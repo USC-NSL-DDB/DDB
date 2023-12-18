@@ -1,10 +1,12 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::str;
+use std::process::{Command, Child};
 
 fn start_process() -> Child {
     let child = Command::new("gdbserver")
         .arg("127.0.0.1:7879")
+        .arg("../bin/hello_world")
         .spawn()
         .expect("Failed to start process");
 
@@ -29,6 +31,13 @@ fn handle_client(mut stream: TcpStream) {
 }
 
 fn main() {
+    let mut child = start_process();
+    child.kill().expect("Failed to gdbserver");
+
+    // ctrlc::set_handler(move || {
+    //     println!("Start kill");
+    // }).expect("Failed to set handler");
+
     // Bind the listener to localhost on port 7878
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
 
