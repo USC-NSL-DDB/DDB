@@ -31,6 +31,9 @@ NCORES = $(shell nproc)
 # test_binaries_src = $(wildcard $TEST_BINARIES_PATH/*.cpp)
 # test_binaries_obj = $(test_binaries_src:.cpp=.o)
 
+.PHONY: all
+all: test_binaries
+
 # Automatically create bin folder when necessary.
 $(BIN_FOLDER):
 	mkdir -p $@
@@ -46,8 +49,6 @@ bin/hello_world: $(test_hello_world_obj)
 
 test_binaries: $(BIN_FOLDER) bin/hello_world
 
-.PHONY: all
-all: test_binaries
 
 .PHONY: clean
 clean:
