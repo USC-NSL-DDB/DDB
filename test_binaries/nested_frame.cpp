@@ -11,9 +11,9 @@ int add(int a, int b) {
 
 int main() {
     std::cout << "Hello, World!" << std::endl;
-    int a, b = 1;
-    int c = 2;
-    inner_frame(a, c);
+    int a = 1;
+    int b = 2;
+    inner_frame(a, b);
 
     int result = add(a, b);
     std::cout << "result: " << result << std::endl;
