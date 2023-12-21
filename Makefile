@@ -28,9 +28,6 @@ TEST_BINARIES_PATH = test_binaries
 
 NCORES = $(shell nproc)
 
-# test_binaries_src = $(wildcard $TEST_BINARIES_PATH/*.cpp)
-# test_binaries_obj = $(test_binaries_src:.cpp=.o)
-
 .PHONY: all
 all: test_binaries
 
@@ -44,12 +41,16 @@ $(BIN_FOLDER):
 test_hello_world_src = $(TEST_BINARIES_PATH)/hello_world.cpp
 test_hello_world_obj = $(test_hello_world_src:.cpp=.o)
 
+test_nested_frame_src = $(TEST_BINARIES_PATH)/nested_frame.cpp
+test_nested_frame_obj = $(test_nested_frame_src:.cpp=.o)
+
 bin/hello_world: $(test_hello_world_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_hello_world_obj)
+bin/nested_frame: $(test_nested_frame_obj)
+	$(CXX) $(CXXFLAGS) -o $@ $(test_nested_frame_obj)
 
-test_binaries: $(BIN_FOLDER) bin/hello_world
-
+test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame
 
 .PHONY: clean
 clean:
-	rm -rf $(TEST_BINARIES_PATH)/*.o bin/*
+	rm -rf $(TEST_BINARIES_PATH)/*.o bin/* 
