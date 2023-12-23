@@ -15,6 +15,32 @@ fn start_process() -> Child {
     child
 }
 
+fn handle_connection(mut client_stream: TcpStream) {
+    let mut server_stream = TcpStream::connect("127.0.0.1:7879")
+                                        .expect("Failed to establish connection to gdbserver");
+    println!("Connected to the gdbserver");
+
+    let mut client_reader = client_stream.try_clone().unwrap();
+    let mut server_reader = server_stream.try_clone().unwrap();
+
+    let client_to_server = std::thread::spawn(move || {
+        if let Err(e) = std::io::copy(&mut client_reader, &mut server_stream) {
+            eprintln!("Error copying client to server: {:?}", e);
+        }
+    });
+
+    let server_to_client = std::thread::spawn(move || {
+        if let Err(e) = std::io::copy(&mut server_reader, &mut client_stream) {
+            eprintln!("Error copying server to client: {:?}", e);
+        }
+    });
+
+    client_to_server.join().unwrap();
+    server_to_client.join().unwrap();
+
+    println!("Finished io printing.");
+}
+
 fn handle_client(stream: &mut TcpStream, conn_stream: &mut TcpStream, sender: mpsc::Sender<&str>) {
     let mut buffer = [0; 40960];
 
@@ -87,9 +113,6 @@ fn main() {
     let (tx, rx) = mpsc::channel();
     tx.send("hello");
 
-    let mut conn_stream = TcpStream::connect("127.0.0.1:7879")
-                                        .expect("Failed to establish connection to gdbserver");
-    println!("Connected to the gdbserver");
     
     // Bind the listener to localhost on port 7878
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
@@ -99,9 +122,10 @@ fn main() {
     // Accept connections and process them
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 // Handle the connection in a separate function
-                handle_client(&mut stream, &mut conn_stream, tx.clone());
+                // handle_client(&mut stream, &mut conn_stream, tx.clone());
+                handle_connection(stream);
             }
             Err(e) => {
                 println!("Connection failed: {}", e);
