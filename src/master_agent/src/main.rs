@@ -4,10 +4,48 @@
 use std::process::{Child, Command, Stdio, Output};
 use std::io;
 
-fn start_process() -> Child {
-    let output = Command::new("gdb")
-        .arg("../bin/hello_world")
-        .arg("--interpreter=mi")
+struct LaunchOptionArgs {
+    args: &'static [&'static str]
+}
+
+impl LaunchOptionArgs {
+    fn new(args: &'static [&'static str]) -> LaunchOptionArgs {
+        LaunchOptionArgs { args }
+    }
+
+    fn get_args(&self) -> Vec<&str> {
+        let mut arg_vec = self.args.to_vec();
+        arg_vec.push("--interpreter=mi");
+        arg_vec
+    }
+}
+
+struct LaunchOption {
+    mi_debugger_path: &'static str,
+    args: LaunchOptionArgs
+}
+
+impl LaunchOption {
+    fn new(
+        mi_debugger_path: &'static str, 
+        args: &'static [&'static str]
+    ) -> LaunchOption {
+        LaunchOption {
+            mi_debugger_path,
+            args: LaunchOptionArgs::new(args)
+        }
+    }
+
+    fn get_args(&self) -> Vec<&str> {
+        self.args.get_args()
+    }
+}
+
+fn start_process(option: LaunchOption) -> Child {
+    let output = Command::new(option.mi_debugger_path)
+        // .arg("../bin/hello_world")
+        // .arg("--interpreter=mi")
+        .args(option.get_args())
         // .stdin(cfg)
         // .stdin(Stdio::piped())
         .spawn()
@@ -23,7 +61,14 @@ fn main() {
 
     // let stdin = io::stdin().lock();
 
-    let mut output = start_process();
+    let option = LaunchOption::new(
+        "gdb",
+        &[
+            "../bin/hello_world"
+        ]
+    );
+
+    let mut output = start_process(option);
     output.wait();
     println!("Output: {output:?}");
 }
