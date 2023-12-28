@@ -7,58 +7,9 @@ use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
 use std::io::{self, Write, Read};
 use std::str;
 
-struct LaunchOptionArgs {
-    args: &'static [&'static str]
-}
 
-impl LaunchOptionArgs {
-    fn new(args: &'static [&'static str]) -> LaunchOptionArgs {
-        LaunchOptionArgs { args }
-    }
 
-    fn get_args(&self) -> Vec<&str> {
-        let mut arg_vec = self.args.to_vec();
-        arg_vec.push("--interpreter=mi");
-        arg_vec
-    }
-}
 
-struct LaunchOption {
-    mi_debugger_path: &'static str,
-    args: LaunchOptionArgs
-}
-
-impl LaunchOption {
-    fn new(
-        mi_debugger_path: &'static str, 
-        args: &'static [&'static str]
-    ) -> LaunchOption {
-        LaunchOption {
-            mi_debugger_path,
-            args: LaunchOptionArgs::new(args)
-        }
-    }
-
-    fn get_args(&self) -> Vec<&str> {
-        self.args.get_args()
-    }
-}
-
-fn start_process(option: LaunchOption) -> Child {
-    let child = Command::new(option.mi_debugger_path)
-        // .arg("../bin/hello_world")
-        // .arg("--interpreter=mi")
-        .args(option.get_args())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        // .stdin(cfg)
-        // .stdin(Stdio::piped())
-        .spawn()
-        // .output()
-        .expect("Failed to start process");
-
-    child
-}
 
 fn read_mi_response(c_stdout: &mut ChildStdout) -> String {
     let mut read_buf = [0u8; 512];
@@ -74,9 +25,11 @@ fn read_mi_response(c_stdout: &mut ChildStdout) -> String {
                 let partial_read = str::from_utf8(&read_buf[..size]).expect("Failed to parse the read buf");
                 out_str += partial_read;
 
-                for character in out_str.chars() {
-                    print!("{} ", character as u8);
-                }
+                // Print characters as ascii values
+                // for character in out_str.chars() {
+                //     print!("{} ", character as u8);
+                // }
+
                 if out_str.ends_with("(gdb) \r") 
                     || out_str.ends_with("(gdb) \r\n") 
                     || out_str.ends_with("(gdb) \n") 
