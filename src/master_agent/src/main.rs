@@ -1,15 +1,17 @@
 // Master Agent itself should also support GDB/MI
 // so that vs code adapter can support our master agent.
 
+mod debugger_process;
+mod launch_option;
+
 use tracing::{info, warn};
 use tracing_subscriber;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
 use std::io::{self, Write, Read};
 use std::str;
 
-
-
-
+use crate::launch_option::LaunchOption;
+use crate::debugger_process::DebuggerProcess;
 
 fn read_mi_response(c_stdout: &mut ChildStdout) -> String {
     let mut read_buf = [0u8; 512];
@@ -61,33 +63,36 @@ fn main() {
         ]
     );
 
-    let mut child = start_process(option);
+    let mut debugger_p = DebuggerProcess::new(option);
+    debugger_p.start();
+
+    // let mut child = start_process(option);
     
-    let mut c_stdin = child.stdin.take().expect("Fail to setup stdin.");
-    let mut c_stdout = child.stdout.take().expect("Fail to setup stdout.");
+    // let mut c_stdin = child.stdin.take().expect("Fail to setup stdin.");
+    // let mut c_stdout = child.stdout.take().expect("Fail to setup stdout.");
 
-    let mut input = String::new();
-    println!("Type something and press enter. Type 'exit' to quit.");
+    // let mut input = String::new();
+    // println!("Type something and press enter. Type 'exit' to quit.");
 
-    let output = read_mi_response(&mut c_stdout);
+    // let output = read_mi_response(&mut c_stdout);
     
-    // c_stdout.read_to_string(&mut output).expect("failed to read from chil stdout");
-    info!("Finished reading from stdout.");
-    print!("{}", output);
+    // // c_stdout.read_to_string(&mut output).expect("failed to read from chil stdout");
+    // info!("Finished reading from stdout.");
+    // print!("{}", output);
 
-    while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
-        if input.trim() == "exit" {
-            break;
-        }
+    // while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
+    //     if input.trim() == "exit" {
+    //         break;
+    //     }
 
-        c_stdin.write_all(input.as_bytes()).expect("Failed to write to child stdin");
-        c_stdin.flush().expect("Failed to flush child stdin");
+    //     c_stdin.write_all(input.as_bytes()).expect("Failed to write to child stdin");
+    //     c_stdin.flush().expect("Failed to flush child stdin");
 
-        input.clear(); // Clear the buffer for the next input
+    //     input.clear(); // Clear the buffer for the next input
 
-        let output = read_mi_response(&mut c_stdout);
-        print!("{}", output);
-    }
+    //     let output = read_mi_response(&mut c_stdout);
+    //     print!("{}", output);
+    // }
 
     // output.wait();
     // println!("Output: {output:?}");
