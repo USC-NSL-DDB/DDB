@@ -13,48 +13,9 @@ use std::str;
 use crate::launch_option::LaunchOption;
 use crate::debugger_process::DebuggerProcess;
 
-fn read_mi_response(c_stdout: &mut ChildStdout) -> String {
-    let mut read_buf = [0u8; 512];
-    let mut out_str = String::new();
-    loop {
-        info!("start new loop");
-        match c_stdout.read(&mut read_buf) {
-            Ok(size) => {
-                if size == 0 { 
-                    info!("break: size == 0");
-                    break;
-                }
-                let partial_read = str::from_utf8(&read_buf[..size]).expect("Failed to parse the read buf");
-                out_str += partial_read;
-
-                // Print characters as ascii values
-                // for character in out_str.chars() {
-                //     print!("{} ", character as u8);
-                // }
-
-                if out_str.ends_with("(gdb) \r") 
-                    || out_str.ends_with("(gdb) \r\n") 
-                    || out_str.ends_with("(gdb) \n") 
-                { 
-                    info!("break: pass end check");
-                    break;
-                }
-                read_buf.fill(0);
-            },
-            Err(err) => warn!("Failed to read from child stdout. {}", err),
-        }
-    }
-    out_str
-}
-
 fn main() {
     tracing_subscriber::fmt::init();
     // for now, just directly use MI mode
-
-    // let mut stdin_handle = io::stdin().lock();
-
-    // let number_of_yaks = 3;
-    // info!(number_of_yaks, "preparing to shave yaks");
 
     let option = LaunchOption::new(
         "gdb",
@@ -66,33 +27,27 @@ fn main() {
     let mut debugger_p = DebuggerProcess::new(option);
     debugger_p.start();
 
-    // let mut child = start_process(option);
-    
-    // let mut c_stdin = child.stdin.take().expect("Fail to setup stdin.");
-    // let mut c_stdout = child.stdout.take().expect("Fail to setup stdout.");
+    let mut input = String::new();
+    println!("Type something and press enter. Type 'exit' to quit.");
 
-    // let mut input = String::new();
-    // println!("Type something and press enter. Type 'exit' to quit.");
+    let response = debugger_p.read().unwrap();
+    print!("{}", response);
 
-    // let output = read_mi_response(&mut c_stdout);
-    
-    // // c_stdout.read_to_string(&mut output).expect("failed to read from chil stdout");
     // info!("Finished reading from stdout.");
-    // print!("{}", output);
 
-    // while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
-    //     if input.trim() == "exit" {
-    //         break;
-    //     }
+    while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
+        if input.trim() == "exit" || input.trim() == "quit" {
+            debugger_p.kill();
+            break;
+        }
 
-    //     c_stdin.write_all(input.as_bytes()).expect("Failed to write to child stdin");
-    //     c_stdin.flush().expect("Failed to flush child stdin");
+        debugger_p.write_all(input.as_bytes());
 
-    //     input.clear(); // Clear the buffer for the next input
+        input.clear(); // Clear the buffer for the next input
 
-    //     let output = read_mi_response(&mut c_stdout);
-    //     print!("{}", output);
-    // }
+        let response = debugger_p.read().unwrap();
+        print!("{}", response);
+    }
 
     // output.wait();
     // println!("Output: {output:?}");
