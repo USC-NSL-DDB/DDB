@@ -1,13 +1,33 @@
-use std::borrow::BorrowMut;
 use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
-use std::str;
+use std::{str, fmt};
 use std::io::{
-    Write, Read
+    Write, Read, Self 
 };
 use tracing::{info, warn};
 
 use crate::launch_option::LaunchOption;
+
+#[derive(Debug)]
+pub enum Error {
+    // Failed to perform IO operation on stdin/stdout/stderr
+    IOError(io::Error),
+    PipeError,
+    // Failed to start or stop debugger process
+    OperationError,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::IOError(e) => write!(f, "failed to perform IO operation on stdin/stdout/stderr: {}", e),
+            Error::PipeError => write!(f, "failed to get usable pipe for stdin/stdout/stderr"),
+            Error::OperationError => write!(f, "failed to start or stop debugger process"),
+        }
+    }
+}
+
+type Result<T> = std::Result<T, Error>;
 
 #[derive(Default)]
 pub struct DebuggerProcess {
@@ -26,24 +46,25 @@ impl DebuggerProcess {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> Result<()> {
         let mut child = Command::new(self.option.get_debugger_path())
             // .arg("../bin/hello_world")
             // .arg("--interpreter=mi")
             .args(self.option.get_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             // .stdin(cfg)
             // .stdin(Stdio::piped())
-            .spawn()
+            .spawn()?
             // .output()
-            .expect("Failed to start process");
 
         self.c_stdin = child.stdin.take();
         self.c_stdout = child.stdout.take();
         self.c_stderr = child.stderr.take();
 
         self.process = Some(child);
+        Ok(())
     }
 
     pub fn kill(&mut self) {
@@ -56,7 +77,7 @@ impl DebuggerProcess {
         self.c_stderr.take();
     }
 
-    pub fn read(&mut self) -> Option<String> {
+    pub fn read(&mut self) -> Result<String> {
         if let Some(c_stdout) = &mut self.c_stdout {
             let mut read_buf = [0u8; 512];
             let mut out_str = String::new();
@@ -88,18 +109,18 @@ impl DebuggerProcess {
                     Err(err) => warn!("Failed to read from child stdout. {}", err),
                 }
             }
-            return Some(out_str)
+            return Ok(out_str);
         }
-        None
+        Err(Error::PipeError) 
     }
 
-    pub fn write_all(&mut self, buf: &[u8]) /* -> Result<()> */ {
+    pub fn write_all(&mut self, buf: &[u8]) -> Result<()> {
         if let Some(c_stdin) = &mut self.c_stdin {
             c_stdin.write_all(buf).expect("Failed to write to child stdin");
             c_stdin.flush().expect("Failed to flush child stdin");
-            // return Ok(());
+            return Ok(());
         }
-        // Err()
+        Err(::IOError)
     }
 }
 
