@@ -29,6 +29,8 @@ impl fmt::Display for Error {
 
 type Result<T> = std::Result<T, Error>;
 
+// NOTE: current implementation for stdout is problematic.
+// The notification is async. Therefore, we shouldn't block the stdin while waiting for the stdout.
 #[derive(Default)]
 pub struct DebuggerProcess {
     option: LaunchOption,

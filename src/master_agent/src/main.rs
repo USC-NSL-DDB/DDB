@@ -9,6 +9,7 @@
 
 mod debugger_process;
 mod launch_option;
+mod output;
 
 use tracing::{info, warn};
 use tracing_subscriber;
