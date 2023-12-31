@@ -1,6 +1,12 @@
 // Master Agent itself should also support GDB/MI
 // so that vs code adapter can support our master agent.
 
+///
+/// NOTE:
+/// 1. https://github.com/kkawakam/rustyline 
+///    Rustyline might be useful to use to build the cli.
+/// 2. 
+
 mod debugger_process;
 mod launch_option;
 
