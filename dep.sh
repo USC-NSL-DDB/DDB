@@ -13,5 +13,7 @@ else
     # Add cargo to the PATH
     source $HOME/.cargo/env
 
+    echo "source $HOME/.cargo/env" >> $HOME/.bashrc
+
     echo "Rustup, Rust and Cargo have been installed."
 fi
