@@ -1,8 +1,8 @@
-use std::error::Error;
+// use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
 use std::{str, fmt};
 use std::io::{
-    Write, Read, Self 
+    Write, Read, self 
 };
 use tracing::{info, warn};
 
@@ -27,7 +27,7 @@ impl fmt::Display for Error {
     }
 }
 
-type Result<T> = std::Result<T, Error>;
+type Result<T> = std::result::Result<T, Error>;
 
 // NOTE: current implementation for stdout is problematic.
 // The notification is async. Therefore, we shouldn't block the stdin while waiting for the stdout.
@@ -58,15 +58,17 @@ impl DebuggerProcess {
             .stderr(Stdio::piped())
             // .stdin(cfg)
             // .stdin(Stdio::piped())
-            .spawn()?
+            .spawn();
             // .output()
-
-        self.c_stdin = child.stdin.take();
-        self.c_stdout = child.stdout.take();
-        self.c_stderr = child.stderr.take();
-
-        self.process = Some(child);
-        Ok(())
+        
+        if let Ok(mut child) = child {
+            self.c_stdin = child.stdin.take();
+            self.c_stdout = child.stdout.take();
+            self.c_stderr = child.stderr.take();
+            self.process = Some(child);
+            return Ok(());
+        }
+        Err(Error::OperationError)
     }
 
     pub fn kill(&mut self) {
@@ -117,12 +119,22 @@ impl DebuggerProcess {
     }
 
     pub fn write_all(&mut self, buf: &[u8]) -> Result<()> {
+        // match &mut self.c_stdin {
+        //     Some(c_stdin) => {
+        //         c_stdin.write_all(buf).expect("Failed to write to child stdin");
+        //         c_stdin.flush().expect("Failed to flush child stdin");
+        //         Ok(())
+        //     },
+        //     _ => {
+
+        //     }
+        // }
         if let Some(c_stdin) = &mut self.c_stdin {
             c_stdin.write_all(buf).expect("Failed to write to child stdin");
             c_stdin.flush().expect("Failed to flush child stdin");
             return Ok(());
         }
-        Err(::IOError)
+        Err(Error::PipeError)
     }
 }
 

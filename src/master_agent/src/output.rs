@@ -14,14 +14,14 @@ pub enum StreamRecordType {
     Log,
 }
 
-#[derive(Debug, Clone)]
-pub enum RecordType {
+// #[derive(Debug, Clone)]
+pub enum RecordType<'a> {
     // Out-of-band-record
-    Async(AsyncRecordType, AsyncOutput),
+    Async(AsyncRecordType, AsyncOutput<'a>),
     Stream(StreamRecordType, StreamOutput),
 
     // Result record
-    Result(ResultOutput)
+    Result(ResultOutput<'a>)
 }
 
 // ------ ResultOutput ------- //
@@ -34,9 +34,9 @@ pub enum ResultClass {
     Exit
 }
 
-pub struct ResultOutput {
-    r'class: ResultClass
-    results: Option<&[VariableResult]>,
+pub struct ResultOutput<'a> {
+    r#class: ResultClass,
+    results: Option<&'a [VariableResult]>,
 }
 
 // ------ AsyncOutput ------- //
@@ -45,26 +45,26 @@ pub enum AsyncClass {
     Stopped,
 } 
 
-pub struct AsyncOutput {
-    r'class : AsyncClass,
-    results: Option<&[VariableResult]>
+pub struct AsyncOutput<'a> {
+    r#class : AsyncClass,
+    results: Option<&'a [VariableResult]>
 }
 
 pub struct VariableResult {
-    var: &str,
+    var: String, 
     // MARK: is this really str? Would generic be better?
     // TODO: implementation is not done!!!
-    val: &str,
+    val: String,
 }
 
 // ------ StreamOutput ------- //
 pub struct StreamOutput {
-    content: &str
+    content: String
 }
 
 // ------ Record ------- //
 pub struct Record<'a> {
-    r'type: RecordType
+    r#type: RecordType<'a>,
     token: Option<&'a str>,
     raw_output: &'a str,
 }
