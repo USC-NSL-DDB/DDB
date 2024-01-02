@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Install dependencies
-./dep.sh
+bash ./dep.sh
 
 source config.sh
 
