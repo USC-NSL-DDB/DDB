@@ -1,4 +1,3 @@
-use std::borrow::BorrowMut;
 // use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
 use std::{str, fmt};
@@ -101,9 +100,7 @@ impl DebuggerProcess {
                     //     print!("{} ", character as u8);
                     // }
 
-                    if out_str.ends_with("(gdb) \r") 
-                        || out_str.ends_with("(gdb) \r\n") 
-                        || out_str.ends_with("(gdb) \n") 
+                    if Self::is_full_output(&out_str) 
                     { 
                         info!("break: pass end check");
                         break;
@@ -121,6 +118,13 @@ impl DebuggerProcess {
         c_stdin.write_all(buf).expect("Failed to write to child stdin");
         c_stdin.flush().expect("Failed to flush child stdin");
         Ok(())
+    }
+
+    #[inline(always)]
+    fn is_full_output(output: &str) -> bool {
+        output.ends_with("(gdb) \r") 
+            || output.ends_with("(gdb) \r\n") 
+            || output.ends_with("(gdb) \n") 
     }
 }
 

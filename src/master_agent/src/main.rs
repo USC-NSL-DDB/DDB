@@ -10,12 +10,11 @@
 mod debugger_process;
 mod launch_option;
 mod output;
+mod parser;
 
-use tracing::{info, warn};
 use tracing_subscriber;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
 use std::io::{self, Write, Read};
-use std::str;
 
 use crate::launch_option::LaunchOption;
 use crate::debugger_process::DebuggerProcess;
@@ -32,7 +31,7 @@ fn main() {
     );
 
     let mut debugger_p = DebuggerProcess::new(option);
-    debugger_p.start();
+    debugger_p.start().unwrap();
 
     let mut input = String::new();
     println!("Type something and press enter. Type 'exit' to quit.");
@@ -44,11 +43,11 @@ fn main() {
 
     while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
         if input.trim() == "exit" || input.trim() == "quit" {
-            debugger_p.kill();
+            debugger_p.kill().unwrap();
             break;
         }
 
-        debugger_p.write_all(input.as_bytes());
+        debugger_p.write_all(input.as_bytes()).unwrap();
 
         input.clear(); // Clear the buffer for the next input
 
