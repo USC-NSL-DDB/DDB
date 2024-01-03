@@ -2,6 +2,7 @@ use std::{str, fmt, num::ParseIntError};
 
 use crate::output::{Record, RecordType};
 
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     // Nothing to parse.
@@ -95,7 +96,7 @@ mod test {
         let line = "hello, world";
         let line_with_token = "12345^done";
 
-        assert_eq!(parse_token(&line), None);
-        assert_eq!(parse_token(&line_with_token), Some("12345"));
+        assert_eq!(parse_token(&line), (None, "hello, world"));
+        assert_eq!(parse_token(&line_with_token), (Some("12345"), "^done"));
     }
 }
