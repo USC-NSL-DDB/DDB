@@ -11,6 +11,7 @@ mod debugger_process;
 mod launch_option;
 mod output;
 mod parser;
+mod Transports;
 
 use tracing_subscriber;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
