@@ -5,6 +5,8 @@ use super::{
     SyncCommandResult
 };
 
+use std::{thread, io, default};
+
 use crate::launch_option::LaunchOption;
 
 // struct StreamTransport {
@@ -35,9 +37,18 @@ impl TransportCallback for MyCallback {
     }
 }
 
+
+pub enum Error {
+    OperationError(io::Error),
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 // For the callback should we use trait object or generic?
 struct StreamTransport<CB: TransportCallback> {
-    callback: CB
+    callback: CB,
+    t_handle: Option<thread::JoinHandle<()>>,
+    _is_quit: bool
 }
 
 impl<CB: TransportCallback> StreamTransport<CB>
@@ -48,12 +59,34 @@ impl<CB: TransportCallback> StreamTransport<CB>
     }   
 }
 
+impl<CB: TransportCallback + Sync + Send> StreamTransport<CB> {
+    fn start_thread(&mut self, t_name: String) -> Result<()> {
+        let handle = thread::Builder::new()
+            .name(t_name)
+            .spawn(|| {
+            self.transport_loop();
+        })
+        .map_err(|e| Error::OperationError(e))?;
+
+        self.t_handle = Some(handle);
+        Ok(())
+    }
+
+    fn transport_loop(&mut self) {
+
+    }
+}
+
 impl<CB: TransportCallback> Transport for StreamTransport<CB>
 {
     type T = CB;
 
     fn new(transport_callback: CB, option: LaunchOption /* host_wait_loop */) -> Self {
-        Self { callback: transport_callback }
+        Self { 
+            callback: transport_callback,
+            t_handle: Default::default(),
+            _is_quit: false
+        }
     }
 
     fn send(&mut self, cmd: &str) {
