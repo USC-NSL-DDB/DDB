@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::os::linux::raw;
 // use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
@@ -143,3 +144,10 @@ impl DebuggerProcess {
     }
 }
 
+impl Drop for DebuggerProcess {
+    fn drop(&mut self) {
+        if let Some(stdin) = self.c_stdin.take().borrow_mut() {
+           stdin.write_all(b"-gdb-exit\n");
+        }
+    }
+}
