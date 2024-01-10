@@ -7,7 +7,7 @@
 ///    Rustyline might be useful to use to build the cli.
 /// 2. 
 
-mod debugger_process;
+mod dbg;
 mod launch_option;
 mod output;
 mod parser;
@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
 use std::io::{self, Write, Read};
 
 use crate::launch_option::LaunchOption;
-use crate::debugger_process::DebuggerProcess;
+use crate::dbg::DebuggerProcess;
 
 fn main() {
     tracing_subscriber::fmt::init();

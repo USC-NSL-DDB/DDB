@@ -5,7 +5,7 @@ use super::{
     SyncCommandResult
 };
 
-use std::{thread, io, default};
+use std::{thread, io};
 
 use crate::launch_option::LaunchOption;
 
@@ -60,7 +60,7 @@ impl<CB: TransportCallback> StreamTransport<CB>
 }
 
 impl<CB: TransportCallback + Sync + Send> StreamTransport<CB> {
-    fn start_thread(&mut self, t_name: String) -> Result<()> {
+    fn start_thread(&'static mut self, t_name: String) -> Result<()> {
         let handle = thread::Builder::new()
             .name(t_name)
             .spawn(|| {
@@ -73,7 +73,7 @@ impl<CB: TransportCallback + Sync + Send> StreamTransport<CB> {
     }
 
     fn transport_loop(&mut self) {
-
+        // self._is_quit = true;
     }
 }
 

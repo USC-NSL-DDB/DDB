@@ -1,8 +1,9 @@
+use std::os::linux::raw;
 // use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
 use std::{str, fmt};
 use std::io::{
-    Write, Read, self 
+    Write, Read, self, BufWriter, BufReader, BufRead 
 };
 use tracing::{info, warn};
 
@@ -35,9 +36,9 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct DebuggerProcess {
     option: LaunchOption,
     process: Option<Child>,
-    c_stdin: Option<ChildStdin>,
-    c_stdout: Option<ChildStdout>,
-    c_stderr: Option<ChildStderr>
+    c_stdin: Option<BufWriter<ChildStdin>>,
+    c_stdout: Option<BufReader<ChildStdout>>,
+    c_stderr: Option<BufReader<ChildStderr>>,
 }
 
 impl DebuggerProcess {
@@ -62,9 +63,9 @@ impl DebuggerProcess {
             .map_err(|_| Error::OperationError)?;
             // .output()
         
-        self.c_stdin = child.stdin.take();
-        self.c_stdout = child.stdout.take();
-        self.c_stderr = child.stderr.take();
+        self.c_stdin = child.stdin.take().map(|stdin| BufWriter::new(stdin));
+        self.c_stdout = child.stdout.take().map(|stdout| BufReader::new(stdout));
+        self.c_stderr = child.stderr.take().map(|stderr| BufReader::new(stderr));
         self.process = Some(child);
         Ok(())
     }
@@ -81,42 +82,56 @@ impl DebuggerProcess {
     }
 
     pub fn read(&mut self) -> Result<String> {
-        let c_stdout: &mut ChildStdout = self.c_stdout.as_mut().ok_or(Error::PipeError)?;
-        let mut read_buf = [0u8; 512];
-        let mut out_str = String::new();
-        loop {
-            info!("start new loop");
-            match c_stdout.read(&mut read_buf) {
-                Ok(size) => {
-                    if size == 0 { 
-                        info!("break: size == 0");
-                        break;
-                    }
-                    let partial_read = str::from_utf8(&read_buf[..size]).expect("Failed to parse the read buf");
-                    out_str += partial_read;
+        let mut line = String::new();
+        // self.c_stdout.read
+        let c_stdout = self.c_stdout.as_mut().ok_or(Error::PipeError)?;
+        c_stdout.read_line(&mut line).map_err(|e| Error::IOError(e))?;
+        Ok(line)
+        // let mut read_buf = [0u8; 512];
+        // let mut out_str = String::new();
+        // loop {
+        //     info!("start new loop");
+        //     match c_stdout.read(&mut read_buf) {
+        //         Ok(size) => {
+        //             if size == 0 { 
+        //                 info!("break: size == 0");
+        //                 break;
+        //             }
+        //             let partial_read = str::from_utf8(&read_buf[..size]).expect("Failed to parse the read buf");
+        //             out_str += partial_read;
 
-                    // Print characters as ascii values
-                    // for character in out_str.chars() {
-                    //     print!("{} ", character as u8);
-                    // }
+        //             // Print characters as ascii values
+        //             // for character in out_str.chars() {
+        //             //     print!("{} ", character as u8);
+        //             // }
 
-                    if Self::is_full_output(&out_str) 
-                    { 
-                        info!("break: pass end check");
-                        break;
-                    }
-                    read_buf.fill(0);
-                },
-                Err(err) => warn!("Failed to read from child stdout. {}", err),
-            }
-        }
-        Ok(out_str)
+        //             if Self::is_full_output(&out_str) 
+        //             { 
+        //                 info!("break: pass end check");
+        //                 break;
+        //             }
+        //             read_buf.fill(0);
+        //         },
+        //         Err(err) => warn!("Failed to read from child stdout. {}", err),
+        //     }
+        // }
+        // Ok(out_str)
     }
 
     pub fn write_all(&mut self, buf: &[u8]) -> Result<()> {
         let c_stdin = self.c_stdin.as_mut().ok_or(Error::PipeError)?;
         c_stdin.write_all(buf).expect("Failed to write to child stdin");
         c_stdin.flush().expect("Failed to flush child stdin");
+        Ok(())
+    }
+
+    pub fn write_raw_cmd(&mut self, raw_cmd: &str) -> Result<()> {
+        let c_stdin = self.c_stdin.as_mut().ok_or(Error::PipeError)?;
+        if raw_cmd.ends_with("\n") {
+            write!(c_stdin, "{}", raw_cmd).map_err(|e| Error::IOError(e))?;
+        } else {
+            write!(c_stdin, "{}\n", raw_cmd).map_err(|e| Error::IOError(e))?;
+        }
         Ok(())
     }
 
