@@ -5,7 +5,7 @@ use super::{
     SyncCommandResult
 };
 
-use std::{thread, io};
+use std::{thread, io, sync::{Arc, Mutex, MutexGuard}};
 
 use crate::launch_option::LaunchOption;
 
@@ -44,27 +44,41 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-// For the callback should we use trait object or generic?
-struct StreamTransport<CB: TransportCallback> {
+struct StreamTransportInner<CB: TransportCallback> {
     callback: CB,
     t_handle: Option<thread::JoinHandle<()>>,
     _is_quit: bool
+}
+
+// For the callback should we use trait object or generic?
+struct StreamTransport<CB: TransportCallback> {
+    inner: Arc<Mutex<StreamTransportInner<CB>>>
+}
+
+impl<'a, CB: TransportCallback> std::ops::Deref for StreamTransport<CB> {
+    type Target = Arc<Mutex<StreamTransportInner<CB>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.clone()
+    }
 }
 
 impl<CB: TransportCallback> StreamTransport<CB>
 {
     fn test(&mut self) {
         self.send("cmd");
-        self.callback.on_stdout_line("line");
+        self.lock().unwrap().callback.on_stdout_line("line");
+        // self.callback.on_stdout_line("line");
     }   
 }
 
 impl<CB: TransportCallback + Sync + Send> StreamTransport<CB> {
-    fn start_thread(&'static mut self, t_name: String) -> Result<()> {
+    fn start_thread(&mut self, t_name: String) -> Result<()> {
+        let local_self = self.inner.clone();
         let handle = thread::Builder::new()
             .name(t_name)
             .spawn(|| {
-            self.transport_loop();
+            local_self.lock().unwrap()
         })
         .map_err(|e| Error::OperationError(e))?;
 
@@ -83,9 +97,15 @@ impl<CB: TransportCallback> Transport for StreamTransport<CB>
 
     fn new(transport_callback: CB, option: LaunchOption /* host_wait_loop */) -> Self {
         Self { 
-            callback: transport_callback,
-            t_handle: Default::default(),
-            _is_quit: false
+            inner: Arc::new(
+                Mutex::new(
+                    StreamTransportInner {
+                        callback: transport_callback,
+                        t_handle: Default::default(),
+                        _is_quit: false
+                    }
+                )
+            ),
         }
     }
 

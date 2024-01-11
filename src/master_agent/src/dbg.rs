@@ -2,6 +2,7 @@ use std::borrow::BorrowMut;
 use std::os::linux::raw;
 // use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
+use std::sync::mpsc;
 use std::{str, fmt};
 use std::io::{
     Write, Read, self, BufWriter, BufReader, BufRead 
@@ -31,6 +32,35 @@ impl fmt::Display for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+pub trait Communicatable {
+    type Target;
+    fn send(&self, content: &String);
+    fn recv(&self) -> Self::Target;
+}
+
+pub struct Communicator {
+    c_stdin: Option<BufWriter<ChildStdin>>,
+    c_stdout: Option<BufReader<ChildStdout>>,
+    c_stderr: Option<BufReader<ChildStderr>>,
+    tx: mpsc::Sender<String>,
+    rx: mpsc::Receiver<String>,
+}
+
+impl Communicatable for Communicator {
+    type Target = String;
+
+    fn send(&self, content: &String) {
+        self.tx.send(content.clone());
+        // if let Some(c_stdin) = self.c_stdin.as_mut() {
+        //     c_std
+        // }
+    }
+
+    fn recv(&self) -> Self::Target {
+        self.rx.recv().unwrap()
+    }
+}
+
 // NOTE: current implementation for stdout is problematic.
 // The notification is async. Therefore, we shouldn't block the stdin while waiting for the stdout.
 #[derive(Default)]
@@ -40,13 +70,17 @@ pub struct DebuggerProcess {
     c_stdin: Option<BufWriter<ChildStdin>>,
     c_stdout: Option<BufReader<ChildStdout>>,
     c_stderr: Option<BufReader<ChildStderr>>,
+    c_stdin_pipeline
 }
 
 impl DebuggerProcess {
     pub fn new(option: LaunchOption) -> Self {
         DebuggerProcess {
             option,
-            ..Default::default()
+            process: None,
+            c_stdin: None,
+            c_stdout: None,
+            c_stderr: None
         }
     }
 
@@ -79,6 +113,22 @@ impl DebuggerProcess {
         self.c_stdin.take();
         self.c_stdout.take();
         self.c_stderr.take();
+        Ok(())
+    }
+
+    pub fn read_until(&mut self, sender: mpsc::Sender<String>) -> Result<()> {
+        let mut line = String::new();
+        let c_stdout = self.c_stdout.as_mut().ok_or(Error::PipeError)?;
+        while let Ok(size) = c_stdout.read_line(&mut line) {
+            if size != 0 {
+                println!("size != 0");
+                sender.send(line.clone()).unwrap();
+            } else {
+                println!("size == 0");
+            }
+            line.clear();
+        }
+        // c_stdout.read_line(&mut line).map_err(|e| Error::IOError(e))?;
         Ok(())
     }
 
@@ -146,8 +196,14 @@ impl DebuggerProcess {
 
 impl Drop for DebuggerProcess {
     fn drop(&mut self) {
-        if let Some(stdin) = self.c_stdin.take().borrow_mut() {
+        if let Some(stdin) = self.c_stdin.take().as_mut() {
            stdin.write_all(b"-gdb-exit\n");
+        }
+
+        self.c_stdout.take();
+        self.c_stderr.take();
+        if let Some(process) = self.process.take().as_mut() {
+            process.kill();
         }
     }
 }

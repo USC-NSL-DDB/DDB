@@ -11,9 +11,10 @@ mod dbg;
 mod launch_option;
 mod output;
 mod parser;
-mod transports;
+// mod transports;
 
 use tracing_subscriber;
+use std::os::unix::thread;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout};
 use std::io::{self, Write, Read};
 
@@ -41,20 +42,38 @@ fn main() {
     print!("{}", response);
 
     // info!("Finished reading from stdout.");
+    use std::sync::mpsc::{self, Sender, Receiver};
 
-    while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
-        if input.trim() == "exit" || input.trim() == "quit" {
-            debugger_p.kill().unwrap();
-            break;
+    let (tx, rx) = mpsc::channel::<String>();
+
+    std::thread::spawn(move || {
+        println!("In new thread");
+        debugger_p.read_until(tx.clone());
+    });
+
+    std::thread::spawn(move || {
+        while let Ok(output) = rx.recv()  {
+            println!("Begin output");
+            println!("{}", output);
         }
+    });
 
-        debugger_p.write_all(input.as_bytes()).unwrap();
+    println!("Out wait loop");
 
-        input.clear(); // Clear the buffer for the next input
+    // while io::stdin().read_line(&mut input).expect("Failed to read line") > 0 {
+    //     if input.trim() == "exit" || input.trim() == "quit" {
+    //         debugger_p.kill().unwrap();
+    //         break;
+    //     }
 
-        let response = debugger_p.read().unwrap();
-        print!("{}", response);
-    }
+    //     debugger_p.write_all(input.as_bytes()).unwrap();
+
+    //     input.clear(); // Clear the buffer for the next input
+
+    //     let response = debugger_p.read().unwrap();
+    //     print!("{}", response);
+    //     // debugger_p.read_until(sender)
+    // }
 
     // output.wait();
     // println!("Output: {output:?}");
