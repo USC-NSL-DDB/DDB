@@ -70,7 +70,6 @@ pub struct DebuggerProcess {
     c_stdin: Option<BufWriter<ChildStdin>>,
     c_stdout: Option<BufReader<ChildStdout>>,
     c_stderr: Option<BufReader<ChildStderr>>,
-    c_stdin_pipeline
 }
 
 impl DebuggerProcess {
