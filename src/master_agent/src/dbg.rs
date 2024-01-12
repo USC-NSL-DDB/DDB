@@ -3,7 +3,8 @@ use std::os::linux::raw;
 // use std::error::Error;
 use std::process::{Child, Command, Stdio, Output, ChildStdin, ChildStdout, ChildStderr};
 use std::sync::mpsc;
-use std::{str, fmt};
+use std::thread::JoinHandle;
+use std::{str, fmt, thread};
 use std::io::{
     Write, Read, self, BufWriter, BufReader, BufRead 
 };
@@ -42,8 +43,25 @@ pub struct Communicator {
     c_stdin: Option<BufWriter<ChildStdin>>,
     c_stdout: Option<BufReader<ChildStdout>>,
     c_stderr: Option<BufReader<ChildStderr>>,
+    stdout_handle: Option<JoinHandle<()>>,
+    stderr_handle: Option<JoinHandle<()>>,
     tx: mpsc::Sender<String>,
     rx: mpsc::Receiver<String>,
+}
+
+impl Default for Communicator {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self { 
+            c_stdin: Default::default(), 
+            c_stdout: Default::default(), 
+            c_stderr: Default::default(), 
+            stdout_handle: None,
+            stderr_handle: None,
+            tx,
+            rx,
+        }
+    }
 }
 
 impl Communicatable for Communicator {
@@ -61,15 +79,74 @@ impl Communicatable for Communicator {
     }
 }
 
+impl Communicator {
+    pub fn set_pipeline(
+        &mut self, 
+        mut stdin: Option<ChildStdin>,
+        mut stdout: Option<ChildStdout>,
+        mut stderr: Option<ChildStderr>
+    ) {
+        self.c_stdin = stdin.take().map(|stdin| BufWriter::new(stdin));
+        self.c_stdout = stdout.take().map(|stdout| BufReader::new(stdout));
+        self.c_stderr = stderr.take().map(|stderr| BufReader::new(stderr));
+    }
+
+    pub fn cleanup(&mut self) {
+        self.c_stdin.take();
+        self.c_stdout.take();
+        self.c_stderr.take();
+        self.stdout_handle.take();
+        self.stderr_handle.take();
+    }
+
+    pub fn start_listen(&mut self) {
+        if let Some(c_stdout) = self.c_stdout.borrow_mut() {
+            let stdout_tx = self.tx.clone();
+            self.stdout_handle = Some(
+                thread::spawn(|| {
+                    let mut line = String::new();
+                    while let Ok(size) = c_stdout.read_line(&mut line) {
+                        if size != 0 {
+                            println!("size != 0");
+                            stdout_tx.send(line);
+                        } else {
+                            println!("size == 0");
+                        }
+                        line.clear();
+                    }
+                })
+            );
+        }
+
+        if let Some(c_stderr) = self.c_stderr.borrow_mut() {
+            self.stderr_handle = Some(
+                thread::spawn(|| {
+                    let mut line = String::new();
+                    while let Ok(size) = c_stderr.read_line(&mut line) {
+                        if size != 0 {
+                            println!("size != 0");
+                            eprintln!("stderr: {}", line);
+                        } else {
+                            println!("size == 0");
+                        }
+                        line.clear();
+                    }
+                })
+            );
+        }
+    }
+}
+
 // NOTE: current implementation for stdout is problematic.
 // The notification is async. Therefore, we shouldn't block the stdin while waiting for the stdout.
 #[derive(Default)]
 pub struct DebuggerProcess {
     option: LaunchOption,
     process: Option<Child>,
-    c_stdin: Option<BufWriter<ChildStdin>>,
-    c_stdout: Option<BufReader<ChildStdout>>,
-    c_stderr: Option<BufReader<ChildStderr>>,
+    comm: Communicator
+    // c_stdin: Option<BufWriter<ChildStdin>>,
+    // c_stdout: Option<BufReader<ChildStdout>>,
+    // c_stderr: Option<BufReader<ChildStderr>>,
 }
 
 impl DebuggerProcess {
@@ -77,9 +154,7 @@ impl DebuggerProcess {
         DebuggerProcess {
             option,
             process: None,
-            c_stdin: None,
-            c_stdout: None,
-            c_stderr: None
+            comm: Default::default()
         }
     }
 
@@ -96,10 +171,8 @@ impl DebuggerProcess {
             .spawn()
             .map_err(|_| Error::OperationError)?;
             // .output()
-        
-        self.c_stdin = child.stdin.take().map(|stdin| BufWriter::new(stdin));
-        self.c_stdout = child.stdout.take().map(|stdout| BufReader::new(stdout));
-        self.c_stderr = child.stderr.take().map(|stderr| BufReader::new(stderr));
+
+        self.comm.set_pipeline(child.stdin, child.stdout, child.stderr);
         self.process = Some(child);
         Ok(())
     }
@@ -109,9 +182,7 @@ impl DebuggerProcess {
             process.kill().map_err(|_| Error::OperationError)?;
         }
 
-        self.c_stdin.take();
-        self.c_stdout.take();
-        self.c_stderr.take();
+        self.comm.cleanup();
         Ok(())
     }
 
