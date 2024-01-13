@@ -24,6 +24,7 @@ function force_cleanup {
 }
 
 function start_nu_rt {
+    echo "Killing related service..."
     prepare
     echo "Rerun iokerneld"
     rerun_iokerneld 
@@ -38,4 +39,17 @@ function shutdown_nu_rt {
     cleanup
 }
 
+function setup_gdbinit {
+    GDBINIT_FILENAME="$HOME/.gdbinit"
+    CMD="handle SIGUSR1 SIGUSR2 nostop noprint" 
+
+    touch $GDBINIT_FILENAME
+
+    if ! grep -Fxq "$CMD" "$GDBINIT_FILENAME"; then
+        echo "$CMD" >> "$GDBINIT_FILENAME"
+    fi
+}
+
 trap force_cleanup INT
+
+setup_gdbinit
