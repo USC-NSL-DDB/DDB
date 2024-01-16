@@ -4,6 +4,7 @@ from pprint import pprint
 from queue import Queue
 from threading import Thread
 from time import sleep
+from utils import *
 
 # BIN_PATH = "../bin/hello_world"
 
@@ -38,9 +39,10 @@ class GdbSession:
 
     def fetch_mi_output(self):
         while True:
-            response = self.session_ctrl.get_gdb_response(timeout_sec=0.5, raise_error_on_timeout=False)
-            if response:
-                self.mi_output_q.put_nowait(response)
+            responses = self.session_ctrl.get_gdb_response(timeout_sec=0.5, raise_error_on_timeout=False)
+            if responses:
+                for r in responses:
+                    self.mi_output_q.put_nowait(r)
             sleep(0.1)
 
     def write(self, cmd: str):
@@ -57,12 +59,15 @@ class GdbSession:
         return result
 
     def get_meta_str(self) -> str:
-        return f"[{self.tag}, {self.bin}]"
-        
-    def __del__(self):
+        return f"[ {self.tag}, {self.bin} ]"
+
+    def cleanup(self):
         print(f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")
         # self.mi_output_t_handle
         self.session_ctrl.exit()
+        
+    def __del__(self):
+        self.cleanup()
     
 class GdbManager:
     def __init__(self, components: List[dict]) -> None:
@@ -90,10 +95,14 @@ class GdbManager:
                 output = s.deque_mi_output()
                 if output:
                     meta = s.get_meta_str()
-                    print(f"{meta} {output}")
+                    # print(f"{meta} {output}")
+                    mi_print(output, meta)
             sleep(0.1)
 
-    def __del__(self):
+    def cleanup(self):
         print("Cleaning up GdbManager resource")
         for s in self.sessions:
-            del s
+            s.cleanup()
+
+    def __del__(self):
+        self.cleanup()
