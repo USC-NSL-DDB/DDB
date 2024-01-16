@@ -18,11 +18,7 @@ import argparse
 def main():
     global gdb_manager, config_data
     components = config_data["Components"]
-    # pprint(components)
     gdb_manager = GdbManager(components=components)
-
-    # while True:
-    #     sleep(1)
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
@@ -30,8 +26,6 @@ def main():
     # for response in gdbmi.get_gdb_response():
     #     print_resp(response)
     #     pprint(response)
-
-    
         
     while True:
         cmd = input("(gdb) ").strip()
@@ -42,14 +36,11 @@ def main():
         # if cmd_head in ["break", "b", "-break-insert"]:
         #     # gdbmi.write
         #     gdb_manager.write(cmd)
-
         # else:
         #     responses = gdbmi.write(cmd)
         #     for response in responses:
         #         print_resp(response)
         #         pprint(response)
-        
-    # gdbmi.exit()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
