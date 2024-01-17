@@ -1,4 +1,15 @@
 ---
+# Vars:
+# - : ""
+
+PreTasks:
+- name: "Restart runtime"
+  command: "./nu_scripts/start_rt.sh"
+
+PostTasks:
+- name: "Shutdown runtime"
+  command: "./nu_scripts/stop_rt.sh"
+
 Components:
 # TODO: Supports for pid (latter attach), remote attach 
 - addr: localhost

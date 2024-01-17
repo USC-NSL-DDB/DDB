@@ -1,6 +1,8 @@
 #!/bin/bash
 
-source shared.sh
+SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+source $SOURCE_DIR/shared.sh
 
 function prepare {
     kill_iokerneld

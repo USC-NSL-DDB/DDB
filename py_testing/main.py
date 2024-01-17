@@ -1,5 +1,7 @@
 import os
+import subprocess
 from time import sleep
+from typing import List, Union
 from pygdbmi.gdbcontroller import GdbController
 from pprint import pprint
 from gdb_manager import GdbManager
@@ -42,6 +44,46 @@ def main():
         #         print_resp(response)
         #         pprint(response)
 
+def exec_cmd(cmd: Union[List[str], str]):
+    if isinstance(cmd, str):
+        cmd = [ cmd ]
+    result = subprocess.run(
+        cmd, 
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    print(result.stdout.decode("utf-8"))
+    eprint(result.stderr.decode("utf-8"))
+
+def exec_task(task: dict):
+    name = None
+    command = None
+    if "name" in task:
+        name = task["name"]
+    if "command" in task:
+        command = task["command"]
+
+    if not name:
+        name = "Unnamed"
+    if not command:
+        eprint("Didn't specify command.")
+        return
+    
+    print(f"Executing task: {name}, command: {command}")
+    exec_cmd(command)
+
+def exec_pretasks(config_data):
+    if ("PreTasks" in config_data) and config_data["PreTasks"]:
+        tasks = config_data["PreTasks"]
+        for task in tasks:
+            exec_task(task)
+
+def exec_posttasks(config_data):
+    if ("PostTasks" in config_data) and config_data["PostTasks"]:
+        tasks = config_data["PostTasks"]
+        for task in tasks:
+            exec_task(task)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="interactive debugging for distributed software.",
@@ -69,6 +111,8 @@ if __name__ == "__main__":
     if not config_data:
         eprint("Debugging config is required!")
         exit(1)
+
+    exec_pretasks(config_data)
     
     gdb_manager: GdbManager = None
     try:
@@ -78,6 +122,8 @@ if __name__ == "__main__":
 
         if gdb_manager:
             gdb_manager.cleanup()
+        
+        exec_posttasks()
 
         try:
             sys.exit(130)
