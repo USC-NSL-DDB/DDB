@@ -5,6 +5,7 @@ from queue import Queue
 from threading import Thread
 from time import sleep
 from utils import *
+from cmd_router import CmdRouter
 
 # BIN_PATH = "../bin/hello_world"
 
@@ -80,10 +81,14 @@ class GdbManager:
         self.output_handle = Thread(target=self.handle_output, args=())
         self.output_handle.start()
 
+        self.router = CmdRouter(self.sessions)
+
     def write(self, cmd: str):
+        self.router.send_cmd(cmd)
         # pass
-        for s in self.sessions:
-            s.write(cmd)
+        # for s in self.sessions:
+        #     s.write(cmd)
+
         # responses = []
         # for session in self.sessions:
         #     resp = session.write(cmd)
