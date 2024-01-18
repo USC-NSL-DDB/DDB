@@ -9,7 +9,7 @@
 void *say_hi(void *thread_id) {
     long tid = (long) thread_id;
     for (size_t i = 0; i < MAX_LOOP; i++) {
-	    size_t sleep_duration = rand() % 5;
+	    size_t sleep_duratIon = rand() % 5;
         printf("Hello World - thread %lu, loop %lu. Will sleep %lu seconds.\n", tid, i, sleep_duration);
         sleep(sleep_duration);
     }

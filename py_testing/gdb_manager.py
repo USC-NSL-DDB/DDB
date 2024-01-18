@@ -6,11 +6,12 @@ from threading import Thread
 from time import sleep
 from utils import *
 from cmd_router import CmdRouter
+from state_manager import SessionMeta
 
 # BIN_PATH = "../bin/hello_world"
 
 class GdbSession:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, meta: SessionMeta) -> None:
         # Ignore addr for now, as we only proceed with localhost
         self.tag = config["tag"]
         self.bin = config["bin"]

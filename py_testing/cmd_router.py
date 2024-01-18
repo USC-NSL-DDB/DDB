@@ -12,7 +12,7 @@ class CmdRouter:
         if (cmd.strip() in [ "b", "break", "-break-insert" ]):
             self.broadcast(cmd)
         
-        if (cmd.strip() in [ ] )
+        # if (cmd.strip() in [ ] )
         # for s in self.sessions:
         #     s.write(cmd)
 
