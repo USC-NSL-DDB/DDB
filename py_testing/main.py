@@ -123,7 +123,7 @@ if __name__ == "__main__":
         if gdb_manager:
             gdb_manager.cleanup()
         
-        exec_posttasks()
+        exec_posttasks(config_data)
 
         try:
             sys.exit(130)

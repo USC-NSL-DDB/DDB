@@ -5,7 +5,7 @@ def eprint(*args, **kwargs):
 
 def mi_print(response, meta: str):
     try:
-        if response["type"] in [ "console", "output" ]:
+        if response["type"] in [ "console", "output", "notify" ]:
             payload = response["payload"] 
             out = f"{meta}\n\t {payload}" 
             if response["stream"] == "stdout":

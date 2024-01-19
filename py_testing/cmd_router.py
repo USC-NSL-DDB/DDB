@@ -1,5 +1,5 @@
 from typing import List
-from gdb_manager import GdbSession
+from gdb_session import GdbSession
 
 class CmdRouter:
     # Should start sessions in this object?
@@ -8,9 +8,21 @@ class CmdRouter:
 
     def send_cmd(self, cmd: str):
         print("sending cmd through the CmdRouter...")
+
+        token = None
+        prefix = cmd.split()[0]
+        if prefix.isdigit:
+            token = prefix
+            prefix = cmd.split()[1]
+        prefix = prefix.strip()
         
-        if (cmd.strip() in [ "b", "break", "-break-insert" ]):
+        if (prefix in [ "b", "break", "-break-insert" ]):
             self.broadcast(cmd)
+        elif (prefix in [ "run", "r" ]):
+            self.broadcast(cmd)
+        elif (prefix in [ "list" ]):
+            self.send_to_first(cmd)
+        
         
         # if (cmd.strip() in [ ] )
         # for s in self.sessions:
@@ -20,4 +32,7 @@ class CmdRouter:
     def broadcast(self, cmd: str):
         for s in self.sessions:
             s.write(cmd)
+
+    def send_to_first(self, cmd: str):
+        self.sessions[0].write(cmd)
     
