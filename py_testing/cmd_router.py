@@ -11,7 +11,7 @@ class CmdRouter:
 
         token = None
         prefix = cmd.split()[0]
-        if prefix.isdigit:
+        if prefix.isdigit():
             token = prefix
             prefix = cmd.split()[1]
         prefix = prefix.strip()

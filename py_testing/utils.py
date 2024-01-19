@@ -5,9 +5,14 @@ def eprint(*args, **kwargs):
 
 def mi_print(response, meta: str):
     try:
-        if response["type"] in [ "console", "output", "notify" ]:
+        token = None
+        if "token" in response:
+            token = response["token"]
+
+        type = response["type"]
+        if type in [ "console", "output", "notify", "result" ]:
             payload = response["payload"] 
-            out = f"{meta}\n\t {payload}" 
+            out = f"{meta} [ type: {type} token: {token} ] \n\t {payload}" 
             if response["stream"] == "stdout":
                 print(out, end="")
             if response["stream"] == "stderr":
