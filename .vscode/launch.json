@@ -1,0 +1,61 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) multiprocess",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/multiprocess",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "targetArchitecture": "x64",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable mi async",
+                    "text": "-gdb-set mi-async on",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable detach on fork",
+                    "text": "set detach-on-fork off",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable target async",
+                    "text": "set target-async on",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable non-stop mode",
+                    "text": "set non-stop on",
+                    "ignoreFailures": true
+                },
+            ],
+            // "launchCompleteCommand": "exec-run"
+            // "customLaunchSetupCommands": [
+            //     {
+            //         "text": "-exec-run",
+            //         "description": "run in background mode",
+            //         "ignoreFailures": true
+            //     }
+            // ]
+        }
+    ]
+}
