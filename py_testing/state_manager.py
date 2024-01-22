@@ -2,6 +2,7 @@ from typing import List
 # from gdb_manager import GdbSession
 from uuid import uuid4, UUID
 from enum import Enum
+from threading import Lock
 
 class ThreadStatus(Enum):
     INIT = 1
@@ -20,9 +21,19 @@ class SessionMeta:
         self.t_status[tid] = new_status
 
 class StateManager:
-    def __init__(self, sessions: List["GdbSession"]) -> None:
-        self.sessions = sessions
-        self.meta = { s.sid: s.meta for s in self.sessions }
+    _store: "StateManager" = None
+    _lock = Lock()
 
-    def update_t_status(self, sid: UUID, tid: int, new_status: ThreadStatus):
-        self.meta[sid].update_t_status(tid, new_status)
+    def __init__(self) -> None:
+        pass
+
+    @staticmethod
+    def inst() -> "StateManager":
+        with StateManager._lock:
+            if StateManager._store:
+                return StateManager._store 
+            StateManager._store = StateManager()
+            return StateManager._store
+
+# Eager instantiation
+_ = StateManager.inst()

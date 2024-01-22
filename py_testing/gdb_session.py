@@ -5,6 +5,31 @@ from pygdbmi.gdbcontroller import GdbController
 from queue import Queue
 from threading import Thread
 from time import sleep
+from threading import Lock
+from counter import TSCounter
+
+# A simple wrapper around counter in case any customization later
+class SessionCounter:
+    _sc: "SessionCounter" = None
+    _lock = Lock()
+    
+    def __init__(self) -> None:
+        self.counter = TSCounter()
+
+    @staticmethod
+    def inst() -> "SessionCounter":
+        with SessionCounter._lock:
+            if SessionCounter._sc:
+                return SessionCounter._sc
+            SessionCounter._sc = SessionCounter()
+            return SessionCounter._sc
+
+    def inc(self) -> int:
+        return self.counter.increment()
+
+    @staticmethod
+    def get() -> int:
+        return SessionCounter.inst().inc()
 
 class GdbSession:
     def __init__(self, config: dict) -> None:
@@ -12,9 +37,9 @@ class GdbSession:
         self.tag = config["tag"]
         self.bin = config["bin"]
         self.args = config["args"]
-        self.sid = uuid4()
-        # self.meta = SessionMeta(self.sid, self.tag)
-        self.state_mgr = None
+        self.suid = uuid4()
+        self.sid = SessionCounter.get()
+        self.state_mgr = StateManager.inst()
 
         if "run_delay" in config.keys():
             self.run_delay = int(config["run_delay"])
@@ -24,9 +49,6 @@ class GdbSession:
         self.session_ctrl: Optional[GdbController] = None
         self.mi_output_q: Queue = Queue(maxsize=0)
         self.mi_output_t_handle = None
-
-    # def attach_state_manager(self, manager: StateManager):
-    #     self.state_mgr = manager
     
     def start(self):
         full_args = [ "gdb", "--interpreter=mi" , "--args" ]
