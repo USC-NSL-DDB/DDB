@@ -13,7 +13,7 @@ class GdbSession:
         self.bin = config["bin"]
         self.args = config["args"]
         self.sid = uuid4()
-        self.meta = SessionMeta(self.sid, self.tag)
+        # self.meta = SessionMeta(self.sid, self.tag)
         self.state_mgr = None
 
         if "run_delay" in config.keys():
@@ -25,8 +25,8 @@ class GdbSession:
         self.mi_output_q: Queue = Queue(maxsize=0)
         self.mi_output_t_handle = None
 
-    def attach_state_manager(self, manager: StateManager):
-        self.state_mgr = manager
+    # def attach_state_manager(self, manager: StateManager):
+    #     self.state_mgr = manager
     
     def start(self):
         full_args = [ "gdb", "--interpreter=mi" , "--args" ]

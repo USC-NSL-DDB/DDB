@@ -1,6 +1,7 @@
 from typing import List, Optional
 from threading import Thread
 from time import sleep
+from session_meta import MetaStore
 from utils import *
 from cmd_router import CmdRouter
 from state_manager import SessionMeta, StateManager
@@ -18,9 +19,9 @@ class GdbManager:
         self.output_handle.start()
 
         self.router = CmdRouter(self.sessions)
-        self.state_manager = StateManager(self.sessions)
+        # self.state_manager = StateManager(self.sessions)
 
-        [ s.attach_state_manager(self.state_manager) for s in self.sessions ]
+        # [ s.attach_state_manager(self.state_manager) for s in self.sessions ]
         [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
