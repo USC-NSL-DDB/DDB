@@ -107,7 +107,7 @@ class GdbSession:
     #     return result
 
     def get_meta_str(self) -> str:
-        return f"[ {self.tag}, {self.bin} ]"
+        return f"[ {self.tag}, {self.bin}, {self.sid} ]"
 
     def cleanup(self):
         print(f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")

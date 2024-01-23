@@ -27,21 +27,32 @@ class CmdRouter:
         elif (prefix in [ "run", "r", "-exec-run" ]):
             self.broadcast(cmd)
         elif (prefix in [ "list" ]):
-            self.send_to_first(cmd)
+            # self.send_to_first(cmd)
+            self.send_to_current_session(cmd)
         elif (prefix in [ "c", "continue", "-exec-continue" ]):
-            self.send_to_current_session()
+            self.send_to_current_session(cmd)
         else:
-            self.broadcast(cmd)
+            self.send_to_current_session(cmd)
+            # self.broadcast(cmd)
         
         
         # if (cmd.strip() in [ ] )
         # for s in self.sessions:
         #     s.write(cmd)
 
+    def send_to_current_session(self, cmd: str):
+        curr_session = self.state_mgr.get_current_session()
+        if not curr_session:
+            print("use session #sno to select session.")
+            return
+        [ s.write(cmd) for s in self.sessions if s.sid == curr_session ]
 
     def broadcast(self, cmd: str):
         for s in self.sessions:
             s.write(cmd)
+
+    # def send_to_random_one(self, cmd: str):
+        
 
     def send_to_first(self, cmd: str):
         self.sessions[0].write(cmd)
