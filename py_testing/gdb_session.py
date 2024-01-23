@@ -7,6 +7,7 @@ from threading import Thread
 from time import sleep
 from threading import Lock
 from counter import TSCounter
+from response_processor import ResponseProcessor, SessionResponse
 
 # A simple wrapper around counter in case any customization later
 class SessionCounter:
@@ -47,7 +48,8 @@ class GdbSession:
             self.run_delay = None
 
         self.session_ctrl: Optional[GdbController] = None
-        self.mi_output_q: Queue = Queue(maxsize=0)
+        self.processor = ResponseProcessor.inst()
+        # self.mi_output_q: Queue = Queue(maxsize=0)
         self.mi_output_t_handle = None
     
     def start(self):
@@ -57,6 +59,8 @@ class GdbSession:
         # full_args.append("--interpreter=mi")
         self.session_ctrl = GdbController(full_args)
         print(f"Started debugging process - \n\ttag: {self.tag}, \n\tbin: {self.bin}, \n\tstartup command: {self.session_ctrl.command}") 
+
+        self.state_mgr.register_session(self.sid, self.tag)
 
         self.mi_output_t_handle = Thread(
             target=self.fetch_mi_output, args=()
@@ -68,22 +72,23 @@ class GdbSession:
             responses = self.session_ctrl.get_gdb_response(timeout_sec=0.5, raise_error_on_timeout=False)
             if responses:
                 for r in responses:
-                    # if r[""]
-                    self.mi_output_q.put_nowait(r)
-            sleep(0.1)
+                    self.processor.put(
+                        SessionResponse(self.sid, self.get_meta_str(), r)
+                    )
+            # sleep(0.1)
 
     def write(self, cmd: str):
         if (cmd.strip() in [ "run", "r" ]) and self.run_delay:
             sleep(self.run_delay)
         self.session_ctrl.write(cmd, read_response=False)
     
-    def deque_mi_output(self) -> dict:
-        result = None
-        try:
-            result = self.mi_output_q.get_nowait()
-        except Exception as e:
-            pass
-        return result
+    # def deque_mi_output(self) -> dict:
+    #     result = None
+    #     try:
+    #         result = self.mi_output_q.get_nowait()
+    #     except Exception as e:
+    #         pass
+    #     return result
 
     def get_meta_str(self) -> str:
         return f"[ {self.tag}, {self.bin} ]"

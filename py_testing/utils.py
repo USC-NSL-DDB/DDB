@@ -11,8 +11,9 @@ def mi_print(response, meta: str):
 
         type = response["type"]
         if type in [ "console", "output", "notify", "result" ]:
+            msg = response["message"]
             payload = response["payload"] 
-            out = f"{meta} [ type: {type} token: {token} ] \n\t {payload}" 
+            out = f"{meta} [ type: {type}, token: {token}, msg: {msg} ] \n\t {payload}\n" 
             if response["stream"] == "stdout":
                 print(out, end="")
             if response["stream"] == "stderr":

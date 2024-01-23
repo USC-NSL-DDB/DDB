@@ -9,6 +9,10 @@ class CmdRouter:
     def send_cmd(self, cmd: str):
         print("sending cmd through the CmdRouter...")
 
+        if len(cmd.strip()) == 0:
+            # special case of no meaningful command
+            return
+
         token = None
         prefix = cmd.split()[0]
         if prefix.isdigit():
@@ -22,6 +26,8 @@ class CmdRouter:
             self.broadcast(cmd)
         elif (prefix in [ "list" ]):
             self.send_to_first(cmd)
+        else:
+            self.broadcast(cmd)
         
         
         # if (cmd.strip() in [ ] )
