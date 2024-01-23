@@ -1,8 +1,7 @@
 from uuid import uuid4
-from state_manager import SessionMeta, StateManager
+from state_manager import StateManager
 from typing import List, Optional
 from pygdbmi.gdbcontroller import GdbController
-from queue import Queue
 from threading import Thread
 from time import sleep
 from threading import Lock
@@ -71,9 +70,26 @@ class GdbSession:
         while True:
             responses = self.session_ctrl.get_gdb_response(timeout_sec=0.5, raise_error_on_timeout=False)
             if responses:
+                payload = ""
                 for r in responses:
+                    if r["type"] == "console":
+                        payload += r["payload"]
+                    else:
+                        self.processor.put(
+                            SessionResponse(self.sid, self.get_meta_str(), r)
+                        )
+
+                console_out = {
+                    "type": "console",
+                    "message": None,
+                    "stream": "stdout",
+                    "payload": None
+                }
+                payload = payload.strip()
+                if payload:
+                    console_out["payload"] = payload
                     self.processor.put(
-                        SessionResponse(self.sid, self.get_meta_str(), r)
+                        SessionResponse(self.sid, self.get_meta_str(), console_out)
                     )
             # sleep(0.1)
 

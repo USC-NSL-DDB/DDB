@@ -1,10 +1,12 @@
 from typing import List
 from gdb_session import GdbSession
+from state_manager import StateManager
 
 class CmdRouter:
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
         self.sessions = sessions
+        self.state_mgr = StateManager.inst()
 
     def send_cmd(self, cmd: str):
         print("sending cmd through the CmdRouter...")
@@ -22,10 +24,12 @@ class CmdRouter:
         
         if (prefix in [ "b", "break", "-break-insert" ]):
             self.broadcast(cmd)
-        elif (prefix in [ "run", "r" ]):
+        elif (prefix in [ "run", "r", "-exec-run" ]):
             self.broadcast(cmd)
         elif (prefix in [ "list" ]):
             self.send_to_first(cmd)
+        elif (prefix in [ "c", "continue", "-exec-continue" ]):
+            self.send_to_current_session()
         else:
             self.broadcast(cmd)
         

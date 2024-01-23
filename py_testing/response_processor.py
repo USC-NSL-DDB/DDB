@@ -53,7 +53,8 @@ class ResponseProcessor:
         resp_payload = response.response["payload"]
 
         if resp_msg == "thread-created":
-            self.state_manager.create_thread(sid, int(resp_payload["id"]))
+            tgid = str(resp_payload["group-id"])
+            self.state_manager.create_thread(sid, int(resp_payload["id"]), tgid)
         elif resp_msg == "running":
             thread_id = resp_payload["thread-id"]
             if thread_id == "all":
@@ -82,6 +83,13 @@ class ResponseProcessor:
                 for t in stopped_threads:
                     tid = int(t)
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
+        elif resp_msg == "thread-group-started":
+            tgid = str(resp_payload['id'])
+            pid = int(resp_payload["pid"])
+            self.state_manager.start_thread_group(sid, tgid, pid)
+        elif resp_msg == "thread-group-exited":
+            tgid = str(resp_payload['id'])
+            self.state_manager.exit_thread_group(sid, tgid)
         else:
             print("Ignoring this notify record for now.")
 
