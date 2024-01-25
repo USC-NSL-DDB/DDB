@@ -83,6 +83,9 @@ class ResponseProcessor:
                 for t in stopped_threads:
                     tid = int(t)
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
+        elif resp_msg == "thread-group-added":
+            tgid = str(resp_payload['id'])
+            self.state_manager.add_thread_group(sid, tgid)
         elif resp_msg == "thread-group-started":
             tgid = str(resp_payload['id'])
             pid = int(resp_payload["pid"])

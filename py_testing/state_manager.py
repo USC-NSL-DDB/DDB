@@ -40,8 +40,7 @@ class SessionMeta:
         self.t_to_tg[tid] = tgid
         self.tg_to_t[tgid].add(tid)
 
-    # Should be called internally only as gdb don't emit 'thread-group-created'
-    def create_thread_group(self, tgid: str):
+    def add_thread_group(self, tgid: str):
         with self.rlock:
             if not (tgid in self.tg_to_t):
                 self.tg_to_t[tgid] = set()
@@ -49,7 +48,7 @@ class SessionMeta:
 
     def start_thread_group(self, tgid: str, pid: int):
         with self.rlock:
-            self.create_thread_group(tgid)
+            # self.create_thread_group(tgid)
             self.tg_status[tgid] = ThreadGroupStatus.RUNNING
             self.tg_to_pid[tgid] = pid
 
@@ -96,7 +95,8 @@ class SessionMeta:
         for ts in self.t_status:
             out += f"({ts}, {self.t_status[ts]}), "
         out += f"\n\tthread to thread group: {self.t_to_tg}"
-        out += f"\n\tthread group to thread: {self.tg_to_t}\n"
+        out += f"\n\tthread group to thread: {self.tg_to_t}"
+        out += f"\n\ttrhead group status: {self.tg_status}"
         return out
 
 class StateManager:
@@ -117,6 +117,9 @@ class StateManager:
 
     def register_session(self, sid: int, tag: str):
         self.sessions[sid] = SessionMeta(sid, tag)
+
+    def add_thread_group(self, sid: int, tgid: str):
+        self.sessions[sid].add_thread_group(tgid)
 
     def start_thread_group(self, sid: int, tgid: str, pid: int):
         self.sessions[sid].start_thread_group(tgid, pid)
