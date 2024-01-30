@@ -16,11 +16,30 @@ class CmdRouter:
             return
 
         token = None
-        prefix = cmd.split()[0]
-        if prefix.isdigit():
-            token = prefix
-            prefix = cmd.split()[1]
-        prefix = prefix.strip()
+        prefix = None
+        cmd_no_token = None
+        cmd = cmd.strip()
+        for idx, cmd_char in enumerate(cmd):
+            if (not cmd_char.isdigit()) and (idx == 0):
+                prefix = cmd.split()[0]
+                cmd_no_token = cmd
+                break
+            
+            if not cmd_char.isdigit():
+                token = cmd[:idx].strip()
+                cmd_no_token = cmd[idx:].strip()
+                if len(cmd_no_token) == 0:
+                    # no meaningful input
+                    return
+                prefix = cmd_no_token.split()[0]
+
+        cmd = f"{cmd}\n"
+            
+        # prefix = cmd.split()[0]
+        # if prefix.isdigit():
+        #     token = prefix
+        #     prefix = cmd.split()[1]
+        # prefix = prefix.strip()
         
         if (prefix in [ "b", "break", "-break-insert" ]):
             self.broadcast(cmd)

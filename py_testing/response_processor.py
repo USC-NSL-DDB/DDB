@@ -45,7 +45,13 @@ class ResponseProcessor:
 
             if resp_type == "notify":
                 self.handle_notify(resp)
-                print(str(self.state_manager))
+                # print(str(self.state_manager))
+            
+            if resp_type == "result":
+                self.handle_result(resp) 
+
+    def handle_result(self, response: SessionResponse):
+        print("result")
 
     def handle_notify(self, response: SessionResponse):
         sid = response.sid
@@ -95,6 +101,24 @@ class ResponseProcessor:
             self.state_manager.exit_thread_group(sid, tgid)
         else:
             print("Ignoring this notify record for now.")
+
+    # def handle_notify_thread_group(self, response: SessionResponse):
+    #     sid = response.sid
+    #     resp_msg = response.response["message"]
+    #     resp_payload = response.response["payload"]
+
+    #     if resp_msg == "thread-group-added":
+    #         tgid = str(resp_payload['id'])
+    #         self.state_manager.add_thread_group(sid, tgid)
+
+    #     if resp_msg == "thread-group-started":
+    #         tgid = str(resp_payload['id'])
+    #         pid = int(resp_payload["pid"])
+    #         self.state_manager.start_thread_group(sid, tgid, pid)
+
+    #     if resp_msg == "thread-group-exited":
+    #         tgid = str(resp_payload['id'])
+    #         self.state_manager.exit_thread_group(sid, tgid)
 
 # Eager instantiation
 _ = ResponseProcessor.inst()
