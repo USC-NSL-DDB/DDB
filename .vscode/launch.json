@@ -5,11 +5,19 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: debugger main.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/py_testing/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [ "py_testing/configs/dbg_multithread_print.yaml" ],
+        },
+        {
             "name": "(gdb) multiprocess",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/multiprocess",
-            "args": [],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
@@ -56,6 +64,6 @@
             //         "ignoreFailures": true
             //     }
             // ]
-        }
+        },
     ]
 }

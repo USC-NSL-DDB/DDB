@@ -1,5 +1,6 @@
 from threading import Lock, Thread
 from queue import Queue
+from cmd_tracker import CmdTracker 
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
 from data_struct import SessionResponse
@@ -44,7 +45,8 @@ class ResponseProcessor:
                 self.handle_result(resp) 
 
     def handle_result(self, response: SessionResponse):
-        print("result")
+        # print("result")
+        CmdTracker.inst().recv_response(response)
 
     def handle_notify(self, response: SessionResponse):
         sid = response.sid

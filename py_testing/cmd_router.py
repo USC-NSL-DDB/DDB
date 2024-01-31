@@ -1,5 +1,6 @@
 from typing import List
 from gdb_session import GdbSession
+from cmd_tracker import CmdTracker
 from state_manager import StateManager
 
 class CmdRouter:
@@ -32,6 +33,10 @@ class CmdRouter:
                     # no meaningful input
                     return
                 prefix = cmd_no_token.split()[0]
+                break
+
+        # if token:
+        #     CmdTracker.inst().create_cmd(token)
 
         cmd = f"{cmd}\n"
             
@@ -50,6 +55,12 @@ class CmdRouter:
             self.send_to_current_session(cmd)
         elif (prefix in [ "c", "continue", "-exec-continue" ]):
             self.send_to_current_session(cmd)
+        elif (prefix in [ "-thread-info" ]):
+            target_s_ids = set()
+            for s in self.sessions:
+                target_s_ids.add(s.sid)
+            CmdTracker.inst().create_cmd(token, target_s_ids)
+            self.broadcast(cmd)
         else:
             self.send_to_current_session(cmd)
             # self.broadcast(cmd)

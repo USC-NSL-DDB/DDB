@@ -24,7 +24,7 @@ class GdbManager:
         [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
-        if cmd and cmd.split()[0] == "session":
+        if cmd.strip() and cmd.split()[0] == "session":
             selection = int(cmd.split()[1])
             self.state_mgr.set_current_session(selection)
             print(f"selected session {self.state_mgr.get_current_session()}.")

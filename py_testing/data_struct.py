@@ -5,8 +5,8 @@ class SessionResponse:
         self.response = response
         self.token: str = None
 
-        if "token" in response:
-            self.token = response["token"]
+        if ("token" in response) and response["token"]:
+            self.token = str(response["token"])
 
     def __str__(self) -> str:
         return f"Response - sid: {self.sid}, output:\n\t{self.output}"
