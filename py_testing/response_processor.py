@@ -2,15 +2,8 @@ from threading import Lock, Thread
 from queue import Queue
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
+from data_struct import SessionResponse
 
-class SessionResponse:
-    def __init__(self, sid: int, meta: str, response: dict) -> None:
-        self.sid = sid
-        self.meta = meta
-        self.response = response
-
-    def __str__(self) -> str:
-        return f"Response - sid: {self.sid}, output:\n\t{self.output}"
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None 

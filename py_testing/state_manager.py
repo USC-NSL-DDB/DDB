@@ -65,7 +65,7 @@ class SessionMeta:
     def add_thread_to_group(self, tid: int, tgid: str):
         with self.rlock:
             if not (tgid in self.tg_to_t):
-                self.create_thread_group(tgid)
+                self.add_thread_group(tgid)
         
             self.tg_to_t[tgid].add(tid)
             self.t_to_tg[tid] = tgid
