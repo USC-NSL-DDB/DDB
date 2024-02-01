@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Set, Union
 from gdb_session import GdbSession
 from cmd_tracker import CmdTracker
 from state_manager import StateManager
@@ -47,22 +47,18 @@ class CmdRouter:
         # prefix = prefix.strip()
         
         if (prefix in [ "b", "break", "-break-insert" ]):
-            self.broadcast(cmd)
+            self.broadcast(token, cmd)
         elif (prefix in [ "run", "r", "-exec-run" ]):
-            self.broadcast(cmd)
+            self.broadcast(token, cmd)
         elif (prefix in [ "list" ]):
             # self.send_to_first(cmd)
-            self.send_to_current_session(cmd)
+            self.send_to_current_session(token, cmd)
         elif (prefix in [ "c", "continue", "-exec-continue" ]):
-            self.send_to_current_session(cmd)
+            self.send_to_current_session(token, cmd)
         elif (prefix in [ "-thread-info" ]):
-            target_s_ids = set()
-            for s in self.sessions:
-                target_s_ids.add(s.sid)
-            CmdTracker.inst().create_cmd(token, target_s_ids)
-            self.broadcast(cmd)
+            self.broadcast(token, cmd)
         else:
-            self.send_to_current_session(cmd)
+            self.send_to_current_session(token, cmd)
             # self.broadcast(cmd)
         
         
@@ -70,20 +66,40 @@ class CmdRouter:
         # for s in self.sessions:
         #     s.write(cmd)
 
-    def send_to_current_session(self, cmd: str):
+    def send_to_current_session(self, token: Optional[str], cmd: str):
         curr_session = self.state_mgr.get_current_session()
         if not curr_session:
             print("use session #sno to select session.")
             return
+
+        self.register_cmd(token, curr_session)
         [ s.write(cmd) for s in self.sessions if s.sid == curr_session ]
 
-    def broadcast(self, cmd: str):
+    def broadcast(self, token: Optional[str], cmd: str):
+        self.register_cmd_for_all(token)
         for s in self.sessions:
             s.write(cmd)
 
     # def send_to_random_one(self, cmd: str):
         
 
-    def send_to_first(self, cmd: str):
+    def send_to_first(self, token: Optional[str], cmd: str):
+        self.register_cmd(token, self.sessions[0].sid) 
         self.sessions[0].write(cmd)
     
+    ### Some help functions for registering cmds
+    def register_cmd_for_all(self, token: Optional[str]):
+        target_s_ids = set()
+        for s in self.sessions:
+            target_s_ids.add(s.sid)
+        self.register_cmd(token, target_s_ids)
+
+    def register_cmd(self, token: Optional[str], target_sessions: Union[int, Set[int]]):
+        if token:
+            if isinstance(target_sessions, int):
+                target_sessions = { target_sessions }
+
+            if not isinstance(target_sessions, Set):
+                raise Exception("wrong argument")
+
+            CmdTracker.inst().create_cmd(token, target_sessions)
