@@ -16,6 +16,11 @@ class CmdRouter:
             # special case of no meaningful command
             return
 
+        if cmd[0] == ":":
+            # handle private command
+            self.handle_private_cmd(cmd[1:])
+            return
+
         token = None
         prefix = None
         cmd_no_token = None
@@ -103,3 +108,15 @@ class CmdRouter:
                 raise Exception("wrong argument")
 
             CmdTracker.inst().create_cmd(token, target_sessions)
+
+    def handle_private_cmd(self, cmd: str):
+        print("Executing private cmd.")
+        cmd = cmd.strip()
+        if cmd == "p-session-meta":
+            print("Printing all session meta...")
+            print(StateManager.inst().get_all_session_meta())
+        elif cmd == "p-session-manager-meta":
+            print("Printing all session manager meta...")
+            print(StateManager.inst()) 
+        else:
+            print("Unknown private command.")

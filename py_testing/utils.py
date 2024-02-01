@@ -20,3 +20,6 @@ def mi_print(response, meta: str):
                 eprint(out, end="")
     except Exception as e:
         print(f"response: {response}. meta: {meta}, e: {e}")
+
+def wrap_grouped_message(msg: str) -> str:
+    return f"**** GROUPED RESPONSE START ****\n{msg}\n**** GROUPED RESPONSE END ****\n\n"

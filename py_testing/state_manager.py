@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 # from gdb_manager import GdbSession
 from uuid import uuid4, UUID
 from enum import Enum
@@ -22,6 +22,13 @@ class SessionMeta:
         self.sid = sid
         self.current_tid: Optional[int] = None
         self.t_status: dict[int, ThreadStatus] = {}
+
+        # maps session unique tid to per inferior tid
+        # for example, if session 1 has:
+        # tg1: { 1, 2, 4 }
+        # tg2: { 3 } then,
+        # self.tid_to_per_inferior_tid = { 1: 1, 2: 1, 3: 2, 4: 1 }
+        self.tid_to_per_inferior_tid: dict[int, int] = {}
         
         # maps thread_id (int) to its belonging thread_group_id (str)
         self.t_to_tg: dict[int, str] = {}
@@ -36,9 +43,14 @@ class SessionMeta:
         self.rlock = RLock()
 
     def create_thread(self, tid: int, tgid: str):
-        self.t_status[tid] = ThreadStatus.INIT
-        self.t_to_tg[tid] = tgid
-        self.tg_to_t[tgid].add(tid)
+        with self.rlock:
+            self.t_status[tid] = ThreadStatus.INIT
+            self.t_to_tg[tid] = tgid
+            
+            num_exist_threads = len(self.tg_to_t[tgid])
+            # manage the per-inferior thread id
+            self.tid_to_per_inferior_tid[tid] = num_exist_threads + 1
+            self.tg_to_t[tgid].add(tid)
 
     def add_thread_group(self, tgid: str):
         with self.rlock:
@@ -97,7 +109,56 @@ class SessionMeta:
         out += f"\n\tthread to thread group: {self.t_to_tg}"
         out += f"\n\tthread group to thread: {self.tg_to_t}"
         out += f"\n\ttrhead group status: {self.tg_status}"
+        out += f"\n\ttid to per thread group tid: {self.tid_to_per_inferior_tid}"
         return out
+
+# A simple wrapper around counter in case any customization later
+class GlobalInferiorIdCounter:
+    _c: "GlobalInferiorIdCounter" = None
+    _lock = Lock()
+    
+    def __init__(self) -> None:
+        from counter import TSCounter
+        self.counter = TSCounter()
+
+    @staticmethod
+    def inst() -> "GlobalInferiorIdCounter":
+        with GlobalInferiorIdCounter._lock:
+            if GlobalInferiorIdCounter._c:
+                return GlobalInferiorIdCounter._c
+            GlobalInferiorIdCounter._c = GlobalInferiorIdCounter()
+            return GlobalInferiorIdCounter._c
+
+    def inc(self) -> int:
+        return self.counter.increment()
+
+    @staticmethod
+    def get() -> int:
+        return GlobalInferiorIdCounter.inst().inc()
+
+# A simple wrapper around counter in case any customization later
+class GlobalThreadIdCounter:
+    _c: "GlobalThreadIdCounter" = None
+    _lock = Lock()
+    
+    def __init__(self) -> None:
+        from counter import TSCounter
+        self.counter = TSCounter()
+
+    @staticmethod
+    def inst() -> "GlobalThreadIdCounter":
+        with GlobalThreadIdCounter._lock:
+            if GlobalThreadIdCounter._c:
+                return GlobalThreadIdCounter._c
+            GlobalThreadIdCounter._c = GlobalThreadIdCounter()
+            return GlobalThreadIdCounter._c
+
+    def inc(self) -> int:
+        return self.counter.increment()
+
+    @staticmethod
+    def get() -> int:
+        return GlobalThreadIdCounter.inst().inc()
 
 class StateManager:
     _store: "StateManager" = None
@@ -106,6 +167,18 @@ class StateManager:
     def __init__(self) -> None:
         self.sessions: dict[int, SessionMeta] = {}
         self.current_session = None
+
+        # Maps (session + thread id) to global thread id
+        self.sidtid_to_gtid: dict[Tuple[int, int], int] = {}
+        # Maps global thread id to (session + thread id)
+        self.gtid_to_sidtid: dict[int, Tuple[int, int]] = {}
+        
+        # Maps (session + thread group id) to global inferior id
+        self.sidtgid_to_giid: dict[Tuple[int, str], int] = {}
+        # Maps global inferior id to (session + thread group id)
+        self.giid_to_sidtgid: dict[int, Tuple[int, str]] = {}
+
+        self.lock = Lock()
 
     @staticmethod
     def inst() -> "StateManager":
@@ -119,6 +192,11 @@ class StateManager:
         self.sessions[sid] = SessionMeta(sid, tag)
 
     def add_thread_group(self, sid: int, tgid: str):
+        with self.lock:
+            giid = GlobalInferiorIdCounter.get()
+            self.sidtgid_to_giid[(sid, tgid)] = giid
+            self.giid_to_sidtgid[giid] = (sid, tgid)
+
         self.sessions[sid].add_thread_group(tgid)
 
     def start_thread_group(self, sid: int, tgid: str, pid: int):
@@ -128,6 +206,10 @@ class StateManager:
         self.sessions[sid].exit_thread_group(tgid)
 
     def create_thread(self, sid: int, tid: int, tgid: str):
+        with self.lock:
+            gtid = GlobalThreadIdCounter.get()
+            self.sidtid_to_gtid[(sid, tid)] = gtid
+            self.gtid_to_sidtid[gtid] = (sid, tid)
         self.sessions[sid].create_thread(tid, tgid)
 
     def update_thread_status(self, sid: int, tid: int, status: ThreadStatus):
@@ -145,10 +227,33 @@ class StateManager:
     def get_current_session(self) -> Optional[int]:
         return self.current_session
 
+    def get_gtid(self, sid: int, tid: int) -> int:
+        with self.lock:
+            return self.sidtid_to_gtid[(sid, tid)]
+
+    def get_readable_gtid(self, sid: int, tid: int) -> str:
+        # returns something like "1.2"
+        # where 1 is global inferior id and 2 is local thread id
+        with self.lock:
+            giid = self.sidtgid_to_giid[(sid, self.sessions[sid].t_to_tg[tid])]
+            return f"{giid}.{self.sessions[sid].tid_to_per_inferior_tid[tid]}"            
+
     def __str__(self) -> str:
-        out = "Session States: \n"
+        out = "**** SESSION MANAGER START ****\n"
+        out += f"- STATE MANAGER META\n"
+        out += f"current session: {self.current_session}\n"
+        out += f"sidtid_to_gtid: {self.sidtid_to_gtid}\n"
+        out += f"gtid_to_sidtid: {self.gtid_to_sidtid}\n"
+        out += f"sidtgid_to_giid: {self.sidtgid_to_giid}\n"
+        out += f"giid_to_sidtgid: {self.giid_to_sidtgid}\n\n"
+        out += f"- SESSION META\n{self.get_all_session_meta()}\n"
+        out = "**** SESSION MANAGER END ****\n"
+        return out
+
+    def get_all_session_meta(self) -> str:
+        out = ""
         for sid in self.sessions:
-            out += f"sid: {sid}, {self.sessions[sid]}"
+            out += f"{str(self.sessions[sid])}\n"
         return out
 
 # Eager instantiation
