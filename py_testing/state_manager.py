@@ -178,7 +178,7 @@ class StateManager:
         # Maps global inferior id to (session + thread group id)
         self.giid_to_sidtgid: dict[int, Tuple[int, str]] = {}
 
-        self.lock = Lock()
+        self.lock = RLock()
 
     @staticmethod
     def inst() -> "StateManager":
@@ -231,12 +231,25 @@ class StateManager:
         with self.lock:
             return self.sidtid_to_gtid[(sid, tid)]
 
+    def get_readable_tid_by_gtid(self, gtid: int) -> str:
+        with self.lock:
+            sid, tid = self.gtid_to_sidtid[gtid]
+            return self.get_readable_gtid(sid, tid)
+
     def get_readable_gtid(self, sid: int, tid: int) -> str:
         # returns something like "1.2"
         # where 1 is global inferior id and 2 is local thread id
         with self.lock:
             giid = self.sidtgid_to_giid[(sid, self.sessions[sid].t_to_tg[tid])]
             return f"{giid}.{self.sessions[sid].tid_to_per_inferior_tid[tid]}"            
+
+    def get_giid(self, sid: int, tgid: str) -> int:
+        with self.lock:
+            return self.sidtgid_to_giid[(sid, tgid)]
+
+    def get_readable_giid(self, sid: int, tgid: str) -> str:
+        with self.lock:
+            return str(self.get_readable_giid(sid, tgid))
 
     def __str__(self) -> str:
         out = "**** SESSION MANAGER START ****\n"
