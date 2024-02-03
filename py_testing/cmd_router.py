@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Union
 from gdb_session import GdbSession
 from cmd_tracker import CmdTracker
 from counter import TSCounter
-from response_transformer import ProcessInfoTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
+from response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
 from state_manager import StateManager
 
 # A simple wrapper around counter in case any customization later
@@ -100,6 +100,8 @@ class CmdRouter:
             subcmd = cmd_no_token.split()[1]
             if subcmd == "threads" or subcmd == "thread":
                 self.broadcast(token, f"{token}-thread-info", ThreadInfoReadableTransformer())
+            if subcmd == "inferiors" or subcmd == "inferior":
+                self.broadcast(token, f"{token}-list-thread-groups", ProcessReadableTransformer())
         else:
             self.send_to_current_session(token, cmd)
             # self.broadcast(cmd)

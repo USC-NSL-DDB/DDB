@@ -97,6 +97,33 @@ class ProcessInfoTransformer(TransformerBase):
         out_str = utils.wrap_grouped_message(str(data))
         return out_str
 
+class ProcessReadableTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pinfo = ProcessInfoTransformer().transform(responses)
+        out_dict = {
+            "groups": [ 
+                { 
+                    "id": int(p["id"][1:]), 
+                    "desc": f"{p['type']} {p['pid']}",
+                    "exec": p["executable"]
+                } 
+                for p in pinfo["groups"] 
+            ]
+        }
+        return out_dict
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        data = self.transform(responses)
+        out_str = "Num\tDescription\tExecutable\n"
+        # out_str = "\n".join(data["groups"])
+        for g in data["groups"]:
+            out_str += f"{g['id']}\t{g['desc']}\t{g['exec']}\n"
+        out_str = utils.wrap_grouped_message(out_str)
+        return out_str
+
 ''' Handling `info threads` response
 '''
 class ThreadInfoReadableTransformer(TransformerBase):
