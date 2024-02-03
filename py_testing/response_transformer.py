@@ -12,10 +12,12 @@ class TransformerBase:
         raise NotImplementedError
 
     def format(self, responses: List[SessionResponse]) -> str:
-        raise NotImplementedError
+        return self.transform(responses) 
 
     # def transform_stdout(self, responses: List)
 
+''' Just a dummy transformer
+'''
 class PlainTransformer(TransformerBase):
     def __init__(self) -> None:
         super().__init__()
@@ -36,6 +38,8 @@ class PlainTransformer(TransformerBase):
         out_str = utils.wrap_grouped_message(out_str)
         return out_str
 
+''' Handling `-list-threads` response
+'''
 class ThreadInfoTransformer(TransformerBase):
     def __init__(self) -> None:
         super().__init__()
@@ -67,6 +71,34 @@ class ThreadInfoTransformer(TransformerBase):
         out_str = utils.wrap_grouped_message(str(data))
         return out_str
 
+''' Handling `-list-thread-groups` response
+'''
+class ProcessInfoTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        all_process_info = []
+        for res in responses:
+            if res.payload and ("groups" in res.payload):
+                processes = res.payload["groups"]
+                sid = res.sid
+                for p in processes:
+                    local_tgid = str(p["id"])
+                    p["id"] = f"i{StateManager.inst().get_giid(sid, local_tgid)}"
+                    all_process_info.append(p) 
+
+        all_process_info = sorted(all_process_info, key=lambda x: x["id"])
+        out_dict = { "groups": all_process_info }
+        return out_dict
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        data = self.transform(responses)
+        out_str = utils.wrap_grouped_message(str(data))
+        return out_str
+
+''' Handling `info threads` response
+'''
 class ThreadInfoReadableTransformer(TransformerBase):
     def __init__(self) -> None:
         super().__init__()
@@ -95,7 +127,6 @@ class ThreadInfoReadableTransformer(TransformerBase):
         out_str += "\n".join([ e[1] for e in out_entries ])
         out_str = utils.wrap_grouped_message(out_str)
         return out_str
-
 
 class ResponseTransformer:
     @staticmethod
