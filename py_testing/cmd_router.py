@@ -32,7 +32,7 @@ class CmdTokenGenerator:
 class CmdRouter:
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
-        self.sessions = sessions
+        self.sessions = { s.sid: s for s in sessions }
         self.state_mgr = StateManager.inst()
 
     def prepend_token(self, cmd: str) -> str:
@@ -89,9 +89,16 @@ class CmdRouter:
             self.broadcast(token, cmd)
         elif (prefix in [ "list" ]):
             # self.send_to_first(cmd)
+            self.state_mgr.set_current_session(1)
             self.send_to_current_session(token, cmd)
         elif (prefix in [ "c", "continue", "-exec-continue" ]):
-            self.send_to_current_session(token, cmd)
+            self.send_to_current_thread(token, cmd)
+            # self.send_to_current_session(token, cmd)
+        elif (prefix in [ "-thread-select"]):
+            if len(cmd_no_token.split()) < 2:
+                print("Usage: -thread-select #gtid")
+                return
+            self.state_mgr.set_current_gthread(int(cmd_no_token.split()[1]))
         elif (prefix in [ "-thread-info" ]):
             self.broadcast(token, cmd, ThreadInfoTransformer())
         elif (prefix in [ "-list-thread-groups" ]):
@@ -103,13 +110,29 @@ class CmdRouter:
             if subcmd == "inferiors" or subcmd == "inferior":
                 self.broadcast(token, f"{token}-list-thread-groups", ProcessReadableTransformer())
         else:
-            self.send_to_current_session(token, cmd)
+            self.send_to_current_thread(token, cmd)
+            # self.send_to_current_session(token, cmd)
             # self.broadcast(cmd)
         
         
         # if (cmd.strip() in [ ] )
         # for s in self.sessions:
         #     s.write(cmd)
+    def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
+        sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
+        self.register_cmd(token, sid, transformer)
+        # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
+        self.sessions[sid].write("-thread-select " + str(tid) + "\n" + cmd)
+
+    # def select_
+
+    def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
+        curr_thread = self.state_mgr.get_current_gthread()
+        if not curr_thread:
+            print("use -thread-select #gtid to select the thread.")
+            return
+        self.send_to_thread(curr_thread, token, cmd, transformer)
+
 
     def send_to_current_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_session = self.state_mgr.get_current_session()
@@ -118,25 +141,25 @@ class CmdRouter:
             return
 
         self.register_cmd(token, curr_session, transformer)
-        [ s.write(cmd) for s in self.sessions if s.sid == curr_session ]
+        [ s.write(cmd) for _, s  in self.sessions.items() if s.sid == curr_session ]
 
     def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd_for_all(token, transformer)
-        for s in self.sessions:
+        for _, s in self.sessions.items():
             s.write(cmd)
 
     # def send_to_random_one(self, cmd: str):
         
 
     def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
-        self.register_cmd(token, self.sessions[0].sid, transformer) 
-        self.sessions[0].write(cmd)
+        self.register_cmd(token, self.sessions[1].sid, transformer) 
+        self.sessions[1].write(cmd)
     
     ### Some help functions for registering cmds
     def register_cmd_for_all(self, token: Optional[str], transformer: Optional[ResponseTransformer] = None):
         target_s_ids = set()
-        for s in self.sessions:
-            target_s_ids.add(s.sid)
+        for sid in self.sessions:
+            target_s_ids.add(sid)
         self.register_cmd(token, target_s_ids, transformer)
 
     def register_cmd(self, token: Optional[str], target_sessions: Union[int, Set[int]], transformer: Optional[ResponseTransformer] = None):

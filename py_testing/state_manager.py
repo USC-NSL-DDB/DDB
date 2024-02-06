@@ -167,6 +167,7 @@ class StateManager:
     def __init__(self) -> None:
         self.sessions: dict[int, SessionMeta] = {}
         self.current_session = None
+        self.selected_gthread = None
 
         # Maps (session + thread id) to global thread id
         self.sidtid_to_gtid: dict[Tuple[int, int], int] = {}
@@ -221,6 +222,12 @@ class StateManager:
     def set_current_tid(self, sid: int, current_tid: int):
         self.sessions[sid].set_current_tid(current_tid)
 
+    def set_current_gthread(self, gtid: int):
+        self.selected_gthread = gtid 
+
+    def get_current_gthread(self) -> Optional[int]:
+        return self.selected_gthread
+
     def set_current_session(self, sid: int):
         self.current_session = sid
 
@@ -246,10 +253,14 @@ class StateManager:
     def get_giid(self, sid: int, tgid: str) -> int:
         with self.lock:
             return self.sidtgid_to_giid[(sid, tgid)]
+    
+    def get_sidtid_by_gtid(self, gtid: int) -> Tuple[int, int]:
+        with self.lock:
+            return self.gtid_to_sidtid[gtid]
 
     def get_readable_giid(self, sid: int, tgid: str) -> str:
         with self.lock:
-            return str(self.get_readable_giid(sid, tgid))
+            return str(self.get_giid(sid, tgid))
 
     def __str__(self) -> str:
         out = "**** SESSION MANAGER START ****\n"
@@ -260,7 +271,7 @@ class StateManager:
         out += f"sidtgid_to_giid: {self.sidtgid_to_giid}\n"
         out += f"giid_to_sidtgid: {self.giid_to_sidtgid}\n\n"
         out += f"- SESSION META\n{self.get_all_session_meta()}\n"
-        out = "**** SESSION MANAGER END ****\n"
+        out += "**** SESSION MANAGER END ****\n"
         return out
 
     def get_all_session_meta(self) -> str:

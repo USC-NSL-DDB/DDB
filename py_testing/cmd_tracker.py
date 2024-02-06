@@ -54,6 +54,9 @@ class CmdTracker:
     def create_cmd(self, token: Optional[str], target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
         if token:
             with self._lock:
+                if token in self.waiting_cmds:
+                    print(f"Token {token} already exists. Skip registering the cmd.")
+                    return
                 self.waiting_cmds[token] = CmdMeta(token, target_sessions, transformer)
         else:
             print("No token supplied. skip registering the cmd.")

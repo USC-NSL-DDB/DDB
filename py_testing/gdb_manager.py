@@ -13,24 +13,18 @@ class GdbManager:
         for config in components:
             self.sessions.append(GdbSession(config))
 
-        # self.output_handle = Thread(target=self.handle_output, args=())
-        # self.output_handle.start()
-
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
-        # self.state_manager = StateManager(self.sessions)
 
-        # [ s.attach_state_manager(self.state_manager) for s in self.sessions ]
         [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
-        if cmd.strip() and cmd.split()[0] == "session":
-            selection = int(cmd.split()[1])
-            self.state_mgr.set_current_session(selection)
-            print(f"selected session {self.state_mgr.get_current_session()}.")
-        else:
-            self.router.send_cmd(cmd)
-        # pass
+        # if cmd.strip() and cmd.split()[0] == "session":
+        #     selection = int(cmd.split()[1])
+        #     self.state_mgr.set_current_session(selection)
+        #     print(f"selected session {self.state_mgr.get_current_session()}.")
+        # else:
+        self.router.send_cmd(cmd)
         # for s in self.sessions:
         #     s.write(cmd)
 
