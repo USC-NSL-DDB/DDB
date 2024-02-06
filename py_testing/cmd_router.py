@@ -7,6 +7,8 @@ from response_transformer import ProcessInfoTransformer, ProcessReadableTransfor
 from state_manager import StateManager
 
 # A simple wrapper around counter in case any customization later
+''' Generate a global unique/incremental token for every cmd it sends
+'''
 class CmdTokenGenerator:
     _sc: "CmdTokenGenerator" = None
     _lock = Lock()
@@ -29,6 +31,13 @@ class CmdTokenGenerator:
     def get() -> int:
         return CmdTokenGenerator.inst().inc()
 
+''' Routing all commands to the desired gdb sessions
+`CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd. 
+`CmdRouter` will partially parse/extract the token and command to ensure it will be resgitered with the `CmdTracker`.
+`CmdRouter` also handles the private commands which can be used to print out some internal states
+
+**Key Functions**: `send_cmd(str)`
+'''
 class CmdRouter:
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
@@ -39,6 +48,7 @@ class CmdRouter:
         token = CmdTokenGenerator.get()
         return f"{token}{cmd}"
 
+    # TODO: handle the case where external command passed in carries a token
     def send_cmd(self, cmd: str):
         print("sending cmd through the CmdRouter...")
 
