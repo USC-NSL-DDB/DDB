@@ -94,6 +94,10 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
+        if isinstance(cmd, list):
+            self.session_ctrl.write(cmd, read_response=False)
+            return
+
         if (cmd.strip() in [ "run", "r" ]) and self.run_delay:
             sleep(self.run_delay)
         self.session_ctrl.write(cmd, read_response=False)
