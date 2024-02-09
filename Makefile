@@ -50,6 +50,9 @@ test_multithread_print_obj = $(test_multithread_print_src:.cpp=.o)
 test_multiproc_print_src = $(TEST_BINARIES_PATH)/multiprocess.cpp
 test_multiproc_print_obj = $(test_multiproc_print_src:.cpp=.o)
 
+test_arg_pass_src = $(TEST_BINARIES_PATH)/arg_pass.cpp
+test_arg_pass_obj = $(test_arg_pass_src:.cpp=.o)
+
 bin/hello_world: $(test_hello_world_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_hello_world_obj)
 bin/nested_frame: $(test_nested_frame_obj)
@@ -58,8 +61,16 @@ bin/multithread_print: $(test_multithread_print_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_multithread_print_obj) -lpthread
 bin/multiprocess: $(test_multiproc_print_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_multiproc_print_obj) -lpthread
+bin/arg_pass: $(test_arg_pass_obj)
+	$(CXX) $(CXXFLAGS) -o $@ $(test_arg_pass_obj)
 
-test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess
+test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass
+
+gdb: 
+	pushd gdb-14.1
+	mkdir -p build
+	pushd build
+	../configure && make -j$(NCORES)
 
 .PHONY: clean
 clean:

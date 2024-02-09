@@ -147,8 +147,9 @@ class ThreadInfoReadableTransformer(TransformerBase):
             # func_args_str = f"({[a['name'] for a in t['frame']['args']]})"
             # full_func = f"{t['frame']['func']} at {t['frame']['addr']}"
             tid = StateManager.inst().get_readable_tid_by_gtid(int(t['id']))
+            file_loc = f" at {t['frame']['file']}:{t['frame']['line']}" if 'file' in t['frame'] else ''
             out_entries.append(
-                (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']} at {t['frame']['file']}:{t['frame']['line']}")
+                (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']}{file_loc}")
             )
         out_entries = sorted(out_entries, key=lambda x: x[0])
         out_str += "\n".join([ e[1] for e in out_entries ])
