@@ -5,7 +5,7 @@ class SessionResponse:
         self.response = response
         self.token: str = None
         self.stream: str = response["stream"]
-        self.payload: str = response["payload"]
+        self.payload: dict = response["payload"]
         self.msg: str = response["message"]
 
         if ("token" in response) and response["token"]:

@@ -1,5 +1,5 @@
 from data_struct import SessionResponse
-from typing import Any, List
+from typing import Any, List, Union
 from state_manager import StateManager
 import utils
 
@@ -35,7 +35,7 @@ class PlainTransformer(TransformerBase):
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
         out_str = "\n".join(data["data"])
-        out_str = utils.wrap_grouped_message(out_str)
+        # out_str = utils.wrap_grouped_message(out_str)
         return out_str
 
 ''' Handling `-list-threads` response
@@ -68,7 +68,8 @@ class ThreadInfoTransformer(TransformerBase):
 
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
-        out_str = utils.wrap_grouped_message(str(data))
+        # out_str = utils.wrap_grouped_message(str(data))
+        out_str = str(data)
         return out_str
 
 ''' Handling `-list-thread-groups` response
@@ -94,7 +95,8 @@ class ProcessInfoTransformer(TransformerBase):
 
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
-        out_str = utils.wrap_grouped_message(str(data))
+        # out_str = utils.wrap_grouped_message(str(data))
+        out_str = str(data)
         return out_str
 
 class ProcessReadableTransformer(TransformerBase):
@@ -121,7 +123,7 @@ class ProcessReadableTransformer(TransformerBase):
         # out_str = "\n".join(data["groups"])
         for g in data["groups"]:
             out_str += f"{g['id']}\t{g['desc']}\t{g['exec']}\n"
-        out_str = utils.wrap_grouped_message(out_str)
+        # out_str = utils.wrap_grouped_message(out_str)
         return out_str
 
 ''' Handling `info threads` response
@@ -153,10 +155,118 @@ class ThreadInfoReadableTransformer(TransformerBase):
             )
         out_entries = sorted(out_entries, key=lambda x: x[0])
         out_str += "\n".join([ e[1] for e in out_entries ])
-        out_str = utils.wrap_grouped_message(out_str)
+        # out_str = utils.wrap_grouped_message(out_str)
         return out_str
+
+''' Handling `thread-group-added` async record
+'''
+class ThreadGroupAddedNotifTransformer(TransformerBase):
+    def __init__(self, gtgid: int) -> None:
+        super().__init__()
+        self.gtgid = gtgid
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass 
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        # Example Output
+        # =thread-group-added,id="i1"
+        out_str = f"=thread-group-added,id=\"i{self.gtgid}\"\n"
+        return out_str 
+
+''' Handling `thread-created` async record
+'''
+class ThreadCreatedNotifTransformer(TransformerBase):
+    def __init__(self, gtid: int, gtgid: int) -> None:
+        super().__init__()
+        self.gtid = gtid
+        self.gtgid = gtgid
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        # Example Output
+        # =thread-created,id="1",group-id="i1"
+        out_str = f"=thread-created,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\"\n"
+        return out_str 
+
+''' Handling `running` async record
+'''
+class RunningAsyncRecordTransformer(TransformerBase):
+    def __init__(self, all_running: bool = False) -> None:
+        super().__init__()
+        self.all_running = all_running
+
+    def iter_over_threads(self, response: SessionResponse) -> str:
+        out = "" 
+        for gtid in StateManager.inst().get_gtids_by_sid(response.sid):
+            out += f"*running,thread-id={gtid}\n"
+        return out
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        response = responses[0]
+
+        # Example Output
+        # *running,thread-id="all"
+        # *running,thread-id="2"
+        out_str = None
+        if self.all_running:
+            out_str = self.iter_over_threads(response)
+        else:
+            tid = int(response.response["payload"]["thread-id"])
+            gtid = StateManager.inst().get_gtid(response.sid, tid)
+            out_str = f"*running,thread-id={gtid}\n"
+        return out_str 
+
+''' Handling `stopped` async record
+'''
+# class StopAsyncRecordTransformer(TransformerBase):
+#     def __init__(self, all_stopped: bool = False) -> None:
+#         super().__init__()
+#         self.all_stopped = all_stopped
+
+#     def transform(self, responses: List[SessionResponse]) -> dict:
+#         assert(len(responses) == 1)
+#         response = responses[0]
+#         orig_tid = response.response["payload"]["thread-id"]
+#         if orig_tid == "all":
+#             return
+#         response.response["payload"]["thread-id"] = StateManager.inst().get_gtid(response.sid, int(response.response["payload"]["thread-id"]))
+#         return response.response["payload"]
+
+#     def format(self, responses: List[SessionResponse]) -> str:
+#         # payload is returned
+#         data = self.transform(responses)
+
+#         # Example Output
+#         # *stopped,reason="breakpoint-hit"
+#         # *stopped,reason="signal-received",signal-name="SIGINT"
+#         # *stopped,thread-id="all",reason="exited-normally"
+#         # *stopped,thread-id="2",reason="exited-normally"
+
+#         out_str = None
+#         if self.all_stopped:
+#             out_str = f"*stopped,thread-id=all,reason=\"{}\"\n"
+#         else:
+#             tid = int(response.response["payload"]["thread-id"])
+#             gtid = StateManager.inst().get_gtid(response.sid, tid)
+#             out_str = f"*stopped,thread-id={gtid},reason=\"exited-normally\"\n"
+#         return out_str
 
 class ResponseTransformer:
     @staticmethod
     def transform(responses: List[SessionResponse], transformer: TransformerBase):
-        print(transformer.format(responses))
+        if isinstance(responses, SessionResponse):
+            responses = [ responses ]
+        print(f"[ TOOL MI OUTPUT ] \n{transformer.format(responses)}\n")
+
+    @staticmethod
+    def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):
+        """
+        alias for transform function.
+        """
+        ResponseTransformer.transform(responses, transformer)

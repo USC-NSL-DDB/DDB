@@ -192,13 +192,32 @@ class StateManager:
     def register_session(self, sid: int, tag: str):
         self.sessions[sid] = SessionMeta(sid, tag)
 
-    def add_thread_group(self, sid: int, tgid: str):
+    def get_gtids_by_sid(self, sid: int) -> List[int]:
+        with self.lock:
+            results = []
+            for k, v in self.sidtid_to_gtid.items():
+                if k[0] == sid:
+                    results.append(v)
+            return results
+
+    def add_thread_group(self, sid: int, tgid: str) -> int:
+        """
+        Adds a thread group (process) to the state manager.
+
+        Args:
+            sid (int): The session ID.
+            tgid (str): The thread group ID.
+
+        Returns:
+            int: The global inferior/process/thread group ID assigned to the thread group.
+        """
         with self.lock:
             giid = GlobalInferiorIdCounter.get()
             self.sidtgid_to_giid[(sid, tgid)] = giid
             self.giid_to_sidtgid[giid] = (sid, tgid)
 
         self.sessions[sid].add_thread_group(tgid)
+        return giid
 
     def start_thread_group(self, sid: int, tgid: str, pid: int):
         self.sessions[sid].start_thread_group(tgid, pid)
@@ -206,12 +225,26 @@ class StateManager:
     def exit_thread_group(self, sid: int, tgid: str):
         self.sessions[sid].exit_thread_group(tgid)
 
-    def create_thread(self, sid: int, tid: int, tgid: str):
+    def create_thread(self, sid: int, tid: int, tgid: str) -> Tuple[int, int]:
+        """
+        Creates a new global thread in the state manager by mapping the session specific thread information.
+
+        Args:
+            sid (int): The session ID from gdb/mi output.
+            tid (int): The thread ID from gdb/mi output.
+            tgid (str): The thread group ID from gdb/mi output.
+
+        Returns:
+            int: The global thread ID assigned to the new thread.
+            int: The global thread group id associated with this newly created thread.
+        """
         with self.lock:
             gtid = GlobalThreadIdCounter.get()
             self.sidtid_to_gtid[(sid, tid)] = gtid
             self.gtid_to_sidtid[gtid] = (sid, tid)
         self.sessions[sid].create_thread(tid, tgid)
+        gtgid = self.sidtgid_to_giid[(sid, tgid)]
+        return (gtid, gtgid)
 
     def update_thread_status(self, sid: int, tid: int, status: ThreadStatus):
         self.sessions[sid].update_t_status(tid, status)

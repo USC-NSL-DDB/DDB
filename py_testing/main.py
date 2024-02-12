@@ -1,10 +1,9 @@
 import os
 import subprocess
-from time import sleep
 from typing import List, Union
 from pprint import pprint
 from gdb_manager import GdbManager
-from yaml import load, dump, safe_load, YAMLError
+from yaml import safe_load, YAMLError
 from utils import *
 
 import sys

@@ -4,7 +4,7 @@ from cmd_tracker import CmdTracker
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
 from data_struct import SessionResponse
-
+from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupAddedNotifTransformer
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None 
@@ -55,14 +55,17 @@ class ResponseProcessor:
 
         if resp_msg == "thread-created":
             tgid = str(resp_payload["group-id"])
-            self.state_manager.create_thread(sid, int(resp_payload["id"]), tgid)
+            gtid, gtgid = self.state_manager.create_thread(sid, int(resp_payload["id"]), tgid)
+            ResponseTransformer.output(response, ThreadCreatedNotifTransformer(gtid, gtgid))
         elif resp_msg == "running":
             thread_id = resp_payload["thread-id"]
             if thread_id == "all":
                 self.state_manager.update_all_thread_status(sid, ThreadStatus.RUNNING)
+                ResponseTransformer.output(response, RunningAsyncRecordTransformer(all_running=True))
             else:
                 thread_id = int(thread_id)
                 self.state_manager.update_thread_status(sid, thread_id, ThreadStatus.RUNNING)
+                ResponseTransformer.output(response, RunningAsyncRecordTransformer(all_running=False))
         elif resp_msg == "stopped":
             thread_id = resp_payload["thread-id"]
             if thread_id == "all":
@@ -85,8 +88,11 @@ class ResponseProcessor:
                     tid = int(t)
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
         elif resp_msg == "thread-group-added":
+            # Example Output
+            # =thread-group-added,id="i1"
             tgid = str(resp_payload['id'])
-            self.state_manager.add_thread_group(sid, tgid)
+            gtgid = self.state_manager.add_thread_group(sid, tgid)
+            ResponseTransformer.output(response, ThreadGroupAddedNotifTransformer(gtgid))
         elif resp_msg == "thread-group-started":
             tgid = str(resp_payload['id'])
             pid = int(resp_payload["pid"])
