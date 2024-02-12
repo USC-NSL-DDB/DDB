@@ -1,17 +1,17 @@
 from enum import Enum
-import os
-import paramiko
 from uuid import uuid4
-from gdbserver_starter import RemoteGdbServer, RemoteServerCred
-from utils import eprint
-from state_manager import StateManager
 from typing import List, Optional
-from pygdbmi.gdbcontroller import GdbController
-from threading import Thread
+from threading import Thread, Lock
 from time import sleep
-from threading import Lock
 from counter import TSCounter
 from response_processor import ResponseProcessor, SessionResponse
+from pygdbmi.gdbcontroller import GdbController
+
+from state_manager import StateManager
+from gdbserver_starter import RemoteGdbServer, RemoteServerCred
+from utils import eprint
+
+import os
 
 # A simple wrapper around counter in case any customization later
 class SessionCounter:
@@ -52,20 +52,20 @@ class GdbSession:
         self.bin: str = os.path.join(self.cwd, config["bin"])
 
         ## Prepare for the remote mode
-        self.remote_cred: dict = None
+        self.remote_cred: RemoteServerCred = None
         self.remote_port: str = None
         self.remote_gdbserver: RemoteGdbServer = None
         self.mode: AttachMode = AttachMode.REMOTE if "mode" in config.keys() and config["mode"] == "remote" else AttachMode.LOCAL
         if self.mode == AttachMode.REMOTE:
-            self.remote_cred = config["cred"]
+            # self.remote_cred = config["cred"]
             self.remote_port = str(config["remote_port"])
-            cred = RemoteServerCred(
+            self.remote_cred = RemoteServerCred(
                 self.remote_port,
-                self.remote_cred["hostname"],
-                self.remote_cred["user"],
+                config["cred"]["hostname"],
+                config["cred"]["user"],
                 self.bin
             )
-            self.remote_gdbserver = RemoteGdbServer(cred)
+            self.remote_gdbserver = RemoteGdbServer(self.remote_cred)
 
         ## Session metadata
         self.suid = uuid4()
@@ -97,7 +97,7 @@ class GdbSession:
         
         self.remote_gdbserver.start(self.args)
         self.session_ctrl = GdbController(
-            [ "gdb", self.get_mi_version_arg() , "-ex", f"target remote :{self.remote_port}" ]
+            [ "gdb", self.get_mi_version_arg() , "-ex", f"target remote {self.remote_cred.hostname}:{self.remote_port}" ]
         )
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
