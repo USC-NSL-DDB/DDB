@@ -1,5 +1,6 @@
 from data_struct import SessionResponse
 from typing import Any, List, Union
+from mi_formatter import MIFormatter
 from state_manager import StateManager
 import utils
 
@@ -201,7 +202,7 @@ class RunningAsyncRecordTransformer(TransformerBase):
     def iter_over_threads(self, response: SessionResponse) -> str:
         out = "" 
         for gtid in StateManager.inst().get_gtids_by_sid(response.sid):
-            out += f"*running,thread-id={gtid}\n"
+            out += f"*running,thread-id=\"{gtid}\"\n"
         return out
 
     def transform(self, responses: List[SessionResponse]) -> dict:
@@ -219,43 +220,47 @@ class RunningAsyncRecordTransformer(TransformerBase):
         else:
             tid = int(response.response["payload"]["thread-id"])
             gtid = StateManager.inst().get_gtid(response.sid, tid)
-            out_str = f"*running,thread-id={gtid}\n"
+            out_str = f"*running,thread-id=\"{gtid}\"\n"
         return out_str 
 
 ''' Handling `stopped` async record
 '''
-# class StopAsyncRecordTransformer(TransformerBase):
-#     def __init__(self, all_stopped: bool = False) -> None:
-#         super().__init__()
-#         self.all_stopped = all_stopped
+class StopAsyncRecordTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
 
-#     def transform(self, responses: List[SessionResponse]) -> dict:
-#         assert(len(responses) == 1)
-#         response = responses[0]
-#         orig_tid = response.response["payload"]["thread-id"]
-#         if orig_tid == "all":
-#             return
-#         response.response["payload"]["thread-id"] = StateManager.inst().get_gtid(response.sid, int(response.response["payload"]["thread-id"]))
-#         return response.response["payload"]
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        assert(len(responses) == 1)  
+        response = responses[0]
+        # Example Output
+        # https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
 
-#     def format(self, responses: List[SessionResponse]) -> str:
-#         # payload is returned
-#         data = self.transform(responses)
+        payload = response.payload.copy()
+        payload["thread-id"] = StateManager.inst().get_gtid(response.sid, int(payload["thread-id"]))
 
-#         # Example Output
-#         # *stopped,reason="breakpoint-hit"
-#         # *stopped,reason="signal-received",signal-name="SIGINT"
-#         # *stopped,thread-id="all",reason="exited-normally"
-#         # *stopped,thread-id="2",reason="exited-normally"
+        stopped_threads = payload["stopped-threads"]
+        new_stopped_threads = []
+        if isinstance(stopped_threads, list):
+            for t in stopped_threads:
+                new_stopped_threads.append(StateManager.inst().get_gtid(response.sid, int(t)))
+        else:
+            if isinstance(stopped_threads, str) and stopped_threads == "all":
+                for gtid in StateManager.inst().get_gtids_by_sid(response.sid):
+                    new_stopped_threads.append(gtid)
+            else:
+                utils.eprint(f"Unknown stopped-threads format: {stopped_threads}")
+                return
 
-#         out_str = None
-#         if self.all_stopped:
-#             out_str = f"*stopped,thread-id=all,reason=\"{}\"\n"
-#         else:
-#             tid = int(response.response["payload"]["thread-id"])
-#             gtid = StateManager.inst().get_gtid(response.sid, tid)
-#             out_str = f"*stopped,thread-id={gtid},reason=\"exited-normally\"\n"
-#         return out_str
+        payload["stopped-threads"] = new_stopped_threads
+        return payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        response = responses[0]
+        # Example Output
+        # https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
+        return MIFormatter.format("*", "stopped", payload, response.token)
+
 
 class ResponseTransformer:
     @staticmethod

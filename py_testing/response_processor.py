@@ -4,7 +4,7 @@ from cmd_tracker import CmdTracker
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
 from data_struct import SessionResponse
-from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupAddedNotifTransformer
+from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupAddedNotifTransformer
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None 
@@ -87,6 +87,7 @@ class ResponseProcessor:
                 for t in stopped_threads:
                     tid = int(t)
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
+            ResponseTransformer.output(response, StopAsyncRecordTransformer())
         elif resp_msg == "thread-group-added":
             # Example Output
             # =thread-group-added,id="i1"
