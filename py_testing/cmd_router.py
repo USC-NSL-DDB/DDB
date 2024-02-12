@@ -102,7 +102,12 @@ class CmdRouter:
             self.state_mgr.set_current_session(1)
             self.send_to_current_session(token, cmd)
         elif (prefix in [ "c", "continue", "-exec-continue" ]):
-            self.send_to_current_thread(token, cmd)
+            subcmd = cmd_no_token.split()[1] if len(cmd_no_token.split()) >= 2 else None
+            if subcmd:
+                if subcmd == "--all":
+                    self.broadcast(token, cmd)
+            else:
+                self.send_to_current_thread(token, cmd)
             # self.send_to_current_session(token, cmd)
         elif (prefix in [ "-thread-select"]):
             if len(cmd_no_token.split()) < 2:

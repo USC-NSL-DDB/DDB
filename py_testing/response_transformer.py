@@ -60,7 +60,7 @@ class ThreadInfoTransformer(TransformerBase):
         # TODO: handle current-thread-id
         out_dict = { 
             "threads": all_threads_info,
-            "current-thread-id": "none"
+            "current-thread-id": StateManager.inst().get_current_gthread()
         }
         return out_dict
         # out_str = utils.wrap_grouped_message(str(out_dict))
