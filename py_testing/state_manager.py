@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 # from gdb_manager import GdbSession
 from uuid import uuid4, UUID
 from enum import Enum
@@ -57,6 +57,19 @@ class SessionMeta:
             if not (tgid in self.tg_to_t):
                 self.tg_to_t[tgid] = set()
             self.tg_status[tgid] = ThreadGroupStatus.INIT
+
+    def remove_thread_group(self, tgid: str) -> Set[int]:
+        with self.rlock:
+            associated_threads = self.tg_to_t[tgid]
+            for t in associated_threads:
+                del self.t_to_tg[t]
+                del self.t_status[t]
+                del self.tid_to_per_inferior_tid[t]
+                
+            del self.tg_to_t[tgid]
+            del self.tg_status[tgid]
+            del self.tg_to_pid[tgid]
+            return associated_threads
 
     def start_thread_group(self, tgid: str, pid: int):
         with self.rlock:
@@ -219,11 +232,56 @@ class StateManager:
         self.sessions[sid].add_thread_group(tgid)
         return giid
 
-    def start_thread_group(self, sid: int, tgid: str, pid: int):
+    def remove_thread_group(self, sid: int, tgid: str) -> int:
+        """
+        Removes a thread group (process) from the state manager.
+
+        Args:
+            sid (int): The session ID.
+            tgid (str): The thread group ID.
+
+        Returns:
+            int: The global inferior/process/thread group ID assigned to the thread group.
+        """
+        giid = self.sidtgid_to_giid[(sid, tgid)]
+            
+        local_tids = self.sessions[sid].remove_thread_group(tgid)
+        for l_tid in local_tids:
+            gtid = self.sidtid_to_gtid[(sid, l_tid)]
+            del self.sidtid_to_gtid[(sid, l_tid)]
+            del self.gtid_to_sidtid[gtid]
+        del self.sidtgid_to_giid[(sid, tgid)]
+        del self.giid_to_sidtgid[giid]
+        return giid
+
+    def start_thread_group(self, sid: int, tgid: str, pid: int) -> int:
+        """
+        Update a thread group metadata to "RUNNING" within a session.
+
+        Args:
+            sid (int): The session ID.
+            tgid (str): The thread group ID.
+            pid (int): The process ID.
+
+        Returns:
+            int: The corresponding global thread group id.
+        """
         self.sessions[sid].start_thread_group(tgid, pid)
+        return self.sidtgid_to_giid[(sid, tgid)]
     
-    def exit_thread_group(self, sid: int, tgid: str):
+    def exit_thread_group(self, sid: int, tgid: str) -> int:
+        """
+        Exit a thread group.
+
+        Args:
+            sid (int): The session ID.
+            tgid (str): The thread group ID.
+
+        Returns:
+            int: The correspondling global thread group id.
+        """
         self.sessions[sid].exit_thread_group(tgid)
+        return self.sidtgid_to_giid[(sid, tgid)]
 
     def create_thread(self, sid: int, tid: int, tgid: str) -> Tuple[int, int]:
         """

@@ -4,7 +4,7 @@ from cmd_tracker import CmdTracker
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
 from data_struct import SessionResponse
-from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupAddedNotifTransformer
+from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupNotifTransformer
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None 
@@ -89,18 +89,22 @@ class ResponseProcessor:
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
             ResponseTransformer.output(response, StopAsyncRecordTransformer())
         elif resp_msg == "thread-group-added":
-            # Example Output
-            # =thread-group-added,id="i1"
             tgid = str(resp_payload['id'])
             gtgid = self.state_manager.add_thread_group(sid, tgid)
-            ResponseTransformer.output(response, ThreadGroupAddedNotifTransformer(gtgid))
+            ResponseTransformer.output(response, ThreadGroupNotifTransformer(gtgid))
+        elif resp_msg == "thread-group-removed":
+            tgid = str(resp_payload['id'])
+            gtgid = self.state_manager.remove_thread_group(sid, tgid)
+            ResponseTransformer.output(response, ThreadGroupNotifTransformer(gtgid))
         elif resp_msg == "thread-group-started":
             tgid = str(resp_payload['id'])
             pid = int(resp_payload["pid"])
-            self.state_manager.start_thread_group(sid, tgid, pid)
+            gtgid = self.state_manager.start_thread_group(sid, tgid, pid)
+            ResponseTransformer.output(response, ThreadGroupNotifTransformer(gtgid))
         elif resp_msg == "thread-group-exited":
             tgid = str(resp_payload['id'])
-            self.state_manager.exit_thread_group(sid, tgid)
+            gtgid = self.state_manager.exit_thread_group(sid, tgid)
+            ResponseTransformer.output(response, ThreadGroupNotifTransformer(gtgid))
         else:
             print("Ignoring this notify record for now.")
 

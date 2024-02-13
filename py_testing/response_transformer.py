@@ -159,20 +159,31 @@ class ThreadInfoReadableTransformer(TransformerBase):
         # out_str = utils.wrap_grouped_message(out_str)
         return out_str
 
-''' Handling `thread-group-added` async record
+''' Handling `thread-group-*` related async record
 '''
-class ThreadGroupAddedNotifTransformer(TransformerBase):
+class ThreadGroupNotifTransformer(TransformerBase):
     def __init__(self, gtgid: int) -> None:
         super().__init__()
         self.gtgid = gtgid
 
     def transform(self, responses: List[SessionResponse]) -> dict:
-        pass 
+        assert(len(responses) == 1)
+        response = responses[0]
+        payload = response.payload.copy() 
+        payload["id"] = f"i{self.gtgid}"
+        return payload
 
     def format(self, responses: List[SessionResponse]) -> str:
         # Example Output
         # =thread-group-added,id="i1"
-        out_str = f"=thread-group-added,id=\"i{self.gtgid}\"\n"
+        # =thread-group-removed,id="id"
+        # =thread-group-started,id="id"
+        # =thread-group-exited,id="id"[,exit-code="code"]
+        data = self.transform(responses)
+        assert(len(responses) == 1)
+        response = responses[0]
+        out_str = MIFormatter.format("=", response.msg, data, response.token)
+        # out_str = f"=thread-group-added,id=\"i{self.gtgid}\"\n"
         return out_str 
 
 ''' Handling `thread-created` async record
