@@ -39,7 +39,7 @@ class PlainTransformer(TransformerBase):
         # out_str = utils.wrap_grouped_message(out_str)
         return out_str
 
-''' Handling `-list-threads` response
+''' Handling `-thread-info` response
 '''
 class ThreadInfoTransformer(TransformerBase):
     def __init__(self) -> None:
@@ -64,13 +64,10 @@ class ThreadInfoTransformer(TransformerBase):
             "current-thread-id": StateManager.inst().get_current_gthread()
         }
         return out_dict
-        # out_str = utils.wrap_grouped_message(str(out_dict))
-        # return out_str
 
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
-        # out_str = utils.wrap_grouped_message(str(data))
-        out_str = str(data)
+        out_str = MIFormatter.format("^", "done", data, None)
         return out_str
 
 ''' Handling `-list-thread-groups` response
@@ -96,10 +93,11 @@ class ProcessInfoTransformer(TransformerBase):
 
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
-        # out_str = utils.wrap_grouped_message(str(data))
-        out_str = str(data)
+        out_str = MIFormatter.format("^", "done", data, None)
         return out_str
 
+''' Handling `info inferiors` response
+'''
 class ProcessReadableTransformer(TransformerBase):
     def __init__(self) -> None:
         super().__init__()
