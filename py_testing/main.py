@@ -19,7 +19,11 @@ def main():
     global gdb_manager, config_data
 
     components = config_data["Components"]
-    gdb_manager = GdbManager(components=components)
+    prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
+    gdb_manager = GdbManager(
+        components=components,
+        prerun_cmds=prerun_cmds
+    )
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])

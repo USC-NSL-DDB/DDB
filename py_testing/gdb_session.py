@@ -84,29 +84,38 @@ class GdbSession:
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
 
-    def local_start(self):
-        full_args = [ "gdb", self.get_mi_version_arg() , "--args" ]
+    def local_start(self, prerun_cmds: Optional[List[dict]] = None):
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.append("--args")
         full_args.append(self.bin)
         full_args.extend(self.args)
         self.session_ctrl = GdbController(full_args)
 
-    def remote_start(self):
+    def remote_start(self, prerun_cmds: Optional[List[dict]] = None):
         if not self.remote_gdbserver:
             eprint("Remote gdbserver not initialized")
             return
         
         self.remote_gdbserver.start(self.args)
-        self.session_ctrl = GdbController(
-            [ "gdb", self.get_mi_version_arg() , "-ex", f"target remote {self.remote_cred.hostname}:{self.remote_port}" ]
-        )
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.extend([ "-ex", f"target remote :{self.remote_port}" ])
+        self.session_ctrl = GdbController(full_args)
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
 
-    def start(self):
+    def start(self, prerun_cmds: Optional[List[dict]] = None) -> None:
         if self.mode == AttachMode.LOCAL:
-            self.local_start()
+            self.local_start(prerun_cmds)
         elif self.mode == AttachMode.REMOTE:
-            self.remote_start()
+            self.remote_start(prerun_cmds)
         else:
             eprint("Invalid mode")
             return

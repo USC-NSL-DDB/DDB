@@ -148,10 +148,19 @@ class ThreadInfoReadableTransformer(TransformerBase):
             # func_args_str = f"({[a['name'] for a in t['frame']['args']]})"
             # full_func = f"{t['frame']['func']} at {t['frame']['addr']}"
             tid = StateManager.inst().get_readable_tid_by_gtid(int(t['id']))
-            file_loc = f" at {t['frame']['file']}:{t['frame']['line']}" if 'file' in t['frame'] else ''
-            out_entries.append(
-                (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']}{file_loc}")
-            )
+
+            # if `frame` is not present, means the thread is running.
+            # in this case, `state` is present.
+            if "frame" in t:
+                file_loc = f" at {t['frame']['file']}:{t['frame']['line']}" if 'file' in t['frame'] else ''
+                out_entries.append(
+                    (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']}{file_loc}")
+                )
+            else:
+                out_entries.append(
+                    (tid, f"\t{tid}\t{t['target-id']}\t{t['state']}")
+                )
+
         out_entries = sorted(out_entries, key=lambda x: x[0])
         out_str += "\n".join([ e[1] for e in out_entries ])
         # out_str = utils.wrap_grouped_message(out_str)
