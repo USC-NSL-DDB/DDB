@@ -270,6 +270,45 @@ class StopAsyncRecordTransformer(TransformerBase):
         # https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
         return MIFormatter.format("*", "stopped", payload, response.token)
 
+''' Handling `-stack-list-frames`
+'''
+class StackListFramesTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        assert(len(responses) == 1)  
+        response = responses[0]
+        return response.payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        return MIFormatter.format("^", "done", payload, None)
+
+''' Handling `bt`, `backtrace`, `where` commands
+'''
+class BacktraceReadableTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = responses[0].payload
+        stacks = payload["stack"]
+        out_str = ""
+        for i, stack in enumerate(stacks):
+            level = stack["level"]
+            func = stack["func"]
+            addr = stack["addr"]
+            filename = stack["file"]
+            line = stack["line"]
+            if i == 0:
+                out_str += f"#{level} {func} at {filename}:{line}\n" 
+            else:
+                out_str += f"#{level} {addr} in {func} at {filename}:{line}\n"
+        return out_str
 
 class ResponseTransformer:
     @staticmethod
