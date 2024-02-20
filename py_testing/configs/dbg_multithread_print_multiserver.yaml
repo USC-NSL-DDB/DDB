@@ -8,13 +8,11 @@
 #   command: "./nu_scripts/stop_rt.sh"
 
 Components:
-- addr: localhost
-  mode: local
+- mode: local
   tag: test_server_1 
   bin: "./bin/multithread_print"
   args: []
-- addr: localhost
-  mode: local
+- mode: local
   tag: test_server_2
   bin: "./bin/multithread_print"
   args: []
