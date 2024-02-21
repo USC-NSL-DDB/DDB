@@ -279,6 +279,20 @@ class StopAsyncRecordTransformer(TransformerBase):
         # https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
         return MIFormatter.format("*", "stopped", payload, response.token)
 
+''' Handling generic `stopped` async record (not thread-related)
+'''
+class GenericStopAsyncRecordTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        return responses[0].payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        response = responses[0]
+        return MIFormatter.format("*", "stopped", payload, response.token)
+
 ''' Handling `-stack-list-frames`
 '''
 class StackListFramesTransformer(TransformerBase):

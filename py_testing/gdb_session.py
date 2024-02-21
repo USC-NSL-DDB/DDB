@@ -157,12 +157,34 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
+        token = None
+        prefix = None
+        cmd_no_token = None
+        cmd = cmd.strip()
+        for idx, cmd_char in enumerate(cmd):
+            if (not cmd_char.isdigit()) and (idx == 0):
+                prefix = cmd.split()[0]
+                cmd_no_token = cmd
+                break
+            
+            if not cmd_char.isdigit():
+                token = cmd[:idx].strip()
+                cmd_no_token = cmd[idx:].strip()
+                if len(cmd_no_token) == 0:
+                    # no meaningful input
+                    return
+                prefix = cmd_no_token.split()[0]
+                break
+        cmd = f"{cmd}\n"
+
         if isinstance(cmd, list):
             self.session_ctrl.write(cmd, read_response=False)
             return
 
-        if (cmd.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
+        if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
+            print("Starts delay")
             sleep(self.run_delay)
+            print("Ends delay")
         self.session_ctrl.write(cmd, read_response=False)
     
     # def deque_mi_output(self) -> dict:

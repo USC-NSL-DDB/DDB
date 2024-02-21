@@ -4,7 +4,7 @@ from cmd_tracker import CmdTracker
 from utils import mi_print
 from state_manager import StateManager, ThreadStatus
 from data_struct import SessionResponse
-from response_transformer import ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupNotifTransformer
+from response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupNotifTransformer
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None 
@@ -67,27 +67,30 @@ class ResponseProcessor:
                 self.state_manager.update_thread_status(sid, thread_id, ThreadStatus.RUNNING)
                 ResponseTransformer.output(response, RunningAsyncRecordTransformer(all_running=False))
         elif resp_msg == "stopped":
-            thread_id = resp_payload["thread-id"]
-            if thread_id == "all":
-                self.state_manager.update_all_thread_status(sid, ThreadStatus.STOPPED)
-            else:
-                thread_id = int(thread_id)
-                self.state_manager.update_thread_status(sid, thread_id, ThreadStatus.STOPPED)
-                # Here, we assume it runs in all-stop mode. 
-                # Therefore, when a thread hits a breakpoint, 
-                # all threads stops and the currently stopped thread 
-                # as the current selected thread automatically.
-                self.state_manager.set_current_tid(sid, thread_id)
+            if "thread-id" in resp_payload:
+                thread_id = resp_payload["thread-id"]
+                if thread_id == "all":
+                    self.state_manager.update_all_thread_status(sid, ThreadStatus.STOPPED)
+                else:
+                    thread_id = int(thread_id)
+                    self.state_manager.update_thread_status(sid, thread_id, ThreadStatus.STOPPED)
+                    # Here, we assume it runs in all-stop mode. 
+                    # Therefore, when a thread hits a breakpoint, 
+                    # all threads stops and the currently stopped thread 
+                    # as the current selected thread automatically.
+                    self.state_manager.set_current_tid(sid, thread_id)
 
-            stopped_threads = resp_payload["stopped-threads"]
-            if stopped_threads == "all":
-                self.state_manager.update_all_thread_status(sid, ThreadStatus.STOPPED)
+                stopped_threads = resp_payload["stopped-threads"]
+                if stopped_threads == "all":
+                    self.state_manager.update_all_thread_status(sid, ThreadStatus.STOPPED)
+                else:
+                    # In non-stop modes, we need to handle a list of threads as they may stop at different times.
+                    for t in stopped_threads:
+                        tid = int(t)
+                        self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
+                ResponseTransformer.output(response, StopAsyncRecordTransformer())
             else:
-                # In non-stop modes, we need to handle a list of threads as they may stop at different times.
-                for t in stopped_threads:
-                    tid = int(t)
-                    self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
-            ResponseTransformer.output(response, StopAsyncRecordTransformer())
+                ResponseTransformer.output(response, GenericStopAsyncRecordTransformer())
         elif resp_msg == "thread-group-added":
             tgid = str(resp_payload['id'])
             gtgid = self.state_manager.add_thread_group(sid, tgid)

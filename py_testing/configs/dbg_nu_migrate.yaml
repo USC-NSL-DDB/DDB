@@ -30,4 +30,4 @@ Components:
   tag: proclet_server_entry
   bin: "./nu_bin/test_migrate"
   args: [ "-l", "1", "-i", "18.18.1.4", "-m"]
-  run_delay: 3
+  run_delay: 10
