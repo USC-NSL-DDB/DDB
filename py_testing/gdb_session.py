@@ -9,7 +9,7 @@ from pygdbmi.gdbcontroller import GdbController
 
 from state_manager import StateManager
 from gdbserver_starter import RemoteGdbServer, RemoteServerCred
-from utils import eprint
+from utils import eprint, parse_cmd
 
 import os
 
@@ -157,25 +157,7 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
-        token = None
-        prefix = None
-        cmd_no_token = None
-        cmd = cmd.strip()
-        for idx, cmd_char in enumerate(cmd):
-            if (not cmd_char.isdigit()) and (idx == 0):
-                prefix = cmd.split()[0]
-                cmd_no_token = cmd
-                break
-            
-            if not cmd_char.isdigit():
-                token = cmd[:idx].strip()
-                cmd_no_token = cmd[idx:].strip()
-                if len(cmd_no_token) == 0:
-                    # no meaningful input
-                    return
-                prefix = cmd_no_token.split()[0]
-                break
-        cmd = f"{cmd}\n"
+        _, cmd_no_token, _, cmd = parse_cmd(cmd)
 
         if isinstance(cmd, list):
             self.session_ctrl.write(cmd, read_response=False)

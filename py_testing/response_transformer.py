@@ -318,6 +318,8 @@ class BacktraceReadableTransformer(TransformerBase):
         pass
 
     def format(self, responses: List[SessionResponse]) -> str:
+        if responses[0].msg == "error":
+            return ErrorResponseTransformer().format(responses)
         payload = responses[0].payload
         stacks = payload["stack"]
         out_str = ""
@@ -325,13 +327,29 @@ class BacktraceReadableTransformer(TransformerBase):
             level = stack["level"]
             func = stack["func"]
             addr = stack["addr"]
-            filename = stack["file"]
-            line = stack["line"]
-            if i == 0:
-                out_str += f"#{level} {func} at {filename}:{line}\n" 
+            filename = stack["file"] if "file" in stack else None
+            line = stack["line"] if "line" in stack else None
+            if filename and line:
+                if i == 0:
+                    out_str += f"#{level} {func} at {filename}:{line}\n" 
+                else:
+                    out_str += f"#{level} {addr} in {func} at {filename}:{line}\n"
             else:
-                out_str += f"#{level} {addr} in {func} at {filename}:{line}\n"
+                out_str += f"#{level} {addr} in {func}\n"
         return out_str
+
+""" Handling `error` response
+"""
+class ErrorResponseTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = responses[0].payload
+        return MIFormatter.format("^", "error", payload, None) 
 
 class ResponseTransformer:
     @staticmethod
