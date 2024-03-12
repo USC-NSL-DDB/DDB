@@ -1,6 +1,8 @@
 # Init flags and common variables
 include ./build/config.mk
 
+SHELL=/bin/bash
+
 FLAGS	= -g -Wall
 LDFLAGS = -T 
 GCC     ?= gcc-13
@@ -67,11 +69,15 @@ bin/arg_pass: $(test_arg_pass_obj)
 test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass
 
 gdb: 
-	@pushd gdb-14.2
-	@mkdir -p build
-	@pushd build
-	@../configure && make all-gdb -j$(NCORES)
+	pushd gdb-14.2 && mkdir -p build && pushd build && ../configure && make -j$(NCORES)
+
+gdb-clean:
+	cd gdb-14.2/build && make clean
+	rm -rf gdb-14.2/build
+
+gdb-install: gdb
+	pushd gdb-14.2/build && sudo make install
 
 .PHONY: clean
-clean:
-	rm -rf $(TEST_BINARIES_PATH)/*.o bin/* 
+clean: gdb-clean
+	rm -rf $(TEST_BINARIES_PATH)/*.o bin/*
