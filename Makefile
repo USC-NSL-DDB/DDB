@@ -67,10 +67,10 @@ bin/arg_pass: $(test_arg_pass_obj)
 test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass
 
 gdb: 
-	pushd gdb-14.1
-	mkdir -p build
-	pushd build
-	../configure && make -j$(NCORES)
+	@pushd gdb-14.2
+	@mkdir -p build
+	@pushd build
+	@../configure && make all-gdb -j$(NCORES)
 
 .PHONY: clean
 clean:
