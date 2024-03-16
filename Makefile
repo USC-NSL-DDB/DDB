@@ -55,6 +55,8 @@ test_multiproc_print_obj = $(test_multiproc_print_src:.cpp=.o)
 test_arg_pass_src = $(TEST_BINARIES_PATH)/arg_pass.cpp
 test_arg_pass_obj = $(test_arg_pass_src:.cpp=.o)
 
+test_go_dummy_src = $(TEST_BINARIES_PATH)/go_dummy.go
+
 bin/hello_world: $(test_hello_world_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_hello_world_obj)
 bin/nested_frame: $(test_nested_frame_obj)
@@ -65,8 +67,12 @@ bin/multiprocess: $(test_multiproc_print_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_multiproc_print_obj) -lpthread
 bin/arg_pass: $(test_arg_pass_obj)
 	$(CXX) $(CXXFLAGS) -o $@ $(test_arg_pass_obj)
+bin/go_dummy: $(test_go_dummy_src)
+	go build -o $(BIN_FOLDER)/go_dummy $(test_go_dummy_src)
 
-test_binaries: $(BIN_FOLDER) bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass
+test_binaries: $(BIN_FOLDER) \
+	bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass \
+	bin/go_dummy
 
 gdb: 
 	pushd gdb-14.2 && mkdir -p build && pushd build && ../configure && make -j$(NCORES)

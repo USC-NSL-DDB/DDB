@@ -2,9 +2,10 @@ from typing import List, Optional
 import paramiko
 from dataclasses import dataclass
 
+
 @dataclass
 class RemoteServerCred:
-    remote_port: str 
+    remote_port: str
     hostname: str
     username: str
     bin: str
@@ -14,6 +15,7 @@ class RemoteServerCred:
         self.hostname = hostname
         self.username = username
         self.bin = bin
+
 
 class RemoteGdbServer:
     def __init__(self, cred: RemoteServerCred, private_key_path=None):
