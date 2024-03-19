@@ -62,7 +62,7 @@ class CmdRouter:
             return
 
         cmd = self.prepend_token(cmd)
-
+        print("current cmd:",cmd)
         token = None
         prefix = None
         cmd_no_token = None
