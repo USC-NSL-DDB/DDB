@@ -10,8 +10,10 @@
 NU_REPO=$1
 TARGET=$2
 
+NCORE=$(nproc)
+
 pushd $NU_REPO
-make $TARGET
+make $TARGET -j$NCORE
 popd
 
 cp $NU_REPO/bin/* nu_bin/

@@ -17,3 +17,6 @@ else
 
     echo "Rustup, Rust and Cargo have been installed."
 fi
+
+# Toolchains for building gdb
+sudo apt-get install texinfo -y

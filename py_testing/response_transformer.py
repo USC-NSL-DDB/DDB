@@ -148,10 +148,19 @@ class ThreadInfoReadableTransformer(TransformerBase):
             # func_args_str = f"({[a['name'] for a in t['frame']['args']]})"
             # full_func = f"{t['frame']['func']} at {t['frame']['addr']}"
             tid = StateManager.inst().get_readable_tid_by_gtid(int(t['id']))
-            file_loc = f" at {t['frame']['file']}:{t['frame']['line']}" if 'file' in t['frame'] else ''
-            out_entries.append(
-                (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']}{file_loc}")
-            )
+
+            # if `frame` is not present, means the thread is running.
+            # in this case, `state` is present.
+            if "frame" in t:
+                file_loc = f" at {t['frame']['file']}:{t['frame']['line']}" if 'file' in t['frame'] else ''
+                out_entries.append(
+                    (tid, f"\t{tid}\t{t['target-id']}\t{t['frame']['func']}{file_loc}")
+                )
+            else:
+                out_entries.append(
+                    (tid, f"\t{tid}\t{t['target-id']}\t{t['state']}")
+                )
+
         out_entries = sorted(out_entries, key=lambda x: x[0])
         out_str += "\n".join([ e[1] for e in out_entries ])
         # out_str = utils.wrap_grouped_message(out_str)
@@ -270,6 +279,77 @@ class StopAsyncRecordTransformer(TransformerBase):
         # https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
         return MIFormatter.format("*", "stopped", payload, response.token)
 
+''' Handling generic `stopped` async record (not thread-related)
+'''
+class GenericStopAsyncRecordTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        return responses[0].payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        response = responses[0]
+        return MIFormatter.format("*", "stopped", payload, response.token)
+
+''' Handling `-stack-list-frames`
+'''
+class StackListFramesTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        assert(len(responses) == 1)  
+        response = responses[0]
+        return response.payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        return MIFormatter.format("^", "done", payload, None)
+
+''' Handling `bt`, `backtrace`, `where` commands
+'''
+class BacktraceReadableTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        if responses[0].msg == "error":
+            return ErrorResponseTransformer().format(responses)
+        payload = responses[0].payload
+        stacks = payload["stack"]
+        out_str = ""
+        for i, stack in enumerate(stacks):
+            level = stack["level"]
+            func = stack["func"]
+            addr = stack["addr"]
+            filename = stack["file"] if "file" in stack else None
+            line = stack["line"] if "line" in stack else None
+            if filename and line:
+                if i == 0:
+                    out_str += f"#{level} {func} at {filename}:{line}\n" 
+                else:
+                    out_str += f"#{level} {addr} in {func} at {filename}:{line}\n"
+            else:
+                out_str += f"#{level} {addr} in {func}\n"
+        return out_str
+
+""" Handling `error` response
+"""
+class ErrorResponseTransformer(TransformerBase):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = responses[0].payload
+        return MIFormatter.format("^", "error", payload, None) 
 
 class ResponseTransformer:
     @staticmethod

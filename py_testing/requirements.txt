@@ -1,3 +1,4 @@
 pygdbmi # gdbmi parser
 pyyaml # yaml parser
 paramiko # ssh command execution
+kubernetes
