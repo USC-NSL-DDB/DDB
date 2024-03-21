@@ -1,6 +1,6 @@
 from typing import List, Optional
 from time import sleep
-from gdbserver_starter import SSHRemoteServerCred, SSHRemoteSeverClient
+from gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from state_manager import StateManager
 from utils import *
 from cmd_router import CmdRouter

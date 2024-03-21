@@ -8,7 +8,7 @@ from response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
 from state_manager import StateManager
-from gdbserver_starter import RemoteGdbServer, RemoteServerConnection, SSHRemoteServerCred
+from gdbserver_starter import RemoteServerConnection
 from utils import eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
@@ -110,21 +110,27 @@ class GdbSession:
         full_args.extend(self.args)
         self.session_ctrl = GdbController(full_args)
 
-    def remote_attach(self):
+    def remote_attach(self, prerun_cmds: Optional[List[dict]] = None):
         print("start remote attach")
         if not self.remote_gdbserver:
             eprint("Remote gdbserver not initialized")
             return
 
-        self.remote_gdbserver.connect()
-        command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-        output = self.remote_gdbserver.execute_command_async(command)
-        print(output)
-        print("finish attach")
-        self.session_ctrl = GdbController(
-            ["gdb", self.get_mi_version_arg(), "-ex",
-             f"target remote {self.remote_host}:{self.remote_port}"]
-        )
+        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid)
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
+        self.session_ctrl = GdbController(full_args)
+        # self.remote_gdbserver.connect()
+        # command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
+        # output = self.remote_gdbserver.execute_command_async(command)
+        # self.session_ctrl = GdbController(
+        #     ["gdb", self.get_mi_version_arg(), "-ex",
+        #      f"target remote {self.remote_host}:{self.remote_port}"]
+        # )
        # self.session_ctrl.write("source /home/hjz/seoresearch/minimalserviceweaver/noobextension.py")
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
@@ -140,7 +146,7 @@ class GdbSession:
             for cmd in prerun_cmds:
                 full_args.append("-ex")
                 full_args.append(cmd["command"])
-        full_args.extend([ "-ex", f"target remote :{self.remote_port}" ])
+        full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
         self.session_ctrl = GdbController(full_args)
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
@@ -150,7 +156,7 @@ class GdbSession:
             self.local_start(prerun_cmds)
         elif self.mode == GdbMode.REMOTE:
             if self.startMode == StartMode.ATTACH:
-                self.remote_attach()
+                self.remote_attach(prerun_cmds)
             elif self.startMode == StartMode.BINARY:
                 self.remote_start(prerun_cmds)
         else:
