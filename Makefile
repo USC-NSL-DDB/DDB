@@ -74,12 +74,15 @@ test_binaries: $(BIN_FOLDER) \
 	bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass \
 	bin/go_dummy
 
-gdb: 
-	pushd gdb-14.2 && mkdir -p build && pushd build && ../configure && make -j$(NCORES)
-
 gdb-clean:
 	cd gdb-14.2/build && make clean
 	rm -rf gdb-14.2/build
+
+gdb: gdb-clean
+	pushd gdb-14.2 && \
+	mkdir -p build && pushd build && \
+	../configure --with-python=/usr/bin/python3 && make -j$(NCORES) && \
+	popd && popd
 
 gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install

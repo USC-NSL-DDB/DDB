@@ -73,9 +73,10 @@ class SSHRemoteServerClient(RemoteServerConnection):
 
 
 class KubeRemoteSeverClient(RemoteServerConnection):
+    from kubernetes import client, config, stream
+    import kubernetes
+
     def __init__(self, pod_name: str, pod_namespace: str):
-        from kubernetes import client, config, stream
-        import kubernetes
         self.pod_name = pod_name
         self.pod_namespace = pod_namespace
 
