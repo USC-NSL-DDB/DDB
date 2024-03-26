@@ -74,5 +74,18 @@
             //     }
             // ]
         },
+        {
+          "name": "Extension",
+          "type": "extensionHost",
+          "request": "launch",
+          "args": [
+            "--extensionDevelopmentPath=${workspaceFolder}",
+            "${workspaceFolder}/debug-adapter/sampleWorkspace"
+          ],
+          "outFiles": [
+            "${workspaceFolder}/debug-adapter/dist/**/*.js"
+          ],
+          "preLaunchTask": "npm: watch"
+        }
     ]
 }
