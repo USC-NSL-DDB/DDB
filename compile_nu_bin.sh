@@ -18,14 +18,18 @@ pushd $NU_REPO
 make $TARGET -j$NCORE
 popd
 
-cp $NU_REPO/bin/* $SOURCE_DIR/nu_bin/
-cp $NU_REPO/caladan/iokerneld $SOURCE_DIR/caladan_bin/
-cp $NU_REPO/caladan/ksched/build/ksched.ko $SOURCE_DIR/caladan_bin/
+mkdir -p $SOURCE_DIR/nu_bin
+mkdir -p $SOURCE_DIR/caladan_bin
 
 # Iterate over each file in the source directory
-# for file in "$NU_REPO/bin"/*; do
-#     # Extract the filename
-#     filename=$(basename "$file")
-#     # Create/overwrite a symbolic link in the target directory
-#     ln -sf "$file" "$SOURCE_DIR/nu_bin/$filename"
-# done
+for file in "$NU_REPO/bin"/*; do
+    filename=$(basename "$file")
+    ln -sf "$file" "$SOURCE_DIR/nu_bin/$filename"
+done
+ln -sf $NU_REPO/caladan/iokerneld $SOURCE_DIR/caladan_bin/iokerneld
+ln -sf $NU_REPO/caladan/ksched/build/ksched.ko $SOURCE_DIR/caladan_bin/ksched.ko
+
+# cp $NU_REPO/bin/* $SOURCE_DIR/nu_bin/
+# cp $NU_REPO/caladan/iokerneld $SOURCE_DIR/caladan_bin/
+# cp $NU_REPO/caladan/ksched/build/ksched.ko $SOURCE_DIR/caladan_bin/
+

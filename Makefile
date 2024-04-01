@@ -31,7 +31,7 @@ TEST_BINARIES_PATH = test_binaries
 NCORES = $(shell nproc)
 
 .PHONY: all
-all: test_binaries
+all: test_binaries nu_binaries
 
 # Automatically create bin folder when necessary.
 $(BIN_FOLDER):
@@ -74,9 +74,16 @@ test_binaries: $(BIN_FOLDER) \
 	bin/hello_world bin/nested_frame bin/multithread_print bin/multiprocess bin/arg_pass \
 	bin/go_dummy
 
+clean_nu_binaries:
+	rm -rf ./nu_bin ./caladan_bin
+
+nu_binaries: 
+	./compile_nu_bin.sh ./Nu all
+
+# gdb preparation/installation for included gdb-14.2
 gdb-clean:
-	cd gdb-14.2/build && make clean
-	rm -rf gdb-14.2/build
+	(cd gdb-14.2/build && make clean) > /dev/null 2>&1 || true
+	rm -rf gdb-14.2/build > /dev/null 2>&1 || true
 
 gdb: gdb-clean
 	pushd gdb-14.2 && \
@@ -88,5 +95,5 @@ gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install
 
 .PHONY: clean
-clean: gdb-clean
+clean: clean_nu_binaries gdb-clean
 	rm -rf $(TEST_BINARIES_PATH)/*.o bin/*
