@@ -116,3 +116,4 @@ dkms.conf
 bin/
 **/node_modules
 debug-adapter/out
+debug-adapter/dist
