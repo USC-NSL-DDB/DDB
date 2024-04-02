@@ -53,6 +53,7 @@ class StartMode(Enum):
 class GdbSessionConfig:
     remote_port: int = -1
     remote_host: str = ""
+    username: str = "" 
     remote_gdbserver: RemoteServerConnection = None
     attach_pid: int = -1
     binary: str = ""
@@ -64,6 +65,7 @@ class GdbSessionConfig:
     # Using default_factory for mutable default
     args: List[str] = field(default_factory=list)
     run_delay: int = 0
+    sudo: bool = False
 
 
 class GdbSession:
@@ -84,6 +86,8 @@ class GdbSession:
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
+
+        self.sudo = config.sudo
 
         # Session metadata
         self.suid = uuid4()
@@ -116,7 +120,7 @@ class GdbSession:
             eprint("Remote gdbserver not initialized")
             return
 
-        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid)
+        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
         full_args = [ "gdb", self.get_mi_version_arg() ]
         if prerun_cmds:
             for cmd in prerun_cmds:
@@ -140,7 +144,7 @@ class GdbSession:
             eprint("Remote gdbserver not initialized")
             return
         
-        self.remote_gdbserver.start(self.args)
+        self.remote_gdbserver.start(self.args, sudo=self.sudo)
         full_args = [ "gdb", self.get_mi_version_arg() ]
         if prerun_cmds:
             for cmd in prerun_cmds:

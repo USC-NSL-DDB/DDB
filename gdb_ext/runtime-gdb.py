@@ -35,7 +35,7 @@ class DistributedBTCmd(gdb.Command):
 
 
 def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
-	"""Print all local variables of the given frame."""
+	"""Get all local variables (symbols) of the given frame."""
 	if frame is None:
 		print("No frame is currently selected.")
 		return None
@@ -102,11 +102,11 @@ class DistributedBacktraceMICmd(gdb.MICommand):
 
 		if remote_ip is None or remote_port is None or local_ip is None or local_port is None:
 			print("Failed to find remote/local address/port")
-			return
+			return result
 
 		if parent_rip is None or parent_rsp is None:
 			print("Failed to find parent rip/rsp")
-			return
+			return result
 
 		backtrace_meta = {
 			"remote_addr": {

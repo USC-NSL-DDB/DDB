@@ -1,3 +1,4 @@
 [submodule "Nu"]
 	path = Nu
 	url = https://github.com/totoroyyb/Nu.git
+	branch = rpc_stack

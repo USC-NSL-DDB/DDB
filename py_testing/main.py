@@ -29,19 +29,23 @@ def main():
     gdbSessionConfigs: List[GdbSessionConfig] = []
     for component in components:
         sessionConfig = GdbSessionConfig()
-        sessionConfig.remote_host = component.get("hostname", None)
-        sessionConfig.remote_port = component.get("remote_port", 0)
-        sessionConfig.gdb_mode = GdbMode.REMOTE if "mode" in component.keys(
-        ) and component["mode"] == "remote" else GdbMode.LOCAL
+
+        sessionConfig.gdb_mode = GdbMode.REMOTE if \
+            "mode" in component.keys() and component["mode"] == "remote" \
+            else GdbMode.LOCAL
         if sessionConfig.gdb_mode == GdbMode.REMOTE:
+            sessionConfig.remote_port = component["remote_port"]
+            sessionConfig.remote_host = component["cred"]["hostname"]
+            sessionConfig.username = component["cred"]["user"]
             remote_cred = SSHRemoteServerCred(
                 port=sessionConfig.remote_port,
                 bin=component["bin"],
-                hostname=component["cred"]["hostname"],
-                username=component["cred"]["user"],
+                hostname=sessionConfig.remote_host,
+                username=sessionConfig.username
             )
             sessionConfig.remote_gdbserver = SSHRemoteServerClient(
                 cred=remote_cred)
+
         sessionConfig.tag = component.get("tag", None)
         sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
         sessionConfig.attach_pid = component.get("pid", 0)
@@ -49,6 +53,7 @@ def main():
         sessionConfig.cwd = component.get("cwd", ".")
         sessionConfig.args = component.get("args", [])
         sessionConfig.run_delay = component.get("run_delay", 0)
+        sessionConfig.sudo = component.get("sudo", False)
         gdbSessionConfigs.append(sessionConfig)
     gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
@@ -83,7 +88,7 @@ def exec_cmd(cmd: Union[List[str], str]):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
-    print(result.stdout.decode("utf-8"))
+    eprint(result.stdout.decode("utf-8"))
     eprint(result.stderr.decode("utf-8"))
 
 
@@ -101,7 +106,7 @@ def exec_task(task: dict):
         eprint("Didn't specify command.")
         return
 
-    print(f"Executing task: {name}, command: {command}")
+    eprint(f"Executing task: {name}, command: {command}")
     exec_cmd(command)
 
 
@@ -248,7 +253,7 @@ if __name__ == "__main__":
     with open(str(args.config), "r") as fs:
         try:
             config_data = safe_load(fs)
-            print("Loaded dbg config file:")
+            eprint("Loaded dbg config file:")
             pprint(config_data)
         except YAMLError as e:
             eprint(f"Failed to read the debugging config. Error: {e}")
