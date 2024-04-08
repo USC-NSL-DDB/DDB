@@ -73,12 +73,14 @@ class ResponseProcessor:
             else:
                 thread_id = int(thread_id)
                 self.state_manager.update_thread_status(sid, thread_id, ThreadStatus.STOPPED)
-                # Here, we assume it runs in all-stop mode. 
-                # Therefore, when a thread hits a breakpoint, 
-                # all threads stops and the currently stopped thread 
-                # as the current selected thread automatically.
-                self.state_manager.set_current_tid(sid, thread_id)
-
+                if resp_payload.get("reason","none") == "breakpoint-hit":
+                    # Here, we assume it runs in all-stop mode. 
+                    # Therefore, when a thread hits a breakpoint, 
+                    # all threads stops and the currently stopped thread 
+                    # as the current selected thread automatically.
+                    print("Setting current thread id to", sid, thread_id,self.state_manager.get_gtid(sid, thread_id))
+                    self.state_manager.set_current_tid(sid, thread_id)
+                    self.state_manager.set_current_gthread(self.state_manager.get_gtid(sid, thread_id))
             stopped_threads = resp_payload["stopped-threads"]
             if stopped_threads == "all":
                 self.state_manager.update_all_thread_status(sid, ThreadStatus.STOPPED)
@@ -87,6 +89,7 @@ class ResponseProcessor:
                 for t in stopped_threads:
                     tid = int(t)
                     self.state_manager.update_thread_status(sid, tid, ThreadStatus.STOPPED)
+            
             ResponseTransformer.output(response, StopAsyncRecordTransformer())
         elif resp_msg == "thread-group-added":
             tgid = str(resp_payload['id'])

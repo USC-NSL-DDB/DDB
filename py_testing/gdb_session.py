@@ -64,7 +64,7 @@ class GdbSessionConfig:
     # Using default_factory for mutable default
     args: List[str] = field(default_factory=list)
     run_delay: int = 0
-
+    gdb_config_cmds:List[str] = field(default_factory=list)
 
 class GdbSession:
     def __init__(self, config: GdbSessionConfig, mi_version: str = None) -> None:
@@ -95,6 +95,7 @@ class GdbSession:
         self.session_ctrl: Optional[GdbController] = None
         self.processor = ResponseProcessor.inst()
         self.mi_output_t_handle = None
+        self.gdb_config_cmds = config.gdb_config_cmds
 
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
@@ -113,13 +114,18 @@ class GdbSession:
 
         self.remote_gdbserver.connect()
         command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
+        print("gdbserver command", command)
         output = self.remote_gdbserver.execute_command_async(command)
         print(output)
         print("finish attach")
+        gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
         self.session_ctrl = GdbController(
-            ["gdb", self.get_mi_version_arg(), "-ex",
-             f"target remote {self.remote_host}:{self.remote_port}"]
+            gdb_cmd
         )
+        self.write("-gdb-set mi-async on")
+        for gdb_condig_cmd in self.gdb_config_cmds:
+            self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
+        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
        # self.session_ctrl.write("source /home/hjz/seoresearch/minimalserviceweaver/noobextension.py")
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
@@ -166,6 +172,7 @@ class GdbSession:
             responses = self.session_ctrl.get_gdb_response(
                 timeout_sec=0.5, raise_error_on_timeout=False)
             if responses:
+                print(f"raw response from{self.sid}",responses)
                 payload = ""
                 for r in responses:
                     if r["type"] == "console":
@@ -191,12 +198,16 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
+        print("session mode",self.startMode)
         if isinstance(cmd, list):
-            self.session_ctrl.write(cmd, read_response=False)
-            return
-
+            cmd=" ".join(cmd)
+        print("session cmd",cmd)
         if (cmd.strip() in ["run", "r", "-exec-run"]) and self.run_delay:
             sleep(self.run_delay)
+        if ("-exec-interrupt" in cmd.strip() ) and self.startMode==StartMode.ATTACH:
+            print(f"{self.sid} sending kill to",self.attach_pid)
+            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+            return
         self.session_ctrl.write(cmd, read_response=False)
 
     # def deque_mi_output(self) -> dict:

@@ -3,9 +3,10 @@ from data_struct import SessionResponse
 from response_transformer import *
 from threading import Lock, Thread
 from queue import Queue
-
-class CmdMeta:
+import asyncio
+class CmdMeta(asyncio.Future):
     def __init__(self, token: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
+        super().__init__()
         self.token = token
         self.target_sessions = target_sessions
         self.finished_sessions: Set[int] = set()
@@ -57,18 +58,33 @@ class CmdTracker:
                 if token in self.waiting_cmds:
                     print(f"Token {token} already exists. Skip registering the cmd.")
                     return
+                print("Creating a new cmd.")
+                print("token:", token)
+                print("target_sessions:", target_sessions)
                 self.waiting_cmds[token] = CmdMeta(token, target_sessions, transformer)
         else:
             print("No token supplied. skip registering the cmd.")
+# send a commnad-> get a future object, waiting for it to be resolved -
+#bactrace
+#get-remote-bt(get metadata)
+#swith to its parent
 
+#swtich back
     def recv_response(self, response: SessionResponse):
         if response.token:
             with self._lock:
                 cmd_meta = self.waiting_cmds[response.token]
                 result = cmd_meta.recv_response(response)
                 if result:
+                    print("Command Result Handling finished")
+                    print(cmd_meta)
+                    # if no one is waiting
+                    if cmd_meta.get_loop().is_running():
+                        cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
                     self.finished_response.put(cmd_meta)
+                    print(cmd_meta)
                     del self.waiting_cmds[response.token]
+                    print(cmd_meta, id(cmd_meta))
                     # self.finished_response.put(result)
         else:
             print("no token presented. skip.")

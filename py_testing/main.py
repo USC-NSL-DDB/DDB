@@ -186,11 +186,13 @@ def bootServiceWeaverKube():
             sessionConfig= GdbSessionConfig()
             sessionConfig.remote_port=30001
             sessionConfig.remote_host=i.status.pod_ip
+            print("remote host type:", type(i.status.pod_ip))
             sessionConfig.gdb_mode=GdbMode.REMOTE
             sessionConfig.remote_gdbserver=remoteServerConn
-            sessionConfig.tag=i.metadata.name
+            sessionConfig.tag=i.status.pod_ip
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.attach_pid=int(pid)
+            sessionConfig.gdb_config_cmds=["source ./noobextension.py"]
             gdbSessionConfigs.append(sessionConfig)
         else:
             eprint(i.status.pod_ip, i.metadata.name,

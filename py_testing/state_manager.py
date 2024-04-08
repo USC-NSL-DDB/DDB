@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from typing import List, Optional, Set, Tuple
 # from gdb_manager import GdbSession
 from uuid import uuid4, UUID
@@ -22,7 +24,7 @@ class SessionMeta:
         self.sid = sid
         self.current_tid: Optional[int] = None
         self.t_status: dict[int, ThreadStatus] = {}
-
+        self.wait_stop_event = asyncio.Event()
         # maps session unique tid to per inferior tid
         # for example, if session 1 has:
         # tg1: { 1, 2, 4 }
@@ -41,7 +43,10 @@ class SessionMeta:
         self.tg_to_pid: dict[str, int] = {}
 
         self.rlock = RLock()
-
+    def resolve_stop_event(self):
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(self.wait_stop_event.set)
+        loop.call_soon_threadsafe(self.wait_stop_event.clear)
     def create_thread(self, tid: int, tgid: str):
         with self.rlock:
             self.t_status[tid] = ThreadStatus.INIT
@@ -305,6 +310,8 @@ class StateManager:
         return (gtid, gtgid)
 
     def update_thread_status(self, sid: int, tid: int, status: ThreadStatus):
+        # if status == ThreadStatus.STOPPED:
+        #     self.sessions[sid].resolve_stop_event()
         self.sessions[sid].update_t_status(tid, status)
 
     def update_all_thread_status(self, sid: int, status: ThreadStatus):
@@ -370,6 +377,12 @@ class StateManager:
         for sid in self.sessions:
             out += f"{str(self.sessions[sid])}\n"
         return out
-
+    def get_session_by_tag(self,tag:str)->int:
+        for sid in self.sessions:
+            if self.sessions[sid].tag == tag:
+                return sid
+        return -1
+    async def wait_until_stop(self,session_id:int):
+        await self.sessions[session_id].wait_stop_event.wait()
 # Eager instantiation
 _ = StateManager.inst()

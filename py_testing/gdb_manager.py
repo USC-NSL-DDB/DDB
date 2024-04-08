@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 from time import sleep
 from gdbserver_starter import SSHRemoteServerCred, SSHRemoteSeverClient
@@ -16,7 +17,6 @@ class GdbManager:
 
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
-
         [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
@@ -25,7 +25,8 @@ class GdbManager:
         #     self.state_mgr.set_current_session(selection)
         #     print(f"selected session {self.state_mgr.get_current_session()}.")
         # else:
-        self.router.send_cmd(cmd)
+        #asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.loop).result()
+        asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
         # for s in self.sessions:
         #     s.write(cmd)
 

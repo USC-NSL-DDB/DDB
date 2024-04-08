@@ -5,6 +5,8 @@ FROM python:3.11-alpine
 WORKDIR /usr/src/app
 
 RUN apk update && apk add --no-cache gdb
+# Install Node.js and npm
+RUN apk update && apk add --no-cache nodejs npm
 # Copy the current directory contents into the container at /usr/src/app
 COPY . .
 
@@ -18,4 +20,5 @@ EXPOSE 80
 ENV NAME World
 
 # Run app.py when the container launches
-CMD ["python", "py_testing/main.py"]
+# CMD ["python", "py_testing/main.py"]
+CMD ["/bin/sh"]
