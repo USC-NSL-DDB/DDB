@@ -50,7 +50,7 @@ def main():
         sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
         sessionConfig.attach_pid = component.get("pid", 0)
         sessionConfig.binary = component.get("bin", None)
-        sessionConfig.cwd = component.get("cwd", ".")
+        sessionConfig.cwd = component.get("cwd", os.getcwd())
         sessionConfig.args = component.get("args", [])
         sessionConfig.run_delay = component.get("run_delay", 0)
         sessionConfig.sudo = component.get("sudo", False)
