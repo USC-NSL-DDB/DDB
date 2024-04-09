@@ -8,33 +8,13 @@ from counter import TSCounter
 from event_loop import EventLoopThread
 from response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
 from state_manager import StateManager, ThreadStatus
-
+from utils import CmdTokenGenerator
 # A simple wrapper around counter in case any customization later
 ''' Generate a global unique/incremental token for every cmd it sends
 '''
 
 
-class CmdTokenGenerator:
-    _sc: "CmdTokenGenerator" = None
-    _lock = Lock()
 
-    def __init__(self) -> None:
-        self.counter = TSCounter()
-
-    @staticmethod
-    def inst() -> "CmdTokenGenerator":
-        with CmdTokenGenerator._lock:
-            if CmdTokenGenerator._sc:
-                return CmdTokenGenerator._sc
-            CmdTokenGenerator._sc = CmdTokenGenerator()
-            return CmdTokenGenerator._sc
-
-    def inc(self) -> int:
-        return self.counter.increment()
-
-    @staticmethod
-    def get() -> int:
-        return CmdTokenGenerator.inst().inc()
 
 
 ''' Routing all commands to the desired gdb sessions
@@ -71,8 +51,14 @@ def extract_remote_parent_data(data):
 
 
 remoteBt = True
-
-
+import re
+def get_token(command):
+    pattern = r'^(\d+)-.+$'
+    match = re.match(pattern, command)
+    if match:
+        return match.group(1)
+    else:
+        return None
 class CmdRouter:
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
@@ -98,8 +84,9 @@ class CmdRouter:
             # handle private command
             self.handle_private_cmd(cmd[1:])
             return
-
-        cmd, _ = self.prepend_token(cmd)
+        token=get_token(cmd)
+        if token is None:
+            cmd, _ = self.prepend_token(cmd)
         print("current cmd:", cmd)
         token = None
         prefix = None
@@ -122,8 +109,8 @@ class CmdRouter:
 
         # if token:
         #     CmdTracker.inst().create_cmd(token)
-
-        cmd = f"{cmd}\n"
+        token=CmdTracker.inst().dedupToken(token)
+        cmd = f"{token}{cmd_no_token}\n"
 
         # prefix = cmd.split()[0]
         # if prefix.isdigit():

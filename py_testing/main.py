@@ -211,7 +211,8 @@ def bootServiceWeaverKube():
         cmd = input("(gdb) ").strip()
         cmd = f"{cmd}\n"
         print(cmd)
-        gdb_manager.write(cmd)
+        if cmd is not None:
+            gdb_manager.write(cmd)
         # cmd_head = cmd.split()[0]
 
         # if cmd_head in ["break", "b", "-break-insert"]:

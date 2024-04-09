@@ -198,10 +198,9 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
-        print("session mode",self.startMode)
         if isinstance(cmd, list):
             cmd=" ".join(cmd)
-        print("session cmd",cmd)
+        print(f"send command {cmd} to session {self.sid}")
         if (cmd.strip() in ["run", "r", "-exec-run"]) and self.run_delay:
             sleep(self.run_delay)
         if ("-exec-interrupt" in cmd.strip() ) and self.startMode==StartMode.ATTACH:
