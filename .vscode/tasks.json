@@ -1,0 +1,40 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "Delete K8s Deployment",
+                "type": "shell",
+                "command": "kubectl delete -f distributeddebuggerkube.yaml || true",
+                "problemMatcher": []
+            },
+            {
+                "label": "Build Docker Image",
+                "type": "docker-build",
+                "dockerBuild": {
+                    "tag": "distributeddebugger:v1",
+                    "dockerfile": "${workspaceFolder}/Dockerfile",
+                    "context": "${workspaceFolder}"
+                },
+                "problemMatcher": []
+            },
+            {
+                "label": "Apply K8s Deployment",
+                "type": "shell",
+                "command": "kubectl apply -f distributeddebuggerkube.yaml",
+                "problemMatcher": []
+            },
+            {
+                "label": "Rebuild and Redeploy",
+                "dependsOrder": "sequence",
+                "dependsOn": ["Delete K8s Deployment", "Build Docker Image", "Apply K8s Deployment"],
+                "group": {
+                    "kind": "build",
+                    "isDefault": true
+                },
+                "problemMatcher": []
+            }
+        ]
+    }
+    
