@@ -1,16 +1,17 @@
 from typing import List, Optional
 from time import sleep
+from gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from state_manager import StateManager
 from utils import *
 from cmd_router import CmdRouter
 
-from gdb_session import GdbSession
+from gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
     
 class GdbManager:
-    def __init__(self, components: List[dict], prerun_cmds: Optional[List[dict]] = None) -> None:
+    def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
         self.sessions: List[GdbSession] = []
 
-        for config in components:
+        for config in sessionConfigs:
             self.sessions.append(GdbSession(config))
 
         self.router = CmdRouter(self.sessions)

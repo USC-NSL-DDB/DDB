@@ -7,6 +7,8 @@
 
 # Nu runtime files
 .conf_*
+/caladan_bin
+/nu_bin
 
 
 # RUST FILES
@@ -117,3 +119,6 @@ bin/
 **/node_modules
 debug-adapter/out
 debug-adapter/dist
+
+*.new
+*.tmp

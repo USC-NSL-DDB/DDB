@@ -12,3 +12,6 @@ git config --global user.email "$GIT_USER_EMAIL"
 # Init gdb experience
 sudo echo "handle SIGUSR1 SIGUSR2 nostop noprint" >> ~/.gdbinit
 sudo echo "set auto-load safe-path /" >> ~/.gdbinit
+
+# init submodules
+git submodule update --init --recursive
