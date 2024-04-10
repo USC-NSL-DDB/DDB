@@ -6,9 +6,8 @@ from pprint import pprint
 from gdb_manager import GdbManager
 from yaml import safe_load, YAMLError
 from gdb_session import GdbMode, GdbSessionConfig, StartMode
-from gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRemoteSeverClient
+from gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRemoteServerClient
 from utils import *
-from kubernetes import config as kubeconfig, client as kubeclient
 import sys
 import argparse
 
@@ -23,6 +22,8 @@ def main():
     global gdb_manager, config_data
 
     components = config_data["Components"]
+    prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
+
     gdbSessionConfigs: List[GdbSessionConfig] = []
     for component in components:
         sessionConfig = GdbSessionConfig()
@@ -32,20 +33,22 @@ def main():
         ) and component["mode"] == "remote" else GdbMode.LOCAL
         if sessionConfig.gdb_mode == GdbMode.REMOTE:
             remote_cred = SSHRemoteServerCred(
+                port=sessionConfig.remote_port,
+                bin=component["bin"],
                 hostname=component["cred"]["hostname"],
                 username=component["cred"]["user"],
             )
-            sessionConfig.remote_gdbserver = SSHRemoteSeverClient(
+            sessionConfig.remote_gdbserver = SSHRemoteServerClient(
                 cred=remote_cred)
         sessionConfig.tag = component.get("tag", None)
-        sessionConfig.start_mode = component.get("startMode", StartMode.Binary)
+        sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
         sessionConfig.attach_pid = component.get("pid", 0)
         sessionConfig.binary = component.get("bin", None)
         sessionConfig.cwd = component.get("cwd", ".")
         sessionConfig.args = component.get("args", [])
         sessionConfig.run_delay = component.get("run_delay", 0)
         gdbSessionConfigs.append(sessionConfig)
-    gdb_manager = GdbManager(gdbSessionConfigs)
+    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
@@ -160,11 +163,13 @@ def bootFromNuConfig():
         except SystemExit:
             os._exit(130)
 
-
 def bootServiceWeaverKube():
+    from kubernetes import config as kubeconfig, client as kubeclient
+
     kubeconfig.load_incluster_config()
     clientset = kubeclient.CoreV1Api()
     global gdb_manager, config_data
+    prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
 
     kube_namespace = "default"
     sw_name = "serviceweaver1"
@@ -198,7 +203,7 @@ def bootServiceWeaverKube():
             eprint(i.status.pod_ip, i.metadata.name,
                    "cannot locate service weaver process:", sw_name)
 
-    gdb_manager = GdbManager(gdbSessionConfigs)
+    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
@@ -226,5 +231,51 @@ def bootServiceWeaverKube():
 
 
 if __name__ == "__main__":
-    bootServiceWeaverKube()
+    parser = argparse.ArgumentParser(
+        description="interactive debugging for distributed software.",
+    )
+
+    parser.add_argument(
+        "config",
+        metavar="conf_file",
+        type=str,
+        help="Path of the debugging config file."
+    )
+
+    args = parser.parse_args()
+
+    config_data = None
+
+    with open(str(args.config), "r") as fs:
+        try:
+            config_data = safe_load(fs)
+            print("Loaded dbg config file:")
+            pprint(config_data)
+        except YAMLError as e:
+            eprint(f"Failed to read the debugging config. Error: {e}")
+
+    if not config_data:
+        eprint("Debugging config is required!")
+        exit(1)
+
+    exec_pretasks(config_data)
+
+    gdb_manager: GdbManager = None
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"Received interrupt")
+
+        if gdb_manager:
+            gdb_manager.cleanup()
+
+        exec_posttasks(config_data)
+
+        try:
+            sys.exit(130)
+        except SystemExit:
+            os._exit(130)
+
+    main()
+    # bootServiceWeaverKube()
     pass

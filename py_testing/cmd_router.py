@@ -6,16 +6,9 @@ from gdb_session import GdbSession
 from cmd_tracker import CmdTracker
 from counter import TSCounter
 from event_loop import EventLoopThread
-from response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
 from state_manager import StateManager, ThreadStatus
-from utils import CmdTokenGenerator
-# A simple wrapper around counter in case any customization later
-''' Generate a global unique/incremental token for every cmd it sends
-'''
-
-
-
-
+from utils import CmdTokenGenerator, parse_cmd
+from response_transformer import BacktraceReadableTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
 
 ''' Routing all commands to the desired gdb sessions
 `CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd. 
@@ -24,7 +17,6 @@ from utils import CmdTokenGenerator
 
 **Key Functions**: `send_cmd(str)`
 '''
-
 
 def extract_remote_parent_data(data):
     try:
@@ -59,7 +51,17 @@ def get_token(command):
         return match.group(1)
     else:
         return None
+
 class CmdRouter:
+    """ 
+    Routing all commands to the desired gdb sessions.
+
+    - `CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd.   
+    - `CmdRouter` will partially parse/extract the token and command to ensure it will be resgitered with the `CmdTracker`.  
+    - `CmdRouter` also handles the private commands which can be used to print out some internal states.  
+
+    **Key Functions**: `send_cmd(str)`
+    """
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
         self.sessions = {s.sid: s for s in sessions}
@@ -84,39 +86,14 @@ class CmdRouter:
             # handle private command
             self.handle_private_cmd(cmd[1:])
             return
+
         token=get_token(cmd)
         if token is None:
             cmd, _ = self.prepend_token(cmd)
         print("current cmd:", cmd)
-        token = None
-        prefix = None
-        cmd_no_token = None
-        cmd = cmd.strip()
-        for idx, cmd_char in enumerate(cmd):
-            if (not cmd_char.isdigit()) and (idx == 0):
-                prefix = cmd.split()[0]
-                cmd_no_token = cmd
-                break
-
-            if not cmd_char.isdigit():
-                token = cmd[:idx].strip()
-                cmd_no_token = cmd[idx:].strip()
-                if len(cmd_no_token) == 0:
-                    # no meaningful input
-                    return
-                prefix = cmd_no_token.split()[0]
-                break
-
-        # if token:
-        #     CmdTracker.inst().create_cmd(token)
-        token=CmdTracker.inst().dedupToken(token)
+        token, cmd_no_token, prefix, cmd = parse_cmd(cmd) 
+        token = CmdTracker.inst().dedupToken(token)
         cmd = f"{token}{cmd_no_token}\n"
-
-        # prefix = cmd.split()[0]
-        # if prefix.isdigit():
-        #     token = prefix
-        #     prefix = cmd.split()[1]
-        # prefix = prefix.strip()
 
         if (prefix in ["b", "break", "-break-insert"]):
             self.broadcast(token, cmd)
@@ -152,8 +129,6 @@ class CmdRouter:
                     print("remote_bt_parent_info from in context",remote_bt_parent_info)
                 print("[special header]")
                 print(aggreated_bt_result)
-                        
-
         elif (prefix in ["run", "r", "-exec-run"]):
             self.broadcast(token, cmd)
         elif (prefix in ["list"]):
@@ -178,11 +153,16 @@ class CmdRouter:
             self.broadcast(token, cmd, ThreadInfoTransformer())
         elif (prefix in ["-list-thread-groups"]):
             self.broadcast(token, cmd, ProcessInfoTransformer())
-        elif (prefix in ["info"]):
+        elif (prefix in [ "-stack-list-frames" ]):
+            self.send_to_current_thread(token, cmd, StackListFramesTransformer())
+        elif (prefix in [ "bt", "backtrace", "where" ]):
+            self.send_to_current_thread(token, f"{token}-stack-list-frames", BacktraceReadableTransformer())
+        elif (prefix in [ "info" ]):
             subcmd = cmd_no_token.split()[1]
             if subcmd == "threads" or subcmd == "thread":
-                self.broadcast(token, f"{token}-thread-info",
-                               ThreadInfoReadableTransformer())
+                self.broadcast(
+                    token, f"{token}-thread-info", ThreadInfoReadableTransformer()
+                )
             if subcmd == "inferiors" or subcmd == "inferior":
                 self.broadcast(
                     token, f"{token}-list-thread-groups", ProcessReadableTransformer())
@@ -196,18 +176,12 @@ class CmdRouter:
                 self.send_to_current_thread(token, cmd)
             # self.send_to_current_session(token, cmd)
             # self.broadcast(cmd)
-
-        # if (cmd.strip() in [ ] )
-        # for s in self.sessions:
-        #     s.write(cmd)
-
+        
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
         self.register_cmd(token, sid, transformer)
         # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
         self.sessions[sid].write("-thread-select " + str(tid) + "\n" + cmd)
-
-    # def select_
 
     def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
@@ -241,8 +215,6 @@ class CmdRouter:
         self.register_cmd_for_all(token, transformer)
         for _, s in self.sessions.items():
             s.write(cmd)
-
-    # def send_to_random_one(self, cmd: str):
 
     def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd(token, self.sessions[1].sid, transformer)

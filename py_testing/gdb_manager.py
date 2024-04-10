@@ -1,7 +1,7 @@
 import asyncio
-from typing import List
+from typing import List, Optional
 from time import sleep
-from gdbserver_starter import SSHRemoteServerCred, SSHRemoteSeverClient
+from gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from state_manager import StateManager
 from utils import *
 from cmd_router import CmdRouter
@@ -9,7 +9,7 @@ from cmd_router import CmdRouter
 from gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
     
 class GdbManager:
-    def __init__(self, sessionConfigs: List[GdbSessionConfig]) -> None:
+    def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
         self.sessions: List[GdbSession] = []
 
         for config in sessionConfigs:
@@ -17,7 +17,8 @@ class GdbManager:
 
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
-        [ s.start() for s in self.sessions ]
+
+        [ s.start(prerun_cmds) for s in self.sessions ]
 
     def write(self, cmd: str):
         # if cmd.strip() and cmd.split()[0] == "session":

@@ -8,8 +8,8 @@ from response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
 from state_manager import StateManager
-from gdbserver_starter import RemoteGdbServer, RemoteServerConnection, SSHRemoteServerCred
-from utils import eprint
+from gdbserver_starter import RemoteServerConnection
+from utils import eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
 
@@ -100,59 +100,71 @@ class GdbSession:
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
 
-    def local_start(self):
-        full_args = ["gdb", self.get_mi_version_arg(), "--args"]
+    def local_start(self, prerun_cmds: Optional[List[dict]] = None):
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.append("--args")
         full_args.append(self.bin)
         full_args.extend(self.args)
         self.session_ctrl = GdbController(full_args)
 
-    def remote_attach(self):
+    def remote_attach(self, prerun_cmds: Optional[List[dict]] = None):
         print("start remote attach")
         if not self.remote_gdbserver:
             eprint("Remote gdbserver not initialized")
             return
 
-        self.remote_gdbserver.connect()
-        command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-        print("gdbserver command", command)
-        output = self.remote_gdbserver.execute_command_async(command)
-        print(output)
-        print("finish attach")
-        gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
-        self.session_ctrl = GdbController(
-            gdb_cmd
-        )
-        self.write("-gdb-set mi-async on")
-        for gdb_condig_cmd in self.gdb_config_cmds:
-            self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
-        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
-       # self.session_ctrl.write("source /home/hjz/seoresearch/minimalserviceweaver/noobextension.py")
-        # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
-        # print(response)
+        # self.remote_gdbserver.connect()
+        # command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
+        # print("gdbserver command", command)
+        # output = self.remote_gdbserver.execute_command_async(command)
+        # print(output)
+        # print("finish attach")
+        # gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
+        # self.session_ctrl = GdbController(
+        #     gdb_cmd
+        # )
+        # self.write("-gdb-set mi-async on")
+        # for gdb_condig_cmd in self.gdb_config_cmds:
+        #     self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
+        # self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
-    def remote_start(self):
+        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid)
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.extend([ "-ex", f"-target-select remote {self.remote_host}:{self.remote_port}" ])
+        self.session_ctrl = GdbController(full_args)
+
+    def remote_start(self, prerun_cmds: Optional[List[dict]] = None):
         if not self.remote_gdbserver:
             eprint("Remote gdbserver not initialized")
             return
-
-        self.remote_gdbserver.connect()
-        command = f"gdbserver :{self.remote_port} {self.bin} {' '.join(self.args) if self.args else ''}"
-        self.remote_gdbserver.execute_command(command)
-        self.session_ctrl = GdbController(
-            ["gdb", self.get_mi_version_arg(), "-ex",
-             f"target remote {self.remote_host}:{self.remote_port}"]
-        )
+        
+        self.remote_gdbserver.start(self.args)
+        full_args = [ "gdb", self.get_mi_version_arg() ]
+        if prerun_cmds:
+            for cmd in prerun_cmds:
+                full_args.append("-ex")
+                full_args.append(cmd["command"])
+        full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
+        self.session_ctrl = GdbController(full_args)
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # print(response)
 
-    def start(self):
+    def start(self, prerun_cmds: Optional[List[dict]] = None) -> None:
         if self.mode == GdbMode.LOCAL:
-            self.local_start()
+            self.local_start(prerun_cmds)
         elif self.mode == GdbMode.REMOTE:
             if self.startMode == StartMode.ATTACH:
-                self.remote_attach()
+                self.remote_attach(prerun_cmds)
             elif self.startMode == StartMode.BINARY:
-                self.remote_start()
+                self.remote_start(prerun_cmds)
         else:
             eprint("Invalid mode")
             return
@@ -198,12 +210,15 @@ class GdbSession:
             # sleep(0.1)
 
     def write(self, cmd: str):
-        if isinstance(cmd, list):
-            cmd=" ".join(cmd)
+        _, cmd_no_token, _, cmd = parse_cmd(cmd)
+
+        # TODO: check if removing support of a list of commands is okay?
+        # if isinstance(cmd, list):
+            # cmd=" ".join(cmd)
         print(f"send command {cmd} to session {self.sid}")
-        if (cmd.strip() in ["run", "r", "-exec-run"]) and self.run_delay:
+        if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
-        if ("-exec-interrupt" in cmd.strip() ) and self.startMode==StartMode.ATTACH:
+        if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:
             print(f"{self.sid} sending kill to",self.attach_pid)
             self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
             return
