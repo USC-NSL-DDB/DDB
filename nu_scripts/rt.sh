@@ -5,16 +5,15 @@ SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 source $SOURCE_DIR/shared.sh
 
 function prepare {
-    kill_iokerneld
-    kill_controller
-    sleep 5
+    cleanup
+    sleep 3
     source setup.sh >/dev/null 2>&1
     sudo sync; sudo sh -c "echo 3 > /proc/sys/vm/drop_caches"
 }
 
 function cleanup {
-    kill_iokerneld
     kill_controller
+    kill_iokerneld
 }
 
 function force_cleanup {
@@ -30,11 +29,15 @@ function start_nu_rt {
     prepare
     echo "Rerun iokerneld"
     rerun_iokerneld 
-    echo "Run controller"
+    echo "Nu runtime boot finished"
+}
+
+function start_controller {
+    echo "Controller starting"
     run_controller 1>/dev/null 2>&1 &
     disown -r 
     sleep 3
-    echo "Start finished"
+    echo "Controller started"
 }
 
 function shutdown_nu_rt {

@@ -13,9 +13,6 @@ from utils import eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
 
-# A simple wrapper around counter in case any customization later
-
-
 class SessionCounter:
     _sc: "SessionCounter" = None
     _lock = Lock()
@@ -38,21 +35,19 @@ class SessionCounter:
     def get() -> int:
         return SessionCounter.inst().inc()
 
-
 class GdbMode(Enum):
     LOCAL = 1
     REMOTE = 2
-
 
 class StartMode(Enum):
     BINARY = 1
     ATTACH = 2
 
-
 @dataclass
 class GdbSessionConfig:
     remote_port: int = -1
     remote_host: str = ""
+    username: str = "" 
     remote_gdbserver: RemoteServerConnection = None
     attach_pid: int = -1
     binary: str = ""
@@ -64,7 +59,8 @@ class GdbSessionConfig:
     # Using default_factory for mutable default
     args: List[str] = field(default_factory=list)
     run_delay: int = 0
-    gdb_config_cmds:List[str] = field(default_factory=list)
+    sudo: bool = False
+    gdb_config_cmds: List[str] = field(default_factory=list)
 
 class GdbSession:
     def __init__(self, config: GdbSessionConfig, mi_version: str = None) -> None:
@@ -84,6 +80,8 @@ class GdbSession:
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
+
+        self.sudo = config.sudo
 
         # Session metadata
         self.suid = uuid4()
@@ -132,7 +130,7 @@ class GdbSession:
         #     self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
         # self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
-        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid)
+        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
         full_args = [ "gdb", self.get_mi_version_arg() ]
         if prerun_cmds:
             for cmd in prerun_cmds:
@@ -146,7 +144,7 @@ class GdbSession:
             eprint("Remote gdbserver not initialized")
             return
         
-        self.remote_gdbserver.start(self.args)
+        self.remote_gdbserver.start(self.args, sudo=self.sudo)
         full_args = [ "gdb", self.get_mi_version_arg() ]
         if prerun_cmds:
             for cmd in prerun_cmds:
