@@ -11,7 +11,7 @@ sysctl -w net.core.somaxconn=3072
 # set up the ksched module
 rmmod ksched
 rm /dev/ksched
-insmod $(dirname $0)/../caladan_bin/ksched.ko
+insmod $(dirname $0)/../caladan_bin/ksched/build/ksched.ko
 mknod /dev/ksched c 280 0
 chmod uga+rwx /dev/ksched
 

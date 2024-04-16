@@ -2,7 +2,7 @@
 
 SHARED_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 NU_PATH=$SHARED_SCRIPT_DIR/../nu_bin
-CALADAN_PATH=$SHARED_SCRIPT_DIR/../caladan_bin
+CALADAN_PATH=$SHARED_SCRIPT_DIR/../caladan_bin/
 
 function say_failed() {
     echo -e "----\e[31mFailed\e[0m"

@@ -56,16 +56,17 @@ class SSHRemoteServerClient(RemoteServerConnection):
         stdin, stdout, stderr = self.client.exec_command(' '.join(command))
         # return stdout.read()
 
-    def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None):
+    def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
         command = None
         if attach_pid and isinstance(attach_pid, int):
             command = f"gdbserver :{self.cred.port} --attach {str(attach_pid)}"
         else:
             command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
-            
+        if sudo:
+            command = f"sudo {command}"
         stdin, stdout, stderr = self.client.exec_command(command)
         # You can handle the output and error streams here if needed
-        print("Start gdbserver on remote machine...")
+        print(f"Start gdbserver on remote machine... args: {args}, attach_pid: {attach_pid}, sudo: {sudo}, command: {command}")
 
     def close(self):
         if self.client:
@@ -73,9 +74,10 @@ class SSHRemoteServerClient(RemoteServerConnection):
 
 
 class KubeRemoteSeverClient(RemoteServerConnection):
+    # from kubernetes import client, config, stream
+    # import kubernetes
+
     def __init__(self, pod_name: str, pod_namespace: str):
-        from kubernetes import client, config, stream
-        import kubernetes
         self.pod_name = pod_name
         self.pod_namespace = pod_namespace
 

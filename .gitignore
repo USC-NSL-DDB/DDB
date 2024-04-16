@@ -7,6 +7,8 @@
 
 # Nu runtime files
 .conf_*
+/caladan_bin
+/nu_bin
 
 
 # RUST FILES
@@ -114,3 +116,6 @@ Mkfile.old
 dkms.conf
 
 bin/
+
+*.new
+*.tmp
