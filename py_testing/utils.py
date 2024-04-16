@@ -1,4 +1,8 @@
 import sys
+from threading import Lock
+from typing import Tuple
+
+from counter import TSCounter
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -13,7 +17,7 @@ def mi_print(response, meta: str):
         if type in [ "console", "output", "notify", "result" ]:
             msg = response["message"]
             payload = response["payload"] 
-            out = f"\n{meta} [ type: {type}, token: {token}, msg: {msg} ]\n{payload}\n" 
+            out = f"\n{meta} [ type: {type}, token: {token}, message: {msg} ]\n{payload}\n" 
             if response["stream"] == "stdout":
                 print(out, end="")
             if response["stream"] == "stderr":
@@ -24,7 +28,32 @@ def mi_print(response, meta: str):
 def wrap_grouped_message(msg: str) -> str:
     return f"**** GROUPED RESPONSE START ****\n{msg}\n**** GROUPED RESPONSE END ****\n\n"
 
-def parse_cmd(cmd: str) -> tuple:
+# A simple wrapper around counter in case any customization later
+''' Generate a global unique/incremental token for every cmd it sends
+'''
+class CmdTokenGenerator:
+    _sc: "CmdTokenGenerator" = None
+    _lock = Lock()
+
+    def __init__(self) -> None:
+        self.counter = TSCounter()
+
+    @staticmethod
+    def inst() -> "CmdTokenGenerator":
+        with CmdTokenGenerator._lock:
+            if CmdTokenGenerator._sc:
+                return CmdTokenGenerator._sc
+            CmdTokenGenerator._sc = CmdTokenGenerator()
+            return CmdTokenGenerator._sc
+
+    def inc(self) -> int:
+        return self.counter.increment()
+
+    @staticmethod
+    def get() -> int:
+        return str(CmdTokenGenerator.inst().inc())
+
+def parse_cmd(cmd: str) -> Tuple[str, str, str, str]:
     """
     Parses a gdb command string and returns a tuple containing the token, command without token,
     prefix, and the original command string.

@@ -1,11 +1,13 @@
 from typing import List, Optional, Set
 from data_struct import SessionResponse
+from utils import CmdTokenGenerator
 from response_transformer import *
 from threading import Lock, Thread
 from queue import Queue
-
-class CmdMeta:
+import asyncio
+class CmdMeta(asyncio.Future):
     def __init__(self, token: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
+        super().__init__()
         self.token = token
         self.target_sessions = target_sessions
         self.finished_sessions: Set[int] = set()
@@ -35,6 +37,7 @@ class CmdTracker:
     
     def __init__(self) -> None:
         self._lock = Lock()
+        self.outTokenToInToken: dict[str, str] = {}
         self.waiting_cmds: dict[str, CmdMeta] = {}
         self.finished_response: Queue[CmdMeta] = Queue(maxsize=0)
 
@@ -54,21 +57,41 @@ class CmdTracker:
     def create_cmd(self, token: Optional[str], target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
         if token:
             with self._lock:
-                if token in self.waiting_cmds:
-                    print(f"Token {token} already exists. Skip registering the cmd.")
-                    return
                 self.waiting_cmds[token] = CmdMeta(token, target_sessions, transformer)
         else:
             print("No token supplied. skip registering the cmd.")
+            return None
+    def dedupToken(self,token:str):
+        tokenSent=token
+        while tokenSent in self.outTokenToInToken:
+            tokenSent=CmdTokenGenerator.get()
+        self.outTokenToInToken[tokenSent]=token
+        return tokenSent
+        
+# send a commnad-> get a future object, waiting for it to be resolved -
+#bactrace
+#get-remote-bt(get metadata)
+#swith to its parent
 
+#swtich back
     def recv_response(self, response: SessionResponse):
         if response.token:
             with self._lock:
                 cmd_meta = self.waiting_cmds[response.token]
                 result = cmd_meta.recv_response(response)
                 if result:
-                    self.finished_response.put(cmd_meta)
+                    print("Command Result Handling finished")
+                    print(cmd_meta)
+                    # if no one is waiting
+                    if cmd_meta.get_loop().is_running():
+                        cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
+                    token = self.outTokenToInToken[cmd_meta.token]
+                    print(cmd_meta)
                     del self.waiting_cmds[response.token]
+                    for cmd_response in cmd_meta.responses:
+                        cmd_response.token=token
+                    print(cmd_meta, id(cmd_meta))
+                    self.finished_response.put(cmd_meta)
                     # self.finished_response.put(result)
         else:
             print("no token presented. skip.")

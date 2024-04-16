@@ -98,12 +98,11 @@ class ResponseProcessor:
                     for t in stopped_threads:
                         tid = int(t)
                         self.state_manager.update_thread_status(
-                            sid, tid, ThreadStatus.STOPPED)
-                ResponseTransformer.output(
-                    response, StopAsyncRecordTransformer())
+                            sid, tid, ThreadStatus.STOPPED
+                        )
+                ResponseTransformer.output(response, StopAsyncRecordTransformer())
             else:
-                ResponseTransformer.output(
-                    response, GenericStopAsyncRecordTransformer())
+                ResponseTransformer.output(response, GenericStopAsyncRecordTransformer())
         elif resp_msg == "thread-group-added":
             tgid = str(resp_payload['id'])
             gtgid = self.state_manager.add_thread_group(sid, tgid)
