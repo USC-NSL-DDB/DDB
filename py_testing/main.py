@@ -12,7 +12,13 @@ from gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRem
 from utils import *
 import sys
 import argparse
-
+import debugpy
+try:
+    debugpy.listen(("localhost", 5678))
+    print("Waiting for debugger attach")
+    debugpy.wait_for_client()
+except Exception as e:
+    print(f"Failed to attach debugger: {e}")
 # ARGS = [
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.3"],
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.4"],
