@@ -149,7 +149,11 @@ class CmdRouter:
             if len(cmd_no_token.split()) < 2:
                 print("Usage: -thread-select #gtid")
                 return
-            self.state_mgr.set_current_gthread(int(cmd_no_token.split()[1]))
+            gtid=int(cmd_no_token.split()[1])
+            self.state_mgr.set_current_gthread(gtid)
+            session_id,thread_id=self.state_mgr.get_sidtid_by_gtid(gtid)
+            new_cmd=cmd.split()[0]+" "+str(thread_id)
+            self.send_to_session(token,new_cmd,ThreadSelectTransformer(gtid),session_id)
         elif (prefix in ["-thread-info"]):
             self.broadcast(token, cmd, ThreadInfoTransformer())
         elif (prefix in ["-list-thread-groups"]):
