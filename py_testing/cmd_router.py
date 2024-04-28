@@ -44,13 +44,16 @@ def extract_remote_parent_data(data):
 
 remoteBt = True
 import re
-def get_token(command):
+def get_token_and_command(command):
     pattern = r'^(\d+)-.+$'
     match = re.match(pattern, command)
     if match:
-        return match.group(1)
+        token = match.group(1)
+        end_pos = match.end(1)
+        command = command[end_pos:]
+        return token, command
     else:
-        return None
+        return None, None
 
 class CmdRouter:
     """ 
@@ -87,9 +90,7 @@ class CmdRouter:
             self.handle_private_cmd(cmd[1:])
             return
 
-        token=get_token(cmd)
-        if token is None:
-            cmd, _ = self.prepend_token(cmd)
+        cmd, _ = self.prepend_token(cmd)
         print("current cmd:", cmd)
         token, cmd_no_token, prefix, cmd = parse_cmd(cmd) 
         token = CmdTracker.inst().dedupToken(token)
