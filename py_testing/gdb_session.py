@@ -9,7 +9,7 @@ from pygdbmi.gdbcontroller import GdbController
 
 from state_manager import StateManager
 from gdbserver_starter import RemoteServerConnection
-from utils import eprint, parse_cmd
+from utils import dev_print, eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
 
@@ -110,34 +110,34 @@ class GdbSession:
         self.session_ctrl = GdbController(full_args)
 
     def remote_attach(self, prerun_cmds: Optional[List[dict]] = None):
-        print("start remote attach")
+        dev_print("start remote attach")
         if not self.remote_gdbserver:
             eprint("Remote gdbserver not initialized")
             return
 
-        # self.remote_gdbserver.connect()
-        # command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-        # print("gdbserver command", command)
-        # output = self.remote_gdbserver.execute_command_async(command)
-        # print(output)
-        # print("finish attach")
-        # gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
-        # self.session_ctrl = GdbController(
-        #     gdb_cmd
-        # )
-        # self.write("-gdb-set mi-async on")
-        # for gdb_condig_cmd in self.gdb_config_cmds:
-        #     self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
-        # self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
+        self.remote_gdbserver.connect()
+        command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
+        dev_print("gdbserver command", command)
+        output = self.remote_gdbserver.execute_command_async(command)
+        dev_print(output)
+        dev_print("finish attach")
+        gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
+        self.session_ctrl = GdbController(
+            gdb_cmd
+        )
+        self.write("-gdb-set mi-async on")
+        for gdb_condig_cmd in self.gdb_config_cmds:
+            self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
+        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
-        self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
-        full_args = [ "gdb", self.get_mi_version_arg() ]
-        if prerun_cmds:
-            for cmd in prerun_cmds:
-                full_args.append("-ex")
-                full_args.append(cmd["command"])
-        full_args.extend([ "-ex", f"-target-select remote {self.remote_host}:{self.remote_port}" ])
-        self.session_ctrl = GdbController(full_args)
+        # self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
+        # full_args = [ "gdb", self.get_mi_version_arg() ]
+        # if prerun_cmds:
+        #     for cmd in prerun_cmds:
+        #         full_args.append("-ex")
+        #         full_args.append(cmd["command"])
+        # full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
+        # self.session_ctrl = GdbController(full_args)
 
     def remote_start(self, prerun_cmds: Optional[List[dict]] = None):
         if not self.remote_gdbserver:
@@ -153,7 +153,7 @@ class GdbSession:
         full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
         self.session_ctrl = GdbController(full_args)
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
-        # print(response)
+        # dev_print(response)
 
     def start(self, prerun_cmds: Optional[List[dict]] = None) -> None:
         if self.mode == GdbMode.LOCAL:
@@ -167,7 +167,7 @@ class GdbSession:
             eprint("Invalid mode")
             return
 
-        print(
+        dev_print(
             f"Started debugging process - \n\ttag: {self.tag}, \n\tbin: {self.bin}, \n\tstartup command: {self.session_ctrl.command}")
 
         self.state_mgr.register_session(self.sid, self.tag)
@@ -182,7 +182,7 @@ class GdbSession:
             responses = self.session_ctrl.get_gdb_response(
                 timeout_sec=0.5, raise_error_on_timeout=False)
             if responses:
-                print(f"raw response from{self.sid}",responses)
+                #dev_print(f"raw response from{self.sid}",responses)
                 payload = ""
                 for r in responses:
                     if r["type"] == "console":
@@ -213,11 +213,11 @@ class GdbSession:
         # TODO: check if removing support of a list of commands is okay?
         # if isinstance(cmd, list):
             # cmd=" ".join(cmd)
-        print(f"send command {cmd} to session {self.sid}")
+        dev_print(f"send command {cmd} to session {self.sid}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
         if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:
-            print(f"{self.sid} sending kill to",self.attach_pid)
+            dev_print(f"{self.sid} sending kill to",self.attach_pid)
             self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
             return
         self.session_ctrl.write(cmd, read_response=False)
@@ -234,7 +234,7 @@ class GdbSession:
         return f"[ {self.tag}, {self.bin}, {self.sid} ]"
 
     def cleanup(self):
-        print(
+        dev_print(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")
         # self.mi_output_t_handle
         self.session_ctrl.exit()

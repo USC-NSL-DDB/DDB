@@ -23,6 +23,15 @@
             ],
         },
         {
+            "name": "Test: serviceweaver kube",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/py_testing/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "stopOnEntry": true
+        },
+        {
             "name": "Test: multithread_print_multiserver",
             "type": "python",
             "request": "launch",

@@ -9,9 +9,13 @@ RUN apk update && apk add --no-cache gdb
 RUN apk update && apk add --no-cache nodejs npm
 # Copy the current directory contents into the container at /usr/src/app
 COPY . .
-
-# Install any needed packages specified in requirements.txt
 RUN pip3 install --no-cache-dir -r py_testing/requirements.txt
+
+# Copy adapter
+WORKDIR /usr/src/adapter
+COPY /home/hjz/seoresearch/distributed_debug/distributed-debugger-dap/webfrakedebugger/code-debug .
+# Install any needed packages specified in requirements.txt
+
 
 # Make port 80 available to the world outside this container
 EXPOSE 80

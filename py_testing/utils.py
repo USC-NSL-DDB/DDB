@@ -5,7 +5,7 @@ from typing import Tuple
 from counter import TSCounter
 
 def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
+    dev_print(*args, file=sys.stderr, **kwargs)
 
 def mi_print(response, meta: str):
     try:
@@ -19,11 +19,11 @@ def mi_print(response, meta: str):
             payload = response["payload"] 
             out = f"\n{meta} [ type: {type}, token: {token}, message: {msg} ]\n{payload}\n" 
             if response["stream"] == "stdout":
-                print(out, end="")
+                dev_print(out, end="")
             if response["stream"] == "stderr":
                 eprint(out, end="")
     except Exception as e:
-        print(f"response: {response}. meta: {meta}, e: {e}")
+        dev_print(f"response: {response}. meta: {meta}, e: {e}")
 
 def wrap_grouped_message(msg: str) -> str:
     return f"**** GROUPED RESPONSE START ****\n{msg}\n**** GROUPED RESPONSE END ****\n\n"
@@ -52,7 +52,10 @@ class CmdTokenGenerator:
     @staticmethod
     def get() -> int:
         return str(CmdTokenGenerator.inst().inc())
-
+trace=False
+def dev_print(msg:str):
+    if trace:
+        dev_print(msg,file=sys.stderr)
 def parse_cmd(cmd: str) -> Tuple[str, str, str, str]:
     """
     Parses a gdb command string and returns a tuple containing the token, command without token,

@@ -14,8 +14,8 @@
                 "type": "docker-build",
                 "dockerBuild": {
                     "tag": "distributeddebugger:v1",
-                    "dockerfile": "${workspaceFolder}/Dockerfile",
-                    "context": "${workspaceFolder}"
+                    "dockerfile": "/home/hjz/seoresearch/distributed_debug/Dockerfile",
+                    "context": "/home/hjz/seoresearch/distributed_debug"
                 },
                 "problemMatcher": []
             },
