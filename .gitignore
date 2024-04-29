@@ -6,7 +6,7 @@ pyplay1.py
 #logs
 cpptools.log
 webfrek.log
-
+Dockerfile
 .swp
 
 # gdb files

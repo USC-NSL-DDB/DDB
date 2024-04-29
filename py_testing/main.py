@@ -65,7 +65,7 @@ def main():
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
-    # print(gdbmi.command)  # print actual command run as subprocess
+    # dev_print(gdbmi.command)  # dev_print actual command run as subprocess
     # for response in gdbmi.get_gdb_response():
     #     print_resp(response)
     #     pprint(response)
@@ -149,7 +149,7 @@ def bootFromNuConfig():
     with open(str(args.config), "r") as fs:
         try:
             config_data = safe_load(fs)
-            print("Loaded dbg config file:")
+            dev_print("Loaded dbg config file:")
             pprint(config_data)
         except YAMLError as e:
             eprint(f"Failed to read the debugging config. Error: {e}")
@@ -164,7 +164,7 @@ def bootFromNuConfig():
     try:
         main()
     except KeyboardInterrupt:
-        print(f"Received interrupt")
+        dev_print(f"Received interrupt")
 
         if gdb_manager:
             gdb_manager.cleanup()
@@ -182,7 +182,7 @@ def bootServiceWeaverKube():
     kubeconfig.load_incluster_config()
     clientset = kubeclient.CoreV1Api()
     global gdb_manager, config_data
-    prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
+    #prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
 
     kube_namespace = "default"
     sw_name = "serviceweaver1"
@@ -191,7 +191,7 @@ def bootServiceWeaverKube():
         namespace=kube_namespace, label_selector=selector_label)
     gdbSessionConfigs: List[GdbSessionConfig] = []
     for i in pods.items:
-        print("%s\t%s\t%s" %
+        dev_print("%s\t%s\t%s" %
               (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
         remoteServerConn = KubeRemoteSeverClient(
             i.metadata.name, i.metadata.namespace)
@@ -204,43 +204,26 @@ def bootServiceWeaverKube():
             sessionConfig= GdbSessionConfig()
             sessionConfig.remote_port=30001
             sessionConfig.remote_host=i.status.pod_ip
-            print("remote host type:", type(i.status.pod_ip))
+            dev_print("remote host type:", type(i.status.pod_ip))
             sessionConfig.gdb_mode=GdbMode.REMOTE
             sessionConfig.remote_gdbserver=remoteServerConn
             sessionConfig.tag=i.status.pod_ip
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.attach_pid=int(pid)
-            sessionConfig.gdb_config_cmds=["source ./noobextension.py"]
+            sessionConfig.gdb_config_cmds=["source /usr/src/app/gdb_ext/noobextension.py"]
             gdbSessionConfigs.append(sessionConfig)
         else:
             eprint(i.status.pod_ip, i.metadata.name,
                    "cannot locate service weaver process:", sw_name)
 
-    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
-
-    # del gdb_manager
-    # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
-    # print(gdbmi.command)  # print actual command run as subprocess
-    # for response in gdbmi.get_gdb_response():
-    #     print_resp(response)
-    #     pprint(response)
-
+    gdb_manager = GdbManager(gdbSessionConfigs, [{"name":"load serviceweaver ext","command":"source /usr/src/app/gdb_ext/noobextension.py"},{"name": "enable async mode",
+  "command": "set target-async on"}])
+    
     while True:
-        cmd = input("(gdb) ").strip()
+        cmd = input(f"({gdb_manager.state_mgr.get_current_gthread()})(gdb) ").strip()
         cmd = f"{cmd}\n"
-        print(cmd)
         if cmd is not None:
             gdb_manager.write(cmd)
-        # cmd_head = cmd.split()[0]
-
-        # if cmd_head in ["break", "b", "-break-insert"]:
-        #     # gdbmi.write
-        #     gdb_manager.write(cmd)
-        # else:
-        #     responses = gdbmi.write(cmd)
-        #     for response in responses:
-        #         print_resp(response)
-        #         pprint(response)
 
 
 if __name__ == "__main__":
@@ -251,6 +234,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "config",
         metavar="conf_file",
+        nargs='?',
         type=str,
         help="Path of the debugging config file."
     )
@@ -258,37 +242,36 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config_data = None
+    if args.config is not None:
+        with open(str(args.config), "r") as fs:
+            try:
+                config_data = safe_load(fs)
+                eprint("Loaded dbg config file:")
+                pprint(config_data)
+            except YAMLError as e:
+                eprint(f"Failed to read the debugging config. Error: {e}")
 
-    with open(str(args.config), "r") as fs:
-        try:
-            config_data = safe_load(fs)
-            eprint("Loaded dbg config file:")
-            pprint(config_data)
-        except YAMLError as e:
-            eprint(f"Failed to read the debugging config. Error: {e}")
+        if not config_data:
+            eprint("Debugging config is required!")
+            exit(1)
 
-    if not config_data:
-        eprint("Debugging config is required!")
-        exit(1)
-
-    exec_pretasks(config_data)
+        exec_pretasks(config_data)
 
     gdb_manager: GdbManager = None
     try:
-        main()
+        #main()
+        bootServiceWeaverKube()
     except KeyboardInterrupt:
-        print(f"Received interrupt")
+        dev_print(f"Received interrupt")
 
         if gdb_manager:
             gdb_manager.cleanup()
-
-        exec_posttasks(config_data)
+        if config_data is not None:
+            exec_posttasks(config_data)
 
         try:
             sys.exit(130)
         except SystemExit:
             os._exit(130)
-
-    main()
-    # bootServiceWeaverKube()
+    
     pass

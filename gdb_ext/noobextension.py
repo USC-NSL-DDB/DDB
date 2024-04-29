@@ -226,15 +226,16 @@ class GetRemoteBTInfo(gdb.MICommand):
     def invoke(self, args):
         frame = gdb.selected_frame()
         frames: List[gdb.Frame] = []
-        while frame.pc():
+        while frame is not None and frame.is_valid():
             frames.append(frame)
             frame = frame.older()
         ip_address = []
         port = -1
         parent_rsp = -1
         parent_rip = -1
+        print("before iterating frames")
         for cur_frame in frames:
-            if cur_frame.function().name.endswith("runHandler"):
+            if cur_frame.function() is not None and cur_frame.function().name.endswith("runHandler"):
                 print("found")
                 for symbol in cur_frame.block():
                     if symbol.is_argument or symbol.is_variable:
@@ -302,7 +303,7 @@ class GetRemoteBTInfoInContext(gdb.MICommand):
         try:
             frame = gdb.selected_frame()
             frames: List[gdb.Frame] = []
-            while frame.pc():
+            while frame is not None and frame.is_valid() and frame.function() is not None:
                 frames.append(frame)
                 backtrace_info.append({
                     "level": len(backtrace_info),
@@ -315,7 +316,7 @@ class GetRemoteBTInfoInContext(gdb.MICommand):
                 })
                 frame = frame.older()
             for cur_frame in frames:
-                if cur_frame.function().name.endswith("runHandler"):
+                if cur_frame.function() is not None and cur_frame.function().name.endswith("runHandler"):
                     print("found")
                     for symbol in cur_frame.block():
                         if symbol.is_argument or symbol.is_variable:
