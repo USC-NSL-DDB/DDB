@@ -307,6 +307,23 @@ class StackListFramesTransformer(TransformerBase):
     def format(self, responses: List[SessionResponse]) -> str:
         payload = self.transform(responses)
         return MIFormatter.format("^", "done", payload, None)
+''' Handling `-thread-select`
+'''
+class ThreadSelectTransformer(TransformerBase):
+    def __init__(self,gtid) -> None:
+        super().__init__()
+        self.gtid=str(gtid)
+
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        assert(len(responses) == 1)  
+        payload = responses[0].payload
+        payload["new-thread-id"]=self.gtid
+        return payload
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        payload = self.transform(responses)
+        response=responses[0]
+        return MIFormatter.format("^", "done", payload, response.token)
 
 ''' Handling `bt`, `backtrace`, `where` commands
 '''
