@@ -20,6 +20,12 @@
                 "problemMatcher": []
             },
             {
+                "label": "Load image to kind",
+                "type": "shell",
+                "command": "kind load docker-image distributeddebugger:v1",
+                "problemMatcher": []
+            },
+            {
                 "label": "Apply K8s Deployment",
                 "type": "shell",
                 "command": "kubectl apply -f distributeddebuggerkube.yaml",
@@ -28,7 +34,7 @@
             {
                 "label": "Rebuild and Redeploy",
                 "dependsOrder": "sequence",
-                "dependsOn": ["Delete K8s Deployment", "Build Docker Image", "Apply K8s Deployment"],
+                "dependsOn": ["Delete K8s Deployment", "Build Docker Image","Load image to kind", "Apply K8s Deployment"],
                 "group": {
                     "kind": "build",
                     "isDefault": true

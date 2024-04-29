@@ -52,10 +52,10 @@ class CmdTokenGenerator:
     @staticmethod
     def get() -> int:
         return str(CmdTokenGenerator.inst().inc())
-trace=False
-def dev_print(msg:str):
+trace = False
+def dev_print(*args, **kwargs):
     if trace:
-        dev_print(msg,file=sys.stderr)
+        print(*args, file=sys.stderr, **kwargs)
 def parse_cmd(cmd: str) -> Tuple[str, str, str, str]:
     """
     Parses a gdb command string and returns a tuple containing the token, command without token,

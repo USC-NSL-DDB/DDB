@@ -204,7 +204,7 @@ def bootServiceWeaverKube():
             sessionConfig.tag=i.status.pod_ip
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.attach_pid=int(pid)
-            sessionConfig.gdb_config_cmds=["source ./noobextension.py"]
+            sessionConfig.gdb_config_cmds=["source /usr/src/app/gdb_ext/noobextension.py"]
             gdbSessionConfigs.append(sessionConfig)
         else:
             eprint(i.status.pod_ip, i.metadata.name,

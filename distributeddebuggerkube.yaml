@@ -57,13 +57,6 @@ spec:
         imagePullPolicy: IfNotPresent
         stdin: true
         tty: true
-        volumeMounts:
-        - name: my-volume
-          mountPath: /debug-adapter
-      volumes:
-      - name: my-volume
-        hostPath:
-          path: /run/desktop/mnt/host/d/wslfiles/debug-adapter
-          type: Directory
+        
         
       

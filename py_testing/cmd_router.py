@@ -105,7 +105,7 @@ class CmdRouter:
                 self.send_to_current_thread(token, cmd)
             else:
                 aggreated_bt_result = []
-                bt_result = await self.send_to_current_thread_async(token, cmd)
+                bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
                 assert(len(bt_result) == 1)
                 aggreated_bt_result.append(bt_result[0].payload)
                 remote_bt_cmd, remote_bt_token = self.prepend_token(
@@ -130,8 +130,8 @@ class CmdRouter:
                     aggreated_bt_result.append(parent_stack_info)
                     remote_bt_parent_info=extract_remote_parent_data(remote_bt_parent_info)
                     dev_print("remote_bt_parent_info from in context",remote_bt_parent_info)
-                dev_print("[special header]")
-                dev_print(aggreated_bt_result)
+                print("[special header]")
+                print(aggreated_bt_result)
         elif (prefix in ["run", "r", "-exec-run"]):
             self.broadcast(token, cmd)
         elif (prefix in ["list"]):
@@ -149,7 +149,7 @@ class CmdRouter:
             # self.send_to_current_session(token, cmd)
         elif (prefix in ["-thread-select"]):
             if len(cmd_no_token.split()) < 2:
-                dev_print("Usage: -thread-select #gtid")
+                print("Usage: -thread-select #gtid")
                 return
             gtid=int(cmd_no_token.split()[1])
             self.state_mgr.set_current_gthread(gtid)
@@ -196,14 +196,14 @@ class CmdRouter:
     def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
         if not curr_thread:
-            dev_print("use -thread-select #gtid to select the thread.")
+            print("use -thread-select #gtid to select the thread.")
             return
         self.send_to_thread(curr_thread, token, cmd, transformer)
 
     async def send_to_current_thread_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
         if not curr_thread:
-            dev_print("use -thread-select #gtid to select the thread.")
+            print("use -thread-select #gtid to select the thread.")
             return
         self.send_to_thread(curr_thread, token, cmd, transformer)
         future = CmdTracker.inst().waiting_cmds[token]
