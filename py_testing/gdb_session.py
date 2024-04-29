@@ -213,7 +213,7 @@ class GdbSession:
         # TODO: check if removing support of a list of commands is okay?
         # if isinstance(cmd, list):
             # cmd=" ".join(cmd)
-        dev_print(f"send command {cmd} to session {self.sid}")
+        print(f"send command {cmd} to session {self.sid}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
         if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:

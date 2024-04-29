@@ -212,30 +212,12 @@ def bootServiceWeaverKube():
 
     gdb_manager = GdbManager(gdbSessionConfigs, [{"name":"load serviceweaver ext","command":"source /usr/src/app/gdb_ext/noobextension.py"},{"name": "enable async mode",
   "command": "set target-async on"}])
-
-    # del gdb_manager
-    # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
-    # dev_print(gdbmi.command)  # dev_print actual command run as subprocess
-    # for response in gdbmi.get_gdb_response():
-    #     print_resp(response)
-    #     pprint(response)
-
+    
     while True:
-        cmd = input("(gdb) ").strip()
+        cmd = input(f"({gdb_manager.state_mgr.get_current_gthread()})(gdb) ").strip()
         cmd = f"{cmd}\n"
-        dev_print(cmd)
         if cmd is not None:
             gdb_manager.write(cmd)
-        # cmd_head = cmd.split()[0]
-
-        # if cmd_head in ["break", "b", "-break-insert"]:
-        #     # gdbmi.write
-        #     gdb_manager.write(cmd)
-        # else:
-        #     responses = gdbmi.write(cmd)
-        #     for response in responses:
-        #         print_resp(response)
-        #         pprint(response)
 
 
 if __name__ == "__main__":
@@ -278,8 +260,8 @@ if __name__ == "__main__":
 
         if gdb_manager:
             gdb_manager.cleanup()
-
-        exec_posttasks(config_data)
+        if config_data is not None:
+            exec_posttasks(config_data)
 
         try:
             sys.exit(130)

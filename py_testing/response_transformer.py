@@ -35,8 +35,12 @@ class PlainTransformer(TransformerBase):
 
     def format(self, responses: List[SessionResponse]) -> str:
         data = self.transform(responses)
-        out_str = "\n".join(data["data"])
-        # out_str = utils.wrap_grouped_message(out_str)
+        #out_str = "\n".join(data["data"])
+        #out_str = utils.wrap_grouped_message(out_str)
+        if responses[0].payload and responses[0].token is not None:
+            out_str = MIFormatter.format("^", "done", responses[0].payload, responses[0].token)
+        else:
+            out_str = "\n".join(data["data"])
         return out_str
 
 ''' Handling `-thread-info` response

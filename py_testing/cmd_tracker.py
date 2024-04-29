@@ -61,6 +61,13 @@ class CmdTracker:
         else:
             dev_print("No token supplied. skip registering the cmd.")
             return None
+    # temporary function for mutating cmdmeta
+    def patch_cmdmeta(self,token:str,cmd_meta:CmdMeta):
+        assert token is not None and cmd_meta is not None
+        self.waiting_cmds[token]=cmd_meta
+    def get_cmdmeta(self,token:str):
+        assert token is not None
+        return self.waiting_cmds[token]
     def dedupToken(self,token:str):
         tokenSent=token
         while tokenSent in self.outTokenToInToken:
