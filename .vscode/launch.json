@@ -86,17 +86,26 @@
             // ]
         },
         {
-          "name": "Extension",
-          "type": "extensionHost",
-          "request": "launch",
-          "args": [
-            "--extensionDevelopmentPath=${workspaceFolder}",
-            "${workspaceFolder}/debug-adapter/sampleWorkspace"
-          ],
-          "outFiles": [
-            "${workspaceFolder}/debug-adapter/dist/**/*.js"
-          ],
-          "preLaunchTask": "npm: watch"
+            "name": "Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "${workspaceFolder}/debug-adapter/sampleWorkspace"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/debug-adapter/dist/**/*.js"
+            ],
+            "preLaunchTask": "npm: watch"
+        },
+        {
+            "name": "Python Debug DDB",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
         }
     ]
 }

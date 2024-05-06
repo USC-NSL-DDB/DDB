@@ -19,6 +19,14 @@ import argparse
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.5", "-m"],
 # ]
 
+import debugpy
+
+try:
+    debugpy.listen(("localhost", 5678))
+    print("Waiting for debugger attach")
+    debugpy.wait_for_client()
+except Exception as e:
+    print(f"Failed to attach debugger: {e}")
 
 def main():
     global gdb_manager, config_data
@@ -170,6 +178,7 @@ def bootFromNuConfig():
         except SystemExit:
             os._exit(130)
 
+
 def bootServiceWeaverKube():
     from kubernetes import config as kubeconfig, client as kubeclient
 
@@ -195,16 +204,16 @@ def bootServiceWeaverKube():
         match = re.search(r'(\d+)\s+{}'.format(sw_name), output)
         if match:
             pid = match.group(1)
-            sessionConfig= GdbSessionConfig()
-            sessionConfig.remote_port=30001
-            sessionConfig.remote_host=i.status.pod_ip
+            sessionConfig = GdbSessionConfig()
+            sessionConfig.remote_port = 30001
+            sessionConfig.remote_host = i.status.pod_ip
             print("remote host type:", type(i.status.pod_ip))
-            sessionConfig.gdb_mode=GdbMode.REMOTE
-            sessionConfig.remote_gdbserver=remoteServerConn
-            sessionConfig.tag=i.status.pod_ip
-            sessionConfig.start_mode=StartMode.ATTACH
-            sessionConfig.attach_pid=int(pid)
-            sessionConfig.gdb_config_cmds=["source ./noobextension.py"]
+            sessionConfig.gdb_mode = GdbMode.REMOTE
+            sessionConfig.remote_gdbserver = remoteServerConn
+            sessionConfig.tag = i.status.pod_ip
+            sessionConfig.start_mode = StartMode.ATTACH
+            sessionConfig.attach_pid = int(pid)
+            sessionConfig.gdb_config_cmds = ["source ./noobextension.py"]
             gdbSessionConfigs.append(sessionConfig)
         else:
             eprint(i.status.pod_ip, i.metadata.name,
