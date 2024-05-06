@@ -7,13 +7,13 @@ from cmd_tracker import CmdTracker
 from counter import TSCounter
 from event_loop import EventLoopThread
 from state_manager import StateManager, ThreadStatus
-from utils import CmdTokenGenerator, parse_cmd
-from response_transformer import BacktraceReadableTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer
+from utils import CmdTokenGenerator, dev_print, parse_cmd
+from response_transformer import BacktraceReadableTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
 
 ''' Routing all commands to the desired gdb sessions
 `CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd. 
 `CmdRouter` will partially parse/extract the token and command to ensure it will be resgitered with the `CmdTracker`.
-`CmdRouter` also handles the private commands which can be used to print out some internal states
+`CmdRouter` also handles the private commands which can be used to dev_print out some internal states
 
 **Key Functions**: `send_cmd(str)`
 '''
@@ -61,7 +61,7 @@ class CmdRouter:
 
     - `CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd.   
     - `CmdRouter` will partially parse/extract the token and command to ensure it will be resgitered with the `CmdTracker`.  
-    - `CmdRouter` also handles the private commands which can be used to print out some internal states.  
+    - `CmdRouter` also handles the private commands which can be used to dev_print out some internal states.  
 
     **Key Functions**: `send_cmd(str)`
     """
@@ -73,13 +73,16 @@ class CmdRouter:
         Thread(target=self.event_loop_thread.run,args=()).start()
 
     def prepend_token(self, cmd: str) -> Tuple[str, str]:
-        token = CmdTokenGenerator.get()
-        return f"{token}{cmd}", str(token)
+        token,command=get_token_and_command(cmd)
+        if not token:
+            token = CmdTokenGenerator.get()
+            command=cmd
+        token=CmdTracker.inst().dedupToken(token)
+        return f"{token}{command}", str(token)
 
     # TODO: handle the case where external command passed in carries a token
-
     async def send_cmd(self, cmd: str):
-        print("sending cmd through the CmdRouter...")
+        dev_print("sending cmd through the CmdRouter...")
 
         if len(cmd.strip()) == 0:
             # special case of no meaningful command
@@ -89,62 +92,48 @@ class CmdRouter:
             # handle private command
             self.handle_private_cmd(cmd[1:])
             return
-
         cmd, _ = self.prepend_token(cmd)
         print("current cmd:", cmd)
         token, cmd_no_token, prefix, cmd = parse_cmd(cmd) 
-        token = CmdTracker.inst().dedupToken(token)
         cmd = f"{token}{cmd_no_token}\n"
-
+        
         if (prefix in ["b", "break", "-break-insert"]):
             self.broadcast(token, cmd)
-        elif (prefix in ["bt", "backtrace", "-stack-list-frames"]):
-            if not remoteBt:
-                self.send_to_current_thread(token, cmd)
-            else:
-                aggreated_bt_result = []
-                bt_result = await self.send_to_current_thread_async(token, cmd)
-                assert(len(bt_result) == 1)
-                aggreated_bt_result.append(bt_result[0].payload)
+        elif (prefix in ["bt-remote"]):
+            aggreated_bt_result = []
+            bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
+            assert(len(bt_result) == 1)
+            aggreated_bt_result.append(bt_result[0].payload)
+            remote_bt_cmd, remote_bt_token = self.prepend_token(
+                f"-get-remote-bt")
+            remote_bt_parent_info = await self.send_to_current_thread_async(remote_bt_token, remote_bt_cmd)
+            assert len(remote_bt_parent_info) == 1
+            remote_bt_parent_info=extract_remote_parent_data(remote_bt_parent_info[0].payload)
+            while remote_bt_parent_info.get("parent_rip") != '-1':
+                dev_print("trying to acquire parent info:-------------------------------------------------")
+                parent_session_id=self.state_mgr.get_session_by_tag(remote_bt_parent_info.get("parent_addr"))
+                interrupt_cmd,interrupt_cmd_token=self.prepend_token("-exec-interrupt")
+                self.send_to_session(interrupt_cmd_token,interrupt_cmd,session_id=parent_session_id)
+                # just try to busy waiting here
+                while self.state_mgr.sessions[parent_session_id].t_status[1]!=ThreadStatus.STOPPED:
+                    pass
                 remote_bt_cmd, remote_bt_token = self.prepend_token(
-                    f"-get-remote-bt")
-                remote_bt_parent_info = await self.send_to_current_thread_async(remote_bt_token, remote_bt_cmd)
+                    f"-get-remote-bt-in-context {remote_bt_parent_info.get('parent_rip')} {remote_bt_parent_info.get('parent_rsp')}")
+                remote_bt_parent_info=await self.send_to_session_async(remote_bt_token, remote_bt_cmd, session_id=parent_session_id)
                 assert len(remote_bt_parent_info) == 1
-                remote_bt_parent_info=extract_remote_parent_data(remote_bt_parent_info[0].payload)
-                while remote_bt_parent_info.get("parent_rip") != '-1':
-                    print("trying to acquire parent info:-------------------------------------------------")
-                    parent_session_id=self.state_mgr.get_session_by_tag(remote_bt_parent_info.get("parent_addr"))
-                    interrupt_cmd,interrupt_cmd_token=self.prepend_token("-exec-interrupt")
-                    self.send_to_session(interrupt_cmd_token,interrupt_cmd,session_id=parent_session_id)
-                    # just try to busy waiting here
-                    while self.state_mgr.sessions[parent_session_id].t_status[1]!=ThreadStatus.STOPPED:
-                        pass
-                    remote_bt_cmd, remote_bt_token = self.prepend_token(
-                        f"-get-remote-bt-in-context {remote_bt_parent_info.get('parent_rip')} {remote_bt_parent_info.get('parent_rsp')}")
-                    remote_bt_parent_info=await self.send_to_session_async(remote_bt_token, remote_bt_cmd, session_id=parent_session_id)
-                    assert len(remote_bt_parent_info) == 1
-                    remote_bt_parent_info=remote_bt_parent_info[0].payload
-                    parent_stack_info=remote_bt_parent_info.get("stack")
-                    aggreated_bt_result.append(parent_stack_info)
-                    remote_bt_parent_info=extract_remote_parent_data(remote_bt_parent_info)
-                    print("remote_bt_parent_info from in context",remote_bt_parent_info)
-                print("[special header]")
-                print(aggreated_bt_result)
+                remote_bt_parent_info=remote_bt_parent_info[0].payload
+                parent_stack_info=remote_bt_parent_info.get("stack")
+                aggreated_bt_result.append(parent_stack_info)
+                remote_bt_parent_info=extract_remote_parent_data(remote_bt_parent_info)
+                dev_print("remote_bt_parent_info from in context",remote_bt_parent_info)
+            print("[special header]")
+            print(aggreated_bt_result)
         elif (prefix in ["run", "r", "-exec-run"]):
             self.broadcast(token, cmd)
         elif (prefix in ["list"]):
             # self.send_to_first(cmd)
             self.state_mgr.set_current_session(1)
             self.send_to_current_session(token, cmd)
-        elif (prefix in ["c", "continue", "-exec-continue"]):
-            subcmd = cmd_no_token.split()[1] if len(
-                cmd_no_token.split()) >= 2 else None
-            if subcmd:
-                if subcmd == "--all":
-                    self.broadcast(token, cmd)
-            else:
-                self.send_to_current_thread(token, cmd)
-            # self.send_to_current_session(token, cmd)
         elif (prefix in ["-thread-select"]):
             if len(cmd_no_token.split()) < 2:
                 print("Usage: -thread-select #gtid")
@@ -158,10 +147,6 @@ class CmdRouter:
             self.broadcast(token, cmd, ThreadInfoTransformer())
         elif (prefix in ["-list-thread-groups"]):
             self.broadcast(token, cmd, ProcessInfoTransformer())
-        elif (prefix in [ "-stack-list-frames" ]):
-            self.send_to_current_thread(token, cmd, StackListFramesTransformer())
-        elif (prefix in [ "bt", "backtrace", "where" ]):
-            self.send_to_current_thread(token, f"{token}-stack-list-frames", BacktraceReadableTransformer())
         elif (prefix in [ "info" ]):
             subcmd = cmd_no_token.split()[1]
             if subcmd == "threads" or subcmd == "thread":
@@ -172,15 +157,18 @@ class CmdRouter:
                 self.broadcast(
                     token, f"{token}-list-thread-groups", ProcessReadableTransformer())
         else:
-            subcmd = cmd_no_token.split()[1] if len(
-                cmd_no_token.split()) >= 2 else None
-            if subcmd:
-                if subcmd == "--all":
-                    self.broadcast(token, cmd)
+            cmd_split = cmd.split()
+            if len(cmd_split) >= 2 and cmd_split[-1] == "--all":
+                self.broadcast(token, " ".join(cmd_split[0:-1]))
+            elif "--thread" in cmd_split:
+                thread_index = cmd_split.index("--thread")
+                if thread_index < len(cmd_split) - 1:
+                    gtid = int(cmd_split[thread_index + 1])
+                    _, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
+                    cmd_split[thread_index + 1] = str(tid)
+                    self.send_to_thread(gtid, token, " ".join(cmd_split))
             else:
                 self.send_to_current_thread(token, cmd)
-            # self.send_to_current_session(token, cmd)
-            # self.broadcast(cmd)
         
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
@@ -201,15 +189,15 @@ class CmdRouter:
             print("use -thread-select #gtid to select the thread.")
             return
         self.send_to_thread(curr_thread, token, cmd, transformer)
-        future = CmdTracker.inst().waiting_cmds[token]
-        print("current future", future, id(future))
+        future = CmdTracker.inst().get_cmdmeta(token)
+        dev_print("current future", future, id(future))
         result = await future
         return result
 
     def send_to_current_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_session = self.state_mgr.get_current_session()
         if not curr_session:
-            print("use session #sno to select session.")
+            dev_print("use session #sno to select session.")
             return
 
         self.register_cmd(token, curr_session, transformer)
@@ -226,19 +214,18 @@ class CmdRouter:
         self.sessions[1].write(cmd)
 
     def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
-        if session_id == -1:
-            raise Exception("session is None")
-        print("current async session:",self.sessions[session_id])
+        assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
+        dev_print("current async session:",self.sessions[session_id])
         self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         if session_id == -1:
             raise Exception("session is None")
-        print("current async session:",self.sessions[session_id])
+        dev_print("current async session:",self.sessions[session_id])
         self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
-        future = CmdTracker.inst().waiting_cmds[token]
-        print("current future", future, id(future))
+        future = CmdTracker.inst().get_cmdmeta(token)
+        dev_print("current future", future, id(future))
         result = await future
         return result
     # Some help functions for registering cmds
@@ -250,9 +237,9 @@ class CmdRouter:
         self.register_cmd(token, target_s_ids, transformer)
 
     def register_cmd(self, token: Optional[str], target_sessions: Union[int, Set[int]], transformer: Optional[ResponseTransformer] = None):
-        print("registering cmd...")
-        print("token:", token)
-        print("target_sessions:", target_sessions)
+        dev_print("registering cmd...")
+        dev_print("token:", token)
+        dev_print("target_sessions:", target_sessions)
         if token:
             if isinstance(target_sessions, int):
                 target_sessions = {target_sessions}
@@ -263,13 +250,13 @@ class CmdRouter:
             CmdTracker.inst().create_cmd(token, target_sessions, transformer)
 
     def handle_private_cmd(self, cmd: str):
-        print("Executing private cmd.")
+        dev_print("Executing private cmd.")
         cmd = cmd.strip()
         if cmd == "p-session-meta":
-            print("Printing all session meta...")
-            print(StateManager.inst().get_all_session_meta())
+            dev_print("Printing all session meta...")
+            dev_print(StateManager.inst().get_all_session_meta())
         elif cmd == "p-session-manager-meta":
-            print("Printing all session manager meta...")
-            print(StateManager.inst())
+            dev_print("Printing all session manager meta...")
+            dev_print(StateManager.inst())
         else:
-            print("Unknown private command.")
+            dev_print("Unknown private command.")

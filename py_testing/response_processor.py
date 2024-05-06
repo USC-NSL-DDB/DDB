@@ -40,13 +40,13 @@ class ResponseProcessor:
 
             if resp_type == "notify":
                 self.handle_notify(resp)
-                # print(str(self.state_manager))
+                # dev_print(str(self.state_manager))
 
             if resp_type == "result":
                 self.handle_result(resp)
 
     def handle_result(self, response: SessionResponse):
-        # print("result")
+        # dev_print("result")
         CmdTracker.inst().recv_response(response)
 
     def handle_notify(self, response: SessionResponse):
@@ -87,8 +87,13 @@ class ResponseProcessor:
                     # Therefore, when a thread hits a breakpoint,
                     # all threads stops and the currently stopped thread
                     # as the current selected thread automatically.
-                    self.state_manager.set_current_tid(sid, thread_id)
-
+                    if resp_payload.get("reason","none") == "breakpoint-hit":
+                    # Here, we assume it runs in all-stop mode. 
+                    # Therefore, when a thread hits a breakpoint, 
+                    # all threads stops and the currently stopped thread 
+                    # as the current selected thread automatically.
+                        self.state_manager.set_current_tid(sid, thread_id)
+                        self.state_manager.set_current_gthread(self.state_manager.get_gtid(sid, thread_id))
                 stopped_threads = resp_payload["stopped-threads"]
                 if stopped_threads == "all":
                     self.state_manager.update_all_thread_status(

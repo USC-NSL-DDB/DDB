@@ -5,13 +5,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: Current File",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal"
-        },
-        {
             "name": "Test: multithread_print",
             "type": "python",
             "request": "launch",
@@ -46,6 +39,42 @@
             "MIMode": "gdb",
             "setupCommands": [
                 {
+                    "name": "Python Debugger: Current File",
+                    "type": "debugpy",
+                    "request": "launch",
+                    "program": "${file}",
+                    "console": "integratedTerminal"
+                },
+                {
+                    "name": "Test: multithread_print",
+                    "type": "python",
+                    "request": "launch",
+                    "program": "${workspaceFolder}/py_testing/main.py",
+                    "console": "integratedTerminal",
+                    "justMyCode": true,
+                    "args": [
+                        "py_testing/configs/dbg_multithread_print.yaml"
+                    ],
+                },
+                {
+                    "name": "Test: serviceweaver kube",
+                    "type": "python",
+                    "request": "launch",
+                    "program": "${workspaceFolder}/py_testing/main.py",
+                    "console": "integratedTerminal",
+                    "justMyCode": false,
+                    "stopOnEntry": true
+                },
+                {
+                    "name": "Test: multithread_print_multiserver",
+                    "type": "python",
+                    "request": "launch",
+                    "program": "${workspaceFolder}/py_testing/main.py",
+                    "console": "integratedTerminal",
+                    "justMyCode": true,
+                    "args": [
+                        "py_testing/configs/dbg_multithread_print_multiserver.yaml"
+                    ],
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true

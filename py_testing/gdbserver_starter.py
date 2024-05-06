@@ -2,8 +2,10 @@ import threading
 from typing import List, Optional
 import paramiko
 from dataclasses import dataclass
-
+from kubernetes import config as kubeconfig, client as kubeclient, stream
 from abc import ABC, abstractmethod
+
+from utils import dev_print
 
 
 class RemoteServerConnection(ABC):
@@ -66,7 +68,7 @@ class SSHRemoteServerClient(RemoteServerConnection):
             command = f"sudo {command}"
         stdin, stdout, stderr = self.client.exec_command(command)
         # You can handle the output and error streams here if needed
-        print(f"Start gdbserver on remote machine... args: {args}, attach_pid: {attach_pid}, sudo: {sudo}, command: {command}")
+        dev_print(f"Start gdbserver on remote machine... args: {args}, attach_pid: {attach_pid}, sudo: {sudo}, command: {command}")
 
     def close(self):
         if self.client:
@@ -85,14 +87,17 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
 
     def execute_command(self, command):
-        config.load_incluster_config()
-        self.clientset=kubernetes.client.CoreV1Api()
+        kubeconfig.load_incluster_config()
+        self.clientset=kubeclient.CoreV1Api()
         output = stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
                                command=command, stderr=True, stdin=False,
                                stdout=True, tty=False)
         return output
     def close(self):
         pass
+    def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
+        pass
+
 
 
 
@@ -114,12 +119,12 @@ class KubeRemoteSeverClient(RemoteServerConnection):
     #     command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
     #     stdin, stdout, stderr = self.client.exec_command(command)
     #     # You can handle the output and error streams here if needed
-    #     print("Start gdbserver on remote machine... Response:")
+    #     dev_print("Start gdbserver on remote machine... Response:")
 
     #     # line = stdout.readline(10)
-    #     # print(line)
+    #     # dev_print(line)
     #     # for line in stdout.readlines(10):
-    #     #     print(line)
+    #     #     dev_print(line)
 
 #     def disconnect(self):
 #         self.client.close()

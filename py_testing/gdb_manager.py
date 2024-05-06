@@ -24,7 +24,7 @@ class GdbManager:
         # if cmd.strip() and cmd.split()[0] == "session":
         #     selection = int(cmd.split()[1])
         #     self.state_mgr.set_current_session(selection)
-        #     print(f"selected session {self.state_mgr.get_current_session()}.")
+        #     dev_print(f"selected session {self.state_mgr.get_current_session()}.")
         # else:
         #asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.loop).result()
         asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
@@ -42,12 +42,12 @@ class GdbManager:
     #             output = s.deque_mi_output()
     #             if output:
     #                 meta = s.get_meta_str()
-    #                 # print(f"{meta} {output}")
+    #                 # dev_print(f"{meta} {output}")
     #                 mi_print(output, meta)
     #         sleep(0.1)
 
     def cleanup(self):
-        print("Cleaning up GdbManager resource")
+        dev_print("Cleaning up GdbManager resource")
         for s in self.sessions:
             s.cleanup()
 
