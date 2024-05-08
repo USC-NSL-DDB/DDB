@@ -37,6 +37,15 @@ def main():
     for component in components:
         sessionConfig = GdbSessionConfig()
 
+        sessionConfig.tag = component.get("tag", None)
+        sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
+        sessionConfig.attach_pid = component.get("pid", 0)
+        sessionConfig.binary = component.get("bin", None)
+        sessionConfig.cwd = component.get("cwd", os.getcwd())
+        sessionConfig.args = component.get("args", [])
+        sessionConfig.run_delay = component.get("run_delay", 0)
+        sessionConfig.sudo = component.get("sudo", False)
+
         sessionConfig.gdb_mode = GdbMode.REMOTE if \
             "mode" in component.keys() and component["mode"] == "remote" \
             else GdbMode.LOCAL
@@ -46,21 +55,13 @@ def main():
             sessionConfig.username = component["cred"]["user"]
             remote_cred = SSHRemoteServerCred(
                 port=sessionConfig.remote_port,
-                bin=component["bin"],
+                bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
                 hostname=sessionConfig.remote_host,
                 username=sessionConfig.username
             )
             sessionConfig.remote_gdbserver = SSHRemoteServerClient(
                 cred=remote_cred)
 
-        sessionConfig.tag = component.get("tag", None)
-        sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
-        sessionConfig.attach_pid = component.get("pid", 0)
-        sessionConfig.binary = component.get("bin", None)
-        sessionConfig.cwd = component.get("cwd", os.getcwd())
-        sessionConfig.args = component.get("args", [])
-        sessionConfig.run_delay = component.get("run_delay", 0)
-        sessionConfig.sudo = component.get("sudo", False)
         gdbSessionConfigs.append(sessionConfig)
     gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
