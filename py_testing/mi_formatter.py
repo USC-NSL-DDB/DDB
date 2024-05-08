@@ -1,9 +1,12 @@
 from enum import Enum
 from typing import Optional
+import json
 
 # class MIResponseType(Enum):
 #     Result = "^"
 
+def escape_output(s: str) -> str:
+    return json.dumps(s)
 
 class MIFormatter:
     @staticmethod
@@ -15,7 +18,7 @@ class MIFormatter:
             elif isinstance(i, list):
                 out_str += "[" + MIFormatter.format_list(i) + "]"
             else:
-                out_str += f"\"{i}\""
+                out_str += escape_output(i)
             out_str += ","
         out_str = out_str.strip(",")
         return out_str
@@ -30,7 +33,7 @@ class MIFormatter:
             elif isinstance(v, list):
                 out_str += "[" + MIFormatter.format_list(v) + "]"
             else:
-                out_str += f"\"{v}\""
+                out_str += escape_output(v)
             out_str += ","
         out_str = out_str.strip(",")
         return out_str

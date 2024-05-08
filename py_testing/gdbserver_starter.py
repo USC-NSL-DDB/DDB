@@ -66,9 +66,12 @@ class SSHRemoteServerClient(RemoteServerConnection):
             command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
         if sudo:
             command = f"sudo {command}"
+
+        command = f"{command} > /tmp/gdbserver.log 2>&1"
+        dev_print(f"Starting gdbserver on remote machine... \n\targs: {args}, \n\tattach_pid: {attach_pid}, \n\tsudo: {sudo}, \n\tcommand: {command}")
         stdin, stdout, stderr = self.client.exec_command(command)
         # You can handle the output and error streams here if needed
-        dev_print(f"Start gdbserver on remote machine... args: {args}, attach_pid: {attach_pid}, sudo: {sudo}, command: {command}")
+        dev_print(f"Finished starting gdbserver on remote machine...")
 
     def close(self):
         if self.client:

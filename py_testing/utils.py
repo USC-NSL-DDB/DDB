@@ -5,7 +5,7 @@ from typing import Tuple
 from counter import TSCounter
 
 def eprint(*args, **kwargs):
-    dev_print(*args, file=sys.stderr, **kwargs)
+    dev_print(*args, **kwargs)
 
 def mi_print(response, meta: str):
     try:
@@ -52,7 +52,8 @@ class CmdTokenGenerator:
     @staticmethod
     def get() -> int:
         return str(CmdTokenGenerator.inst().inc())
-trace = False
+
+trace = True
 
 def dev_print(*args, **kwargs):
     if trace:
