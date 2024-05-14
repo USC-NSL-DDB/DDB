@@ -10,7 +10,7 @@ mqtt_publisher: mqtt_publisher.o
 	$(CXX) -o test_binaries/mqtt_publisher mqtt_publisher.o $(LDFLAGS)
 
 mqtt_publisher.o: test_binaries/mqtt_publisher.cpp
-	$(CXX) $(CFLAGS) -c test_binaries/mqtt_publisher.cpp
+	$(CXX) $(CXXFLAGS) -c test_binaries/mqtt_publisher.cpp
 
 clean:
 	rm -f mqtt_publisher mqtt_publisher.o
