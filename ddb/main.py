@@ -5,14 +5,14 @@ import re
 import subprocess
 from typing import List, Union
 from pprint import pprint
-from gdb_manager import GdbManager
+from ddb.gdb_manager import GdbManager
+from ddb.logging import logger
 from yaml import safe_load, YAMLError
-from gdb_session import GdbMode, GdbSessionConfig, StartMode
-from gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRemoteServerClient
-from utils import *
+from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
+from ddb.gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRemoteServerClient
+from ddb.utils import *
 import sys
 import argparse
-import debugpy
 
 # try:
 #     debugpy.listen(("localhost", 5678))

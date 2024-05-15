@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from kubernetes import config as kubeconfig, client as kubeclient, stream
 from abc import ABC, abstractmethod
 
-from utils import dev_print
+from ddb.utils import dev_print
 
 
 class RemoteServerConnection(ABC):

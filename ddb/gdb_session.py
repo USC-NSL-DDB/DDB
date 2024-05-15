@@ -3,13 +3,13 @@ from uuid import uuid4
 from typing import List, Optional
 from threading import Thread, Lock
 from time import sleep
-from counter import TSCounter
-from response_processor import ResponseProcessor, SessionResponse
+from ddb.counter import TSCounter
+from ddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
-from state_manager import StateManager
-from gdbserver_starter import RemoteServerConnection
-from utils import dev_print, eprint, parse_cmd
+from ddb.state_manager import StateManager
+from ddb.gdbserver_starter import RemoteServerConnection
+from ddb.utils import dev_print, eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
 
