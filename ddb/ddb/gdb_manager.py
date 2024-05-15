@@ -5,13 +5,16 @@ from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.state_manager import StateManager
 from ddb.utils import *
 from ddb.cmd_router import CmdRouter
-
+from ddb.service_manager import ServiceManager
 from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
 
 class GdbManager:
     def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
         self.sessions: List[GdbSession] = []
+        self.service_mgr: ServiceManager = ServiceManager()
+
+        # TODO: adding new sessions when a new report is received from serviec manager.
 
         for config in sessionConfigs:
             self.sessions.append(GdbSession(config))

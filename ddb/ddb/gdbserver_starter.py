@@ -2,11 +2,9 @@ import threading
 from typing import List, Optional
 import paramiko
 from dataclasses import dataclass
-from kubernetes import config as kubeconfig, client as kubeclient, stream
 from abc import ABC, abstractmethod
 
 from ddb.utils import dev_print
-
 
 class RemoteServerConnection(ABC):
     @abstractmethod
@@ -79,8 +77,7 @@ class SSHRemoteServerClient(RemoteServerConnection):
 
 
 class KubeRemoteSeverClient(RemoteServerConnection):
-    # from kubernetes import client, config, stream
-    # import kubernetes
+    from kubernetes import config as kubeconfig, client as kubeclient, stream
 
     def __init__(self, pod_name: str, pod_namespace: str):
         self.pod_name = pod_name
@@ -90,9 +87,9 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
 
     def execute_command(self, command):
-        kubeconfig.load_incluster_config()
-        self.clientset=kubeclient.CoreV1Api()
-        output = stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
+        KubeRemoteSeverClient.kubeconfig.load_incluster_config()
+        self.clientset=KubeRemoteSeverClient.kubeclient.CoreV1Api()
+        output = KubeRemoteSeverClient.stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
                                command=command, stderr=True, stdin=False,
                                stdout=True, tty=False)
         return output

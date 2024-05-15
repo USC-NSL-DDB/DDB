@@ -9,7 +9,7 @@ from ddb.gdb_manager import GdbManager
 from ddb.logging import logger
 from yaml import safe_load, YAMLError
 from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
-from ddb.gdbserver_starter import KubeRemoteSeverClient, SSHRemoteServerCred, SSHRemoteServerClient
+from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.utils import *
 import sys
 import argparse
@@ -30,39 +30,42 @@ import argparse
 def main():
     global gdb_manager, config_data
 
-    components = config_data["Components"]
-    prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
-
     gdbSessionConfigs: List[GdbSessionConfig] = []
-    for component in components:
-        sessionConfig = GdbSessionConfig()
+    prerun_cmds = None
+    if config_data:
+        components = config_data["Components"] if "Components" in config_data else []
+        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
 
-        sessionConfig.tag = component.get("tag", None)
-        sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
-        sessionConfig.attach_pid = component.get("pid", 0)
-        sessionConfig.binary = component.get("bin", None)
-        sessionConfig.cwd = component.get("cwd", os.getcwd())
-        sessionConfig.args = component.get("args", [])
-        sessionConfig.run_delay = component.get("run_delay", 0)
-        sessionConfig.sudo = component.get("sudo", False)
+        for component in components:
+            sessionConfig = GdbSessionConfig()
 
-        sessionConfig.gdb_mode = GdbMode.REMOTE if \
-            "mode" in component.keys() and component["mode"] == "remote" \
-            else GdbMode.LOCAL
-        if sessionConfig.gdb_mode == GdbMode.REMOTE:
-            sessionConfig.remote_port = component["remote_port"]
-            sessionConfig.remote_host = component["cred"]["hostname"]
-            sessionConfig.username = component["cred"]["user"]
-            remote_cred = SSHRemoteServerCred(
-                port=sessionConfig.remote_port,
-                bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
-                hostname=sessionConfig.remote_host,
-                username=sessionConfig.username
-            )
-            sessionConfig.remote_gdbserver = SSHRemoteServerClient(
-                cred=remote_cred)
+            sessionConfig.tag = component.get("tag", None)
+            sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
+            sessionConfig.attach_pid = component.get("pid", 0)
+            sessionConfig.binary = component.get("bin", None)
+            sessionConfig.cwd = component.get("cwd", os.getcwd())
+            sessionConfig.args = component.get("args", [])
+            sessionConfig.run_delay = component.get("run_delay", 0)
+            sessionConfig.sudo = component.get("sudo", False)
 
-        gdbSessionConfigs.append(sessionConfig)
+            sessionConfig.gdb_mode = GdbMode.REMOTE if \
+                "mode" in component.keys() and component["mode"] == "remote" \
+                else GdbMode.LOCAL
+            if sessionConfig.gdb_mode == GdbMode.REMOTE:
+                sessionConfig.remote_port = component["remote_port"]
+                sessionConfig.remote_host = component["cred"]["hostname"]
+                sessionConfig.username = component["cred"]["user"]
+                remote_cred = SSHRemoteServerCred(
+                    port=sessionConfig.remote_port,
+                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
+                    hostname=sessionConfig.remote_host,
+                    username=sessionConfig.username
+                )
+                sessionConfig.remote_gdbserver = SSHRemoteServerClient(
+                    cred=remote_cred)
+
+            gdbSessionConfigs.append(sessionConfig)
+    
     gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
     # del gdb_manager
@@ -181,6 +184,7 @@ def bootFromNuConfig():
 
 def bootServiceWeaverKube():
     from kubernetes import config as kubeconfig, client as kubeclient
+    from gdbserver_starter import KubeRemoteSeverClient
 
     kubeconfig.load_incluster_config()
     clientset = kubeclient.CoreV1Api()
