@@ -1,9 +1,0 @@
-{
-    "files.associations": {
-        "*.ipp": "cpp"
-    },
-    "python.analysis.extraPaths": [
-        "./py_testing"
-    ],
-    "cmake.sourceDirectory": "/proj/flashburst-PG0/code/distributed-debugger/Nu/app/socialNetwork/multi_proclets"
-}
