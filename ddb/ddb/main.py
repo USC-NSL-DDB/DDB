@@ -27,9 +27,7 @@ import argparse
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.5", "-m"],
 # ]
 
-def main():
-    global gdb_manager, config_data
-
+def main(gdb_manager: GdbManager = None, config_data=None):
     gdbSessionConfigs: List[GdbSessionConfig] = []
     prerun_cmds = None
     if config_data:
@@ -135,9 +133,8 @@ def exec_posttasks(config_data):
             exec_task(task)
 
 
-def bootFromNuConfig():
-    parser = argparse.ArgumentParser(
-        description="interactive debugging for distributed software.",
+def bootFromNuConfig(gdb_manager: GdbManager, config_data):
+    parser = argparse.ArgumentParser( description="interactive debugging for distributed software.",
     )
 
     parser.add_argument(
@@ -167,7 +164,7 @@ def bootFromNuConfig():
 
     gdb_manager: GdbManager = None
     try:
-        main()
+        main(gdb_manager, config_data)
     except KeyboardInterrupt:
         dev_print(f"Received interrupt")
 
@@ -277,7 +274,7 @@ if __name__ == "__main__":
 
     gdb_manager: GdbManager = None
     try:
-        main()
+        main(gdb_manager, config_data)
         # bootServiceWeaverKube()
     except KeyboardInterrupt:
         dev_print(f"Received interrupt")

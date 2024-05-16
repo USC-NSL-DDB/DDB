@@ -130,6 +130,7 @@ bin/
 # Temp Files
 *.new
 *.tmp
+*.log
 
 # Debugger Adapter Files
 **/node_modules

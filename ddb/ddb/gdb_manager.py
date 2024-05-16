@@ -5,7 +5,7 @@ from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.state_manager import StateManager
 from ddb.utils import *
 from ddb.cmd_router import CmdRouter
-from ddb.service_manager import ServiceManager
+from ddb.service_mgr import ServiceManager
 from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
 
