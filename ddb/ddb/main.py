@@ -27,7 +27,7 @@ import argparse
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.5", "-m"],
 # ]
 
-def main(gdb_manager: GdbManager = None, config_data=None):
+def main(config_data=None) -> GdbManager:
     gdbSessionConfigs: List[GdbSessionConfig] = []
     prerun_cmds = None
     if config_data:
@@ -64,7 +64,7 @@ def main(gdb_manager: GdbManager = None, config_data=None):
 
             gdbSessionConfigs.append(sessionConfig)
     
-    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
+    return GdbManager(gdbSessionConfigs, prerun_cmds)
 
     # del gdb_manager
     # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
@@ -274,7 +274,7 @@ if __name__ == "__main__":
 
     gdb_manager: GdbManager = None
     try:
-        main(gdb_manager, config_data)
+        gdb_manager = main(config_data)
         # bootServiceWeaverKube()
     except KeyboardInterrupt:
         dev_print(f"Received interrupt")
