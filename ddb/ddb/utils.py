@@ -2,7 +2,7 @@ import sys
 from threading import Lock
 from typing import Tuple
 
-from counter import TSCounter
+from ddb.counter import TSCounter
 
 def eprint(*args, **kwargs):
     dev_print(*args, **kwargs)

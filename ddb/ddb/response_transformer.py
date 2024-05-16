@@ -1,8 +1,8 @@
-from data_struct import SessionResponse
+from ddb.data_struct import SessionResponse
 from typing import Any, List, Union
-from mi_formatter import MIFormatter
-from state_manager import StateManager
-import utils
+from ddb.mi_formatter import MIFormatter
+from ddb.state_manager import StateManager
+from ddb import utils
 
 class TransformerBase:
     def __init__(self) -> None:
