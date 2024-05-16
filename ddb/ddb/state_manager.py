@@ -160,7 +160,7 @@ class GlobalThreadIdCounter:
     _lock = Lock()
     
     def __init__(self) -> None:
-        from counter import TSCounter
+        from ddb.counter import TSCounter
         self.counter = TSCounter()
 
     @staticmethod

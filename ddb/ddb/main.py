@@ -21,15 +21,6 @@ import argparse
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
 
-# ARGS = [
-#     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.3"],
-#     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.4"],
-#     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.5", "-m"],
-# ]
-
-
-
-
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
         cmd = [cmd]

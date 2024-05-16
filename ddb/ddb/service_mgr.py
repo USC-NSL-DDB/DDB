@@ -1,4 +1,5 @@
 import time
+import asyncio
 from typing import Callable
 import paho.mqtt.client as paho
 from paho.mqtt.client import CallbackAPIVersion
@@ -71,11 +72,20 @@ class ServiceManager:
         msg = message.payload.decode()
         logger.debug(f"Receive new service msg: {msg}")
         parts = msg.split(":")
-        userdata[ON_NEW_SERVICE_CALLBACK_HANDLE](
-            ServiceInfo(
-                ip=ip_int2ip_str(int(parts[0])), # ip addr embedded in the message is in integer format, convert it to human-readable string
-                tag=str(parts[1]), 
-                pid=int(parts[2])
+        # Create an event loop in this thread if not already present
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        loop.run_until_complete(
+            userdata[ON_NEW_SERVICE_CALLBACK_HANDLE](
+                ServiceInfo(
+                    ip=ip_int2ip_str(int(parts[0])), # ip addr embedded in the message is in integer format, convert it to human-readable string
+                    tag=str(parts[1]), 
+                    pid=int(parts[2])
+                )
             )
         )
         
