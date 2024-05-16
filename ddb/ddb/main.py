@@ -27,66 +27,7 @@ import argparse
 #     ["gdb", "./nu_bin/test_migrate", "-l", "1", "-i", "18.18.1.5", "-m"],
 # ]
 
-def main(gdb_manager: GdbManager=None, config_data=None):
-    gdbSessionConfigs: List[GdbSessionConfig] = []
-    prerun_cmds = None
-    if config_data:
-        components = config_data["Components"] if "Components" in config_data else []
-        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
 
-        for component in components:
-            sessionConfig = GdbSessionConfig()
-
-            sessionConfig.tag = component.get("tag", None)
-            sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
-            sessionConfig.attach_pid = component.get("pid", 0)
-            sessionConfig.binary = component.get("bin", None)
-            sessionConfig.cwd = component.get("cwd", os.getcwd())
-            sessionConfig.args = component.get("args", [])
-            sessionConfig.run_delay = component.get("run_delay", 0)
-            sessionConfig.sudo = component.get("sudo", False)
-
-            sessionConfig.gdb_mode = GdbMode.REMOTE if \
-                "mode" in component.keys() and component["mode"] == "remote" \
-                else GdbMode.LOCAL
-            if sessionConfig.gdb_mode == GdbMode.REMOTE:
-                sessionConfig.remote_port = component["remote_port"]
-                sessionConfig.remote_host = component["cred"]["hostname"]
-                sessionConfig.username = component["cred"]["user"]
-                remote_cred = SSHRemoteServerCred(
-                    port=sessionConfig.remote_port,
-                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
-                    hostname=sessionConfig.remote_host,
-                    username=sessionConfig.username
-                )
-                sessionConfig.remote_gdbserver = SSHRemoteServerClient(
-                    cred=remote_cred)
-
-            gdbSessionConfigs.append(sessionConfig)
-    
-    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
-
-    # del gdb_manager
-    # gdbmi = GdbController(["gdb", "./bin/hello_world", "--interpreter=mi"])
-    # dev_print(gdbmi.command)  # dev_print actual command run as subprocess
-    # for response in gdbmi.get_gdb_response():
-    #     print_resp(response)
-    #     pprint(response)
-
-    while True:
-        cmd = input("(gdb) ").strip()
-        cmd = f"{cmd}\n"
-        gdb_manager.write(cmd)
-        # cmd_head = cmd.split()[0]
-
-        # if cmd_head in ["break", "b", "-break-insert"]:
-        #     # gdbmi.write
-        #     gdb_manager.write(cmd)
-        # else:
-        #     responses = gdbmi.write(cmd)
-        #     for response in responses:
-        #         print_resp(response)
-        #         pprint(response)
 
 
 def exec_cmd(cmd: Union[List[str], str]):
@@ -132,52 +73,49 @@ def exec_posttasks(config_data):
         for task in tasks:
             exec_task(task)
 
+def bootFromNuConfig(gdb_manager: GdbManager=None, config_data=None):
+    gdbSessionConfigs: List[GdbSessionConfig] = []
+    prerun_cmds = None
+    if config_data:
+        components = config_data["Components"] if "Components" in config_data else []
+        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
 
-def bootFromNuConfig(gdb_manager: GdbManager, config_data):
-    parser = argparse.ArgumentParser( description="interactive debugging for distributed software.",
-    )
+        for component in components:
+            sessionConfig = GdbSessionConfig()
 
-    parser.add_argument(
-        "config",
-        metavar="conf_file",
-        type=str,
-        help="Path of the debugging config file."
-    )
+            sessionConfig.tag = component.get("tag", None)
+            sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
+            sessionConfig.attach_pid = component.get("pid", 0)
+            sessionConfig.binary = component.get("bin", None)
+            sessionConfig.cwd = component.get("cwd", os.getcwd())
+            sessionConfig.args = component.get("args", [])
+            sessionConfig.run_delay = component.get("run_delay", 0)
+            sessionConfig.sudo = component.get("sudo", False)
 
-    args = parser.parse_args()
+            sessionConfig.gdb_mode = GdbMode.REMOTE if \
+                "mode" in component.keys() and component["mode"] == "remote" \
+                else GdbMode.LOCAL
+            if sessionConfig.gdb_mode == GdbMode.REMOTE:
+                sessionConfig.remote_port = component["remote_port"]
+                sessionConfig.remote_host = component["cred"]["hostname"]
+                sessionConfig.username = component["cred"]["user"]
+                remote_cred = SSHRemoteServerCred(
+                    port=sessionConfig.remote_port,
+                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
+                    hostname=sessionConfig.remote_host,
+                    username=sessionConfig.username
+                )
+                sessionConfig.remote_gdbserver = SSHRemoteServerClient(
+                    cred=remote_cred)
 
-    config_data = None
+            gdbSessionConfigs.append(sessionConfig)
+    
+    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
 
-    with open(str(args.config), "r") as fs:
-        try:
-            config_data = safe_load(fs)
-            dev_print("Loaded dbg config file:")
-            pprint(config_data)
-        except YAMLError as e:
-            eprint(f"Failed to read the debugging config. Error: {e}")
-
-    if not config_data:
-        eprint("Debugging config is required!")
-        exit(1)
-
-    exec_pretasks(config_data)
-
-    gdb_manager: GdbManager = None
-    try:
-        main(gdb_manager, config_data)
-    except KeyboardInterrupt:
-        dev_print(f"Received interrupt")
-
-        if gdb_manager:
-            gdb_manager.cleanup()
-
-        exec_posttasks(config_data)
-
-        try:
-            sys.exit(130)
-        except SystemExit:
-            os._exit(130)
-
+    while True:
+        cmd = input("(gdb) ").strip()
+        cmd = f"{cmd}\n"
+        gdb_manager.write(cmd)
 
 def bootServiceWeaverKube():
     from kubernetes import config as kubeconfig, client as kubeclient
@@ -240,8 +178,7 @@ def bootServiceWeaverKube():
         if cmd is not None:
             gdb_manager.write(cmd)
 
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(
         description="interactive debugging for distributed software.",
     )
@@ -274,7 +211,7 @@ if __name__ == "__main__":
 
     gdb_manager: GdbManager = None
     try:
-        main(gdb_manager, config_data)
+        bootFromNuConfig(gdb_manager, config_data)
         # bootServiceWeaverKube()
     except KeyboardInterrupt:
         dev_print(f"Received interrupt")
@@ -289,4 +226,7 @@ if __name__ == "__main__":
         except SystemExit:
             os._exit(130)
     
-    pass
+    pass 
+
+if __name__ == "__main__":
+    main()
