@@ -8,7 +8,7 @@ from ddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
 from ddb.state_manager import StateManager
-from ddb.gdbserver_starter import RemoteServerConnection
+from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
 from ddb.utils import dev_print, eprint, parse_cmd
 from dataclasses import dataclass, field
 import os
@@ -115,13 +115,17 @@ class GdbSession:
             eprint("Remote gdbserver not initialized")
             return
 
-        self.remote_gdbserver.connect()
-        command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-        dev_print("gdbserver command", command)
-        output = self.remote_gdbserver.execute_command_async(command)
-        dev_print(output)
-        dev_print("finish attach")
-        gdb_cmd = ["gdb", self.get_mi_version_arg(),"-q"]
+        if isinstance(self.remote_gdbserver, SSHRemoteServerClient):
+            self.remote_gdbserver.start(attach_pid=self.attach_pid, sudo=self.sudo)
+        else:
+            self.remote_gdbserver.connect()
+            command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
+            dev_print("gdbserver command", command)
+            output = self.remote_gdbserver.execute_command_async(command)
+            dev_print(output)
+            dev_print("finish attach")
+
+        gdb_cmd = ["gdb", self.get_mi_version_arg(), "-q"]
         self.session_ctrl = GdbController(
             gdb_cmd
         )

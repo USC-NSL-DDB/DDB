@@ -9,7 +9,7 @@
 
 PrerunGdbCommands:
 - name: "enable async mode"
-  command: "set target-async on"
+  command: "set mi-async on"
 - name: "enable non-stop mode"
   command: "set non-stop off"
 

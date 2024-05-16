@@ -89,3 +89,18 @@ def parse_cmd(cmd: str) -> Tuple[str, str, str, str]:
             prefix = cmd_no_token.split()[0]
             break
     return (token, cmd_no_token, prefix, f"{cmd}\n")
+
+def ip_str2ip_int(ip_str: str) -> int:
+    """
+    Convert an IP string to int
+    """
+    import socket, struct
+    packed_ip = socket.inet_aton(ip_str)
+    return struct.unpack("!L", packed_ip)[0]
+
+def ip_int2ip_str(ip_int: int) -> str:
+    """
+    Convert an IP int to str 
+    """
+    import socket, struct
+    return socket.inet_ntoa(struct.pack('!L', ip_int))

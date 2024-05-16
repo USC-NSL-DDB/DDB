@@ -65,10 +65,15 @@ class CmdRouter:
     """
     # Should start sessions in this object?
     def __init__(self, sessions: List[GdbSession]) -> None:
+        self.lock = Lock()
         self.sessions = {s.sid: s for s in sessions}
         self.state_mgr = StateManager.inst()
         self.event_loop_thread=EventLoopThread()
         Thread(target=self.event_loop_thread.run,args=()).start()
+
+    def add_session(self, session: GdbSession):
+        with self.lock:
+            self.sessions[session.sid] = session
 
     def prepend_token(self, cmd: str) -> Tuple[str, str]:
         token,command=get_token_and_command(cmd)
@@ -200,7 +205,7 @@ class CmdRouter:
 
         self.register_cmd(token, curr_session, transformer)
         [s.write(cmd)
-         for _, s in self.sessions.items() if s.sid == curr_session]
+        for _, s in self.sessions.items() if s.sid == curr_session]
 
     def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd_for_all(token, transformer)
@@ -216,6 +221,7 @@ class CmdRouter:
         dev_print("current async session:",self.sessions[session_id])
         self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
+
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         if session_id == -1:
             raise Exception("session is None")

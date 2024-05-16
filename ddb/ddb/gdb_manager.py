@@ -1,4 +1,5 @@
 import asyncio
+from threading import Lock
 from typing import List, Optional
 from time import sleep
 from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
@@ -8,13 +9,15 @@ from ddb.cmd_router import CmdRouter
 from ddb.service_mgr import ServiceManager
 from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
+from ddb.data_struct import ServiceInfo
 
 class GdbManager:
     def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
+        self.lock = Lock()
+
         self.sessions: List[GdbSession] = []
         self.service_mgr: ServiceManager = ServiceManager()
-
-        # TODO: adding new sessions when a new report is received from serviec manager.
+        self.service_mgr.set_callback_on_new_service(self.__discover_new_session)
 
         for config in sessionConfigs:
             self.sessions.append(GdbSession(config))
@@ -40,15 +43,46 @@ class GdbManager:
         #     resp = session.write(cmd)
         #     responses.append(resp)
 
-    # def handle_output(self):
-    #     while True:
-    #         for s in self.sessions:
-    #             output = s.deque_mi_output()
-    #             if output:
-    #                 meta = s.get_meta_str()
-    #                 # dev_print(f"{meta} {output}")
-    #                 mi_print(output, meta)
-    #         sleep(0.1)
+    def __discover_new_session(self, session_info: ServiceInfo):
+        logger.debug(f"In GdbManager. New session discovered: {session_info}")
+        port = 8989
+        hostname = session_info.ip
+        username = "ybyan"
+        pid = session_info.pid
+        tag = session_info.tag
+        config = GdbSessionConfig(
+            remote_port=port,
+            remote_host=hostname,
+            username=username,
+            remote_gdbserver=SSHRemoteServerClient(
+                cred=SSHRemoteServerCred(
+                    port=port,
+                    bin="",
+                    hostname=hostname,
+                    username=username
+                )
+            ),
+            attach_pid=pid,
+            tag=tag,
+            gdb_mode=GdbMode.REMOTE,
+            start_mode=StartMode.ATTACH,
+            sudo=True,
+            gdb_config_cmds=[
+                "set mi-async on",
+            ]
+        )
+        gdb_session = GdbSession(config)
+
+        # 1. add the new session to the session list
+        # 2. register router with the new session
+        with self.lock:
+            self.sessions.append(gdb_session)
+        self.router.add_session(gdb_session)
+
+        # start the session: 
+        # 1. start gdbserver on the remote 
+        # 2. start local gdb process and attach
+        gdb_session.start()
 
     def cleanup(self):
         dev_print("Cleaning up GdbManager resource")
