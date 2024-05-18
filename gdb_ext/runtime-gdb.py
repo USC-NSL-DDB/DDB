@@ -57,6 +57,40 @@ def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
 def int_to_ip(ip_int: int) -> str:
     return socket.inet_ntoa(struct.pack('!I', ip_int))
 
+# Function to fetch and print the global variable
+def get_global_variable(var_name, to_print: bool = False, check_is_var: bool = True) -> gdb.Value:
+    try:
+        var = gdb.lookup_symbol(var_name)[0]
+		# check_is_var is used for this specific case where the 
+		# globally defined variable is not recognized as a variable by gdb.
+        is_var = True if (not check_is_var) else var.is_variable
+        if var is not None and is_var:
+            value = var.value()
+            if to_print:
+                print(f"Value of {var_name}: {value}")
+            return value
+        else:
+            print(f"No such global variable: {var_name}")
+            return None
+    except gdb.error as e:
+        print(f"Error accessing variable: {str(e)}")
+        return None
+
+class GetGlobalVarCommand(gdb.Command):
+    """A custom command to fetch a global variable"""
+
+    def __init__(self):
+        super(GetGlobalVarCommand, self).__init__("get-global-var",
+                                                  gdb.COMMAND_DATA,
+                                                  gdb.COMPLETE_SYMBOL)
+
+    def invoke(self, arg, from_tty):
+        args = gdb.string_to_argv(arg)
+        if len(args) != 1:
+            print("Usage: get-global-var variable_name")
+        else:
+            get_global_variable(args[0], to_print=True)
+
 class DistributedBacktraceMICmd(gdb.MICommand):
 	def __init__(self):
 		super(DistributedBacktraceMICmd, self).__init__(
@@ -73,9 +107,9 @@ class DistributedBacktraceMICmd(gdb.MICommand):
 			frame = frame.older()
 
 		remote_ip: Optional[int] = None
-		remote_port: Optional[int] = None
+		# remote_port: Optional[int] = None
 		local_ip: Optional[int] = None
-		local_port: Optional[int] = None
+		# local_port: Optional[int] = None
 		parent_rip: Optional[int]= None
 		parent_rsp: Optional[int] = None
 
@@ -85,23 +119,21 @@ class DistributedBacktraceMICmd(gdb.MICommand):
 				for sym in get_local_variables(cur_frame):
 					if sym.name == "meta":
 						val = sym.value(cur_frame)
+						remote_ip = int(val['caller_comm_ip'])
 						parent_rip = int(val['rip'])
 						parent_rsp = int(val['rsp'])
+						print(f"caller ip: {int_to_ip(remote_ip)}")
 						print(f"rip: {parent_rip:#x}")
 						print(f"rsp: {parent_rsp:#x}")
-					if sym.name == "local_addr":
-						val = sym.value(cur_frame)
-						local_ip = int(val['ip'])
-						local_port = int(val['port'])
-						print(f"local_addr: ip: {int_to_ip(local_ip)}; port: {local_port}")
-					if sym.name == "remote_addr":
-						val = sym.value(cur_frame)
-						remote_ip = int(val['ip'])
-						remote_port = int(val['port'])
-						print(f"remote_addr: ip: {int_to_ip(remote_ip)}; port: {remote_port}")
+		ddb_meta = get_global_variable("ddb_meta", to_print=False, check_is_var=False)
+		if ddb_meta:
+			local_ip = int(ddb_meta["comm_ip"])
+			print(f"local ip: {int_to_ip(local_ip)}")
+		else:
+			print("Failed to find ddb_meta")
 
-		if remote_ip is None or remote_port is None or local_ip is None or local_port is None:
-			print("Failed to find remote/local address/port")
+		if remote_ip is None or local_ip is None:
+			print("Failed to find remote/local address")
 			return result
 
 		if parent_rip is None or parent_rsp is None:
@@ -111,11 +143,9 @@ class DistributedBacktraceMICmd(gdb.MICommand):
 		backtrace_meta = {
 			"remote_addr": {
 				"ip": remote_ip,
-				"port": remote_port
 			},
 			"local_addr": {
 				"ip": local_ip,
-				"port": local_port
 			},
 			"caller_meta": {
 				"rip": parent_rip,
@@ -324,6 +354,7 @@ MIEcho("-echo-dict", "dict")
 MIEcho("-echo-list", "list")
 MIEcho("-echo-string", "string")
 
+GetGlobalVarCommand()
 dbt_mi_cmd = DistributedBacktraceMICmd()
 dbt_cmd = DistributedBTCmd()
 ShowCaladanThreadCmd()

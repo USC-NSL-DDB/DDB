@@ -1,3 +1,12 @@
+#kubeconfigs
+distributeddebuggerkube.yaml
+#playgrouds:)
+pyplay.py
+pyplay1.py
+#logs
+cpptools.log
+webfrek.log
+Dockerfile
 .swp
 
 # gdb files
@@ -115,7 +124,15 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+# Binaries
 bin/
 
+# Temp Files
 *.new
 *.tmp
+*.log
+
+# Debugger Adapter Files
+**/node_modules
+debug-adapter/out
+debug-adapter/dist

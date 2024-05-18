@@ -8,7 +8,8 @@
 #   command: "./nu_scripts/stop_rt.sh"
 
 Components:
-- addr: localhost
+- mode: local
   tag: test_server_1 
   bin: "./bin/multithread_print"
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
   args: []
