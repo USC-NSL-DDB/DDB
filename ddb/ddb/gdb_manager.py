@@ -11,13 +11,16 @@ from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
 from ddb.data_struct import ServiceInfo
 
+ENABLE_SERVICE_DISCOVERY_NU = False
+
 class GdbManager:
     def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
         self.lock = Lock()
 
         self.sessions: List[GdbSession] = []
-        self.service_mgr: ServiceManager = ServiceManager()
-        self.service_mgr.set_callback_on_new_service(self.__discover_new_session)
+        if ENABLE_SERVICE_DISCOVERY_NU:
+            self.service_mgr: ServiceManager = ServiceManager()
+            self.service_mgr.set_callback_on_new_service(self.__discover_new_session)
 
         for config in sessionConfigs:
             self.sessions.append(GdbSession(config))
