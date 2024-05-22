@@ -3,16 +3,19 @@
 import os
 import re
 import subprocess
+import sys
+import argparse
+
 from typing import List, Union
 from pprint import pprint
+from yaml import safe_load, YAMLError
+
 from ddb.gdb_manager import GdbManager
 from ddb.logging import logger
-from yaml import safe_load, YAMLError
 from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
 from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.utils import *
-import sys
-import argparse
+from ddb.config import LoadConfig, GlobalConfig
 
 # try:
 #     debugpy.listen(("localhost", 5678))
@@ -64,44 +67,8 @@ def exec_posttasks(config_data):
         for task in tasks:
             exec_task(task)
 
-def bootFromNuConfig(gdb_manager: GdbManager=None, config_data=None):
-    gdbSessionConfigs: List[GdbSessionConfig] = []
-    prerun_cmds = None
-    if config_data:
-        components = config_data["Components"] if "Components" in config_data else []
-        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
-
-        for component in components:
-            sessionConfig = GdbSessionConfig()
-
-            sessionConfig.tag = component.get("tag", None)
-            sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
-            sessionConfig.attach_pid = component.get("pid", 0)
-            sessionConfig.binary = component.get("bin", None)
-            sessionConfig.cwd = component.get("cwd", os.getcwd())
-            sessionConfig.args = component.get("args", [])
-            sessionConfig.run_delay = component.get("run_delay", 0)
-            sessionConfig.sudo = component.get("sudo", False)
-
-            sessionConfig.gdb_mode = GdbMode.REMOTE if \
-                "mode" in component.keys() and component["mode"] == "remote" \
-                else GdbMode.LOCAL
-            if sessionConfig.gdb_mode == GdbMode.REMOTE:
-                sessionConfig.remote_port = component["remote_port"]
-                sessionConfig.remote_host = component["cred"]["hostname"]
-                sessionConfig.username = component["cred"]["user"]
-                remote_cred = SSHRemoteServerCred(
-                    port=sessionConfig.remote_port,
-                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
-                    hostname=sessionConfig.remote_host,
-                    username=sessionConfig.username
-                )
-                sessionConfig.remote_gdbserver = SSHRemoteServerClient(
-                    cred=remote_cred)
-
-            gdbSessionConfigs.append(sessionConfig)
-    
-    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
+def bootFromNuConfig(gdb_manager: GdbManager=None):
+    gdb_manager = GdbManager()
 
     while True:
         cmd = input("(gdb) ").strip()
@@ -184,33 +151,22 @@ def main():
 
     args = parser.parse_args()
 
-    config_data = None
-    if args.config is not None:
-        with open(str(args.config), "r") as fs:
-            try:
-                config_data = safe_load(fs)
-                eprint("Loaded dbg config file:")
-                pprint(config_data)
-            except YAMLError as e:
-                eprint(f"Failed to read the debugging config. Error: {e}")
+    if (args.config is not None) and LoadConfig(str(args.config)):
+        logger.info(f"Loaded config. content: {GlobalConfig}")    
 
-        if not config_data:
-            eprint("Debugging config is required!")
-            exit(1)
-
-        exec_pretasks(config_data)
+        # exec_pretasks(config_data)
 
     gdb_manager: GdbManager = None
     try:
-        bootFromNuConfig(gdb_manager, config_data)
+        bootFromNuConfig(gdb_manager)
         # bootServiceWeaverKube()
     except KeyboardInterrupt:
         dev_print(f"Received interrupt")
 
         if gdb_manager:
             gdb_manager.cleanup()
-        if config_data is not None:
-            exec_posttasks(config_data)
+        # if config_data is not None:
+        #     exec_posttasks(config_data)
 
         try:
             sys.exit(130)

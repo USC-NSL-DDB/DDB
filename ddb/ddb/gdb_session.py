@@ -4,6 +4,7 @@ from typing import List, Optional
 from threading import Thread, Lock
 from time import sleep
 from ddb.counter import TSCounter
+from ddb.data_struct import GdbMode, GdbSessionConfig, StartMode
 from ddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
@@ -34,33 +35,6 @@ class SessionCounter:
     @staticmethod
     def get() -> int:
         return SessionCounter.inst().inc()
-
-class GdbMode(Enum):
-    LOCAL = 1
-    REMOTE = 2
-
-class StartMode(Enum):
-    BINARY = 1
-    ATTACH = 2
-
-@dataclass
-class GdbSessionConfig:
-    remote_port: int = -1
-    remote_host: str = ""
-    username: str = "" 
-    remote_gdbserver: RemoteServerConnection = None
-    attach_pid: int = -1
-    binary: str = ""
-    tag: Optional[str] = None
-    gdb_mode: GdbMode = 1
-    start_mode: StartMode = 1
-    mi_version: str = "mi"
-    cwd: str = "."
-    # Using default_factory for mutable default
-    args: List[str] = field(default_factory=list)
-    run_delay: int = 0
-    sudo: bool = False
-    gdb_config_cmds: List[str] = field(default_factory=list)
 
 class GdbSession:
     def __init__(self, config: GdbSessionConfig, mi_version: str = None) -> None:
