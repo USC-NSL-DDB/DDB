@@ -11,7 +11,7 @@ PrerunGdbCommands:
 - name: "enable async mode"
   command: "set mi-async on"
 - name: "enable non-stop mode"
-  command: "set non-stop on"
+  command: "set non-stop off"
 
 Components:
 # TODO: Supports for pid (latter attach), remote attach 
