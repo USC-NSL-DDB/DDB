@@ -16,6 +16,8 @@ from ddb.response_transformer import BacktraceReadableTransformer, ProcessInfoTr
 **Key Functions**: `send_cmd(str)`
 '''
 
+FORCE_INTERRUPT_ON_COMMADN = True
+
 def extract_remote_parent_data(data):
     try:
         metadata = data.get('metadata', {})
@@ -172,7 +174,19 @@ class CmdRouter:
                     self.send_to_thread(gtid, token, " ".join(cmd_split))
             else:
                 self.send_to_current_thread(token, cmd)
-        
+    
+    def prepare_force_interrupt_command(self, cmd: str, resume: bool = True) -> str:
+        cmd_back = cmd
+        if not cmd_back.endswith("\n"):
+            cmd_back = f"{cmd_back}\n"
+        if FORCE_INTERRUPT_ON_COMMADN:
+            cmd_back = f"-exec-interrupt\n {cmd_back}"
+            if resume:
+                # using `-exec-continue --all` with `--all` to ensure 
+                # it works correctly when non-stop mode is enabled
+                cmd_back = f"{cmd_back} -exec-continue --all\n"
+        return cmd_back
+
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
         self.register_cmd(token, sid, transformer)
@@ -210,7 +224,19 @@ class CmdRouter:
     def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd_for_all(token, transformer)
         for _, s in self.sessions.items():
-            s.write(cmd)
+            cmd_to_send = cmd
+            if FORCE_INTERRUPT_ON_COMMADN:
+                # We only force interrupt if the thread is running
+                s_meta = StateManager.inst().get_session_meta(s.sid)
+                dev_print(f"Broadcast - Session {s.sid} meta: \n{s_meta}")
+                # We assume in all-stop mode, so only check the first thread status. 
+                # Assumption is all threads are at the same status.
+                cond = (s_meta and len(s_meta.t_status) > 0) and s_meta.t_status[1] == ThreadStatus.RUNNING
+                dev_print(f"cond: {cond}")
+                if cond:
+                    cmd_to_send = self.prepare_force_interrupt_command(cmd_to_send, resume=True)
+            # dev_print("Comand on broadcast to :\n", cmd)
+            s.write(cmd_to_send)
 
     def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd(token, self.sessions[1].sid, transformer)

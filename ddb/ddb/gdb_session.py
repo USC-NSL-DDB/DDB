@@ -217,13 +217,13 @@ class GdbSession:
         # TODO: check if removing support of a list of commands is okay?
         # if isinstance(cmd, list):
             # cmd=" ".join(cmd)
-        print(f"send command {cmd} to session {self.sid}")
+        dev_print(f"send command to session {self.sid}:\n {cmd}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
-        if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:
-            dev_print(f"{self.sid} sending kill to",self.attach_pid)
-            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
-            return
+        # if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:
+        #     dev_print(f"{self.sid} sending kill to",self.attach_pid)
+        #     self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+        #     return
         self.session_ctrl.write(cmd, read_response=False)
 
     # def deque_mi_output(self) -> dict:
