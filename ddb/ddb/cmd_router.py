@@ -19,27 +19,19 @@ from ddb.response_transformer import BacktraceReadableTransformer, ProcessInfoTr
 FORCE_INTERRUPT_ON_COMMADN = True
 
 def extract_remote_parent_data(data):
-    try:
-        metadata = data.get('metadata', {})
-        parent_rip = metadata.get('parentRIP', -1)
-        parent_rsp = metadata.get('parentRSP', -1)
-        parent_addr = metadata.get('parentAddr', [])
-        parent_port = metadata.get('parentPort', -1)
-        parent_addr_str = '.'.join(str(octet) for octet in parent_addr[-4:])
+    metadata = data.get('metadata', {})
+    parent_rip = metadata.get('parentRIP', '-1')
+    parent_rsp = metadata.get('parentRSP', '-1')
+    parent_addr = metadata.get('parentAddr', [])
+    parent_port = metadata.get('parentPort', '-1')
+    parent_addr_str = '.'.join(str(octet) for octet in parent_addr[-4:])
 
-        return {
-            'parent_rip': parent_rip,
-            'parent_rsp': parent_rsp,
-            'parent_addr': parent_addr_str,
-            'parent_port': parent_port
-        }
-    except (KeyError, TypeError):
-        return {
-            'parent_rip': 'N/A',
-            'parent_rsp': 'N/A',
-            'parent_addr': 'N/A',
-            'parent_port': 'N/A'
-        }
+    return {
+        'parent_rip': parent_rip,
+        'parent_rsp': parent_rsp,
+        'parent_addr': parent_addr_str,
+        'parent_port': parent_port
+    }
 
 
 remoteBt = True
@@ -101,10 +93,10 @@ class CmdRouter:
         print("current cmd:", cmd)
         token, cmd_no_token, prefix, cmd = parse_cmd(cmd) 
         cmd = f"{token}{cmd_no_token}\n"
-        
+
         if (prefix in ["b", "break", "-break-insert"]):
             self.broadcast(token, cmd)
-        elif (prefix in ["bt-remote"]):
+        elif (prefix in ["-bt-remote"]):
             aggreated_bt_result = []
             bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
             assert(len(bt_result) == 1)
@@ -191,7 +183,9 @@ class CmdRouter:
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
         self.register_cmd(token, sid, transformer)
         # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
-        self.sessions[sid].write("-thread-select " + str(tid) + "\n" + cmd)
+        self.sessions[sid].write(
+            "-thread-select " + str(tid) + "\n" + 
+                                 cmd)
 
     def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()

@@ -6,7 +6,7 @@
 # PostTasks:
 # - name: "Shutdown runtime"
 #   command: "./nu_scripts/stop_rt.sh"
-
+Framework: Nu
 PrerunGdbCommands:
 - name: "enable async mode"
   command: "set mi-async on"

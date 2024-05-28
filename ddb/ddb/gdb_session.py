@@ -1,4 +1,5 @@
 from enum import Enum
+import threading
 from uuid import uuid4
 from typing import List, Optional
 from threading import Thread, Lock
@@ -94,7 +95,7 @@ class GdbSession:
         self.processor = ResponseProcessor.inst()
         self.mi_output_t_handle = None
         self.gdb_config_cmds = config.gdb_config_cmds
-
+        self._stop_event = threading.Event()
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
 
@@ -108,7 +109,6 @@ class GdbSession:
         full_args.append(self.bin)
         full_args.extend(self.args)
         self.session_ctrl = GdbController(full_args)
-
     def remote_attach(self, prerun_cmds: Optional[List[dict]] = None):
         dev_print("start remote attach")
         if not self.remote_gdbserver:
@@ -182,7 +182,7 @@ class GdbSession:
         self.mi_output_t_handle.start()
 
     def fetch_mi_output(self):
-        while True:
+        while not self._stop_event.is_set():
             responses = self.session_ctrl.get_gdb_response(
                 timeout_sec=0.5, raise_error_on_timeout=False)
             if responses:
@@ -238,6 +238,8 @@ class GdbSession:
         return f"[ {self.tag}, {self.bin}, {self.sid} ]"
 
     def cleanup(self):
+        self._stop_event.set()
+        sleep(1)# wait to let fetch thread to stop
         dev_print(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")
         # self.mi_output_t_handle
