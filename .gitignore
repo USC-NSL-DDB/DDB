@@ -11,7 +11,7 @@ Dockerfile
 
 # gdb files
 /gdb*/build
-/gdb*/config.*
+# /gdb*/config.*
 /gdb*/Makefile
 
 # Nu runtime files
