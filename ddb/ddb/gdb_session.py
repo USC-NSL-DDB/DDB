@@ -220,10 +220,15 @@ class GdbSession:
         dev_print(f"send command to session {self.sid}:\n {cmd}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
-        # if ("-exec-interrupt" in cmd_no_token.strip() ) and self.startMode==StartMode.ATTACH:
-        #     dev_print(f"{self.sid} sending kill to",self.attach_pid)
-        #     self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
-        #     return
+        
+        # Special case for handling interruption when child process is spawned.
+        # `exec-interrupt` won't work in this case. Need manually send kill signal.
+        # TODO: how to handle this elegantly?
+        if ("-exec-interrupt" == cmd_no_token.strip()) and self.StartMode == StartMode.ATTACH:
+            dev_print(f"{self.sid} sending kill to",self.attach_pid)
+            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+            return
+
         self.session_ctrl.write(cmd, read_response=False)
 
     # def deque_mi_output(self) -> dict:
