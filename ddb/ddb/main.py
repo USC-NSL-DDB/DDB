@@ -2,17 +2,20 @@
 
 import os
 import re
+import signal
 import subprocess
 import sys
 import argparse
 
 from typing import List, Union
 
+from ddb.data_struct import TargetFramework
 from ddb.gdb_manager import GdbManager
 from ddb.logging import logger
 from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
 from ddb.utils import *
 from ddb.config import GlobalConfig
+# import debugpy
 
 # try:
 #     debugpy.listen(("localhost", 5678))
@@ -50,13 +53,11 @@ def exec_task(task: dict):
     eprint(f"Executing task: {name}, command: {command}")
     exec_cmd(command)
 
-
 def exec_pretasks(config_data):
     if ("PreTasks" in config_data) and config_data["PreTasks"]:
         tasks = config_data["PreTasks"]
         for task in tasks:
             exec_task(task)
-
 
 def exec_posttasks(config_data):
     if ("PostTasks" in config_data) and config_data["PostTasks"]:
@@ -64,7 +65,7 @@ def exec_posttasks(config_data):
         for task in tasks:
             exec_task(task)
 
-def bootFromNuConfig(gdb_manager: GdbManager=None):
+def bootFromNuConfig(gdb_manager: GdbManager):
     gdb_manager = GdbManager()
 
     while True:
@@ -72,17 +73,16 @@ def bootFromNuConfig(gdb_manager: GdbManager=None):
         cmd = f"{cmd}\n"
         gdb_manager.write(cmd)
 
-def bootServiceWeaverKube():
+def bootServiceWeaverKube(config_data=None):
     from kubernetes import config as kubeconfig, client as kubeclient
-    from gdbserver_starter import KubeRemoteSeverClient
-
+    from ddb.gdbserver_starter import KubeRemoteSeverClient
+    global gdb_manager
     kubeconfig.load_incluster_config()
     clientset = kubeclient.CoreV1Api()
-    global gdb_manager, config_data
-    #prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
-
-    kube_namespace = "default"
-    sw_name = "serviceweaver1"
+    prerun_cmds = config_data.get("PrerunGdbCommands",[])
+    config_metadata=config_data.get("Components",{})
+    kube_namespace = config_metadata.get("kube_namespace","default")
+    sw_name = config_metadata.get("binary_name","serviceweaver")
     selector_label = f"serviceweaver/app={sw_name}"
     pods = clientset.list_namespaced_pod(
         namespace=kube_namespace, label_selector=selector_label)
@@ -117,15 +117,13 @@ def bootServiceWeaverKube():
             sessionConfig.tag=i.status.pod_ip
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.attach_pid=int(pid)
-            sessionConfig.gdb_config_cmds=["source /usr/src/app/gdb_ext/noobextension.py"]
             # sessionConfig.gdb_config_cmds = ["source ./noobextension.py"]
             gdbSessionConfigs.append(sessionConfig)
         else:
             eprint(i.status.pod_ip, i.metadata.name,
                    "cannot locate service weaver process:", sw_name)
 
-    gdb_manager = GdbManager(gdbSessionConfigs, [{"name":"load serviceweaver ext","command":"source /usr/src/app/gdb_ext/noobextension.py"},{"name": "enable async mode",
-  "command": "set target-async on"}])
+    gdb_manager = GdbManager(gdbSessionConfigs, prerun_cmds)
     
     while True:
         cmd = input(f"({gdb_manager.state_mgr.get_current_gthread()})(gdb) ").strip()
@@ -133,7 +131,31 @@ def bootServiceWeaverKube():
         if cmd is not None:
             gdb_manager.write(cmd)
 
+terminated = False
+gdb_manager = None
+
+def handle_interrupt(signal_num, frame):
+    global terminated, gdb_manager
+    dev_print(f"Received interrupt")
+    if not terminated:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        terminated=True
+        if gdb_manager:
+            gdb_manager.cleanup()
+
+        # TODO: reimplement the following functions
+        # if config_data is not None:
+        #     exec_posttasks(config_data)
+
+        try:
+            sys.exit(130)
+        except SystemExit:
+            os._exit(130)
+
 def main():
+    global gdb_manager, terminated
+
+    signal.signal(signal.SIGINT, handle_interrupt)
     parser = argparse.ArgumentParser(
         description="interactive debugging for distributed software.",
     )
@@ -141,7 +163,6 @@ def main():
     parser.add_argument(
         "config",
         metavar="conf_file",
-        nargs='?',
         type=str,
         help="Path of the debugging config file."
     )
@@ -156,10 +177,17 @@ def main():
     # TODO: implement the following functions
     # exec_pretasks(config_data)
 
-    gdb_manager: GdbManager = None
+    # gdb_manager: GdbManager = None
+    # terminated=False
+
+    global_config = GlobalConfig.get()
     try:
-        bootFromNuConfig(gdb_manager)
-        # bootServiceWeaverKube()
+        if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
+            bootServiceWeaverKube(gdb_manager)
+        elif global_config.framework == TargetFramework.NU:
+            bootFromNuConfig(gdb_manager)
+        else:
+            bootFromNuConfig(gdb_manager)
     except KeyboardInterrupt:
         logger.info("Received interrupt signal. Exiting...")
 

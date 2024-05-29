@@ -38,7 +38,9 @@ class PlainTransformer(TransformerBase):
         #out_str = "\n".join(data["data"])
         #out_str = utils.wrap_grouped_message(out_str)
         if responses[0].payload and responses[0].token is not None:
-            out_str = MIFormatter.format("^", "done", responses[0].payload, responses[0].token)
+            out_str = MIFormatter.format("^", responses[0].msg, responses[0].payload, responses[0].token)
+        elif responses[0].msg is not None:
+            out_str =  MIFormatter.format_message("^", responses[0].msg, responses[0].token)
         else:
             out_str = "\n".join(data["data"])
         return out_str
@@ -378,7 +380,8 @@ class ResponseTransformer:
     def transform(responses: List[SessionResponse], transformer: TransformerBase):
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
-        print(f"[ TOOL MI OUTPUT ] \n{transformer.format(responses)}\n")
+        transformed_output=transformer.format(responses).replace("\n", "")
+        print(f"[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):

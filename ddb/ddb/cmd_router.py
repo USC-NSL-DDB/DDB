@@ -16,28 +16,22 @@ from ddb.response_transformer import BacktraceReadableTransformer, ProcessInfoTr
 **Key Functions**: `send_cmd(str)`
 '''
 
-def extract_remote_parent_data(data):
-    try:
-        metadata = data.get('metadata', {})
-        parent_rip = metadata.get('parentRIP', -1)
-        parent_rsp = metadata.get('parentRSP', -1)
-        parent_addr = metadata.get('parentAddr', [])
-        parent_port = metadata.get('parentPort', -1)
-        parent_addr_str = '.'.join(str(octet) for octet in parent_addr[-4:])
+FORCE_INTERRUPT_ON_COMMADN = True
 
-        return {
-            'parent_rip': parent_rip,
-            'parent_rsp': parent_rsp,
-            'parent_addr': parent_addr_str,
-            'parent_port': parent_port
-        }
-    except (KeyError, TypeError):
-        return {
-            'parent_rip': 'N/A',
-            'parent_rsp': 'N/A',
-            'parent_addr': 'N/A',
-            'parent_port': 'N/A'
-        }
+def extract_remote_parent_data(data):
+    metadata = data.get('metadata', {})
+    parent_rip = metadata.get('parentRIP', '-1')
+    parent_rsp = metadata.get('parentRSP', '-1')
+    parent_addr = metadata.get('parentAddr', [])
+    parent_port = metadata.get('parentPort', '-1')
+    parent_addr_str = '.'.join(str(octet) for octet in parent_addr[-4:])
+
+    return {
+        'parent_rip': parent_rip,
+        'parent_rsp': parent_rsp,
+        'parent_addr': parent_addr_str,
+        'parent_port': parent_port
+    }
 
 
 remoteBt = True
@@ -99,10 +93,10 @@ class CmdRouter:
         print("current cmd:", cmd)
         token, cmd_no_token, prefix, cmd = parse_cmd(cmd) 
         cmd = f"{token}{cmd_no_token}\n"
-        
+
         if (prefix in ["b", "break", "-break-insert"]):
             self.broadcast(token, cmd)
-        elif (prefix in ["bt-remote"]):
+        elif (prefix in ["-bt-remote"]):
             aggreated_bt_result = []
             bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
             assert(len(bt_result) == 1)
@@ -172,12 +166,26 @@ class CmdRouter:
                     self.send_to_thread(gtid, token, " ".join(cmd_split))
             else:
                 self.send_to_current_thread(token, cmd)
-        
+    
+    def prepare_force_interrupt_command(self, cmd: str, resume: bool = True) -> str:
+        cmd_back = cmd
+        if not cmd_back.endswith("\n"):
+            cmd_back = f"{cmd_back}\n"
+        if FORCE_INTERRUPT_ON_COMMADN:
+            cmd_back = f"-exec-interrupt\n {cmd_back}"
+            if resume:
+                # using `-exec-continue --all` with `--all` to ensure 
+                # it works correctly when non-stop mode is enabled
+                cmd_back = f"{cmd_back} -exec-continue --all\n"
+        return cmd_back
+
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
         self.register_cmd(token, sid, transformer)
         # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
-        self.sessions[sid].write("-thread-select " + str(tid) + "\n" + cmd)
+        self.sessions[sid].write(
+            "-thread-select " + str(tid) + "\n" + 
+                                 cmd)
 
     def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
@@ -210,7 +218,19 @@ class CmdRouter:
     def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd_for_all(token, transformer)
         for _, s in self.sessions.items():
-            s.write(cmd)
+            cmd_to_send = cmd
+            if FORCE_INTERRUPT_ON_COMMADN:
+                # We only force interrupt if the thread is running
+                s_meta = StateManager.inst().get_session_meta(s.sid)
+                dev_print(f"Broadcast - Session {s.sid} meta: \n{s_meta}")
+                # We assume in all-stop mode, so only check the first thread status. 
+                # Assumption is all threads are at the same status.
+                cond = (s_meta and len(s_meta.t_status) > 0) and s_meta.t_status[1] == ThreadStatus.RUNNING
+                dev_print(f"cond: {cond}")
+                if cond:
+                    cmd_to_send = self.prepare_force_interrupt_command(cmd_to_send, resume=True)
+            # dev_print("Comand on broadcast to :\n", cmd)
+            s.write(cmd_to_send)
 
     def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         self.register_cmd(token, self.sessions[1].sid, transformer)

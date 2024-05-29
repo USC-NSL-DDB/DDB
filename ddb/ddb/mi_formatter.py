@@ -46,6 +46,13 @@ class MIFormatter:
             return 
         out_str = f"{token if token else ''}{task_symbol}{msg},{MIFormatter.format_dict(payload)}"
         return out_str
+    @staticmethod
+    def format_message(task_symbol: str, msg: Optional[str], token: Optional[str] = None) -> str:
+        if not msg:
+            print("No message to format")
+            return 
+        out_str = f"{token if token else ''}{task_symbol}{msg}"
+        return out_str
 
 if __name__ == "__main__":
     # Some tests 
