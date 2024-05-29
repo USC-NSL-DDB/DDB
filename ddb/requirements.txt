@@ -1,5 +1,13 @@
-pygdbmi # gdbmi parser
-pyyaml # yaml parser
-paramiko # ssh command execution
+# gdbmi parser
+pygdbmi 
+
+# yaml parser
+pyyaml>=5.4.1
+
+# ssh command execution
+paramiko 
+
 kubernetes
-paho-mqtt # mqtt client
+
+# mqtt client
+paho-mqtt 
