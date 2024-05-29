@@ -21,7 +21,6 @@ class GdbManager:
         # TODO: re-implement prerun_cmds
         prerun_cmds = []
 
-
         self.sessions: List[GdbSession] = []
 
         if global_config.broker:

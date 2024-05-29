@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional 
+from pprint import pformat
+
 from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
 
 class SessionResponse:
@@ -18,6 +20,9 @@ class SessionResponse:
 
     def __str__(self) -> str:
         return f"Response - sid: {self.sid}, payload:\n\t{self.payload}"
+
+    # def __repr__(self):
+    #     return pformat(self.__dict__)
 
 @dataclass
 class ServiceInfo:
@@ -52,12 +57,28 @@ class GdbSessionConfig:
     sudo: bool = False
     gdb_config_cmds: List[str] = field(default_factory=list)
 
+    def __repr__(self):
+        formatted_dict = pformat(self.__dict__)
+        indented_lines = "\n".join("\t" + line for line in formatted_dict.splitlines())
+        return f"{self.__class__.__name__}(\n{indented_lines}\n)"
+
 @dataclass
 class BrokerInfo:
     hostname: str
     port: int
 
+class TargetFramework(Enum):
+    UNSPECIFIED = 1
+    NU = 2
+    SERVICE_WEAVER_K8S = 3
+
 @dataclass
 class DDBConfig:
+    framework = TargetFramework.UNSPECIFIED
     gdb_sessions_configs: List[GdbSessionConfig] = field(default_factory=list)
     broker: BrokerInfo = None
+
+    def __repr__(self):
+        formatted_dict = pformat(self.__dict__)
+        indented_lines = "\n".join("\t" + line for line in formatted_dict.splitlines())
+        return f"{self.__class__.__name__}(\n{indented_lines}\n)"

@@ -7,15 +7,12 @@ import sys
 import argparse
 
 from typing import List, Union
-from pprint import pprint
-from yaml import safe_load, YAMLError
 
 from ddb.gdb_manager import GdbManager
 from ddb.logging import logger
 from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
-from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.utils import *
-from ddb.config import LoadConfig, GlobalConfig
+from ddb.config import GlobalConfig
 
 # try:
 #     debugpy.listen(("localhost", 5678))
@@ -151,20 +148,25 @@ def main():
 
     args = parser.parse_args()
 
-    if (args.config is not None) and LoadConfig(str(args.config)):
-        logger.info(f"Loaded config. content: {GlobalConfig}")    
+    if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
+        logger.info(f"Loaded config. content: \n{GlobalConfig.get()}")    
+    else:
+        logger.info(f"Configuration file is not provided or something goes wrong. Skipping...")    
 
-        # exec_pretasks(config_data)
+    # TODO: implement the following functions
+    # exec_pretasks(config_data)
 
     gdb_manager: GdbManager = None
     try:
         bootFromNuConfig(gdb_manager)
         # bootServiceWeaverKube()
     except KeyboardInterrupt:
-        dev_print(f"Received interrupt")
+        logger.info("Received interrupt signal. Exiting...")
 
         if gdb_manager:
             gdb_manager.cleanup()
+
+        # TODO: implement the following functions
         # if config_data is not None:
         #     exec_posttasks(config_data)
 
