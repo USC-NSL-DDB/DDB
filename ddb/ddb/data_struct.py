@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional 
+from typing import Dict, List, Optional 
 from pprint import pformat
 
 from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
@@ -55,7 +55,7 @@ class GdbSessionConfig:
     args: List[str] = field(default_factory=list)
     run_delay: int = 0
     sudo: bool = False
-    gdb_config_cmds: List[str] = field(default_factory=list)
+    prerun_cmds:List[Dict[str,str]] = field(default_factory=list)
 
     def __repr__(self):
         formatted_dict = pformat(self.__dict__)

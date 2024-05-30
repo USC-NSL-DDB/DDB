@@ -55,7 +55,7 @@ class GdbSession:
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
-
+        self.prerun_cmds=config.prerun_cmds
         self.sudo = config.sudo
 
         # Session metadata
@@ -68,7 +68,6 @@ class GdbSession:
         self.session_ctrl: Optional[GdbController] = None
         self.processor = ResponseProcessor.inst()
         self.mi_output_t_handle = None
-        self.gdb_config_cmds = config.gdb_config_cmds
         self._stop_event = threading.Event()
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
@@ -104,8 +103,8 @@ class GdbSession:
             gdb_cmd
         )
         self.write("-gdb-set mi-async on")
-        for gdb_condig_cmd in self.gdb_config_cmds:
-            self.write(f'-interpreter-exec console "{gdb_condig_cmd}"')
+        for prerun_cmd in self.prerun_cmds:
+            self.write(f'-interpreter-exec console "{prerun_cmd}"')
         self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
         # self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
@@ -133,7 +132,8 @@ class GdbSession:
         # self.session_ctrl.write(f"target remote :{self.remote_port}", read_response=False)
         # dev_print(response)
 
-    def start(self, prerun_cmds: Optional[List[dict]] = None) -> None:
+    def start(self) -> None:
+        prerun_cmds=self.prerun_cmds
         if self.mode == GdbMode.LOCAL:
             self.local_start(prerun_cmds)
         elif self.mode == GdbMode.REMOTE:

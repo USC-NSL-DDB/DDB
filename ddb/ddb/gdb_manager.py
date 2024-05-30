@@ -15,14 +15,11 @@ from ddb.config import GlobalConfig
 class GdbManager:
     def __init__(self) -> None:
         self.lock = Lock()
-
-        global_config = GlobalConfig.get()
-        
         # TODO: re-implement prerun_cmds
         prerun_cmds = []
-
         self.sessions: List[GdbSession] = []
-
+    def start(self)->None:
+        global_config = GlobalConfig.get()
         if global_config.broker:
             logger.debug("Broker is enabled. Starting ServiceManager.")
             self.service_mgr: ServiceManager = ServiceManager()
@@ -34,8 +31,7 @@ class GdbManager:
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
 
-        [ s.start(prerun_cmds) for s in self.sessions ]
-
+        [ s.start() for s in self.sessions ]
     def write(self, cmd: str):
         # if cmd.strip() and cmd.split()[0] == "session":
         #     selection = int(cmd.split()[1])
@@ -76,7 +72,7 @@ class GdbManager:
             gdb_mode=GdbMode.REMOTE,
             start_mode=StartMode.ATTACH,
             sudo=True,
-            gdb_config_cmds=[
+            prerun_cmds=[
                 "set mi-async on",
             ]
         )

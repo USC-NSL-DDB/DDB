@@ -1,10 +1,11 @@
 import os
 from pprint import pprint, pformat
+import re
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 
 from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
-from ddb.utils import eprint
+from ddb.utils import dev_print, eprint
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
 
@@ -75,7 +76,47 @@ class GlobalConfig:
 
             gdbSessionConfigs.append(sessionConfig)
         ddb_config.gdb_sessions_configs = gdbSessionConfigs
-
+    @staticmethod
+    def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
+        from kubernetes import config as kubeconfig, client as kubeclient
+        from ddb.gdbserver_starter import KubeRemoteSeverClient
+        global gdb_manager
+        kubeconfig.load_incluster_config()
+        clientset = kubeclient.CoreV1Api()
+        prerun_cmds = config_data.get("PrerunGdbCommands",[])
+        config_metadata=config_data.get("Components",{})
+        kube_namespace = config_metadata.get("kube_namespace","default")
+        sw_name = config_metadata.get("binary_name","serviceweaver")
+        selector_label = f"serviceweaver/app={sw_name}"
+        pods = clientset.list_namespaced_pod(
+            namespace=kube_namespace, label_selector=selector_label)
+        gdbSessionConfigs: List[GdbSessionConfig] = []
+        for i in pods.items:
+            dev_print("%s\t%s\t%s" %
+                (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
+            remoteServerConn = KubeRemoteSeverClient(
+                i.metadata.name, i.metadata.namespace)
+            remoteServerConn.connect()
+            output = remoteServerConn.execute_command(['ps', '-eo', "pid,comm"])
+            # Use a regular expression to find the PID for 'serviceweaver1'
+            match = re.search(r'(\d+)\s+{}'.format(sw_name), output)
+            if match:
+                pid = match.group(1)
+                sessionConfig= GdbSessionConfig()
+                sessionConfig.remote_port=30001
+                sessionConfig.remote_host=i.status.pod_ip
+                dev_print("remote host type:", type(i.status.pod_ip))
+                sessionConfig.gdb_mode=GdbMode.REMOTE
+                sessionConfig.remote_gdbserver=remoteServerConn
+                sessionConfig.tag=i.status.pod_ip
+                sessionConfig.start_mode=StartMode.ATTACH
+                sessionConfig.attach_pid=int(pid)
+                sessionConfig.prerun_cmds=prerun_cmds
+                gdbSessionConfigs.append(sessionConfig)
+            else:
+                eprint(i.status.pod_ip, i.metadata.name,
+                    "cannot locate service weaver process:", sw_name)
+        ddb_config.gdb_sessions_configs=gdbSessionConfigs
     @staticmethod
     def parse_config_file(config_data: any) -> DDBConfig:
         ddb_config = DDBConfig()
@@ -83,7 +124,7 @@ class GlobalConfig:
         if "Framework" in config_data:
             if config_data["Framework"] == "serviceweaver_kube":
                 ddb_config.framework = TargetFramework.SERVICE_WEAVER_K8S
-                # parse_serviceweaver_kube_config(ddb_config, config_data)
+                GlobalConfig.parse_serviceweaver_kube_config(ddb_config, config_data)
             elif config_data["Framework"] == "Nu":
                 ddb_config.framework = TargetFramework.NU
                 GlobalConfig.parse_nu_config(ddb_config, config_data)
