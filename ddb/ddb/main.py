@@ -81,7 +81,7 @@ def bootServiceWeaverKube(gdb_manager: GdbManager):
             gdb_manager.write(cmd)
 
 terminated = False
-gdb_manager:GdbManager = None
+gdb_manager: GdbManager = None
 
 def handle_interrupt(signal_num, frame):
     global terminated, gdb_manager

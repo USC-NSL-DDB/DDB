@@ -1,11 +1,10 @@
 import os
-from pprint import pprint, pformat
 import re
 from yaml import YAMLError, safe_load
 from typing import List, Optional
+from pprint import pformat
 
 from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
-from ddb.utils import dev_print, eprint
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
 
@@ -43,8 +42,7 @@ class GlobalConfig:
     
         gdbSessionConfigs: List[GdbSessionConfig] = []
         components = config_data["Components"] if "Components" in config_data else []
-        # TODO: use prerun commands. For now, just ignore it.
-        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else None
+        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
 
         for component in components:
             sessionConfig = GdbSessionConfig()
@@ -57,6 +55,7 @@ class GlobalConfig:
             sessionConfig.args = component.get("args", [])
             sessionConfig.run_delay = component.get("run_delay", 0)
             sessionConfig.sudo = component.get("sudo", False)
+            sessionConfig.prerun_cmds = prerun_cmds
 
             sessionConfig.gdb_mode = GdbMode.REMOTE if \
                 "mode" in component.keys() and component["mode"] == "remote" \
@@ -71,16 +70,16 @@ class GlobalConfig:
                     hostname=sessionConfig.remote_host,
                     username=sessionConfig.username
                 )
-                sessionConfig.remote_gdbserver = SSHRemoteServerClient(
-                    cred=remote_cred)
+                sessionConfig.remote_gdbserver = SSHRemoteServerClient(cred=remote_cred)
 
             gdbSessionConfigs.append(sessionConfig)
         ddb_config.gdb_sessions_configs = gdbSessionConfigs
+
     @staticmethod
     def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
         from kubernetes import config as kubeconfig, client as kubeclient
         from ddb.gdbserver_starter import KubeRemoteSeverClient
-        global gdb_manager
+
         kubeconfig.load_incluster_config()
         clientset = kubeclient.CoreV1Api()
         prerun_cmds = config_data.get("PrerunGdbCommands",[])
@@ -92,7 +91,7 @@ class GlobalConfig:
             namespace=kube_namespace, label_selector=selector_label)
         gdbSessionConfigs: List[GdbSessionConfig] = []
         for i in pods.items:
-            dev_print("%s\t%s\t%s" %
+            logger.debug("%s\t%s\t%s" %
                 (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
             remoteServerConn = KubeRemoteSeverClient(
                 i.metadata.name, i.metadata.namespace)
@@ -105,7 +104,7 @@ class GlobalConfig:
                 sessionConfig= GdbSessionConfig()
                 sessionConfig.remote_port=30001
                 sessionConfig.remote_host=i.status.pod_ip
-                dev_print("remote host type:", type(i.status.pod_ip))
+                logger.debug("remote host type:", type(i.status.pod_ip))
                 sessionConfig.gdb_mode=GdbMode.REMOTE
                 sessionConfig.remote_gdbserver=remoteServerConn
                 sessionConfig.tag=i.status.pod_ip
@@ -114,9 +113,10 @@ class GlobalConfig:
                 sessionConfig.prerun_cmds=prerun_cmds
                 gdbSessionConfigs.append(sessionConfig)
             else:
-                eprint(i.status.pod_ip, i.metadata.name,
+                logger.error(i.status.pod_ip, i.metadata.name,
                     "cannot locate service weaver process:", sw_name)
         ddb_config.gdb_sessions_configs=gdbSessionConfigs
+
     @staticmethod
     def parse_config_file(config_data: any) -> DDBConfig:
         ddb_config = DDBConfig()
@@ -151,24 +151,9 @@ class GlobalConfig:
                     # Set parsed config to the global scope
                     GlobalConfig.set_config(GlobalConfig.parse_config_file(config_data))
                 except YAMLError as e:
-                    eprint(f"Failed to read the debugging config. Error: {e}")
+                    logger.error(f"Failed to read the debugging config. Error: {e}")
                     return False
         else:
-            eprint("Config file path is not specified...")
+            logger.debug("Config file path is not specified...")
             return False
         return True
-
-
-# class GlobalConfig:
-#     __config: Optional[DDBConfig] = None
-#     __lock = Lock()
-
-#     def __init__(self) -> None:
-#         pass
-
-
-#     @staticmethod
-#     def SetConfig(config: DDBConfig):
-#         with GlobalConfig.__lock:
-#             GlobalConfig.__config = config
-

@@ -15,9 +15,8 @@ from ddb.config import GlobalConfig
 class GdbManager:
     def __init__(self) -> None:
         self.lock = Lock()
-        # TODO: re-implement prerun_cmds
-        prerun_cmds = []
         self.sessions: List[GdbSession] = []
+
     def start(self)->None:
         global_config = GlobalConfig.get()
         if global_config.broker:
@@ -32,6 +31,7 @@ class GdbManager:
         self.state_mgr = StateManager.inst()
 
         [ s.start() for s in self.sessions ]
+
     def write(self, cmd: str):
         # if cmd.strip() and cmd.split()[0] == "session":
         #     selection = int(cmd.split()[1])
@@ -73,7 +73,10 @@ class GdbManager:
             start_mode=StartMode.ATTACH,
             sudo=True,
             prerun_cmds=[
-                "set mi-async on",
+                {
+                    "name": "async mode",
+                    "command": "set mi-async on"
+                }
             ]
         )
         gdb_session = GdbSession(config)
