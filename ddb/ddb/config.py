@@ -1,0 +1,159 @@
+import os
+import re
+from yaml import YAMLError, safe_load
+from typing import List, Optional
+from pprint import pformat
+
+from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
+from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
+from ddb.logging import logger
+
+class GlobalConfig:
+    __global_config = DDBConfig()
+
+    @staticmethod
+    def get() -> DDBConfig:
+        '''Just a alias'''
+        return GlobalConfig.get_config()
+
+    @staticmethod
+    def set(config: DDBConfig):
+        '''Just a alias'''
+        GlobalConfig.set_config(config)
+
+    @staticmethod
+    def get_config() -> DDBConfig:
+        return GlobalConfig.__global_config
+
+    @staticmethod
+    def set_config(config: DDBConfig):
+        # logger.debug(f"Setting global config: \n{pformat(config)}")
+        GlobalConfig.__global_config = config
+
+    @staticmethod
+    def parse_nu_config(ddb_config: DDBConfig, config_data: any):
+        service_discovery_enabled = ("ServiceDiscovery" in config_data)
+        if service_discovery_enabled:
+            broker_info = config_data["ServiceDiscovery"]["Broker"]
+            ddb_config.broker = BrokerInfo(
+                broker_info["hostname"],
+                broker_info["port"]
+            ) 
+    
+        gdbSessionConfigs: List[GdbSessionConfig] = []
+        components = config_data["Components"] if "Components" in config_data else []
+        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
+
+        for component in components:
+            sessionConfig = GdbSessionConfig()
+
+            sessionConfig.tag = component.get("tag", None)
+            sessionConfig.start_mode = component.get("startMode", StartMode.BINARY)
+            sessionConfig.attach_pid = component.get("pid", 0)
+            sessionConfig.binary = component.get("bin", None)
+            sessionConfig.cwd = component.get("cwd", os.getcwd())
+            sessionConfig.args = component.get("args", [])
+            sessionConfig.run_delay = component.get("run_delay", 0)
+            sessionConfig.sudo = component.get("sudo", False)
+            sessionConfig.prerun_cmds = prerun_cmds
+
+            sessionConfig.gdb_mode = GdbMode.REMOTE if \
+                "mode" in component.keys() and component["mode"] == "remote" \
+                else GdbMode.LOCAL
+            if sessionConfig.gdb_mode == GdbMode.REMOTE:
+                sessionConfig.remote_port = component["remote_port"]
+                sessionConfig.remote_host = component["cred"]["hostname"]
+                sessionConfig.username = component["cred"]["user"]
+                remote_cred = SSHRemoteServerCred(
+                    port=sessionConfig.remote_port,
+                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
+                    hostname=sessionConfig.remote_host,
+                    username=sessionConfig.username
+                )
+                sessionConfig.remote_gdbserver = SSHRemoteServerClient(cred=remote_cred)
+
+            gdbSessionConfigs.append(sessionConfig)
+        ddb_config.gdb_sessions_configs = gdbSessionConfigs
+
+    @staticmethod
+    def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
+        from kubernetes import config as kubeconfig, client as kubeclient
+        from ddb.gdbserver_starter import KubeRemoteSeverClient
+
+        kubeconfig.load_incluster_config()
+        clientset = kubeclient.CoreV1Api()
+        prerun_cmds = config_data.get("PrerunGdbCommands",[])
+        config_metadata=config_data.get("Components",{})
+        kube_namespace = config_metadata.get("kube_namespace","default")
+        sw_name = config_metadata.get("binary_name","serviceweaver")
+        selector_label = f"serviceweaver/app={sw_name}"
+        pods = clientset.list_namespaced_pod(
+            namespace=kube_namespace, label_selector=selector_label)
+        gdbSessionConfigs: List[GdbSessionConfig] = []
+        for i in pods.items:
+            logger.debug("%s\t%s\t%s" %
+                (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
+            remoteServerConn = KubeRemoteSeverClient(
+                i.metadata.name, i.metadata.namespace)
+            remoteServerConn.connect()
+            output = remoteServerConn.execute_command(['ps', '-eo', "pid,comm"])
+            # Use a regular expression to find the PID for 'serviceweaver1'
+            match = re.search(r'(\d+)\s+{}'.format(sw_name), output)
+            if match:
+                pid = match.group(1)
+                sessionConfig= GdbSessionConfig()
+                sessionConfig.remote_port=30001
+                sessionConfig.remote_host=i.status.pod_ip
+                logger.debug("remote host type:", type(i.status.pod_ip))
+                sessionConfig.gdb_mode=GdbMode.REMOTE
+                sessionConfig.remote_gdbserver=remoteServerConn
+                sessionConfig.tag=i.status.pod_ip
+                sessionConfig.start_mode=StartMode.ATTACH
+                sessionConfig.attach_pid=int(pid)
+                sessionConfig.prerun_cmds=prerun_cmds
+                gdbSessionConfigs.append(sessionConfig)
+            else:
+                logger.error(i.status.pod_ip, i.metadata.name,
+                    "cannot locate service weaver process:", sw_name)
+        ddb_config.gdb_sessions_configs=gdbSessionConfigs
+
+    @staticmethod
+    def parse_config_file(config_data: any) -> DDBConfig:
+        ddb_config = DDBConfig()
+
+        if "Framework" in config_data:
+            if config_data["Framework"] == "serviceweaver_kube":
+                ddb_config.framework = TargetFramework.SERVICE_WEAVER_K8S
+                GlobalConfig.parse_serviceweaver_kube_config(ddb_config, config_data)
+            elif config_data["Framework"] == "Nu":
+                ddb_config.framework = TargetFramework.NU
+                GlobalConfig.parse_nu_config(ddb_config, config_data)
+            else:
+                ddb_config.framework = TargetFramework.UNSPECIFIED
+                # TODO: parse a configuration file for a unspecified framework
+                GlobalConfig.parse_nu_config(ddb_config, config_data)
+        else:
+            ddb_config.framework = TargetFramework.UNSPECIFIED
+            # TODO: parse a configuration file for a unspecified framework
+            GlobalConfig.parse_nu_config(ddb_config, config_data)
+
+        return ddb_config
+
+    @staticmethod
+    def load_config(path: Optional[str]) -> bool:
+        config_data = None
+        if path is not None:
+            with open(str(path), "r") as fs:
+                try:
+                    config_data = safe_load(fs)
+                    logger.info(f"Loaded dbg config file: \n{pformat(config_data)}")
+                    # eprint("Loaded dbg config file:")
+                    # Set parsed config to the global scope
+                    GlobalConfig.set_config(GlobalConfig.parse_config_file(config_data))
+                except YAMLError as e:
+                    logger.error(f"Failed to read the debugging config. Error: {e}")
+                    return False
+        else:
+            logger.debug("Config file path is not specified...")
+            return False
+        return True

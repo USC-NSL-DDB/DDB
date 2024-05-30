@@ -10,22 +10,27 @@ from ddb.service_mgr import ServiceManager
 from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
 from ddb.data_struct import ServiceInfo
+from ddb.config import GlobalConfig
 
 class GdbManager:
-    def __init__(self, sessionConfigs: List[GdbSessionConfig], prerun_cmds: Optional[List[dict]] = None) -> None:
+    def __init__(self) -> None:
         self.lock = Lock()
-
         self.sessions: List[GdbSession] = []
-        self.service_mgr: ServiceManager = ServiceManager()
-        self.service_mgr.set_callback_on_new_service(self.__discover_new_session)
 
-        for config in sessionConfigs:
+    def start(self)->None:
+        global_config = GlobalConfig.get()
+        if global_config.broker:
+            logger.debug("Broker is enabled. Starting ServiceManager.")
+            self.service_mgr: ServiceManager = ServiceManager()
+            self.service_mgr.set_callback_on_new_service(self.__discover_new_session)
+
+        for config in global_config.gdb_sessions_configs:
             self.sessions.append(GdbSession(config))
 
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
 
-        [ s.start(prerun_cmds) for s in self.sessions ]
+        [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
         # if cmd.strip() and cmd.split()[0] == "session":
@@ -67,8 +72,11 @@ class GdbManager:
             gdb_mode=GdbMode.REMOTE,
             start_mode=StartMode.ATTACH,
             sudo=True,
-            gdb_config_cmds=[
-                "set mi-async on",
+            prerun_cmds=[
+                {
+                    "name": "async mode",
+                    "command": "set mi-async on"
+                }
             ]
         )
         gdb_session = GdbSession(config)

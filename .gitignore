@@ -8,7 +8,7 @@ cpptools.log
 webfrek.log
 Dockerfile
 .swp
-
+.vscode
 # gdb files
 /gdb*/build
 # /gdb*/config.*

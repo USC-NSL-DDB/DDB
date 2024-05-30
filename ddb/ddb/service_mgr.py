@@ -6,9 +6,10 @@ from paho.mqtt.client import CallbackAPIVersion
 from ddb.data_struct import ServiceInfo
 from ddb.logging import logger
 from ddb.utils import ip_int2ip_str
+from ddb.config import GlobalConfig
 
-BROKER_ADDR = "10.10.2.1"
-BROKER_PORT = 10101
+# BROKER_ADDR = "10.10.2.1"
+# BROKER_PORT = 10101
 BROKER_MSG_TRANSPORT = "tcp"
 T_SERVICE_DISCOVERY = "service_discovery/report"
 CLIENT_ID = "service_manager"
@@ -40,7 +41,8 @@ class ServiceManager:
         self.client.on_message = ServiceManager.__on_message
         self.client.message_callback_add(T_SERVICE_DISCOVERY, ServiceManager.__on_service_discovery)
 
-        self.client.connect(BROKER_ADDR, BROKER_PORT)
+        broker_info = GlobalConfig.get().broker
+        self.client.connect(broker_info.hostname, broker_info.port)
         self.client.subscribe(T_SERVICE_DISCOVERY)
         self.client.loop_start()
 

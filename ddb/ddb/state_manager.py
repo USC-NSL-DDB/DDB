@@ -126,7 +126,7 @@ class SessionMeta:
             out += f"({ts}, {self.t_status[ts]}), "
         out += f"\n\tthread to thread group: {self.t_to_tg}"
         out += f"\n\tthread group to thread: {self.tg_to_t}"
-        out += f"\n\ttrhead group status: {self.tg_status}"
+        out += f"\n\tthread group status: {self.tg_status}"
         out += f"\n\ttid to per thread group tid: {self.tid_to_per_inferior_tid}"
         return out
 
@@ -206,6 +206,9 @@ class StateManager:
                 return StateManager._store 
             StateManager._store = StateManager()
             return StateManager._store
+
+    def get_session_meta(self, sid: int) -> Optional[SessionMeta]:
+        return self.sessions.get(sid, None)
 
     def register_session(self, sid: int, tag: str):
         self.sessions[sid] = SessionMeta(sid, tag)
