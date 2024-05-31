@@ -93,7 +93,7 @@ class GdbSession:
         else:
             self.remote_gdbserver.connect()
             command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-            logger.debug("gdbserver command", command)
+            logger.debug(f"gdbserver command: {command}")
             output = self.remote_gdbserver.execute_command_async(command)
             logger.debug(output)
             logger.debug("finish attach")
