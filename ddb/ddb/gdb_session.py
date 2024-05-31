@@ -209,6 +209,8 @@ class GdbSession:
         logger.debug(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")
         # self.mi_output_t_handle
+        response = self.session_ctrl.write("kill", read_response=True)
+        logger.debug(f"kill response: {response}")
         self.session_ctrl.exit()
         if self.remote_gdbserver:
             self.remote_gdbserver.close()
