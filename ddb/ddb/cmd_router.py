@@ -7,6 +7,7 @@ from ddb.event_loop import EventLoopThread
 from ddb.state_manager import StateManager, ThreadStatus
 from ddb.utils import CmdTokenGenerator, dev_print, parse_cmd
 from ddb.response_transformer import BacktraceReadableTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
+from ddb.logging import logger
 
 ''' Routing all commands to the desired gdb sessions
 `CmdRouter` will fetch a token from `CmdTokenGenerator` and prepend the token to the cmd. 
@@ -239,7 +240,8 @@ class CmdRouter:
     def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
         dev_print("current async session:",self.sessions[session_id])
-        self.register_cmd(token, self.sessions[session_id].sid, transformer)
+        if token:
+            self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
 
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
@@ -277,10 +279,18 @@ class CmdRouter:
         dev_print("Executing private cmd.")
         cmd = cmd.strip()
         if cmd == "p-session-meta":
-            dev_print("Printing all session meta...")
-            dev_print(StateManager.inst().get_all_session_meta())
+            logger.debug("Printing all session meta...")
+            logger.info(StateManager.inst().get_all_session_meta())
         elif cmd == "p-session-manager-meta":
-            dev_print("Printing all session manager meta...")
-            dev_print(StateManager.inst())
+            logger.debug("Printing all session manager meta...")
+            logger.info(StateManager.inst())
+        elif "s-cmd" in cmd:
+            cmd = cmd.split()
+            if len(cmd) < 3:
+                logger.info("Usage: s-cmd <session_id> <cmd>")
+                return
+            session_id = int(cmd[1])
+            cmd = " ".join(cmd[2:])
+            self.send_to_session(None, cmd, session_id=session_id)
         else:
-            dev_print("Unknown private command.")
+            logger.debug("Unknown private command.")
