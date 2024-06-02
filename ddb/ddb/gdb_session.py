@@ -186,7 +186,7 @@ class GdbSession:
         # TODO: check if removing support of a list of commands is okay?
         # if isinstance(cmd, list):
             # cmd=" ".join(cmd)
-        logger.debug(f"send command to session {self.sid}:\n {cmd}")
+        logger.debug(f"send command to session {self.sid}:\n{cmd}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
         
@@ -207,11 +207,15 @@ class GdbSession:
         self._stop_event.set()
         sleep(1) # wait to let fetch thread to stop
         logger.debug(
-            f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}")
-        # self.mi_output_t_handle
-        response = self.session_ctrl.write("kill", read_response=True)
-        logger.debug(f"kill response: {response}")
-        self.session_ctrl.exit()
+            f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
+        )
+        try:
+            # try-except in case the gdb is already killed or exited.
+            response = self.session_ctrl.write("kill", read_response=True)
+            logger.debug(f"kill response: {response}")
+            self.session_ctrl.exit()
+        except Exception as e:
+            logger.debug(f"Failed to clean up gdb: {e}")
         if self.remote_gdbserver:
             self.remote_gdbserver.close()
 
