@@ -17,7 +17,10 @@ from ddb.logging import logger
 **Key Functions**: `send_cmd(str)`
 '''
 
-FORCE_INTERRUPT_ON_COMMADN = True
+# Temporarily disable this as it don't work as expected.
+# Problem: https://github.com/USC-NSL/distributed-debugger/issues/61
+# Current solution: https://github.com/USC-NSL/distributed-debugger/issues/62
+FORCE_INTERRUPT_ON_COMMADN = False
 
 def extract_remote_parent_data(data):
     metadata = data.get('metadata', {})
@@ -223,11 +226,10 @@ class CmdRouter:
             if FORCE_INTERRUPT_ON_COMMADN:
                 # We only force interrupt if the thread is running
                 s_meta = StateManager.inst().get_session_meta(s.sid)
-                dev_print(f"Broadcast - Session {s.sid} meta: \n{s_meta}")
+                logger.debug(f"Broadcast - Session {s.sid} meta: \n{s_meta}")
                 # We assume in all-stop mode, so only check the first thread status. 
                 # Assumption is all threads are at the same status.
                 cond = (s_meta and len(s_meta.t_status) > 0) and s_meta.t_status[1] == ThreadStatus.RUNNING
-                dev_print(f"cond: {cond}")
                 if cond:
                     cmd_to_send = self.prepare_force_interrupt_command(cmd_to_send, resume=True)
             # dev_print("Comand on broadcast to :\n", cmd)

@@ -39,7 +39,7 @@ class SessionCounter:
 class GdbSession:
     def __init__(self, config: GdbSessionConfig, mi_version: str = None) -> None:
         # Basic information
-        self.mi_version: str = mi_version if mi_version else "mi"
+        self.mi_version: str = mi_version if mi_version else "mi3"
         self.tag: str = config.tag
         self.args: List[str] = config.args
 
@@ -99,22 +99,17 @@ class GdbSession:
             logger.debug("finish attach")
 
         gdb_cmd = ["gdb", self.get_mi_version_arg(), "-q"]
-        self.session_ctrl = GdbController(
-            gdb_cmd
-        )
+        self.session_ctrl = GdbController(gdb_cmd)
+
         self.write("-gdb-set mi-async on")
+        # https://github.com/USC-NSL/distributed-debugger/issues/62
+        # Workaround for async+all-stop mode for gdbserver
+        self.write("maint set target-non-stop on")
+        self.write("-gdb-set non-stop off")
+
         for prerun_cmd in self.prerun_cmds:
             self.write(f'-interpreter-exec console "{prerun_cmd["command"]}"')
         self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
-
-        # self.remote_gdbserver.start(self.args, attach_pid=self.attach_pid, sudo=self.sudo)
-        # full_args = [ "gdb", self.get_mi_version_arg() ]
-        # if prerun_cmds:
-        #     for cmd in prerun_cmds:
-        #         full_args.append("-ex")
-        #         full_args.append(cmd["command"])
-        # full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
-        # self.session_ctrl = GdbController(full_args)
 
     def remote_start(self):
         if not self.remote_gdbserver:
@@ -122,12 +117,18 @@ class GdbSession:
             return
         
         self.remote_gdbserver.start(self.args, sudo=self.sudo)
-        full_args = [ "gdb", self.get_mi_version_arg() ]
-        for cmd in self.prerun_cmds:
-            full_args.append("-ex")
-            full_args.append(cmd["command"])
-        full_args.extend([ "-ex", f"target remote {self.remote_host}:{self.remote_port}" ])
-        self.session_ctrl = GdbController(full_args)
+        gdb_cmd = [ "gdb", self.get_mi_version_arg(), "-q" ]
+        self.session_ctrl = GdbController(gdb_cmd)
+
+        self.write("-gdb-set mi-async on")
+        # https://github.com/USC-NSL/distributed-debugger/issues/62
+        # Workaround for async+all-stop mode for gdbserver
+        self.write("maint set target-non-stop on")
+        self.write("-gdb-set non-stop off")
+        
+        for prerun_cmd in self.prerun_cmds:
+            self.write(prerun_cmd["command"])
+        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
     def start(self) -> None:
         if self.mode == GdbMode.LOCAL:

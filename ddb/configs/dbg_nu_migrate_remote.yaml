@@ -7,11 +7,11 @@
 # - name: "Shutdown runtime"
 #   command: "./nu_scripts/stop_rt.sh"
 Framework: Nu
-PrerunGdbCommands:
-- name: "enable async mode"
-  command: "set mi-async on"
-- name: "enable non-stop mode"
-  command: "set non-stop off"
+# PrerunGdbCommands:
+# - name: "enable async mode"
+#   command: "set mi-async on"
+# - name: "enable non-stop mode"
+#   command: "set non-stop off"
 
 Components:
 # TODO: Supports for pid (latter attach), remote attach 
