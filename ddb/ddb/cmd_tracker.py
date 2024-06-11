@@ -1,5 +1,6 @@
 from typing import List, Optional, Set
 from ddb.data_struct import SessionResponse
+from ddb.event_loop import GlobalRunningLoop
 from ddb.utils import CmdTokenGenerator, dev_print
 from ddb.response_transformer import *
 from threading import Lock, Thread
@@ -7,7 +8,7 @@ from queue import Queue
 import asyncio
 class CmdMeta(asyncio.Future):
     def __init__(self, token: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
-        super().__init__()
+        super().__init__(loop=GlobalRunningLoop().get_loop())
         self.token = token
         self.target_sessions = target_sessions
         self.finished_sessions: Set[int] = set()

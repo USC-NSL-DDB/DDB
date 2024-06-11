@@ -11,6 +11,7 @@ from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from ddb.logging import logger
 from ddb.data_struct import ServiceInfo
 from ddb.config import GlobalConfig
+from ddb.event_loop import GlobalRunningLoop
 
 class GdbManager:
     def __init__(self) -> None:
@@ -18,6 +19,8 @@ class GdbManager:
         self.sessions: List[GdbSession] = []
 
     def start(self)->None:
+        # start a global running loop for asyncio context
+        _ = GlobalRunningLoop()
         global_config = GlobalConfig.get()
         if global_config.broker:
             logger.debug("Broker is enabled. Starting ServiceManager.")
@@ -39,7 +42,10 @@ class GdbManager:
         #     dev_print(f"selected session {self.state_mgr.get_current_session()}.")
         # else:
         #asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.loop).result()
-        asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
+
+        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
+        asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
+
         # for s in self.sessions:
         #     s.write(cmd)
 

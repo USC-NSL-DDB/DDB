@@ -1,12 +1,10 @@
-from threading import Lock, Thread
+from threading import Lock
 from typing import List, Optional, Set, Tuple, Union
 from ddb.gdb_session import GdbSession
 from ddb.cmd_tracker import CmdTracker
-from ddb.counter import TSCounter
-from ddb.event_loop import EventLoopThread
 from ddb.state_manager import StateManager, ThreadStatus
 from ddb.utils import CmdTokenGenerator, dev_print, parse_cmd
-from ddb.response_transformer import BacktraceReadableTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
+from ddb.response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
 from ddb.logging import logger
 
 ''' Routing all commands to the desired gdb sessions
@@ -66,8 +64,6 @@ class CmdRouter:
         self.lock = Lock()
         self.sessions = {s.sid: s for s in sessions}
         self.state_mgr = StateManager.inst()
-        self.event_loop_thread=EventLoopThread()
-        Thread(target=self.event_loop_thread.run,args=()).start()
 
     def add_session(self, session: GdbSession):
         with self.lock:
