@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional 
 from pprint import pformat
 
-from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
+from ddb.gdbserver_starter import RemoteServerConnection
 
 class SessionResponse:
     def __init__(self, sid: int, meta: str, response: dict) -> None:

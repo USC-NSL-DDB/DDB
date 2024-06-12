@@ -13,6 +13,7 @@ from ddb.state_manager import StateManager
 from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
 from ddb.utils import parse_cmd
 from ddb.logging import logger
+from ddb.config import DevFlags
 
 class SessionCounter:
     _sc: "SessionCounter" = None
@@ -109,8 +110,15 @@ class GdbSession:
 
         for prerun_cmd in self.prerun_cmds:
             self.write(f'-interpreter-exec console "{prerun_cmd["command"]}"')
-        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
 
+        if DevFlags.USE_EXTENDED_REMOTE:
+            self.write(f"-target-select extended-remote {self.remote_host}:{self.remote_port}")
+        else:
+            self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
+
+        if DevFlags.USE_EXTENDED_REMOTE:
+            self.write(f"-target-attach {self.attach_pid}")
+            
     def remote_start(self):
         if not self.remote_gdbserver:
             logger.warn("Remote gdbserver not initialized")
@@ -128,7 +136,15 @@ class GdbSession:
         
         for prerun_cmd in self.prerun_cmds:
             self.write(prerun_cmd["command"])
-        self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
+
+        if DevFlags.USE_EXTENDED_REMOTE:
+            self.write(f"-target-select extended-remote {self.remote_host}:{self.remote_port}")
+        else:
+            self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
+
+        if DevFlags.USE_EXTENDED_REMOTE:
+            self.write(f"set remote exec-file {self.bin}")
+            self.write(f"set args {' '.join(self.args)}")
 
     def start(self) -> None:
         if self.mode == GdbMode.LOCAL:
@@ -214,6 +230,9 @@ class GdbSession:
             # try-except in case the gdb is already killed or exited.
             response = self.session_ctrl.write("kill", read_response=True)
             logger.debug(f"kill response: {response}")
+            if self.mode == GdbMode.REMOTE and DevFlags.USE_EXTENDED_REMOTE:
+                # elegant exit gdbserver on remote machine when extended remote mode is used
+                self.session_ctrl.write("monitor exit", read_response=True)
             self.session_ctrl.exit()
         except Exception as e:
             logger.debug(f"Failed to clean up gdb: {e}")

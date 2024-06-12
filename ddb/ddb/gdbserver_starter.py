@@ -57,13 +57,19 @@ class SSHRemoteServerClient(RemoteServerConnection):
         # return stdout.read()
 
     def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
+        from ddb.config import DevFlags
+
         command = None
-        if attach_pid and isinstance(attach_pid, int):
-            command = f"gdbserver :{self.cred.port} --attach {str(attach_pid)}"
+        if DevFlags.USE_EXTENDED_REMOTE:
+            # sudo is forcely used. Attaching to running process with pid required sudo permission.
+            command = f"sudo gdbserver --multi :{self.cred.port}"
         else:
-            command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
-        if sudo:
-            command = f"sudo {command}"
+            if attach_pid and isinstance(attach_pid, int):
+                command = f"gdbserver :{self.cred.port} --attach {str(attach_pid)}"
+            else:
+                command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
+            if sudo:
+                command = f"sudo {command}"
 
         command = f"{command} > /tmp/gdbserver.log 2>&1"
         dev_print(f"Starting gdbserver on remote machine... \n\targs: {args}, \n\tattach_pid: {attach_pid}, \n\tsudo: {sudo}, \n\tcommand: {command}")

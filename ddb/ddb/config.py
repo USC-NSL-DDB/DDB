@@ -8,6 +8,9 @@ from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
 
+class DevFlags:
+    USE_EXTENDED_REMOTE = True
+
 class GlobalConfig:
     __global_config = DDBConfig()
 
