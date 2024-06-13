@@ -118,6 +118,7 @@ class DistributedBacktraceMICmd(gdb.MICommand):
         parent_rip: Optional[int] = None
         parent_rsp: Optional[int] = None
         parent_rbp: Optional[int] = None
+        pid: Optional[int] = None
 
         is_remote_call = False
 
@@ -132,10 +133,12 @@ class DistributedBacktraceMICmd(gdb.MICommand):
                         parent_rip = int(val['rip'])
                         parent_rsp = int(val['rsp'])
                         parent_rbp = int(val['rbp'])
+                        pid = int(val["pid"])
                         print(f"caller ip: {int_to_ip(remote_ip)}")
                         print(f"rip: {parent_rip:#x}")
                         print(f"rsp: {parent_rsp:#x}")
                         print(f"rbp: {parent_rbp:#x}")
+                        print(f"pid: {pid}")
 
         if not is_remote_call:
             print("Did not find a valid remote call")
@@ -168,6 +171,7 @@ class DistributedBacktraceMICmd(gdb.MICommand):
                 "rip": parent_rip,
                 "rsp": parent_rsp,
                 "rbp": parent_rbp,
+                "pid": pid
             }
         }
         result["bt_meta"] = backtrace_meta

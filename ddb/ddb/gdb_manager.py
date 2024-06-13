@@ -60,7 +60,7 @@ class GdbManager:
         hostname = session_info.ip
         username = "ybyan"
         pid = session_info.pid
-        tag = session_info.tag
+        tag = f"{hostname}:-{pid}"
         config = GdbSessionConfig(
             remote_port=port,
             remote_host=hostname,
