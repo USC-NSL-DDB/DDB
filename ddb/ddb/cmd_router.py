@@ -58,8 +58,19 @@ def nu_extract_remote_parent_data(data) -> Optional[dict]:
         'rsp': parent_rsp,
         'rbp': parent_rbp,
         'pid': parent_pid,
-        'parent_addr': parent_addr,
+        'parent_addr': parent_addr
     }
+
+def nu_extract_stack(data) -> Optional[list]:
+    return data.get('stack', None)
+
+def nu_concat_stack(stack: List[dict], bt_data: dict) -> List[dict]:
+    bt_stack: List[dict] = nu_extract_stack(bt_data)
+    for frame in bt_stack:
+        loc_frame = frame.copy()
+        loc_frame["level"] = f"\"{len(stack)}\""
+        stack.append(loc_frame)
+    return stack
 
 
 remoteBt = True
@@ -126,11 +137,14 @@ class CmdRouter:
             logger.debug("-bt-remote")
             if GlobalConfig.get().framework == TargetFramework.NU:
                 logger.debug("execute -bt-remote")
+                stack = []
                 bt_cmd, bt_token = self.prepend_token("-stack-list-distri-frames")
                 bt_result = await self.send_to_current_thread_async(bt_token, bt_cmd)
-                logger.debug(f"bt_result: {bt_result}")
+                stack = nu_concat_stack(stack, bt_result[0].payload)
+                logger.debug(f"bt_result: {bt_result[0].payload}")
                 parent_meta = nu_extract_remote_parent_data(bt_result[0].payload)
-                if parent_meta:
+                logger.debug(f"parent meta: {parent_meta}")
+                while parent_meta:
                     rip = parent_meta["rip"]
                     rsp = parent_meta["rsp"]
                     rbp = parent_meta["rbp"]
@@ -146,7 +160,12 @@ class CmdRouter:
                     #     pass
                     cmd_token, token = self.prepend_token(f"-stack-list-distri-frames-ctx {rip} {rsp} {rbp}")
                     parent_bt_info = await self.send_to_session_async(token, cmd_token, session_id=parent_sid)
-                    logger.debug(f"parent_bt_result: {parent_bt_info}")
+                    payload = parent_bt_info[0].payload
+                    logger.debug(f"parent payload: {payload}")
+                    stack = nu_concat_stack(stack, payload)
+                    parent_meta = nu_extract_remote_parent_data(payload)
+                    # logger.debug(f"parent_bt_result: {parent_bt_info}")
+                logger.debug(f"concated stack: \n{stack}") 
             else:
                 aggreated_bt_result = []
                 bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
@@ -288,7 +307,7 @@ class CmdRouter:
 
     def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
-        dev_print("current async session:",self.sessions[session_id])
+        # dev_print("current async session:",self.sessions[session_id])
         if token:
             self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
