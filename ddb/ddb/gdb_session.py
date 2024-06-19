@@ -74,14 +74,17 @@ class GdbSession:
         return f"--interpreter={self.mi_version}"
 
     def local_start(self):
-        full_args = [ "gdb", self.get_mi_version_arg() ]
-        for cmd in self.prerun_cmds:
-            full_args.append("-ex")
-            full_args.append(cmd["command"])
+        full_args = [ "gdb", self.get_mi_version_arg(), "-q" ]
         full_args.append("--args")
         full_args.append(self.bin)
         full_args.extend(self.args)
         self.session_ctrl = GdbController(full_args)
+
+        for prerun_cmd in self.prerun_cmds:
+            self.write(f'-interpreter-exec console "{prerun_cmd["command"]}"')
+
+        self.write("-gdb-set mi-async on")
+        self.write("-gdb-set non-stop off")
 
     def remote_attach(self):
         logger.debug("start remote attach")
