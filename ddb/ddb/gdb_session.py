@@ -6,6 +6,8 @@ from threading import Thread, Lock
 from time import sleep
 from ddb.counter import TSCounter
 from ddb.data_struct import GdbMode, GdbSessionConfig, StartMode
+from ddb.gdb_controller import RemoteGdbController
+from ddb.gdbparser import GdbParser
 from ddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
@@ -52,6 +54,8 @@ class GdbSession:
         self.remote_host: str = config.remote_host
         self.remote_port: str = str(config.remote_port)
         self.remote_gdbserver: RemoteServerConnection = config.remote_gdbserver
+        self.gdb_controller:RemoteGdbController=config.gdb_controller
+        self.gdb_response_parser=GdbParser()
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
@@ -85,41 +89,18 @@ class GdbSession:
 
     def remote_attach(self):
         logger.debug("start remote attach")
-        if not self.remote_gdbserver:
-            logger.warn("Remote gdbserver not initialized")
+        if not self.gdb_controller:
+            logger.warn("Remote gdbcontroller not initialized")
             return
+        gdb_cmd = " ".join(["gdb", self.get_mi_version_arg(), "-q"])
+        self.gdb_controller.start(gdb_cmd)
 
-        if isinstance(self.remote_gdbserver, SSHRemoteServerClient):
-            self.remote_gdbserver.start(attach_pid=self.attach_pid, sudo=self.sudo)
-        else:
-            self.remote_gdbserver.connect()
-            command = ["gdbserver", f":{self.remote_port}", "--attach", f"{str(self.attach_pid)}"]
-            if DevFlags.USE_EXTENDED_REMOTE:
-                command = [ "sudo", "gdbserver", "--multi", f":{self.remote_port}" ]
-            logger.debug(f"gdbserver command: {command}")
-            output = self.remote_gdbserver.execute_command_async(command)
-            logger.debug(output)
-            logger.debug("finish attach")
-
-        gdb_cmd = ["gdb", self.get_mi_version_arg(), "-q"]
-        self.session_ctrl = GdbController(gdb_cmd)
-
-        self.write("-gdb-set mi-async on")
-        # https://github.com/USC-NSL/distributed-debugger/issues/62
-        # Workaround for async+all-stop mode for gdbserver
-        self.write("maint set target-non-stop on")
-        self.write("-gdb-set non-stop off")
+        self.gdb_controller.write_input("-gdb-set mi-async on")
 
         for prerun_cmd in self.prerun_cmds:
-            self.write(f'-interpreter-exec console "{prerun_cmd["command"]}"')
+            self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
 
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"-target-select extended-remote {self.remote_host}:{self.remote_port}")
-        else:
-            self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
-
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"-target-attach {self.attach_pid}")
+        self.write(f"-target-attach {self.attach_pid}")
             
     def remote_start(self):
         if not self.remote_gdbserver:
@@ -148,6 +129,7 @@ class GdbSession:
             self.write(f"set remote exec-file {self.bin}")
             self.write(f"set args {' '.join(self.args)}")
 
+
     def start(self) -> None:
         if self.mode == GdbMode.LOCAL:
             self.local_start()
@@ -160,9 +142,9 @@ class GdbSession:
             logger.error("Invalid mode")
             return
 
-        logger.debug(
-            f"Started debugging process - \n\ttag: {self.tag}, \n\tbin: {self.bin}, \n\tstartup command: {self.session_ctrl.command}"
-        )
+        # logger.debug(
+        #     f"Started debugging process - \n\ttag: {self.tag}, \n\tbin: {self.bin}, \n\tstartup command: {self.session_ctrl.command}"
+        # )
 
         self.state_mgr.register_session(self.sid, self.tag)
 
@@ -172,9 +154,12 @@ class GdbSession:
         self.mi_output_t_handle.start()
 
     def fetch_mi_output(self):
-        while not self._stop_event.is_set():
-            responses = self.session_ctrl.get_gdb_response(
-                timeout_sec=0.5, raise_error_on_timeout=False)
+        while not self._stop_event.is_set() and self.gdb_controller.is_open():
+            response = self.gdb_controller.fetch_output(
+                timeout=0.5)
+            # logger.debug(f"raw response from session [{self.sid}] ,{response}")
+            responses=self.gdb_response_parser.get_responses_list(response,"stdout")
+            # logger.debug(f"parsed response from gdb,${responses}")
             if responses:
                 payload = ""
                 for r in responses:
@@ -212,34 +197,27 @@ class GdbSession:
         # Special case for handling interruption when child process is spawned.
         # `exec-interrupt` won't work in this case. Need manually send kill signal.
         # TODO: how to handle this elegantly?
-        if ("-exec-interrupt" == cmd_no_token.strip()) and self.StartMode == StartMode.ATTACH:
-            logger.debug(f"{self.sid} sending kill to",self.attach_pid)
+        if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
+            logger.debug(f"{self.sid} sending kill to {self.attach_pid}")
             self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
             return
 
-        self.session_ctrl.write(cmd, read_response=False)
+        self.gdb_controller.write_input(cmd)
 
     def get_meta_str(self) -> str:
         return f"[ {self.tag}, {self.bin}, {self.sid} ]"
 
     def cleanup(self):
         self._stop_event.set()
-        sleep(1) # wait to let fetch thread to stop
+        sleep(1) # wait to let fetch thread to stop should be larger than timeout
         logger.debug(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
         )
-        try:
-            # try-except in case the gdb is already killed or exited.
-            response = self.session_ctrl.write("kill", read_response=True)
-            logger.debug(f"kill response: {response}")
-            if self.mode == GdbMode.REMOTE and DevFlags.USE_EXTENDED_REMOTE:
-                # elegant exit gdbserver on remote machine when extended remote mode is used
-                self.session_ctrl.write("monitor exit", read_response=True)
-            self.session_ctrl.exit()
-        except Exception as e:
-            logger.debug(f"Failed to clean up gdb: {e}")
-        if self.remote_gdbserver:
-            self.remote_gdbserver.close()
+        if self.startMode==StartMode.BINARY:
+        # try-except in case the gdb is already killed or exited.
+            self.gdb_controller.write_input("kill")
+        if self.gdb_controller.is_open():
+            self.gdb_controller.close()
 
     def __del__(self):
         self.cleanup()

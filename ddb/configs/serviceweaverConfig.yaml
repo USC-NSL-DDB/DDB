@@ -1,7 +1,5 @@
 Framework: serviceweaver_kube
 PrerunGdbCommands:
-- name: "enable async mode"
-  command: "set target-async on"
 - name: "load extension"
   command: "source /usr/src/app/gdb_ext/noobextension.py"
 

@@ -88,17 +88,17 @@ class CmdTracker:
                 cmd_meta = self.waiting_cmds[response.token]
                 result = cmd_meta.recv_response(response)
                 if result:
-                    dev_print("Command Result Handling finished")
-                    dev_print(cmd_meta)
+                    # dev_print("Command Result Handling finished")
+                    # dev_print(cmd_meta)
                     # if no one is waiting
                     if cmd_meta.get_loop().is_running():
                         cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
                     token = self.outTokenToInToken[cmd_meta.token]
-                    dev_print(cmd_meta)
+                    # dev_print(cmd_meta)
                     del self.waiting_cmds[response.token]
                     for cmd_response in cmd_meta.responses:
                         cmd_response.token=token
-                    dev_print(cmd_meta, id(cmd_meta))
+                    # dev_print(cmd_meta, id(cmd_meta))
                     self.finished_response.put(cmd_meta)
                     # self.finished_response.put(result)
         else:

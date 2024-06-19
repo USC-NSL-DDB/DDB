@@ -1,5 +1,6 @@
 import os
 import re
+from ddb.gdb_controller import ServiceWeaverkubeGdbController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
@@ -107,9 +108,9 @@ class GlobalConfig:
                 sessionConfig= GdbSessionConfig()
                 sessionConfig.remote_port=30001
                 sessionConfig.remote_host=i.status.pod_ip
-                logger.debug("remote host type:", type(i.status.pod_ip))
                 sessionConfig.gdb_mode=GdbMode.REMOTE
                 sessionConfig.remote_gdbserver=remoteServerConn
+                sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,True)
                 sessionConfig.tag=i.status.pod_ip
                 sessionConfig.start_mode=StartMode.ATTACH
                 sessionConfig.attach_pid=int(pid)

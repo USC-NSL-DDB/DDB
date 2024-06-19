@@ -32,7 +32,7 @@ class GdbManager:
 
         self.router = CmdRouter(self.sessions)
         self.state_mgr = StateManager.inst()
-
+        # self.sessions[1].start()
         [ s.start() for s in self.sessions ]
 
     def write(self, cmd: str):
