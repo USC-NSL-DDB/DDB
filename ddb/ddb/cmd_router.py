@@ -223,6 +223,8 @@ class CmdRouter:
             if subcmd == "inferiors" or subcmd == "inferior":
                 self.broadcast(
                     token, f"{token}-list-thread-groups", ProcessReadableTransformer())
+        elif (prefix in ["-gdb-exit", "exit"]):
+            self.broadcast(token, cmd)
         else:
             cmd_split = cmd.split()
             if len(cmd_split) >= 2 and cmd_split[-1] == "--all":

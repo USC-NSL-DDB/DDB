@@ -65,28 +65,23 @@ def exec_posttasks(config_data):
         for task in tasks:
             exec_task(task)
 
-def bootFromNuConfig(gdb_manager: GdbManager):
-    gdb_manager.start()
-    while True:
-        cmd = input("(gdb) ").strip()
-        cmd = f"{cmd}\n"
-        gdb_manager.write(cmd)
-
-def bootServiceWeaverKube(gdb_manager: GdbManager):
-    gdb_manager.start()
-    while True:
-        cmd = input(f"({gdb_manager.state_mgr.get_current_gthread()})(gdb) ").strip()
-        cmd = f"{cmd}\n"
-        if cmd is not None:
-            gdb_manager.write(cmd)
-
 terminated = False
 gdb_manager: GdbManager = None
 
-def handle_interrupt(signal_num, frame):
-    global terminated, gdb_manager
-    dev_print(f"Received interrupt")
+def run_cmd_loop():
+    while True:
+        cmd = input("(gdb) ").strip()
+        cmd = f"{cmd}\n"
+        gdb_manager.write(cmd) 
+        raw_cmd = cmd.strip()
+        if raw_cmd == "exit" or raw_cmd == "-gdb-exit":
+            break
+    ddb_exit()
+
+def ddb_exit():
+    global gdb_manager, terminated
     if not terminated:
+        logger.info("Exiting ddb...")
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         terminated=True
         if gdb_manager:
@@ -100,6 +95,18 @@ def handle_interrupt(signal_num, frame):
             sys.exit(130)
         except SystemExit:
             os._exit(130)
+
+def bootFromNuConfig(gdb_manager: GdbManager):
+    gdb_manager.start()
+    run_cmd_loop()
+
+def bootServiceWeaverKube(gdb_manager: GdbManager):
+    gdb_manager.start()
+    run_cmd_loop()
+
+def handle_interrupt(signal_num, frame):
+    logger.debug("Handling interrupt...")
+    ddb_exit()
 
 def main():
     global gdb_manager, terminated
@@ -135,19 +142,8 @@ def main():
         else:
             bootFromNuConfig(gdb_manager)
     except KeyboardInterrupt:
-        logger.info("Received interrupt signal. Exiting...")
-
-        if gdb_manager:
-            gdb_manager.cleanup()
-
-        # TODO: implement the following functions
-        # if config_data is not None:
-        #     exec_posttasks(config_data)
-
-        try:
-            sys.exit(130)
-        except SystemExit:
-            os._exit(130)
+        logger.debug("Received interrupt signal.")
+        ddb_exit()
     
     pass 
 
