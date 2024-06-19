@@ -1,12 +1,12 @@
 from threading import Lock
 from typing import List, Optional, Set, Tuple, Union
 from ddb.config import GlobalConfig
-from ddb.data_struct import TargetFramework
+from ddb.data_struct import SessionResponse, TargetFramework
 from ddb.gdb_session import GdbSession
 from ddb.cmd_tracker import CmdTracker
 from ddb.state_manager import StateManager, ThreadStatus
 from ddb.utils import CmdTokenGenerator, dev_print, ip_int2ip_str, parse_cmd
-from ddb.response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
+from ddb.response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, StackListFramesTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
 from ddb.logging import logger
 
 ''' Routing all commands to the desired gdb sessions
@@ -68,7 +68,7 @@ def nu_concat_stack(stack: List[dict], bt_data: dict) -> List[dict]:
     bt_stack: List[dict] = nu_extract_stack(bt_data)
     for frame in bt_stack:
         loc_frame = frame.copy()
-        loc_frame["level"] = f"\"{len(stack)}\""
+        loc_frame["level"] = f"{len(stack)}"
         stack.append(loc_frame)
     return stack
 
@@ -141,9 +141,9 @@ class CmdRouter:
                 bt_cmd, bt_token = self.prepend_token("-stack-list-distri-frames")
                 bt_result = await self.send_to_current_thread_async(bt_token, bt_cmd)
                 stack = nu_concat_stack(stack, bt_result[0].payload)
-                logger.debug(f"bt_result: {bt_result[0].payload}")
+                # logger.debug(f"bt_result: {bt_result[0].payload}")
                 parent_meta = nu_extract_remote_parent_data(bt_result[0].payload)
-                logger.debug(f"parent meta: {parent_meta}")
+                # logger.debug(f"parent meta: {parent_meta}")
                 while parent_meta:
                     rip = parent_meta["rip"]
                     rsp = parent_meta["rsp"]
@@ -154,18 +154,26 @@ class CmdRouter:
                     # right now it only works for auto service discovery...
                     parent_sid = self.state_mgr.get_session_by_tag(target_tag)
                     # interrupt_cmd,interrupt_cmd_token=self.prepend_token("-exec-interrupt")
-                    # self.send_to_session(interrupt_cmd_token,interrupt_cmd,session_id=parent_sid)
-                    # # just try to busy waiting here
-                    # while self.state_mgr.sessions[parent_sid].t_status[1]!=ThreadStatus.STOPPED:
-                    #     pass
+                    self.send_to_session(None, "-exec-interrupt",session_id=parent_sid)
+                    # just try to busy waiting here
+                    while self.state_mgr.sessions[parent_sid].t_status[1]!=ThreadStatus.STOPPED:
+                        pass
                     cmd_token, token = self.prepend_token(f"-stack-list-distri-frames-ctx {rip} {rsp} {rbp}")
                     parent_bt_info = await self.send_to_session_async(token, cmd_token, session_id=parent_sid)
                     payload = parent_bt_info[0].payload
-                    logger.debug(f"parent payload: {payload}")
                     stack = nu_concat_stack(stack, payload)
                     parent_meta = nu_extract_remote_parent_data(payload)
-                    # logger.debug(f"parent_bt_result: {parent_bt_info}")
-                logger.debug(f"concated stack: \n{stack}") 
+                curr_s_id = self.state_mgr.get_current_session()
+                curr_s_meta_str = self.sessions[curr_s_id].get_meta_str()
+                sr = SessionResponse(curr_s_id, curr_s_meta_str, response={
+                    "type": "result",
+                    "message": "done",
+                    "stream": "stdout",
+                    "payload": {
+                        "stack": stack
+                    }
+                })
+                ResponseTransformer.output(sr, StackListFramesTransformer())
             else:
                 aggreated_bt_result = []
                 bt_result = await self.send_to_current_thread_async(token, f"{token}-stack-list-frames")
@@ -253,6 +261,7 @@ class CmdRouter:
 
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
+        self.state_mgr.set_current_session(sid)
         self.register_cmd(token, sid, transformer)
         # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
         self.sessions[sid].write(
@@ -309,6 +318,8 @@ class CmdRouter:
 
     def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
+        if session_id:
+            self.state_mgr.set_current_session(session_id)
         # dev_print("current async session:",self.sessions[session_id])
         if token:
             self.register_cmd(token, self.sessions[session_id].sid, transformer)
@@ -317,6 +328,8 @@ class CmdRouter:
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         if session_id == -1:
             raise Exception("session is None")
+        if session_id:
+            self.state_mgr.set_current_session(session_id)
         dev_print("current async session:",self.sessions[session_id])
         self.register_cmd(token, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
