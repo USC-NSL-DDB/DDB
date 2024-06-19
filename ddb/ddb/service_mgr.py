@@ -4,7 +4,6 @@ from typing import Callable
 import paho.mqtt.client as paho
 from paho.mqtt.client import CallbackAPIVersion
 from ddb.data_struct import ServiceInfo
-from ddb.event_loop import GlobalRunningLoop
 from ddb.logging import logger
 from ddb.utils import ip_int2ip_str
 from ddb.config import GlobalConfig

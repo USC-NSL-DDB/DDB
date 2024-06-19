@@ -8,7 +8,7 @@ from queue import Queue
 import asyncio
 class CmdMeta(asyncio.Future):
     def __init__(self, token: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
-        super().__init__(loop=GlobalRunningLoop().get_loop())
+        super().__init__(loop=GlobalRunningLoop.inst().get_loop())
         self.token = token
         self.target_sessions = target_sessions
         self.finished_sessions: Set[int] = set()

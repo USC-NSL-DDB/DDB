@@ -380,7 +380,8 @@ class ResponseTransformer:
     def transform(responses: List[SessionResponse], transformer: TransformerBase):
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
-        transformed_output=transformer.format(responses).replace("\n", "")
+        # transformed_output=transformer.format(responses).replace("\n", "")
+        transformed_output=transformer.format(responses)
         print(f"[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod

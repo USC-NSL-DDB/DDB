@@ -215,9 +215,9 @@ class GdbSession:
         # Special case for handling interruption when child process is spawned.
         # `exec-interrupt` won't work in this case. Need manually send kill signal.
         # TODO: how to handle this elegantly?
-        if ("-exec-interrupt" == cmd_no_token.strip()) and self.StartMode == StartMode.ATTACH:
-            logger.debug(f"{self.sid} sending kill to",self.attach_pid)
-            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+        if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
+            logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
+            self.remote_gdbserver.execute_command(["sudo", "kill", "-5", str(self.attach_pid)])
             return
 
         self.session_ctrl.write(cmd, read_response=False)

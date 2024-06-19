@@ -20,17 +20,23 @@ class EventLoopThread(threading.Thread):
 class GlobalRunningLoop:
     _instance: Optional["GlobalRunningLoop"] = None
 
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(GlobalRunningLoop, cls).__new__(cls, *args, **kwargs)
-        return cls._instance
+    # def __new__(cls, *args, **kwargs):
+    #     if not cls._instance:
+    #         cls._instance = super(GlobalRunningLoop, cls).__new__(cls, *args, **kwargs)
+    #     return cls._instance
 
     def __init__(self) -> None:
         self._loop = EventLoopThread()
         threading.Thread(target=self._loop.run, args=()).start()
 
-    # def start(self):
+    @staticmethod
+    def inst() -> "GlobalRunningLoop":
+        if not GlobalRunningLoop._instance:
+            GlobalRunningLoop._instance = GlobalRunningLoop()
+        return GlobalRunningLoop._instance
 
     def get_loop(self):
         return self._loop.get_loop()
+
+_ = GlobalRunningLoop.inst()
 
