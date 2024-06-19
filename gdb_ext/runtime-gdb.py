@@ -134,21 +134,21 @@ class DistributedBacktraceMICmd(gdb.MICommand):
                         parent_rsp = int(val['rsp'])
                         parent_rbp = int(val['rbp'])
                         pid = int(val["pid"])
-                        print(f"caller ip: {int_to_ip(remote_ip)}")
-                        print(f"rip: {parent_rip:#x}")
-                        print(f"rsp: {parent_rsp:#x}")
-                        print(f"rbp: {parent_rbp:#x}")
-                        print(f"pid: {pid}")
+                        # print(f"caller ip: {int_to_ip(remote_ip)}")
+                        # print(f"rip: {parent_rip:#x}")
+                        # print(f"rsp: {parent_rsp:#x}")
+                        # print(f"rbp: {parent_rbp:#x}")
+                        # print(f"pid: {pid}")
 
         if not is_remote_call:
-            print("Did not find a valid remote call")
+            # print("Did not find a valid remote call")
             return result
         
         ddb_meta = get_global_variable(
             "ddb_meta", to_print=False, check_is_var=False)
         if ddb_meta:
             local_ip = int(ddb_meta["comm_ip"])
-            print(f"local ip: {int_to_ip(local_ip)}")
+            # print(f"local ip: {int_to_ip(local_ip)}")
         else:
             print("Failed to find ddb_meta")
 
@@ -175,7 +175,7 @@ class DistributedBacktraceMICmd(gdb.MICommand):
             }
         }
         result["bt_meta"] = backtrace_meta
-        pprint(result)
+        # pprint(result)
         return result
 
 
