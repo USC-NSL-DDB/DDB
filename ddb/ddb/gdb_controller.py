@@ -30,41 +30,65 @@ class RemoteGdbController(ABC):
         pass
 
 class ServiceWeaverkubeGdbController(RemoteGdbController):
-    def __init__(self, pod_name: str, pod_namespace: str,verbose=False):
+    def __init__(self, pod_name: str, pod_namespace: str,target_container_name:str,verbose=False):
         self.pod_name = pod_name
         self.pod_namespace = pod_namespace
+        self.target_container_name=target_container_name
         self.api_instance=kubeclient.CoreV1Api()
+        self.debugger_container_name="debugger-ephemeral"
         self.verbose=verbose
         try:
             resp = self.api_instance.read_namespaced_pod(name=pod_name,
                                                     namespace='default')
+            container_names=[]
+            for container in resp.spec.containers:
+                container_names.append(container.name)
+            if target_container_name not in container_names:
+                raise Exception("No such container in the target pod")
         except ApiException as e:
             print(f"fail to find pod with the given name: {e} {pod_name} {pod_namespace}")
-        exec_command = [
-        '/bin/sh',
-        '-c',
-        'echo This message goes to stderr; echo This message goes to stdout']
-        resp = stream(self.api_instance.connect_get_namespaced_pod_exec,
-                  self.pod_name,
-                  self.pod_namespace,
-                  command=exec_command,
-                  stderr=True, stdin=False,
-                  stdout=True, tty=False)
-        print(f"Response from pod ${self.pod_name}: " + resp)
-        exec_command = ['gdb','--interpreter=mi3','-q']
-        self.resp = stream(self.api_instance.connect_get_namespaced_pod_exec,
-                        self.pod_name,
-                        self.pod_namespace,
-                        command=exec_command,
-                        stderr=True, stdin=True,
-                        stdout=True, tty=False,
-                        _preload_content=False)
-    def start(self,command):
-        # if self.verbose:
-        #     print(f"------------->>Send input to [{self.pod_name}] [{command}] ")
-        # sleep(1)
-        # self.resp.write_stdin(f"{command}\n")
-        pass
+        # create ephemeral container
+        # Add a debug container to it
+        debug_container = kubeclient.V1EphemeralContainer(
+            name=self.debugger_container_name,
+            image="debuggerimage:latest",
+            target_container_name=self.target_container_name,
+            image_pull_policy="IfNotPresent",
+            stdin=True,
+            tty=True
+        )
+        patch_body = {
+            "spec": {
+                "ephemeralContainers": [
+                    debug_container
+                ]
+            }
+        }
+        self.api_instance.patch_namespaced_pod_ephemeralcontainers(
+            name=self.pod_name,
+            namespace=self.pod_namespace,
+            body=patch_body
+        )
+    def start(self,command:str):
+        # maybe this command should synchronouly start the gdb
+        # stuck until it starts successfully
+        while True:
+            pod = self.api_instance.read_namespaced_pod(name=self.pod_name, namespace=self.pod_namespace)
+            containers = pod.status.ephemeral_container_statuses
+            if containers and any(c.name == self.debugger_container_name and c.state.running for c in containers):
+                print(f"Ephemeral container {self.debugger_container_name} is now running.")
+                break
+            sleep(1)
+        self.resp = stream(
+            self.api_instance.connect_get_namespaced_pod_exec,
+            name=self.pod_name,
+            namespace=self.pod_namespace,
+            command=['gdb','--interpreter=mi3','-q'],
+            container=self.debugger_container_name,
+            stderr=True, stdin=True,
+            stdout=True, tty=True,
+            _preload_content=False
+        )
     def write_input(self,command):
         if self.verbose:
             print(f"------------->>Send input to [{self.pod_name}] [{command}] ")

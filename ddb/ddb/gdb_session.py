@@ -216,6 +216,9 @@ class GdbSession:
         if self.startMode==StartMode.BINARY:
         # try-except in case the gdb is already killed or exited.
             self.gdb_controller.write_input("kill")
+        else:
+            self.gdb_controller.write_input("detach")
+        self.gdb_controller.write_input("exit")
         if self.gdb_controller.is_open():
             self.gdb_controller.close()
 

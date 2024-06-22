@@ -110,7 +110,7 @@ class GlobalConfig:
                 sessionConfig.remote_host=i.status.pod_ip
                 sessionConfig.gdb_mode=GdbMode.REMOTE
                 sessionConfig.remote_gdbserver=remoteServerConn
-                sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,True)
+                sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,"serviceweaver",True)
                 sessionConfig.tag=i.status.pod_ip
                 sessionConfig.start_mode=StartMode.ATTACH
                 sessionConfig.attach_pid=int(pid)

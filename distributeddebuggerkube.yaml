@@ -12,7 +12,7 @@ metadata:
   namespace: default
 rules:
 - apiGroups: ["", "extensions", "apps"]
-  resources: ["deployments", "replicasets", "pods", "pods/attach", "pods/exec", "pods/log"]
+  resources: ["deployments", "replicasets", "pods", "pods/attach", "pods/exec", "pods/log","pods/ephemeralcontainers"]
   verbs: ["list", "get", "watch", "create", "update", "patch", "delete"]
 
 
