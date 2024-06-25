@@ -17,6 +17,12 @@ class TransformerBase:
 
     # def transform_stdout(self, responses: List)
 
+class NullTransformer(TransformerBase):
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        return ""
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        return self.transform(responses) 
 ''' Just a dummy transformer
 '''
 class PlainTransformer(TransformerBase):
@@ -116,7 +122,7 @@ class ProcessReadableTransformer(TransformerBase):
                 { 
                     "id": int(p["id"][1:]), 
                     "desc": f"{p['type']} {p['pid']}",
-                    "exec": p["executable"]
+                    "exec": p.get("executable","")
                 } 
                 for p in pinfo["groups"] 
             ]

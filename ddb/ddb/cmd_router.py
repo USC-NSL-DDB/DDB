@@ -4,7 +4,7 @@ from ddb.gdb_session import GdbSession
 from ddb.cmd_tracker import CmdTracker
 from ddb.state_manager import StateManager, ThreadStatus
 from ddb.utils import CmdTokenGenerator, dev_print, parse_cmd
-from ddb.response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer
+from ddb.response_transformer import ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoReadableTransformer, ThreadInfoTransformer, ThreadSelectTransformer, TransformerBase
 from ddb.logging import logger
 
 ''' Routing all commands to the desired gdb sessions
@@ -48,7 +48,6 @@ def get_token_and_command(command):
         return token, command
     else:
         return None, None
-
 class CmdRouter:
     """ 
     Routing all commands to the desired gdb sessions.
@@ -64,7 +63,6 @@ class CmdRouter:
         self.lock = Lock()
         self.sessions = {s.sid: s for s in sessions}
         self.state_mgr = StateManager.inst()
-
     def add_session(self, session: GdbSession):
         with self.lock:
             self.sessions[session.sid] = session
@@ -75,7 +73,7 @@ class CmdRouter:
             token = CmdTokenGenerator.get()
             command=cmd
         token=CmdTracker.inst().dedupToken(token)
-        return f"{token}{command}", str(token)
+        return str(command), str(token)
 
     # TODO: handle the case where external command passed in carries a token
     async def send_cmd(self, cmd: str):
@@ -292,3 +290,5 @@ class CmdRouter:
             self.send_to_session(None, cmd, session_id=session_id)
         else:
             logger.debug("Unknown private command.")
+
+

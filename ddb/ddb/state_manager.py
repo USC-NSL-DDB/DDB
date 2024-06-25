@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import threading
 from typing import List, Optional, Set, Tuple
 # from gdb_manager import GdbSession
@@ -17,13 +18,17 @@ class ThreadGroupStatus(Enum):
     STOPPED = 2
     RUNNING = 3
     EXITED = 4
-
+@dataclass
+class ThreadContext:
+    SP:int
+    PC:int
 class SessionMeta:
     def __init__(self, sid: int, tag: str) -> None:
         self.tag = tag
         self.sid = sid
         self.current_tid: Optional[int] = None
         self.t_status: dict[int, ThreadStatus] = {}
+        self.current_context:ThreadContext=None
         # maps session unique tid to per inferior tid
         # for example, if session 1 has:
         # tg1: { 1, 2, 4 }
@@ -40,7 +45,6 @@ class SessionMeta:
         self.tg_status: dict[str, ThreadGroupStatus] = {}
         # maps thread_group_id (str) to pid that thread group represents
         self.tg_to_pid: dict[str, int] = {}
-
         self.rlock = RLock()
     def create_thread(self, tid: int, tgid: str):
         with self.rlock:

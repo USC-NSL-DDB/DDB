@@ -2,6 +2,7 @@ import asyncio
 from threading import Lock
 from typing import List, Optional
 from time import sleep
+from ddb.cmd_processor import CommandProcessor
 from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.state_manager import StateManager
 from ddb.utils import *
@@ -31,28 +32,14 @@ class GdbManager:
             self.sessions.append(GdbSession(config))
 
         self.router = CmdRouter(self.sessions)
+        self.processor=CommandProcessor(self.router)
         self.state_mgr = StateManager.inst()
-        # self.sessions[1].start()
-        [ s.start() for s in self.sessions ]
+        for s in self.sessions:
+            s.start()
 
     def write(self, cmd: str):
-        # if cmd.strip() and cmd.split()[0] == "session":
-        #     selection = int(cmd.split()[1])
-        #     self.state_mgr.set_current_session(selection)
-        #     dev_print(f"selected session {self.state_mgr.get_current_session()}.")
-        # else:
-        #asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.loop).result()
-
-        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
-        asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
-
-        # for s in self.sessions:
-        #     s.write(cmd)
-
-        # responses = []
-        # for session in self.sessions:
-        #     resp = session.write(cmd)
-        #     responses.append(resp)
+        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
+        asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):
         logger.debug(f"In GdbManager. New session discovered: {session_info}")

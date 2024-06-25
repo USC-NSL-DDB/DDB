@@ -99,8 +99,9 @@ class GdbSession:
 
         for prerun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
-
+        
         self.write(f"-target-attach {self.attach_pid}")
+        self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
         if not self.remote_gdbserver:
@@ -213,14 +214,13 @@ class GdbSession:
         logger.debug(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
         )
-        if self.startMode==StartMode.BINARY:
-        # try-except in case the gdb is already killed or exited.
-            self.gdb_controller.write_input("kill")
-        else:
-            self.gdb_controller.write_input("detach")
-        self.gdb_controller.write_input("exit")
         if self.gdb_controller.is_open():
+            if self.startMode==StartMode.BINARY:
+            # try-except in case the gdb is already killed or exited.
+                self.gdb_controller.write_input("kill")
+            else:
+                self.gdb_controller.write_input("detach")
+            self.gdb_controller.write_input("exit")
             self.gdb_controller.close()
-
     def __del__(self):
         self.cleanup()

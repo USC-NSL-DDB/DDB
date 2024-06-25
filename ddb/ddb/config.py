@@ -106,6 +106,7 @@ class GlobalConfig:
             if match:
                 pid = match.group(1)
                 sessionConfig= GdbSessionConfig()
+                sessionConfig.binary=remoteServerConn.execute_command(['readlink', f'/proc/{pid}/exe',])
                 sessionConfig.remote_port=30001
                 sessionConfig.remote_host=i.status.pod_ip
                 sessionConfig.gdb_mode=GdbMode.REMOTE

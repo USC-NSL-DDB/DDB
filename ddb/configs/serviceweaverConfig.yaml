@@ -1,7 +1,7 @@
 Framework: serviceweaver_kube
 PrerunGdbCommands:
 - name: "load extension"
-  command: "source /usr/src/app/gdb_ext/noobextension.py"
+  command: "source /workspace/extension.py"
 
 Components:
   kube_namespace: default

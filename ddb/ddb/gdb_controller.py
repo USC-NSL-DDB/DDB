@@ -102,6 +102,6 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
             print(f"<<-------------Receive output from[{self.pod_name}] [{std_output}] ")
         return std_output.encode()
     def is_open(self) -> bool:
-        return self.resp.is_open()
+        return hasattr(self, 'resp') and self.resp.is_open()
     def close(self):
         self.resp.close()
