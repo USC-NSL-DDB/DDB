@@ -6,7 +6,7 @@ import json
 #     Result = "^"
 
 def escape_output(s: str) -> str:
-    return json.dumps(s)
+    return json.dumps(str(s))
 
 class MIFormatter:
     @staticmethod
@@ -44,6 +44,7 @@ class MIFormatter:
         if not msg:
             print("No message to format")
             return 
+        
         out_str = f"{token if token else ''}{task_symbol}{msg},{MIFormatter.format_dict(payload)}"
         return out_str
     @staticmethod

@@ -65,7 +65,7 @@ class ThreadInfoTransformer(TransformerBase):
                 sid = res.sid
                 for t in threads:
                     tid = int(t["id"])
-                    t["id"] = StateManager.inst().get_gtid(sid, tid)
+                    t["id"] = str(StateManager.inst().get_gtid(sid, tid))
                     all_threads_info.append(t)
 
         all_threads_info = sorted(all_threads_info, key=lambda x: x["id"])
@@ -387,7 +387,7 @@ class ResponseTransformer:
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
         transformed_output=transformer.format(responses).replace("\n", "")
-        print(f"[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+        print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):

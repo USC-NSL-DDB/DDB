@@ -83,8 +83,11 @@ class GlobalConfig:
     def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
         from kubernetes import config as kubeconfig, client as kubeclient
         from ddb.gdbserver_starter import KubeRemoteSeverClient
-
-        kubeconfig.load_incluster_config()
+        try:
+            kubeconfig.load_kube_config()
+        except Exception as e:
+            print("fail to fetch cluster information")
+            exit(0)
         clientset = kubeclient.CoreV1Api()
         prerun_cmds = config_data.get("PrerunGdbCommands",[])
         config_metadata=config_data.get("Components",{})

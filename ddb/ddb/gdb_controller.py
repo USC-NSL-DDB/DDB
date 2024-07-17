@@ -3,6 +3,10 @@ from time import sleep
 from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
+import uuid
+from ddb.logging import logger
+
+
 class RemoteGdbController(ABC):
     @abstractmethod
     def start(self,command):
@@ -35,7 +39,8 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
         self.pod_namespace = pod_namespace
         self.target_container_name=target_container_name
         self.api_instance=kubeclient.CoreV1Api()
-        self.debugger_container_name="debugger-ephemeral"
+        # Generate a random UUID
+        self.debugger_container_name=f"debugger-ephemeral{str(uuid.uuid4())}"
         self.verbose=verbose
         try:
             resp = self.api_instance.read_namespaced_pod(name=pod_name,
@@ -86,20 +91,20 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
             command=['gdb','--interpreter=mi3','-q'],
             container=self.debugger_container_name,
             stderr=True, stdin=True,
-            stdout=True, tty=True,
+            stdout=True, tty=False,
             _preload_content=False
         )
     def write_input(self,command):
         if self.verbose:
-            print(f"------------->>Send input to [{self.pod_name}] [{command}] ")
+            logger.debug(f"------------->>Send input to [{self.pod_name}] [{command}] ")
         self.resp.write_stdin(f"{command}\n")
     def fetch_output(self,timeout=1):
         std_output=self.resp.read_stdout(timeout)
         std_err=self.resp.read_stderr(timeout)
         if self.verbose and std_err:
-            print(f"<<---(error)Receive error from[{self.pod_name}] [{std_err}] ")
+            logger.debug(f"<<---(error)Receive error from[{self.pod_name}] [{std_err}] ")
         if self.verbose and std_output:
-            print(f"<<-------------Receive output from[{self.pod_name}] [{std_output}] ")
+            logger.debug(f"<<-------------Receive output from[{self.pod_name}] [{std_output}] ")
         return std_output.encode()
     def is_open(self) -> bool:
         return hasattr(self, 'resp') and self.resp.is_open()

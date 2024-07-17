@@ -67,13 +67,15 @@ class CmdRouter:
         with self.lock:
             self.sessions[session.sid] = session
 
-    def prepend_token(self, cmd: str) -> Tuple[str, str]:
-        token,command=get_token_and_command(cmd)
-        if not token:
+    def prepend_token(self, cmd: str) -> Tuple[str, str, str]:
+        origin_token, command = get_token_and_command(cmd)
+        if not origin_token:
             token = CmdTokenGenerator.get()
-            command=cmd
-        token=CmdTracker.inst().dedupToken(token)
-        return str(command), str(token)
+            command = cmd
+        else:
+            token = origin_token
+        token = CmdTracker.inst().dedupToken(token)
+        return str(command), str(token), str(origin_token)
 
     # TODO: handle the case where external command passed in carries a token
     async def send_cmd(self, cmd: str):

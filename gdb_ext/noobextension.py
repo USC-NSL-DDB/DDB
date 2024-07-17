@@ -186,22 +186,23 @@ class ContextSwitchingCmd(gdb.MICommand):
         super().__init__("-switch-context-custom")
 
     def invoke(self, args):
-        print(args)
-        cur_rip = int(args[0])
-        cur_rsp = int(args[1])
-        frame = gdb.selected_frame()
-        cur_rsp = 0
-        cur_rip = 0
-        print(cur_rsp)
-        print(cur_rip)
-        global save_frame
-        save_frame = gdb.selected_frame()
-        gdb.parse_and_eval('$save_sp = $sp')
-        gdb.parse_and_eval('$save_pc = $pc')
-        gdb.execute('select-frame 0')
-        gdb.parse_and_eval('$sp = {0}'.format(str(cur_rsp)))
-        gdb.parse_and_eval('$pc = {0}'.format(str(cur_rip)))
-
+        try:
+            cur_rip = int(args[0])
+            cur_rsp = int(args[1])
+            global save_frame
+            save_frame = gdb.selected_frame()
+            gdb.parse_and_eval('$save_sp = $sp')
+            gdb.parse_and_eval('$save_pc = $pc')
+            gdb.execute('select-frame 0')
+            gdb.parse_and_eval('$sp = {0}'.format(str(cur_rsp)))
+            gdb.parse_and_eval('$pc = {0}'.format(str(cur_rip)))
+            original_sp = int(gdb.parse_and_eval('$save_sp'))
+            original_pc = int(gdb.parse_and_eval('$save_pc'))
+            return {"message":"success","rip":original_pc,"rsp":original_sp}
+        except Exception as e:
+            return {"message":"error","rip":None,"rsp":None}
+    
+    
 
 ContextSwitchingCmd()
 
@@ -211,12 +212,16 @@ class RestoreContext(gdb.Command):
         gdb.Command.__init__(
             self, "rcontext", gdb.COMMAND_STACK, gdb.COMPLETE_NONE)
 
-    def invoke(self, _arg, _from_tty):
-        global save_frame
-        gdb.execute('select-frame 0')
-        gdb.parse_and_eval('$pc = $save_pc')
-        gdb.parse_and_eval('$sp = $save_sp')
-        save_frame.select()
+    def invoke(self, args):
+        try:
+            global save_frame
+            gdb.execute('select-frame 0')
+            gdb.parse_and_eval('$pc = $save_pc')
+            gdb.parse_and_eval('$sp = $save_sp')
+            save_frame.select()
+            return {"message":"success"}
+        except Exception as e:
+            return {"message":"error"}
 
 
 class GetRemoteBTInfo(gdb.MICommand):
@@ -277,7 +282,7 @@ class GetRemoteBTInfo(gdb.MICommand):
                             ip_address = [int(b)
                                           for b in SliceValue(parent_addr['IP'])]
 
-        return {"metadata": {"parentRIP": parent_rip, "parentRSP": parent_rsp, "parentAddr": ip_address, "parentPort": port}}
+        return {"message":"success","metadata": {"parentRIP": parent_rip, "parentRSP": parent_rsp, "parentAddr": ip_address, "parentPort": port}}
 
 
 class GetRemoteBTInfoInContext(gdb.MICommand):

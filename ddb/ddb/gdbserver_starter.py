@@ -93,7 +93,6 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
 
     def execute_command(self, command):
-        KubeRemoteSeverClient.kubeconfig.load_incluster_config()
         self.clientset=KubeRemoteSeverClient.kubeclient.CoreV1Api()
         output = KubeRemoteSeverClient.stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
                                command=command, stderr=True, stdin=False,

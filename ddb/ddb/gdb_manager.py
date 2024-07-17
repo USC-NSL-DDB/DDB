@@ -39,6 +39,8 @@ class GdbManager:
 
     def write(self, cmd: str):
         # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
+        lp=GlobalRunningLoop().get_loop()
+        # logger.debug(f"Sending command: {cmd} {len(asyncio.all_tasks(lp))} {lp} {lp.is_running()}")
         asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):

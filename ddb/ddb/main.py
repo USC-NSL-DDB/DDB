@@ -74,6 +74,8 @@ def bootFromNuConfig(gdb_manager: GdbManager):
 
 def bootServiceWeaverKube(gdb_manager: GdbManager):
     gdb_manager.start()
+    # for i in range(200):
+    #     gdb_manager.write(f"{10000+i}-thread-info")
     while True:
         cmd = input(f"({gdb_manager.state_mgr.get_current_gthread()})(gdb) ").strip()
         cmd = f"{cmd}\n"
@@ -129,7 +131,11 @@ def main():
     global_config = GlobalConfig.get()
     try:
         if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
-            bootServiceWeaverKube(gdb_manager)
+            from kubernetes import config
+            try:
+                bootServiceWeaverKube(gdb_manager)
+            except Exception as e:
+                print("fail to laod kubernetes config, check path again")
         elif global_config.framework == TargetFramework.NU:
             bootFromNuConfig(gdb_manager)
         else:

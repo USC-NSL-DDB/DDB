@@ -24,6 +24,7 @@ class GlobalRunningLoop:
         if not cls._instance:
             cls._instance = super(GlobalRunningLoop, cls).__new__(cls)
             cls._instance._loop = EventLoopThread()
+            cls._instance._loop.loop.set_debug(True)
             cls._instance._loop.start()
         return cls._instance
 
