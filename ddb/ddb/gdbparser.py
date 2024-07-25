@@ -1,6 +1,7 @@
 from pprint import pformat
 from typing import Optional,Tuple,Dict,List,Any
 from pygdbmi import gdbmiparser
+from ddb.logging import logger
 def _buffer_incomplete_responses(
 raw_output: Optional[bytes], buf: Optional[bytes]
 ) -> Tuple[Optional[bytes], Optional[bytes]]:
@@ -57,6 +58,6 @@ class GdbParser:
                 parsed_response = gdbmiparser.parse_response(response)
                 parsed_response["stream"] = stream
                 if self.verbose:
-                    print(pformat(parsed_response))
+                    logger.debug(pformat(parsed_response))
                 responses.append(parsed_response)
         return responses

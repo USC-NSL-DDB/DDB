@@ -87,7 +87,7 @@ gdb_manager: GdbManager = None
 
 def handle_interrupt(signal_num, frame):
     global terminated, gdb_manager
-    dev_print(f"Received interrupt")
+    print(f"Received interrupt")
     if not terminated:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         terminated=True

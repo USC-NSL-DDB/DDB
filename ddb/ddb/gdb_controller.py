@@ -60,7 +60,7 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
             target_container_name=self.target_container_name,
             image_pull_policy="IfNotPresent",
             stdin=True,
-            tty=True
+            tty=False
         )
         patch_body = {
             "spec": {

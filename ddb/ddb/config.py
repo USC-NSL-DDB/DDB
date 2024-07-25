@@ -155,7 +155,6 @@ class GlobalConfig:
                 try:
                     config_data = safe_load(fs)
                     logger.info(f"Loaded dbg config file: \n{pformat(config_data)}")
-                    # eprint("Loaded dbg config file:")
                     # Set parsed config to the global scope
                     GlobalConfig.set_config(GlobalConfig.parse_config_file(config_data))
                 except YAMLError as e:

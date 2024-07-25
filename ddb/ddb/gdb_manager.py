@@ -88,7 +88,7 @@ class GdbManager:
         gdb_session.start()
 
     def cleanup(self):
-        dev_print("Cleaning up GdbManager resource")
+        print("Cleaning up GdbManager resource")
         for s in self.sessions:
             s.cleanup()
 

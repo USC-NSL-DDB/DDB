@@ -115,7 +115,7 @@ class RemoteBacktraceHandler(CmdHandler):
         remote_bt_parent_info = self.extract_remote_parent_data(
             remote_bt_parent_info[0].payload)
         while remote_bt_parent_info.get("parent_rip") != '-1':
-            dev_print(
+            logger.debug(
                 "trying to acquire parent info:-------------------------------------------------")
             parent_session_id = self.state_mgr.get_session_by_tag(
                 remote_bt_parent_info.get("parent_addr"))
