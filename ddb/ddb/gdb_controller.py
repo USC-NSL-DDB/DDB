@@ -34,6 +34,7 @@ class RemoteGdbController(ABC):
         pass
 
 class ServiceWeaverkubeGdbController(RemoteGdbController):
+    count=0
     def __init__(self, pod_name: str, pod_namespace: str,target_container_name:str,verbose=False):
         self.pod_name = pod_name
         self.pod_namespace = pod_namespace
@@ -56,9 +57,9 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
         # Add a debug container to it
         debug_container = kubeclient.V1EphemeralContainer(
             name=self.debugger_container_name,
-            image="debuggerimage:latest",
+            image="h21565897/debuggerimage:latest2",
             target_container_name=self.target_container_name,
-            image_pull_policy="IfNotPresent",
+            image_pull_policy="Always",
             stdin=True,
             tty=False
         )
@@ -98,11 +99,12 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
         if self.verbose:
             logger.debug(f"------------->>Send input to [{self.pod_name}] [{command}] ")
         self.resp.write_stdin(f"{command}\n")
+    
     def fetch_output(self,timeout=1):
         std_output=self.resp.read_stdout(timeout)
-        std_err=self.resp.read_stderr(timeout)
-        if self.verbose and std_err:
-            logger.debug(f"<<---(error)Receive error from[{self.pod_name}] [{std_err}] ")
+        # std_err=self.resp.read_stderr(timeout)
+        # if self.verbose and std_err:
+        #     logger.debug(f"<<---(error)Receive error from[{self.pod_name}] [{std_err}] ")
         if self.verbose and std_output:
             logger.debug(f"<<-------------Receive output from[{self.pod_name}] [{std_output}] ")
         return std_output.encode()

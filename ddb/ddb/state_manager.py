@@ -20,15 +20,18 @@ class ThreadGroupStatus(Enum):
     EXITED = 4
 @dataclass
 class ThreadContext:
-    SP:int
-    PC:int
+    thread_id:int
+    rsp:int
+    rip:int
 class SessionMeta:
-    def __init__(self, sid: int, tag: str) -> None:
+    def __init__(self, sid: int, tag: str, session: "GdbSession") -> None:
         self.tag = tag
         self.sid = sid
         self.current_tid: Optional[int] = None
         self.t_status: dict[int, ThreadStatus] = {}
         self.current_context:ThreadContext=None
+        self.in_custom_context = False
+        self.session_obj = session
         # maps session unique tid to per inferior tid
         # for example, if session 1 has:
         # tg1: { 1, 2, 4 }
@@ -209,8 +212,8 @@ class StateManager:
     def get_session_meta(self, sid: int) -> Optional[SessionMeta]:
         return self.sessions.get(sid, None)
 
-    def register_session(self, sid: int, tag: str):
-        self.sessions[sid] = SessionMeta(sid, tag)
+    def register_session(self, sid: int, tag: str, session: "GdbSession"):
+        self.sessions[sid] = SessionMeta(sid, tag, session)
 
     def get_gtids_by_sid(self, sid: int) -> List[int]:
         with self.lock:

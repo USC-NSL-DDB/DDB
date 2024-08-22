@@ -1,10 +1,11 @@
 import asyncio
-from threading import Lock
+from threading import Lock, Thread
 from typing import List, Optional
 from time import sleep
 from ddb.cmd_processor import CommandProcessor
 from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.state_manager import StateManager
+from ddb.status_server import FlaskApp
 from ddb.utils import *
 from ddb.cmd_router import CmdRouter
 from ddb.service_mgr import ServiceManager
@@ -13,6 +14,7 @@ from ddb.logging import logger
 from ddb.data_struct import ServiceInfo
 from ddb.config import GlobalConfig
 from ddb.event_loop import GlobalRunningLoop
+
 
 class GdbManager:
     def __init__(self) -> None:
@@ -32,11 +34,13 @@ class GdbManager:
             self.sessions.append(GdbSession(config))
 
         self.router = CmdRouter(self.sessions)
+        ddbapiserver=FlaskApp(router=self.router)
+        Thread(target=ddbapiserver.app.run).start()
         self.processor=CommandProcessor(self.router)
         self.state_mgr = StateManager.inst()
         for s in self.sessions:
             s.start()
-
+        ddbapiserver.DDB_up_and_running=True
     def write(self, cmd: str):
         # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
         lp=GlobalRunningLoop().get_loop()

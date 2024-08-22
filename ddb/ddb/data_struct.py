@@ -12,7 +12,7 @@ class SessionResponse:
         self.meta = meta
         self.response = response
         self.token: str = None
-        self.stream: str = response["stream"]
+        self.stream: str = response.get("stream", "unknown")
         self.payload: dict = response["payload"]
         self.msg: str = response["message"]
 

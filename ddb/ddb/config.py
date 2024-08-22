@@ -98,6 +98,8 @@ class GlobalConfig:
             namespace=kube_namespace, label_selector=selector_label)
         gdbSessionConfigs: List[GdbSessionConfig] = []
         for i in pods.items:
+            if i._metadata.deletion_timestamp:
+                continue
             logger.debug("%s\t%s\t%s" %
                 (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
             remoteServerConn = KubeRemoteSeverClient(

@@ -198,19 +198,17 @@ class ContextSwitchingCmd(gdb.MICommand):
             gdb.parse_and_eval('$pc = {0}'.format(str(cur_rip)))
             original_sp = int(gdb.parse_and_eval('$save_sp'))
             original_pc = int(gdb.parse_and_eval('$save_pc'))
-            return {"message":"success","rip":original_pc,"rsp":original_sp}
+            return {"message": "success", "rip": original_pc, "rsp": original_sp}
         except Exception as e:
-            return {"message":"error","rip":None,"rsp":None}
-    
-    
+            return {"message": "error", "rip": None, "rsp": None}
+
 
 ContextSwitchingCmd()
 
 
-class RestoreContext(gdb.Command):
+class RestoreContext(gdb.MICommand):
     def __init__(self):
-        gdb.Command.__init__(
-            self, "rcontext", gdb.COMMAND_STACK, gdb.COMPLETE_NONE)
+        super().__init__("-restore-context-custom")
 
     def invoke(self, args):
         try:
@@ -219,9 +217,9 @@ class RestoreContext(gdb.Command):
             gdb.parse_and_eval('$pc = $save_pc')
             gdb.parse_and_eval('$sp = $save_sp')
             save_frame.select()
-            return {"message":"success"}
+            return {"message": "success"}
         except Exception as e:
-            return {"message":"error"}
+            return {"message": "error"}
 
 
 class GetRemoteBTInfo(gdb.MICommand):
@@ -229,60 +227,66 @@ class GetRemoteBTInfo(gdb.MICommand):
         super().__init__("-get-remote-bt")
 
     def invoke(self, args):
-        frame = gdb.selected_frame()
-        frames: List[gdb.Frame] = []
-        while frame is not None and frame.is_valid():
-            frames.append(frame)
-            frame = frame.older()
-        ip_address = []
-        port = -1
-        parent_rsp = -1
-        parent_rip = -1
-        print("before iterating frames")
-        for cur_frame in frames:
-            if cur_frame.function() is not None and cur_frame.function().name.endswith("runHandler"):
-                print("found")
-                for symbol in cur_frame.block():
-                    if symbol.is_argument or symbol.is_variable:
-                        if symbol.name == "msg":
-                            slice_val = symbol.value(cur_frame)
-                            data_ptr = slice_val['array']
-                            length = int(slice_val['len'])
-                            byte_array_type = gdb.lookup_type(
-                                "uint8").array(length - 1).pointer()
-                            data_ptr_casted = data_ptr.cast(byte_array_type)
-                            # Now, you can read the bytes
-                            byte_array = bytearray()
-                            for i in range(length):
-                                byte_array.append(
-                                    int(data_ptr_casted.dereference()[i]))
+        try:
+            frame = gdb.selected_frame()
+            frames: List[gdb.Frame] = []
+            while frame is not None and frame.is_valid():
+                frames.append(frame)
+                frame = frame.older()
+            ip_address = []
+            port = -1
+            parent_rsp = -1
+            parent_rip = -1
+            message = "success"
+            print("before iterating frames")
+            for cur_frame in frames:
+                if cur_frame.function() is not None and cur_frame.function().name.endswith("runHandler"):
+                    print("found")
+                    for symbol in cur_frame.block():
+                        if symbol.is_argument or symbol.is_variable:
+                            if symbol.name == "msg":
+                                slice_val = symbol.value(cur_frame)
+                                data_ptr = slice_val['array']
+                                length = int(slice_val['len'])
+                                byte_array_type = gdb.lookup_type(
+                                    "uint8").array(length - 1).pointer()
+                                data_ptr_casted = data_ptr.cast(
+                                    byte_array_type)
+                                # Now, you can read the bytes
+                                byte_array = bytearray()
+                                for i in range(length):
+                                    byte_array.append(
+                                        int(data_ptr_casted.dereference()[i]))
 
-                            # Convert to a Python bytes object if necessary
-                            bytes_object = bytes(byte_array)
-                            metadata = bytes_object[49:65]
-                            # Convert these byte segments to integers using little-endian encoding
-                            parent_rsp = int.from_bytes(
-                                metadata[0:8], byteorder='little')
-                            parent_rip = int.from_bytes(
-                                metadata[-8:], byteorder='little')
+                                # Convert to a Python bytes object if necessary
+                                bytes_object = bytes(byte_array)
+                                metadata = bytes_object[49:65]
+                                # Convert these byte segments to integers using little-endian encoding
+                                parent_rsp = int.from_bytes(
+                                    metadata[0:8], byteorder='little')
+                                parent_rip = int.from_bytes(
+                                    metadata[-8:], byteorder='little')
 
-                            print(f"parent_rsp: {parent_rsp}")
-                            print(f"parent_rip {parent_rip}")
-                        if symbol.name == "c":
-                            sc = symbol.value(cur_frame).dereference()
-                            tcp_conn_type = gdb.lookup_type(
-                                'net.TCPConn').pointer()
-                            tcp_addr_type = gdb.lookup_type(
-                                'net.TCPAddr').pointer()
-                            fd = sc["c"]["data"].cast(tcp_conn_type).dereference()[
-                                "conn"]["fd"].dereference()
-                            parent_addr = fd["raddr"]["data"].cast(
-                                tcp_addr_type).dereference()
-                            port = int(parent_addr['Port'])
-                            ip_address = [int(b)
-                                          for b in SliceValue(parent_addr['IP'])]
-
-        return {"message":"success","metadata": {"parentRIP": parent_rip, "parentRSP": parent_rsp, "parentAddr": ip_address, "parentPort": port}}
+                                print(f"parent_rsp: {parent_rsp}")
+                                print(f"parent_rip {parent_rip}")
+                            if symbol.name == "c":
+                                sc = symbol.value(cur_frame).dereference()
+                                tcp_conn_type = gdb.lookup_type(
+                                    'net.TCPConn').pointer()
+                                tcp_addr_type = gdb.lookup_type(
+                                    'net.TCPAddr').pointer()
+                                fd = sc["c"]["data"].cast(tcp_conn_type).dereference()[
+                                    "conn"]["fd"].dereference()
+                                parent_addr = fd["raddr"]["data"].cast(
+                                    tcp_addr_type).dereference()
+                                port = int(parent_addr['Port'])
+                                ip_address = [int(b)
+                                              for b in SliceValue(parent_addr['IP'])]
+        except Exception as e:
+            print(e)
+            message = "error"
+        finally:
+            return {"message": message, "metadata": {"parentRIP": parent_rip, "parentRSP": parent_rsp, "parentAddr": ip_address, "parentPort": port}}
 
 
 class GetRemoteBTInfoInContext(gdb.MICommand):

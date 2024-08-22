@@ -1,5 +1,6 @@
 import threading
 import os
+import time
 from uuid import uuid4
 from typing import List, Optional
 from threading import Thread, Lock
@@ -102,6 +103,7 @@ class GdbSession:
         
         self.write(f"-target-attach {self.attach_pid}")
         self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
+        self.write(f"-gdb-set logging enabled on")
             
     def remote_start(self):
         if not self.remote_gdbserver:
@@ -147,7 +149,7 @@ class GdbSession:
         #     f"Started debugging process - \n\ttag: {self.tag}, \n\tbin: {self.bin}, \n\tstartup command: {self.session_ctrl.command}"
         # )
 
-        self.state_mgr.register_session(self.sid, self.tag)
+        self.state_mgr.register_session(self.sid, self.tag,self)
 
         self.mi_output_t_handle = Thread(
             target=self.fetch_mi_output, args=()
@@ -157,7 +159,7 @@ class GdbSession:
     def fetch_mi_output(self):
         while not self._stop_event.is_set() and self.gdb_controller.is_open():
             response = self.gdb_controller.fetch_output(
-                timeout=0.5)
+                timeout=1)
             # logger.debug(f"raw response from session [{self.sid}] ,{response}")
             responses=self.gdb_response_parser.get_responses_list(response,"stdout")
             # logger.debug(f"parsed response from gdb,${responses}")
@@ -184,6 +186,7 @@ class GdbSession:
                         SessionResponse(
                             self.sid, self.get_meta_str(), console_out)
                     )
+            # logger.debug(f"raw response from session [{self.sid}] ,{response}")
 
     def write(self, cmd: str):
         _, cmd_no_token, _, cmd = parse_cmd(cmd)

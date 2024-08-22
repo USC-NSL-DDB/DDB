@@ -1,0 +1,194 @@
+{'command': '79-thread-info', 'duration': 2.134264413}
+{'command': '128-stack-info-depth --thread 29', 'duration': 0.682273046}
+{'command': '127-stack-info-depth --thread 28', 'duration': 0.66126511}
+{'command': '195-thread-info', 'duration': 0.648064092}
+{'command': '194-thread-info', 'duration': 0.646406892}
+{'command': '126-stack-info-depth --thread 27', 'duration': 0.633752815}
+{'command': '196-thread-info', 'duration': 0.619593919}
+{'command': '193-thread-info', 'duration': 0.618765388}
+{'command': '125-stack-info-depth --thread 26', 'duration': 0.605252167}
+{'command': '197-thread-info', 'duration': 0.604994075}
+{'command': '192-thread-info', 'duration': 0.598487574}
+{'command': '199-thread-info', 'duration': 0.59217837}
+{'command': '124-stack-info-depth --thread 25', 'duration': 0.587055886}
+{'command': '114-thread-info', 'duration': 0.586581069}
+{'command': '198-thread-info', 'duration': 0.580438461}
+{'command': '123-stack-info-depth --thread 24', 'duration': 0.574729695}
+{'command': '113-thread-info', 'duration': 0.573078741}
+{'command': '111-thread-info', 'duration': 0.56615004}
+{'command': '110-stack-info-depth --thread 15', 'duration': 0.55447562}
+{'command': '95-thread-info', 'duration': 0.55295652}
+{'command': '109-stack-info-depth --thread 14', 'duration': 0.548089043}
+{'command': '122-stack-info-depth --thread 23', 'duration': 0.547501559}
+{'command': '121-stack-info-depth --thread 22', 'duration': 0.545745337}
+{'command': '108-stack-info-depth --thread 13', 'duration': 0.542447079}
+{'command': '191-thread-info', 'duration': 0.542226959}
+{'command': '107-stack-info-depth --thread 12', 'duration': 0.538735734}
+{'command': '78-thread-info', 'duration': 0.536811429}
+{'command': '120-stack-info-depth --thread 21', 'duration': 0.533953606}
+{'command': '119-stack-info-depth --thread 20', 'duration': 0.528137139}
+{'command': '106-stack-info-depth --thread 11', 'duration': 0.526847567}
+{'command': '96-stack-info-depth --thread 1', 'duration': 0.522327964}
+{'command': '97-stack-info-depth --thread 2', 'duration': 0.513986806}
+{'command': '200-stack-info-depth --thread 1', 'duration': 0.513384641}
+{'command': '190-thread-info', 'duration': 0.512212942}
+{'command': '201-stack-info-depth --thread 1', 'duration': 0.510675268}
+{'command': '98-stack-info-depth --thread 3', 'duration': 0.506250609}
+{'command': '77-thread-info', 'duration': 0.505990201}
+{'command': '105-stack-info-depth --thread 10', 'duration': 0.498258468}
+{'command': '104-stack-info-depth --thread 9', 'duration': 0.49625448}
+{'command': '99-stack-info-depth --thread 4', 'duration': 0.494797283}
+{'command': '202-stack-info-depth --thread 2', 'duration': 0.491702373}
+{'command': '189-thread-info', 'duration': 0.490045741}
+{'command': '103-stack-info-depth --thread 8', 'duration': 0.489003949}
+{'command': '102-stack-info-depth --thread 7', 'duration': 0.484314508}
+{'command': '203-stack-info-depth --thread 3', 'duration': 0.48189189}
+{'command': '101-stack-info-depth --thread 6', 'duration': 0.481824707}
+{'command': '76-thread-info', 'duration': 0.48161645}
+{'command': '100-stack-info-depth --thread 5', 'duration': 0.480522268}
+{'command': '205-stack-info-depth --thread 5', 'duration': 0.475334899}
+{'command': '204-stack-info-depth --thread 4', 'duration': 0.475255397}
+{'command': '206-stack-info-depth --thread 6', 'duration': 0.472907278}
+{'command': '188-thread-info', 'duration': 0.460791443}
+{'command': '75-thread-info', 'duration': 0.456103848}
+{'command': '187-thread-info', 'duration': 0.444428907}
+{'command': '186-thread-info', 'duration': 0.426883807}
+{'command': '185-thread-info', 'duration': 0.408777233}
+{'command': '207-stack-info-depth --thread 7', 'duration': 0.399372418}
+{'command': '208-stack-info-depth --thread 8', 'duration': 0.398310687}
+{'command': '209-stack-info-depth --thread 9', 'duration': 0.394176205}
+{'command': '74-thread-info', 'duration': 0.390278535}
+{'command': '184-thread-info', 'duration': 0.387040925}
+{'command': '210-stack-info-depth --thread 10', 'duration': 0.367452935}
+{'command': '183-thread-info', 'duration': 0.363037955}
+{'command': '212-stack-info-depth --thread 12', 'duration': 0.352234224}
+{'command': '211-stack-info-depth --thread 11', 'duration': 0.351808385}
+{'command': '132-stack-list-frames --thread 19 0 19', 'duration': 0.344257086}
+{'command': '131-stack-list-frames --thread 18 0 19', 'duration': 0.341661804}
+{'command': '182-thread-info', 'duration': 0.336314004}
+{'command': '213-stack-info-depth --thread 13', 'duration': 0.332571359}
+{'command': '135-stack-info-depth --thread 30', 'duration': 0.328222777}
+{'command': '214-stack-info-depth --thread 14', 'duration': 0.326429316}
+{'command': '73-thread-info', 'duration': 0.320172976}
+{'command': '181-thread-info', 'duration': 0.313619776}
+{'command': '215-stack-info-depth --thread 15', 'duration': 0.311121507}
+{'command': '130-stack-list-frames --thread 17 0 19', 'duration': 0.302465047}
+{'command': '129-stack-list-frames --thread 16 0 15', 'duration': 0.294946941}
+{'command': '72-thread-info', 'duration': 0.291137147}
+{'command': '180-thread-info', 'duration': 0.290967899}
+{'command': '71-thread-info', 'duration': 0.270198324}
+{'command': '179-thread-info', 'duration': 0.262415061}
+{'command': '70-thread-info', 'duration': 0.242866846}
+{'command': '88-thread-info', 'duration': 0.237749582}
+{'command': '178-thread-info', 'duration': 0.23438673}
+{'command': '87-thread-info', 'duration': 0.223592116}
+{'command': '89-thread-info', 'duration': 0.221948255}
+{'command': '69-thread-info', 'duration': 0.219656233}
+{'command': '177-thread-info', 'duration': 0.219203254}
+{'command': '118-stack-info-depth --thread 19', 'duration': 0.215948524}
+{'command': '117-stack-info-depth --thread 18', 'duration': 0.211269358}
+{'command': '176-thread-info', 'duration': 0.202641495}
+{'command': '68-thread-info', 'duration': 0.197765883}
+{'command': '86-thread-info', 'duration': 0.197126632}
+{'command': '175-thread-info', 'duration': 0.188928796}
+{'command': '255-stack-list-frames --thread 13 0 16', 'duration': 0.188667984}
+{'command': '90-thread-info', 'duration': 0.185392526}
+{'command': '257-stack-list-frames --thread 14 0 16', 'duration': 0.183787896}
+{'command': '254-stack-list-frames --thread 12 0 16', 'duration': 0.178133915}
+{'command': '67-thread-info', 'duration': 0.176724015}
+{'command': '258-stack-list-frames --thread 15 0 16', 'duration': 0.175122408}
+{'command': '147-stack-list-frames --thread 20 0 17', 'duration': 0.170905532}
+{'command': '251-stack-list-frames --thread 11 0 16', 'duration': 0.170128831}
+{'command': '174-thread-info', 'duration': 0.168366439}
+{'command': '85-thread-info', 'duration': 0.167512831}
+{'command': '91-thread-info', 'duration': 0.16274722}
+{'command': '66-thread-info', 'duration': 0.154861658}
+{'command': '149-stack-list-frames --thread 21 0 19', 'duration': 0.148440377}
+{'command': '250-stack-list-frames --thread 10 0 16', 'duration': 0.147571187}
+{'command': '173-thread-info', 'duration': 0.145090309}
+{'command': '116-stack-info-depth --thread 17', 'duration': 0.14063592}
+{'command': '115-stack-info-depth --thread 16', 'duration': 0.137816365}
+{'command': '84-thread-info', 'duration': 0.135444594}
+{'command': '151-stack-list-frames --thread 22 0 16', 'duration': 0.135438154}
+{'command': '137-stack-list-frames --thread 4 0 19', 'duration': 0.13218105}
+{'command': '134-stack-list-frames --thread 2 0 19', 'duration': 0.131395988}
+{'command': '256-stack-list-frames --thread 27 0 16', 'duration': 0.129875126}
+{'command': '92-thread-info', 'duration': 0.128558883}
+{'command': '140-stack-list-frames --thread 7 0 16', 'duration': 0.127882365}
+{'command': '248-stack-list-frames --thread 9 0 16', 'duration': 0.127829408}
+{'command': '139-stack-list-frames --thread 6 0 19', 'duration': 0.126688623}
+{'command': '138-stack-list-frames --thread 5 0 16', 'duration': 0.126473241}
+{'command': '136-stack-list-frames --thread 3 0 19', 'duration': 0.126232395}
+{'command': '65-thread-info', 'duration': 0.126008955}
+{'command': '152-stack-list-frames --thread 23 0 16', 'duration': 0.123535366}
+{'command': '253-stack-list-frames --thread 26 0 16', 'duration': 0.122435887}
+{'command': '93-thread-info', 'duration': 0.122129377}
+{'command': '141-stack-list-frames --thread 8 0 16', 'duration': 0.121145151}
+{'command': '133-stack-list-frames --thread 1 0 17', 'duration': 0.119000858}
+{'command': '153-stack-list-frames --thread 24 0 16', 'duration': 0.115506717}
+{'command': '83-thread-info', 'duration': 0.111783026}
+{'command': '172-thread-info', 'duration': 0.110840768}
+{'command': '252-stack-list-frames --thread 25 0 16', 'duration': 0.108406006}
+{'command': '246-stack-list-frames --thread 8 0 16', 'duration': 0.10562764}
+{'command': '142-stack-list-frames --thread 9 0 11', 'duration': 0.104754342}
+{'command': '143-stack-list-frames --thread 10 0 16', 'duration': 0.101857582}
+{'command': '94-thread-info', 'duration': 0.100913621}
+{'command': '82-thread-info', 'duration': 0.099393459}
+{'command': '249-stack-list-frames --thread 24 0 16', 'duration': 0.098742001}
+{'command': '150-stack-list-frames --thread 15 0 16', 'duration': 0.096198127}
+{'command': '144-stack-list-frames --thread 11 0 16', 'duration': 0.095894525}
+{'command': '259-stack-list-frames --thread 28 0 16', 'duration': 0.095690946}
+{'command': '146-stack-list-frames --thread 13 0 16', 'duration': 0.094268371}
+{'command': '145-stack-list-frames --thread 12 0 16', 'duration': 0.092046016}
+{'command': '171-thread-info', 'duration': 0.090073709}
+{'command': '245-stack-list-frames --thread 7 0 16', 'duration': 0.088605823}
+{'command': '64-thread-info', 'duration': 0.086938452}
+{'command': '236-stack-list-frames --thread 20 0 17', 'duration': 0.086516322}
+{'command': '247-stack-list-frames --thread 23 0 16', 'duration': 0.086055437}
+{'command': '243-stack-list-frames --thread 22 0 16', 'duration': 0.082586144}
+{'command': '260-stack-list-frames --thread 29 0 16', 'duration': 0.081376281}
+{'command': '81-thread-info', 'duration': 0.078446187}
+{'command': '170-thread-info', 'duration': 0.07786888}
+{'command': '219-stack-info-depth --thread 19', 'duration': 0.074707161}
+{'command': '221-stack-info-depth --thread 21', 'duration': 0.07435218}
+{'command': '148-stack-list-frames --thread 14 0 16', 'duration': 0.072486627}
+{'command': '240-stack-list-frames --thread 4 0 19', 'duration': 0.07187806}
+{'command': '261-stack-list-frames --thread 30 0 16', 'duration': 0.071701017}
+{'command': '239-stack-list-frames --thread 3 0 19', 'duration': 0.070991239}
+{'command': '160-stack-list-frames --thread 30 0 16', 'duration': 0.069358875}
+{'command': '238-stack-list-frames --thread 2 0 19', 'duration': 0.068858545}
+{'command': '244-stack-list-frames --thread 6 0 19', 'duration': 0.068583011}
+{'command': '157-stack-list-frames --thread 27 0 11', 'duration': 0.06807767}
+{'command': '156-stack-list-frames --thread 26 0 16', 'duration': 0.067865506}
+{'command': '220-stack-info-depth --thread 20', 'duration': 0.06495019}
+{'command': '241-stack-list-frames --thread 21 0 19', 'duration': 0.064819518}
+{'command': '155-stack-list-frames --thread 25 0 16', 'duration': 0.06222896}
+{'command': '237-stack-list-frames --thread 1 0 17', 'duration': 0.061953362}
+{'command': '158-stack-list-frames --thread 28 0 16', 'duration': 0.061245565}
+{'command': '222-stack-info-depth --thread 22', 'duration': 0.061199384}
+{'command': '217-stack-info-depth --thread 17', 'duration': 0.059737721}
+{'command': '230-stack-list-frames --thread 17 0 19', 'duration': 0.059286369}
+{'command': '229-stack-info-depth --thread 28', 'duration': 0.058953609}
+{'command': '161-stack-list-frames --thread 1 0 17', 'duration': 0.058918303}
+{'command': '223-stack-info-depth --thread 23', 'duration': 0.058396916}
+{'command': '225-stack-info-depth --thread 25', 'duration': 0.058373692}
+{'command': '216-stack-info-depth --thread 16', 'duration': 0.057642886}
+{'command': '159-stack-list-frames --thread 29 0 16', 'duration': 0.057152342}
+{'command': '218-stack-info-depth --thread 18', 'duration': 0.056521268}
+{'command': '231-stack-list-frames --thread 18 0 19', 'duration': 0.056500928}
+{'command': '224-stack-info-depth --thread 24', 'duration': 0.056370553}
+{'command': '235-stack-list-frames --thread 1 0 17', 'duration': 0.056243493}
+{'command': '232-stack-info-depth --thread 29', 'duration': 0.053605132}
+{'command': '228-stack-list-frames --thread 16 0 15', 'duration': 0.053276773}
+{'command': '227-stack-info-depth --thread 27', 'duration': 0.05167823}
+{'command': '226-stack-info-depth --thread 26', 'duration': 0.050506144}
+{'command': '233-stack-list-frames --thread 19 0 19', 'duration': 0.046239576}
+{'command': '234-stack-info-depth --thread 30', 'duration': 0.045716235}
+{'command': '154-stack-info-depth --thread 1', 'duration': 0.0449556}
+{'command': '242-stack-list-frames --thread 5 0 16', 'duration': 0.040297604}
+{'command': '265-stack-list-variables --thread 16 --frame 0 --simple-values', 'duration': 0.037703423}
+{'command': '263-exec-next', 'duration': 0.03759773}
+{'command': '165-exec-continue --all', 'duration': 0.036653965}
+{'command': '163-stack-list-variables --thread 1 --frame 0 --simple-values', 'duration': 0.033625705}
+{'command': '168-exec-interrupt --all', 'duration': -1}
+{'command': '1-session-status', 'duration': -1}

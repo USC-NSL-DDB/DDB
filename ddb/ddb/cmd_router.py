@@ -1,3 +1,4 @@
+import re
 from threading import Lock
 from typing import List, Optional, Set, Tuple, Union
 from ddb.gdb_session import GdbSession
@@ -90,11 +91,16 @@ class CmdRouter:
 
     def send_to_thread(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         sid, tid = self.state_mgr.get_sidtid_by_gtid(gtid)
-        self.register_cmd(token, sid, transformer)
+        self.register_cmd(token, cmd, sid, transformer)
         # [ s.write(cmd) for s in self.sessions if s.sid == curr_thread ]
         self.sessions[sid].write(
             "-thread-select " + str(tid) + "\n" + 
                                  cmd)
+    async def send_to_thread_async(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
+        self.send_to_thread(gtid, token, cmd, transformer)
+        future = CmdTracker.inst().get_cmdmeta(token)
+        result = await future
+        return result
 
     def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
@@ -118,12 +124,12 @@ class CmdRouter:
         if not curr_session:
             return
 
-        self.register_cmd(token, curr_session, transformer)
+        self.register_cmd(token, cmd, curr_session, transformer)
         [s.write(cmd)
         for _, s in self.sessions.items() if s.sid == curr_session]
 
     def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
-        self.register_cmd_for_all(token, transformer)
+        self.register_cmd_for_all(token, cmd, transformer)
         for _, s in self.sessions.items():
             cmd_to_send = cmd
             if FORCE_INTERRUPT_ON_COMMADN:
@@ -138,32 +144,34 @@ class CmdRouter:
             s.write(cmd_to_send)
 
     def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
-        self.register_cmd(token, self.sessions[1].sid, transformer)
+        self.register_cmd(token, cmd, self.sessions[1].sid, transformer)
         self.sessions[1].write(cmd)
 
     def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
         if token:
-            self.register_cmd(token, self.sessions[session_id].sid, transformer)
+            self.register_cmd(
+                token, cmd, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
 
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
         if session_id == -1:
             raise Exception("session is None")
-        self.register_cmd(token, self.sessions[session_id].sid, transformer)
+        self.register_cmd(
+            token, cmd, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
         future = CmdTracker.inst().get_cmdmeta(token)
         result = await future
         return result
     # Some help functions for registering cmds
 
-    def register_cmd_for_all(self, token: Optional[str], transformer: Optional[ResponseTransformer] = None):
+    def register_cmd_for_all(self, token: Optional[str], command: Optional[str], transformer: Optional[ResponseTransformer] = None):
         target_s_ids = set()
         for sid in self.sessions:
             target_s_ids.add(sid)
-        self.register_cmd(token, target_s_ids, transformer)
+        self.register_cmd(token, command, target_s_ids, transformer)
 
-    def register_cmd(self, token: Optional[str], target_sessions: Union[int, Set[int]], transformer: Optional[ResponseTransformer] = None):
+    def register_cmd(self, token: Optional[str], command: Optional[str], target_sessions: Union[int, Set[int]], transformer: Optional[ResponseTransformer] = None):
         if token:
             if isinstance(target_sessions, int):
                 target_sessions = {target_sessions}
@@ -171,7 +179,7 @@ class CmdRouter:
             if not isinstance(target_sessions, Set):
                 raise Exception("wrong argument")
 
-            CmdTracker.inst().create_cmd(token, target_sessions, transformer)
+            CmdTracker.inst().create_cmd(token, command, target_sessions, transformer)
 
     def handle_private_cmd(self, cmd: str):
         logger.debug("Executing private cmd.")
@@ -192,5 +200,3 @@ class CmdRouter:
             self.send_to_session(None, cmd, session_id=session_id)
         else:
             logger.debug("Unknown private command.")
-
-

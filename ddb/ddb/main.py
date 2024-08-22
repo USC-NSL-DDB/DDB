@@ -17,12 +17,12 @@ from ddb.utils import *
 from ddb.config import GlobalConfig
 import debugpy
 
-try:
-    debugpy.listen(("localhost", 5678))
-    print("Waiting for debugger attach")
-    debugpy.wait_for_client()
-except Exception as e:
-    print(f"Failed to attach debugger: {e}")
+# try:
+#     debugpy.listen(("localhost", 5678))
+#     print("Waiting for debugger attach")
+#     debugpy.wait_for_client()
+# except Exception as e:
+#     print(f"Failed to attach debugger: {e}")
 
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
