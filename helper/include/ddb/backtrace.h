@@ -11,7 +11,7 @@ extern "C" {
 #include "ddb/common.h"
 
 /// @brief  Added magic number for testing DDBTraceMeta 
-#define T_META_MATIC 12345ULL;
+#define T_META_MATIC 12345ULL
 // constexpr static uint64_t tMetaMagic = 12345;
 
 typedef struct {

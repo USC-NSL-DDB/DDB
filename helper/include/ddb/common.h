@@ -14,9 +14,7 @@ typedef struct {
   char host[NI_MAXHOST];
 } DDBMetadata;
 
-
 extern DDBMetadata ddb_meta;
-
 
 static inline DDBMetadata* get_global_ddb_meta() {
   return &ddb_meta;
