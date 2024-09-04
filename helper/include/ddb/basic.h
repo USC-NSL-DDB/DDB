@@ -59,40 +59,6 @@ free_ifaddrs:
     // }
 }
 
-// inline void populate_ddb_metadata(const std::string& ifa_name) {
-//   struct ifaddrs *ifaddr, *ifa;
-//   int family;
-
-//   if (getifaddrs(&ifaddr) == -1) {
-//     perror("getifaddrs");
-//     goto free_ifaddrs;
-//   }
-
-//   for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-//     if (ifa->ifa_addr == nullptr) {
-//       continue;
-//     }
-
-//     family = ifa->ifa_addr->sa_family;
-
-//     if (strcmp(ifa->ifa_name, ifa_name.c_str()) == 0 && family == AF_INET) {  // AF_INET for IPv4
-//       struct sockaddr_in *ipv4 = (struct sockaddr_in *)ifa->ifa_addr;
-//       ddb_meta.comm_ip = htonl(ipv4->sin_addr.s_addr);
-//       ddb_meta.comm_port = htons(ipv4->sin_port);
-//       inet_ntop(AF_INET, &(ipv4->sin_addr), ddb_meta.host, NI_MAXHOST);
-
-//       break;
-//     }
-//   }
-
-// free_ifaddrs:
-//   freeifaddrs(ifaddr);
-//   if (ddb_meta.comm_ip == 0) {
-//     std::cout << "ifa ip address is not initialized." << std::endl;
-//   }
-// }
-
-
 #ifdef __cplusplus
 }
 #endif
