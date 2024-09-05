@@ -130,7 +130,8 @@ class DistributedBacktraceMICmd(gdb.MICommand):
         is_remote_call = False
 
         for cur_frame in frames:
-            if cur_frame.function().name.startswith("nu::RPCServer::handler_fn"):
+            curr_func = cur_frame.function()
+            if curr_func and curr_func.name.startswith("nu::RPCServer::handler_fn"):
                 # print("found")
                 is_remote_call = True
                 for sym in get_local_variables(cur_frame):

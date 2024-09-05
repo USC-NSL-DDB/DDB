@@ -24,25 +24,20 @@ typedef struct {
 } ServiceInfo;
 
 typedef struct {
-    ServiceInfo info; // info of this service
     MQTTClient client; // client for pub
 } DDBServiceReporter;
 
 // static MQTTClient client;
 
-static inline DDBServiceReporter get_reporter(ServiceInfo* info) {
-    return DDBServiceReporter { .info = *info }
-}
-
 static inline int service_reporter_init(DDBServiceReporter* reporter) {
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
     int rc;
 
-    MQTTClient_create(&report->client, ADDRESS, CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    MQTTClient_create(&reporter->client, ADDRESS, CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     conn_opts.keepAliveInterval = 20;
     conn_opts.cleansession = 1;
 
-    if ((rc = MQTTClient_connect(report->client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
+    if ((rc = MQTTClient_connect(reporter->client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
         printf("Failed to connect, return code %d\n", rc);
         return rc;
     }
@@ -50,8 +45,8 @@ static inline int service_reporter_init(DDBServiceReporter* reporter) {
 }
 
 static inline int service_reporter_deinit(DDBServiceReporter* reporter) {
-    MQTTClient_disconnect(report->client, 10000);
-    MQTTClient_destroy(&report->client);
+    MQTTClient_disconnect(reporter->client, 10000);
+    MQTTClient_destroy(&reporter->client);
     return 0;
 }
 
