@@ -22,7 +22,14 @@ class DistributedBTCmd(gdb.Command):
         # result = gdb.execute_mi("-stack-list-distributed-frames")
         # print(f"result:\n{result}")
         # print(gdb.execute("bt"))
-        self.mi_cmd.invoke(None)
+        result = self.mi_cmd.invoke(None)
+        
+        if "stack" in result:
+            stacks = result["stack"]
+            for stack in stacks:
+                print(f"{stack['level']} {stack['func']} file:{stack['file']}") 
+        else:
+            print("no stack info presented")
         # command = 'nc localhost 12345'
         # result = subprocess.run(command, input=input_data, shell=True, text=True, capture_output=True)
 
@@ -123,22 +130,33 @@ class DistributedBacktraceMICmd(gdb.MICommand):
         is_remote_call = False
 
         for cur_frame in frames:
-            if cur_frame.function().name.startswith("nu::RPCServer::handler_fn"):
-                print("found")
+            curr_func = cur_frame.function()
+            if curr_func and curr_func.name.startswith("nu::RPCServer::handler_fn"):
+                # print("found")
                 is_remote_call = True
                 for sym in get_local_variables(cur_frame):
                     if sym.name == "meta":
+                        # print("found meta")
                         val = sym.value(cur_frame)
-                        remote_ip = int(val['caller_comm_ip'])
-                        parent_rip = int(val['rip'])
-                        parent_rsp = int(val['rsp'])
-                        parent_rbp = int(val['rbp'])
-                        pid = int(val["pid"])
+                        # print("found val")
+                        remote_ip = int(val['meta']['caller_comm_ip'])
+                        # print("found ip")
+                        pid = int(val['meta']['pid'])
+                        # print("found pid")
+                        parent_rip = int(val['ctx']['rip'])
+                        parent_rsp = int(val['ctx']['rsp'])
+                        parent_rbp = int(val['ctx']['rbp'])
+                        # print("found ctx")
+                        break
                         # print(f"caller ip: {int_to_ip(remote_ip)}")
                         # print(f"rip: {parent_rip:#x}")
                         # print(f"rsp: {parent_rsp:#x}")
                         # print(f"rbp: {parent_rbp:#x}")
                         # print(f"pid: {pid}")
+            if is_remote_call:
+                break
+        print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
+        # print("get all data")
 
         if not is_remote_call:
             # print("Did not find a valid remote call")
