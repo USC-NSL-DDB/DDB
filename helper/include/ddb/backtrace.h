@@ -14,23 +14,41 @@ extern "C" {
 #define T_META_MATIC 12345ULL
 // constexpr static uint64_t tMetaMagic = 12345;
 
+// typedef struct {
+//   uint32_t caller_comm_ip;
+//   pid_t pid;
+// } __attribute__((packed)) DDBCallerMeta;
+
+// typedef struct {
+//   uintptr_t rip;
+//   uintptr_t rsp;
+//   uintptr_t rbp;
+// } __attribute__((packed)) DDBCallerContext;
+
+// /// @brief  Added data structure for backtrace
+// typedef struct {
+//   uint64_t magic;
+//   DDBCallerMeta meta;
+//   DDBCallerContext ctx;
+// } __attribute__((packed)) DDBTraceMeta;
+
 typedef struct {
   uint32_t caller_comm_ip;
   pid_t pid;
-} __attribute__((packed)) DDBCallerMeta;
+} DDBCallerMeta;
 
 typedef struct {
   uintptr_t rip;
   uintptr_t rsp;
   uintptr_t rbp;
-} __attribute__((packed)) DDBCallerContext;
+} DDBCallerContext;
 
 /// @brief  Added data structure for backtrace
 typedef struct {
   uint64_t magic;
   DDBCallerMeta meta;
   DDBCallerContext ctx;
-} __attribute__((packed)) DDBTraceMeta;
+} DDBTraceMeta;
 
 static inline __attribute__((always_inline)) void get_context(DDBCallerContext* ctx) { 
   void *rsp;
@@ -61,3 +79,23 @@ static inline __attribute__((always_inline)) void get_trace_meta(DDBTraceMeta* t
 #ifdef __cplusplus
 }
 #endif
+
+#include <functional>
+
+namespace DDB {
+  namespace Backtrace {
+    template<typename RT = void, class RPCCallable>
+    __attribute__((noinline))
+    static RT extraction(std::function<DDBTraceMeta()> extractor, RPCCallable&& rpc_callable) {
+      __attribute__((used)) DDBTraceMeta meta;
+      if (extractor) {
+        meta = extractor();
+      }
+      if constexpr (!std::is_void_v<RT>) {
+        return rpc_callable();
+      } else {
+        rpc_callable();
+      }
+    }
+  }
+}
