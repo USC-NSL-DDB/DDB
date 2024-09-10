@@ -88,7 +88,7 @@ gdb-clean:
 gdb: gdb-clean
 	pushd gdb-14.2 && \
 	mkdir -p build && pushd build && \
-	../configure --with-python=/usr/bin/python3 && make -j$(NCORES) && \
+	../configure --disable-install-man --with-python=/usr/bin/python3 && make -j$(NCORES) && \
 	popd && popd
 
 gdb-install: gdb

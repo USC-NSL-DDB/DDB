@@ -12,6 +12,7 @@ from ddb.logging import logger
 from ddb.data_struct import ServiceInfo
 from ddb.config import GlobalConfig
 from ddb.event_loop import GlobalRunningLoop
+from ddb.port_mgr import PortManager
 
 class GdbManager:
     def __init__(self) -> None:
@@ -55,12 +56,12 @@ class GdbManager:
         #     responses.append(resp)
 
     def __discover_new_session(self, session_info: ServiceInfo):
-        logger.debug(f"In GdbManager. New session discovered: {session_info}")
-        port = 8989
+        port = PortManager.reserve_port(int(session_info.ip))
         hostname = session_info.ip
         username = "ybyan"
         pid = session_info.pid
         tag = f"{hostname}:-{pid}"
+        logger.debug(f"New session discovered: port={port}, hostname={hostname}, username={username}, pid={pid}, tag={tag}")
         config = GdbSessionConfig(
             remote_port=port,
             remote_host=hostname,
