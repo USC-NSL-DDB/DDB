@@ -206,7 +206,7 @@ class GdbSession:
         # TODO: how to handle this elegantly?
         if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
             logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
-            self.remote_gdbserver.execute_command(["sudo", "kill", "-5", str(self.attach_pid)])
+            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
             return
 
         self.gdb_controller.write_input(cmd)
