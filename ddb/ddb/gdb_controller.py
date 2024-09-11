@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+import subprocess
 from time import sleep
+import time
 from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
@@ -32,6 +34,64 @@ class RemoteGdbController(ABC):
     @abstractmethod
     def close(self):
         pass
+
+class VanillaPIDController():
+    def __init__(self, pid: int, verbose=False):
+        self.pid = pid
+        self.verbose = verbose
+        self.process = None
+
+    def start(self, command: str):
+        if self.verbose:
+            print(f"Starting GDB for process {self.pid}")
+        self.process = subprocess.Popen(
+            ['gdb', '--interpreter=mi3', '-q',],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=0
+        )
+        # Wait for GDB to initialize
+        time.sleep(1)
+
+    def write_input(self, command):
+        if self.verbose:
+            logger.debug(f"Sending input to {self.pid}: {command}")
+        self.process.stdin.write(f"{command}\n")
+        self.process.stdin.flush()
+
+    def fetch_output(self, timeout=1):
+        output = ""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.process.stdout.readable():
+                line = self.process.stdout.readline()
+                if line:
+                    output += line
+                else:
+                    break
+            else:
+                break
+        if self.verbose and output:
+            logger.debug(f"Received output from {self.pid}: {output}")
+        return output.encode()
+
+    def is_open(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def close(self):
+        if self.is_open():
+            if self.verbose:
+                print(f"Closing GDB for process {self.pid}")
+            self.write_input("quit")
+            time.sleep(0.5)
+            if self.is_open():
+                self.process.terminate()
+                time.sleep(0.5)
+                if self.is_open():
+                    self.process.kill()
+            self.process = None
 
 class ServiceWeaverkubeGdbController(RemoteGdbController):
     count=0

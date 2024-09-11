@@ -1,11 +1,11 @@
 import os
 import re
-from ddb.gdb_controller import ServiceWeaverkubeGdbController
+from ddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
 
-from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
+from ddb.gdbserver_starter import LocalClient, SSHRemoteServerClient, SSHRemoteServerCred
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
 
@@ -121,16 +121,30 @@ class GlobalConfig:
                 sessionConfig.start_mode=StartMode.ATTACH
                 sessionConfig.attach_pid=int(pid)
                 sessionConfig.prerun_cmds=prerun_cmds
+                sessionConfig.initialize_commands.append(f"-file-exec-and-symbols /proc/{sessionConfig.attach_pid}/root{sessionConfig.binary}")
+                # sessionConfig.prerun_cmds.append({"name":"add symbols","command":f"file /proc/{sessionConfig.attach_pid}/root{sessionConfig.binary}"})
                 gdbSessionConfigs.append(sessionConfig)
             else:
                 logger.error(i.status.pod_ip, i.metadata.name,
                     "cannot locate service weaver process:", sw_name)
         ddb_config.gdb_sessions_configs=gdbSessionConfigs
 
+    def parse_vanillapid_config(ddb_config: DDBConfig, config_data: any):
+        pids=config_data.get("Pids",[])
+        for pid in pids:
+            sessionConfig= GdbSessionConfig()
+            sessionConfig.tag=pid
+            sessionConfig.attach_pid=pid
+            sessionConfig.start_mode=StartMode.ATTACH
+            sessionConfig.gdb_mode=GdbMode.REMOTE
+            sessionConfig.prerun_cmds=config_data.get("PrerunGdbCommands",[])
+            sessionConfig.gdb_controller=VanillaPIDController(pid,True)
+            sessionConfig.remote_gdbserver=LocalClient()
+            # sessionConfig.initialize_commands.append(f"-file-exec-and-symbols /proc/{pid}/exe")
+            ddb_config.gdb_sessions_configs.append(sessionConfig)
     @staticmethod
     def parse_config_file(config_data: any) -> DDBConfig:
         ddb_config = DDBConfig()
-
         if "Framework" in config_data:
             if config_data["Framework"] == "serviceweaver_kube":
                 ddb_config.framework = TargetFramework.SERVICE_WEAVER_K8S
@@ -138,6 +152,9 @@ class GlobalConfig:
             elif config_data["Framework"] == "Nu":
                 ddb_config.framework = TargetFramework.NU
                 GlobalConfig.parse_nu_config(ddb_config, config_data)
+            elif config_data["Framework"] == "vanillapid":
+                ddb_config.framework = TargetFramework.UNSPECIFIED
+                GlobalConfig.parse_vanillapid_config(ddb_config, config_data)
             else:
                 ddb_config.framework = TargetFramework.UNSPECIFIED
                 # TODO: parse a configuration file for a unspecified framework

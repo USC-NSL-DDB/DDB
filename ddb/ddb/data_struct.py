@@ -58,6 +58,7 @@ class GdbSessionConfig:
     run_delay: int = 0
     sudo: bool = False
     prerun_cmds:List[Dict[str,str]] = field(default_factory=list)
+    initialize_commands:List[str] = field(default_factory=list)
 
     def __repr__(self):
         formatted_dict = pformat(self.__dict__)

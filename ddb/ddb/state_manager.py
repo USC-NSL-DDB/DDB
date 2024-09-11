@@ -23,6 +23,7 @@ class ThreadContext:
     thread_id:int
     rsp:int
     rip:int
+    rbp:int
 class SessionMeta:
     def __init__(self, sid: int, tag: str, session: "GdbSession") -> None:
         self.tag = tag

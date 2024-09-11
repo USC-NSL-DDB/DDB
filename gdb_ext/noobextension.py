@@ -189,8 +189,6 @@ class ContextSwitchingCmd(gdb.MICommand):
         try:
             cur_rip = int(args[0])
             cur_rsp = int(args[1])
-            global save_frame
-            save_frame = gdb.selected_frame()
             gdb.parse_and_eval('$save_sp = $sp')
             gdb.parse_and_eval('$save_pc = $pc')
             gdb.execute('select-frame 0')

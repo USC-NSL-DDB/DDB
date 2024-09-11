@@ -101,3 +101,19 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
     def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
         pass
+class LocalClient(RemoteServerConnection):
+    def __init__(self):
+        pass
+
+    def connect(self):
+        pass
+
+    def execute_command(self, command):
+        import subprocess
+        subprocess.run(command)
+
+    def close(self):
+        pass
+
+    def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
+        pass

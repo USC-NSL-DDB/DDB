@@ -387,7 +387,8 @@ class ResponseTransformer:
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
         transformed_output=transformer.format(responses).replace("\n", "")
-        print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+        if transformed_output is not None and len(transformed_output) > 0:
+            print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):

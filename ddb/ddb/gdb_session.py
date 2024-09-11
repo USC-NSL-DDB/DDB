@@ -61,6 +61,7 @@ class GdbSession:
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
         self.prerun_cmds=config.prerun_cmds
+        self.initialize_commands = config.initialize_commands
         self.sudo = config.sudo
 
         # Session metadata
@@ -103,9 +104,10 @@ class GdbSession:
 
         for prerun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
-        
+        for init_cmd in self.initialize_commands:
+            self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
-        self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
+        # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
         self.write(f"-gdb-set logging enabled on")
             
     def remote_start(self):

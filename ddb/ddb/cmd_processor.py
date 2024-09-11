@@ -122,15 +122,16 @@ remotebtlock = asyncio.Lock()
 
 
 class RemoteBacktraceHandler(CmdHandler):
-    def extract_remote_parent_data(self, data):
-        metadata = data.get('metadata', {})
-        parent_addr = metadata.get('parentAddr', [])
-
+    def extract_remote_metadata(self, data):
+        caller_meta = data.get('metadata', {}).get('caller_meta', {})
+        pid, ip = caller_meta.get('pid'), caller_meta.get('ip')
+        
         return {
-            'parent_rip': metadata.get('parentRIP', '-1'),
-            'parent_rsp': metadata.get('parentRSP', '-1'),
-            'parent_addr': '.'.join(map(str, parent_addr[-4:])) if parent_addr else '-1',
-            'parent_port': metadata.get('parentPort', '-1')
+            'message': data.get('message'),
+            'parent_rip': caller_meta.get('rip'),
+            'parent_rsp': caller_meta.get('rsp'),
+            'parent_rbp': caller_meta.get('rbp'),
+            'id': pid
         }
 
     async def process_command(self, command_instance: SingleCommand):
@@ -150,9 +151,9 @@ class RemoteBacktraceHandler(CmdHandler):
                 f"-get-remote-bt")
             remote_bt_parent_info = await self.router.send_to_thread_async(command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer())
             assert len(remote_bt_parent_info) == 1
-            remote_bt_parent_info = self.extract_remote_parent_data(
+            remote_bt_parent_info = self.extract_remote_metadata(
                 remote_bt_parent_info[0].payload)
-            while remote_bt_parent_info.get("parent_rip") != '-1':
+            while remote_bt_parent_info.get("message") == 'success':
                 logger.debug(
                     "trying to acquire parent info:-------------------------------------------------")
                 parent_session_id = self.state_mgr.get_session_by_tag(
@@ -168,14 +169,14 @@ class RemoteBacktraceHandler(CmdHandler):
                         while self.state_mgr.sessions[parent_session_id].t_status[1] != ThreadStatus.STOPPED:
                             await asyncio.sleep(0.5)
                         context_switch_cmd, context_switch_token, _ = self.router.prepend_token(
-                            f"-switch-context-custom {remote_bt_parent_info.get('parent_rip')} {remote_bt_parent_info.get('parent_rsp')}")
+                            f"-switch-context-custom {remote_bt_parent_info.get('parent_rip')} {remote_bt_parent_info.get('parent_rsp')} {remote_bt_parent_info.get('parent_rbp')}")
                         # default choose the first thread as remote-bt-thread
                         context_switch_result = await self.router.send_to_thread_async(chosen_id, context_switch_token, f"{context_switch_token}{context_switch_cmd}",  transformer=NullTransformer())
                         assert len(context_switch_result) == 1
                         if context_switch_result[0].payload["message"] != "success":
                             return
                         self.state_mgr.sessions[parent_session_id].current_context = ThreadContext(
-                            rip=context_switch_result[0].payload["rip"], rsp=context_switch_result[0].payload["rsp"], thread_id=chosen_id)
+                            rip=context_switch_result[0].payload["rip"], rsp=context_switch_result[0].payload["rsp"], rbp=context_switch_result[0].payload["rbp"], thread_id=chosen_id)
                         self.state_mgr.sessions[parent_session_id].in_custom_context = True
                 chosen_id = self.state_mgr.sessions[parent_session_id].current_context.thread_id
                 logger.debug("chosen_id: %d" % chosen_id)
@@ -193,7 +194,7 @@ class RemoteBacktraceHandler(CmdHandler):
                     frame['thread'] = chosen_id
                 a_bt_result[0].payload['stack'].extend(
                     bt_result[0].payload['stack'])
-                remote_bt_parent_info = self.extract_remote_parent_data(
+                remote_bt_parent_info = self.extract_remote_metadata(
                     remote_bt_parent_info[0].payload)
         except Exception as e:
             logger.debug(
@@ -266,14 +267,14 @@ class CommandProcessor:
                     curr_thread)
                 cmd_instance.thread_id = curr_thread
 
-            # if "--session" in cmd_split:
-            #     session_index = cmd_split.index("--session")
-            #     if session_index < len(cmd_split) - 1:
-            #         sid = int(cmd_split[session_index + 1])
-            #         cmd_instance.session_id = sid
-            #         cmd_split.pop(session_index + 1)  # Remove the session ID
-            #         cmd_split.pop(session_index)      # Remove "--session"
-            #         cmd_instance.command_no_token = " ".join(cmd_split)
+            if "--session" in cmd_split:
+                session_index = cmd_split.index("--session")
+                if session_index < len(cmd_split) - 1:
+                    sid = int(cmd_split[session_index + 1])
+                    cmd_instance.session_id = sid
+                    cmd_split.pop(session_index + 1)  # Remove the session ID
+                    cmd_split.pop(session_index)      # Remove "--session"
+                    cmd_instance.command_no_token = " ".join(cmd_split)
 
             # Command handling
 

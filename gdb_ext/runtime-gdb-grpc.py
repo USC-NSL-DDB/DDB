@@ -4,12 +4,20 @@ import socket
 import struct
 import gdb
 
-print("Loading distributed backtrace support.", file=sys.stderr)
+import debugpy
+
+# try:
+#     debugpy.listen(("localhost", 5678))
+#     print("Waiting for debugger attach")
+#     debugpy.wait_for_client()
+# except Exception as e:
+#     print(f"Failed to attach debugger: {e}")
+# print("Loading distributed backtrace support.", file=sys.stderr)
 
 # allow to manually reload while developing
 # goobjfile = gdb.current_objfile() or gdb.objfiles()[0]
 # goobjfile.pretty_printers = []
-
+print("Loading distributed backtrace support.",)
 
 class DistributedBTCmd(gdb.Command):
     def __init__(self):
@@ -234,16 +242,55 @@ def restore_context(saved_frame: Optional[gdb.Frame] = None):
 class SwitchContextMICmd(gdb.MICommand):
     def __init__(self) -> None:
         super(SwitchContextMICmd, self).__init__(
-            "-sctx"
+            "-switch-context-custom"
         )
 
     def invoke(self, args):
-        global saved_frame
-        if len(args) != 3:
-            print("Usage: -sctx rip rsp rbp")
-            return
-        rip, rsp, rbp = args[0], args[1], args[2]
-        saved_frame = switch_context(Registers(rip, rsp, rbp))
+        try:
+            cur_rip, cur_rsp = map(int, args[:2])
+            cur_rbp = int(args[2]) if len(args) > 2 else None
+            
+            # Save current register values
+            for reg in ['sp', 'pc', 'rbp']:
+                gdb.parse_and_eval(f'$save_{reg} = ${reg}')
+            
+            gdb.execute('select-frame 0')
+            
+            # Set new register values
+            gdb.parse_and_eval(f'$sp = {cur_rsp}')
+            gdb.parse_and_eval(f'$pc = {cur_rip}')
+            if cur_rbp is not None:
+                gdb.parse_and_eval(f'$rbp = {cur_rbp}')
+            
+            # Store original values
+            original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
+                               for reg in ['pc', 'sp', 'rbp']}
+            
+            return {"message": "success", **original_values}
+        except Exception as e:
+            return {"message": "error", "rip": None, "rsp": None, "rbp": None}
+
+    def invoke(self, args):
+        try:
+            cur_rip, cur_rsp, cur_rbp = map(int, args[:3])
+            
+            # Save current register values
+            for reg in ['sp', 'pc', 'rbp']:
+                gdb.parse_and_eval(f'$save_{reg} = ${reg}')
+            
+            gdb.execute('select-frame 0')
+            
+            # Set new register values
+            for reg, value in zip(['sp', 'pc', 'rbp'], [cur_rsp, cur_rip, cur_rbp]):
+                gdb.parse_and_eval(f'${reg} = {value}')
+            
+            # Store original values
+            original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
+                            for reg in ['pc', 'sp', 'rbp']}
+            
+            return {"message": "success", **original_values}
+        except Exception as e:
+            return {"message": "error", "rip": None, "rsp": None, "rbp": None}
 
 class SwitchContextCmd(gdb.Command):
     def __init__(self):
@@ -360,113 +407,6 @@ def pc_to_int(pc):
         # chop at first space.
         pc = int(str(pc).split(None, 1)[0], 16)
     return pc
-
-# def find_goroutine(goid):
-# 	"""
-# 	find_goroutine attempts to find the goroutine identified by goid.
-# 	It returns a tuple of gdb.Value's representing the stack pointer
-# 	and program counter pointer for the goroutine.
-
-# 	@param int goid
-
-# 	@return tuple (gdb.Value, gdb.Value)
-# 	"""
-# 	vp = gdb.lookup_type('void').pointer()
-# 	for ptr in SliceValue(gdb.parse_and_eval("'runtime.allgs'")):
-# 		if ptr['atomicstatus']['value'] == G_DEAD:
-# 			continue
-# 		if ptr['goid'] == goid:
-# 			break
-# 	else:
-# 		return None, None
-# 	# Get the goroutine's saved state.
-# 	pc, sp = ptr['sched']['pc'], ptr['sched']['sp']
-# 	status = ptr['atomicstatus']['value']&~G_SCAN
-# 	# Goroutine is not running nor in syscall, so use the info in goroutine
-# 	if status != G_RUNNING and status != G_SYSCALL:
-# 		return pc.cast(vp), sp.cast(vp)
-
-# 	# If the goroutine is in a syscall, use syscallpc/sp.
-# 	pc, sp = ptr['syscallpc'], ptr['syscallsp']
-# 	if sp != 0:
-# 		return pc.cast(vp), sp.cast(vp)
-# 	# Otherwise, the goroutine is running, so it doesn't have
-# 	# saved scheduler state. Find G's OS thread.
-# 	m = ptr['m']
-# 	if m == 0:
-# 		return None, None
-# 	for thr in gdb.selected_inferior().threads():
-# 		if thr.ptid[1] == m['procid']:
-# 			break
-# 	else:
-# 		return None, None
-# 	# Get scheduler state from the G's OS thread state.
-# 	curthr = gdb.selected_thread()
-# 	try:
-# 		thr.switch()
-# 		pc = gdb.parse_and_eval('$pc')
-# 		sp = gdb.parse_and_eval('$sp')
-# 	finally:
-# 		curthr.switch()
-# 	return pc.cast(vp), sp.cast(vp)
-
-
-# class CaladanThreadCmd(gdb.Command):
-# 	"""Execute gdb command in the context of goroutine <goid>.
-
-# 	Switch PC and SP to the ones in the goroutine's G structure,
-# 	execute an arbitrary gdb command, and restore PC and SP.
-
-# 	Usage: (gdb) goroutine <goid> <gdbcmd>
-
-# 	You could pass "all" as <goid> to apply <gdbcmd> to all goroutines.
-
-# 	For example: (gdb) goroutine all <gdbcmd>
-
-# 	Note that it is ill-defined to modify state in the context of a goroutine.
-# 	Restrict yourself to inspecting values.
-# 	"""
-
-# 	def __init__(self):
-# 		gdb.Command.__init__(self, "cldth", gdb.COMMAND_STACK, gdb.COMPLETE_NONE)
-
-# 	def invoke(self, arg, _from_tty):
-# 		goid_str, cmd = arg.split(None, 1)
-# 		goids = []
-
-# 		if goid_str == 'all':
-# 			for ptr in SliceValue(gdb.parse_and_eval("'runtime.allgs'")):
-# 				goids.append(int(ptr['goid']))
-# 		else:
-# 			goids = [int(gdb.parse_and_eval(goid_str))]
-
-# 		for goid in goids:
-# 			self.invoke_per_goid(goid, cmd)
-
-# 	def invoke_per_goid(self, goid, cmd):
-# 		pc, sp = find_goroutine(goid)
-# 		if not pc:
-# 			print("No such goroutine: ", goid)
-# 			return
-# 		pc = pc_to_int(pc)
-# 		save_frame = gdb.selected_frame()
-# 		gdb.parse_and_eval('$save_sp = $sp')
-# 		gdb.parse_and_eval('$save_pc = $pc')
-# 		# In GDB, assignments to sp must be done from the
-# 		# top-most frame, so select frame 0 first.
-# 		gdb.execute('select-frame 0')
-# 		gdb.parse_and_eval('$sp = {0}'.format(str(sp)))
-# 		gdb.parse_and_eval('$pc = {0}'.format(str(pc)))
-# 		try:
-# 			gdb.execute(cmd)
-# 		finally:
-# 			# In GDB, assignments to sp must be done from the
-# 			# top-most frame, so select frame 0 first.
-# 			gdb.execute('select-frame 0')
-# 			gdb.parse_and_eval('$pc = $save_pc')
-# 			gdb.parse_and_eval('$sp = $save_sp')
-# 			save_frame.select()
-
 class MIEcho(gdb.MICommand):
     """Echo arguments passed to the command."""
 
@@ -482,6 +422,66 @@ class MIEcho(gdb.MICommand):
         else:
             return {'string': ", ".join(argv)}
 
+class GetRemoteBTInfo(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-get-remote-bt")
+
+    def invoke(self, argv):
+        remote_ip: Optional[int] = -1
+        local_ip: Optional[int] = -1
+        parent_rip: Optional[int] = -1
+        parent_rsp: Optional[int] = -1
+        parent_rbp: Optional[int] = -1
+        pid: Optional[int] = -1
+        frame = gdb.selected_frame()
+        frames: List[gdb.Frame] = []
+        message = "failed"
+        try:
+            while frame is not None and frame.is_valid():
+                    frames.append(frame)
+                    frame = frame.older()
+            for cur_frame in frames:
+                curr_func = cur_frame.function()
+                if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
+                    for sym in get_local_variables(cur_frame):
+                        if sym.name == "meta":
+                            # print("found meta")
+                            val = sym.value(cur_frame)
+                            # print("found val")
+                            remote_ip = int(val['meta']['caller_comm_ip'])
+                            # print("found ip")
+                            pid = int(val['meta']['pid'])
+                            # print("found pid")
+                            parent_rip = int(val['ctx']['rip'])
+                            parent_rsp = int(val['ctx']['rsp'])
+                            parent_rbp = int(val['ctx']['rbp'])
+                            ddb_meta = get_global_variable(
+                                "ddb_meta", to_print=False, check_is_var=False)
+                            if ddb_meta:
+                                local_ip = int(ddb_meta["comm_ip"])
+                            message = "success"
+                            break
+            print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
+        except Exception as e:
+            pass
+        return {
+            "message":
+                message,
+            "metadata": {
+                "callee_meta": {
+                    "ip": local_ip,
+                },
+                "caller_meta": {
+                    "rip": parent_rip,
+                    "rsp": parent_rsp,
+                    "rbp": parent_rbp,
+                    "pid": pid,
+                    "ip": remote_ip
+                }
+            }}
+
+
+
 
 MIEcho("-echo-dict", "dict")
 MIEcho("-echo-list", "list")
@@ -496,5 +496,5 @@ sctx_mi_cmd = SwitchContextMICmd()
 sctx_cmd = SwitchContextCmd()
 rctx_mi_cmd = RestoreContextMICmd()
 rctx_cmd = RestoreContextCmd()
-
+GetRemoteBTInfo()
 ShowCaladanThreadCmd()
