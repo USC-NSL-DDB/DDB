@@ -11,3 +11,7 @@ kubernetes
 
 # mqtt client
 paho-mqtt 
+
+opentelemetry-sdk
+opentelemetry-exporter-jaeger
+debugpy
