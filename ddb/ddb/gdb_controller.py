@@ -64,19 +64,12 @@ class VanillaPIDController():
 
     def fetch_output(self, timeout=1):
         output = ""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if self.process.stdout.readable():
-                line = self.process.stdout.readline()
-                if line:
-                    output += line
-                else:
-                    break
-            else:
-                break
+        # start_time = time.time()
+        line = self.process.stdout.readline()
+
         if self.verbose and output:
             logger.debug(f"Received output from {self.pid}: {output}")
-        return output.encode()
+        return line.encode()
 
     def is_open(self) -> bool:
         return self.process is not None and self.process.poll() is None
