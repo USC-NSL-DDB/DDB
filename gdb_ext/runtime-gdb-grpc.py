@@ -286,9 +286,9 @@ class SwitchContextMICmd(gdb.MICommand):
             
             # Store original values
             original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
-                            for reg in ['pc', 'sp', 'rbp']}
+                            for reg in ['sp', 'pc', 'rbp']}
             
-            return {"message": "success", **original_values}
+            return {"message": "success", "rip":original_values['pc'], "rsp":original_values['sp'], "rbp":original_values['rbp']}
         except Exception as e:
             return {"message": "error", "rip": None, "rsp": None, "rbp": None}
 

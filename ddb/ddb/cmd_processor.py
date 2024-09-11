@@ -80,7 +80,7 @@ class ContinueCmdHandler(CmdHandler):
             async with remotebtlock:
                 if session.in_custom_context:
                     restore_cmd, restore_cmd_token, _ = self.router.prepend_token(
-                        f"-switch-context-custom {session.current_context.rip} {session.current_context.rsp}")
+                        f"-switch-context-custom {session.current_context.rip} {session.current_context.rsp} {session.current_context.rbp}")
                     context_switch_result = await self.router.send_to_thread_async(session.current_context.thread_id, restore_cmd_token, f"{restore_cmd_token}{restore_cmd}", transformer=NullTransformer())
                     assert len(context_switch_result) == 1
                     if context_switch_result[0].payload["message"] != "success":
@@ -157,7 +157,7 @@ class RemoteBacktraceHandler(CmdHandler):
                 logger.debug(
                     "trying to acquire parent info:-------------------------------------------------")
                 parent_session_id = self.state_mgr.get_session_by_tag(
-                    remote_bt_parent_info.get("parent_addr"))
+                    remote_bt_parent_info.get("id"))
                 chosen_id = self.state_mgr.get_gtids_by_sid(parent_session_id)[0]
                 async with remotebtlock:
                     if not self.state_mgr.sessions[parent_session_id].in_custom_context:

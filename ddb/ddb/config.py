@@ -133,7 +133,7 @@ class GlobalConfig:
         pids=config_data.get("Pids",[])
         for pid in pids:
             sessionConfig= GdbSessionConfig()
-            sessionConfig.tag=pid
+            sessionConfig.tag=str(pid)
             sessionConfig.attach_pid=pid
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.gdb_mode=GdbMode.REMOTE
