@@ -6,6 +6,7 @@ from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
 import uuid
+from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
 from ddb.logging import logger
 
 
@@ -172,3 +173,22 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
         return hasattr(self, 'resp') and self.resp.is_open()
     def close(self):
         self.resp.close()
+
+class RemoteSSHGdbController(RemoteGdbController):
+    def __init__(self, cred: SSHRemoteServerCred):
+        self.client = SSHRemoteServerClient(cred)
+
+    def start(self, command: str):
+        pass
+    
+    def write_input(self, command: str):
+        pass
+    
+    def fetch_output(self, timeout=1) -> bytes:
+        pass
+    
+    def is_open(self) -> bool:
+        pass
+    
+    def close(self):
+        pass

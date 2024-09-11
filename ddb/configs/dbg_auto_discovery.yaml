@@ -10,11 +10,11 @@ Framework: Nu
 
 PrerunGdbCommands:
 - name: "enable script"
-  command: "source ../gdb_ext/runtime-gdb.py"
+  command: "source ../gdb_ext/runtime-gdb-grpc.py"
 # - name: "enable non-stop mode"
 #   command: "set non-stop off"
 
 ServiceDiscovery:
   Broker:
-    hostname: 10.10.2.1
+    hostname: 10.10.1.2
     port: 10101

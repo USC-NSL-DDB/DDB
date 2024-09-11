@@ -8,14 +8,15 @@ class PortManager:
     __port_mgr: "PortManager" = None
 
     def __init__(self) -> None:
-        self.node_list = set()
-        self.per_node_availble: Dict[int, Set[int]] = {}
+        self.node_list: Set[int] = set() # right not the type of node list element is str, make it int later
+        self.per_node_availble: Dict[int, Set[int]] = {} # for now, the key is str, make it int later
         self._lock = Lock()
 
     def init_node(self, ip: int):
         with self._lock:
             if not (ip in self.node_list):
                 self.node_list.add(ip)
+                self.per_node_availble[ip] = set()
                 for p in range(PORT_LOWER_RANGE, PORT_UPPER_RANGE):
                     self.per_node_availble[ip].add(p)
 
@@ -49,6 +50,7 @@ class PortManager:
 
     @staticmethod
     def reserve_port(ip: int) -> Optional[int]:
+        # ip is a str for now. make it a int later
         PortManager.add_node(ip)
         return PortManager.inst().pick_port(ip)
 

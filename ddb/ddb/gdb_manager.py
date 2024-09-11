@@ -49,7 +49,7 @@ class GdbManager:
         asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):
-        port = PortManager.reserve_port(int(session_info.ip))
+        port = PortManager.reserve_port(session_info.ip)
         hostname = session_info.ip
         username = "ybyan"
         pid = session_info.pid
