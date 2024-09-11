@@ -17,6 +17,12 @@ class TransformerBase:
 
     # def transform_stdout(self, responses: List)
 
+class NullTransformer(TransformerBase):
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        return ""
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        return self.transform(responses) 
 ''' Just a dummy transformer
 '''
 class PlainTransformer(TransformerBase):
@@ -59,7 +65,7 @@ class ThreadInfoTransformer(TransformerBase):
                 sid = res.sid
                 for t in threads:
                     tid = int(t["id"])
-                    t["id"] = StateManager.inst().get_gtid(sid, tid)
+                    t["id"] = str(StateManager.inst().get_gtid(sid, tid))
                     all_threads_info.append(t)
 
         all_threads_info = sorted(all_threads_info, key=lambda x: x["id"])
@@ -116,7 +122,7 @@ class ProcessReadableTransformer(TransformerBase):
                 { 
                     "id": int(p["id"][1:]), 
                     "desc": f"{p['type']} {p['pid']}",
-                    "exec": p["executable"]
+                    "exec": p.get("executable","")
                 } 
                 for p in pinfo["groups"] 
             ]
@@ -380,9 +386,8 @@ class ResponseTransformer:
     def transform(responses: List[SessionResponse], transformer: TransformerBase):
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
-        # transformed_output=transformer.format(responses).replace("\n", "")
-        transformed_output=transformer.format(responses)
-        print(f"[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+        transformed_output=transformer.format(responses).replace("\n", "")
+        print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):

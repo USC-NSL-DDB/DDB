@@ -40,13 +40,11 @@ class ResponseProcessor:
 
             if resp_type == "notify":
                 self.handle_notify(resp)
-                # dev_print(str(self.state_manager))
 
             if resp_type == "result":
                 self.handle_result(resp)
 
     def handle_result(self, response: SessionResponse):
-        # dev_print("result")
         CmdTracker.inst().recv_response(response)
 
     def handle_notify(self, response: SessionResponse):

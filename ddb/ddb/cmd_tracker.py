@@ -1,15 +1,21 @@
+import time
 from typing import List, Optional, Set
 from ddb.data_struct import SessionResponse
 from ddb.event_loop import GlobalRunningLoop
-from ddb.utils import CmdTokenGenerator, dev_print
+from ddb.mtracer import GlobalTracer
+from ddb.utils import CmdTokenGenerator
 from ddb.response_transformer import *
+from ddb.logging import logger
 from threading import Lock, Thread
 from queue import Queue
 import asyncio
+
+
 class CmdMeta(asyncio.Future):
-    def __init__(self, token: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
-        super().__init__(loop=GlobalRunningLoop.inst().get_loop())
+    def __init__(self, token: str, command: str, target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
+        super().__init__(loop=GlobalRunningLoop().get_loop())
         self.token = token
+        self.command = command
         self.target_sessions = target_sessions
         self.finished_sessions: Set[int] = set()
         self.responses: List[SessionResponse] = []
@@ -40,6 +46,7 @@ class CmdTracker:
         self._lock = Lock()
         self.outTokenToInToken: dict[str, str] = {}
         self.waiting_cmds: dict[str, CmdMeta] = {}
+        self.finished_cmds: dict[str, CmdMeta] = {}
         self.finished_response: Queue[CmdMeta] = Queue(maxsize=0)
 
         self.process_handle = Thread(
@@ -55,12 +62,13 @@ class CmdTracker:
             CmdTracker._instance = CmdTracker()
             return CmdTracker._instance
 
-    def create_cmd(self, token: Optional[str], target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
+    def create_cmd(self, token: Optional[str],command:Optional[str], target_sessions: Set[int], transformer: Optional[ResponseTransformer] = None):
         if token:
             with self._lock:
-                self.waiting_cmds[token] = CmdMeta(token, target_sessions, transformer)
+                self.waiting_cmds[token] = CmdMeta(
+                    token, command,target_sessions, transformer)
         else:
-            dev_print("No token supplied. skip registering the cmd.")
+            logger.debug("No token supplied. skip registering the cmd.")
             return None
     # temporary function for mutating cmdmeta
     def patch_cmdmeta(self,token:str,cmd_meta:CmdMeta):
@@ -88,25 +96,26 @@ class CmdTracker:
                 cmd_meta = self.waiting_cmds[response.token]
                 result = cmd_meta.recv_response(response)
                 if result:
-                    dev_print("Command Result Handling finished")
-                    dev_print(cmd_meta)
-                    # if no one is waiting
-                    if cmd_meta.get_loop().is_running():
-                        cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
-                    token = self.outTokenToInToken[cmd_meta.token]
-                    dev_print(cmd_meta)
-                    del self.waiting_cmds[response.token]
-                    for cmd_response in cmd_meta.responses:
-                        cmd_response.token=token
-                    dev_print(cmd_meta, id(cmd_meta))
-                    self.finished_response.put(cmd_meta)
-                    # self.finished_response.put(result)
+                    with GlobalTracer().tracer.start_as_current_span("process response") as span:
+                        span.set_attribute("token", response.token)
+                        span.set_attribute(
+                            "duration", (time.time_ns()-GlobalTracer().request_times[response.token])/1e9)
+                        # if no one is waiting
+                        if cmd_meta.get_loop().is_running():
+                            cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
+                        token = self.outTokenToInToken[cmd_meta.token]
+                        del self.waiting_cmds[response.token]
+                        for cmd_response in cmd_meta.responses:
+                            cmd_response.token = token
+                        self.finished_cmds[token] = cmd_meta
+                        self.finished_response.put(cmd_meta)
+                        # self.finished_response.put(result)
         else:
-            dev_print("no token presented. skip.")
+            logger.debug("no token presented. skip.")
     
     def process_finished_response(self):
         while True:
             cmd_meta = self.finished_response.get()
-            dev_print("Start to process a grouped response.")
+            logger.debug("Start to process a grouped response.")
             # For now, just test out 1234-thread-info
             ResponseTransformer.transform(cmd_meta.responses, cmd_meta.transformer)

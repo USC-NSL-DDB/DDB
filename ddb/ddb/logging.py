@@ -33,7 +33,7 @@ logger.addHandler(file_handler)
 logger.addFilter(CustomFilter())
 
 # Suppress logs from other modules by setting a higher log level for the root logger
-logging.getLogger().setLevel(logging.WARNING)
+# logging.getLogger().setLevel(logging.WARNING)
 
 # Function to temporarily disable logging
 def disable_logging():

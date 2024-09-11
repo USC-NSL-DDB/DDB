@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional 
 from pprint import pformat
 
+from ddb.gdb_controller import RemoteGdbController
 from ddb.gdbserver_starter import RemoteServerConnection
 
 class SessionResponse:
@@ -11,7 +12,7 @@ class SessionResponse:
         self.meta = meta
         self.response = response
         self.token: str = None
-        self.stream: str = response["stream"]
+        self.stream: str = response.get("stream", "unknown")
         self.payload: dict = response["payload"]
         self.msg: str = response["message"]
 
@@ -44,6 +45,7 @@ class GdbSessionConfig:
     remote_host: str = ""
     username: str = "" 
     remote_gdbserver: RemoteServerConnection = None
+    gdb_controller:RemoteGdbController = None
     attach_pid: int = -1
     binary: str = ""
     tag: Optional[str] = None

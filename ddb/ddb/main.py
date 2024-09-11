@@ -15,7 +15,7 @@ from ddb.logging import logger
 from ddb.gdb_session import GdbMode, GdbSessionConfig, StartMode
 from ddb.utils import *
 from ddb.config import GlobalConfig
-# import debugpy
+import debugpy
 
 # try:
 #     debugpy.listen(("localhost", 5678))
@@ -136,7 +136,11 @@ def main():
     global_config = GlobalConfig.get()
     try:
         if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
-            bootServiceWeaverKube(gdb_manager)
+            from kubernetes import config
+            try:
+                bootServiceWeaverKube(gdb_manager)
+            except Exception as e:
+                print("fail to laod kubernetes config, check path again")
         elif global_config.framework == TargetFramework.NU:
             bootFromNuConfig(gdb_manager)
         else:

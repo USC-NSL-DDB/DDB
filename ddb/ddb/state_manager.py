@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import threading
 from typing import List, Optional, Set, Tuple
 # from gdb_manager import GdbSession
@@ -17,13 +18,20 @@ class ThreadGroupStatus(Enum):
     STOPPED = 2
     RUNNING = 3
     EXITED = 4
-
+@dataclass
+class ThreadContext:
+    thread_id:int
+    rsp:int
+    rip:int
 class SessionMeta:
-    def __init__(self, sid: int, tag: str) -> None:
+    def __init__(self, sid: int, tag: str, session: "GdbSession") -> None:
         self.tag = tag
         self.sid = sid
         self.current_tid: Optional[int] = None
         self.t_status: dict[int, ThreadStatus] = {}
+        self.current_context:ThreadContext=None
+        self.in_custom_context = False
+        self.session_obj = session
         # maps session unique tid to per inferior tid
         # for example, if session 1 has:
         # tg1: { 1, 2, 4 }
@@ -40,7 +48,6 @@ class SessionMeta:
         self.tg_status: dict[str, ThreadGroupStatus] = {}
         # maps thread_group_id (str) to pid that thread group represents
         self.tg_to_pid: dict[str, int] = {}
-
         self.rlock = RLock()
     def create_thread(self, tid: int, tgid: str):
         with self.rlock:
@@ -205,8 +212,8 @@ class StateManager:
     def get_session_meta(self, sid: int) -> Optional[SessionMeta]:
         return self.sessions.get(sid, None)
 
-    def register_session(self, sid: int, tag: str):
-        self.sessions[sid] = SessionMeta(sid, tag)
+    def register_session(self, sid: int, tag: str, session: "GdbSession"):
+        self.sessions[sid] = SessionMeta(sid, tag, session)
 
     def get_gtids_by_sid(self, sid: int) -> List[int]:
         with self.lock:

@@ -1,9 +1,11 @@
 import asyncio
-from threading import Lock
+from threading import Lock, Thread
 from typing import List, Optional
 from time import sleep
+from ddb.cmd_processor import CommandProcessor
 from ddb.gdbserver_starter import SSHRemoteServerCred, SSHRemoteServerClient
 from ddb.state_manager import StateManager
+from ddb.status_server import FlaskApp
 from ddb.utils import *
 from ddb.cmd_router import CmdRouter
 from ddb.service_mgr import ServiceManager
@@ -13,6 +15,7 @@ from ddb.data_struct import ServiceInfo
 from ddb.config import GlobalConfig
 from ddb.event_loop import GlobalRunningLoop
 from ddb.port_mgr import PortManager
+
 
 class GdbManager:
     def __init__(self) -> None:
@@ -32,28 +35,18 @@ class GdbManager:
             self.sessions.append(GdbSession(config))
 
         self.router = CmdRouter(self.sessions)
+        ddbapiserver=FlaskApp(router=self.router)
+        Thread(target=ddbapiserver.app.run).start()
+        self.processor=CommandProcessor(self.router)
         self.state_mgr = StateManager.inst()
-
-        [ s.start() for s in self.sessions ]
-
+        for s in self.sessions:
+            s.start()
+        ddbapiserver.DDB_up_and_running=True
     def write(self, cmd: str):
-        # if cmd.strip() and cmd.split()[0] == "session":
-        #     selection = int(cmd.split()[1])
-        #     self.state_mgr.set_current_session(selection)
-        #     dev_print(f"selected session {self.state_mgr.get_current_session()}.")
-        # else:
-        #asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.loop).result()
-
-        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), self.router.event_loop_thread.loop)
-        asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop.inst().get_loop())
-
-        # for s in self.sessions:
-        #     s.write(cmd)
-
-        # responses = []
-        # for session in self.sessions:
-        #     resp = session.write(cmd)
-        #     responses.append(resp)
+        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
+        lp=GlobalRunningLoop().get_loop()
+        # logger.debug(f"Sending command: {cmd} {len(asyncio.all_tasks(lp))} {lp} {lp.is_running()}")
+        asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):
         port = PortManager.reserve_port(int(session_info.ip))
@@ -100,7 +93,7 @@ class GdbManager:
         gdb_session.start()
 
     def cleanup(self):
-        dev_print("Cleaning up GdbManager resource")
+        print("Cleaning up GdbManager resource")
         for s in self.sessions:
             s.cleanup()
 

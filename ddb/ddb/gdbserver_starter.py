@@ -3,8 +3,7 @@ from typing import List, Optional
 import paramiko
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-
-from ddb.utils import dev_print
+from ddb.logging import logger
 
 class RemoteServerConnection(ABC):
     @abstractmethod
@@ -72,10 +71,10 @@ class SSHRemoteServerClient(RemoteServerConnection):
                 command = f"sudo {command}"
 
         command = f"{command} > /tmp/gdbserver.log 2>&1"
-        dev_print(f"Starting gdbserver on remote machine... \n\targs: {args}, \n\tattach_pid: {attach_pid}, \n\tsudo: {sudo}, \n\tcommand: {command}")
+        logger.debug(f"Starting gdbserver on remote machine... \n\targs: {args}, \n\tattach_pid: {attach_pid}, \n\tsudo: {sudo}, \n\tcommand: {command}")
         stdin, stdout, stderr = self.client.exec_command(command)
         # You can handle the output and error streams here if needed
-        dev_print(f"Finished starting gdbserver on remote machine...")
+        logger.debug(f"Finished starting gdbserver on remote machine...")
 
     def close(self):
         if self.client:
@@ -93,7 +92,6 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
 
     def execute_command(self, command):
-        KubeRemoteSeverClient.kubeconfig.load_incluster_config()
         self.clientset=KubeRemoteSeverClient.kubeclient.CoreV1Api()
         output = KubeRemoteSeverClient.stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
                                command=command, stderr=True, stdin=False,
@@ -103,34 +101,3 @@ class KubeRemoteSeverClient(RemoteServerConnection):
         pass
     def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
         pass
-
-
-
-
-# class RemoteGdbServer:
-#     def __init__(self, cred: SSHRemoteServerCred, private_key_path=None):
-#         self.cred = cred
-
-#         if private_key_path is None:
-#             self.private_key_path = '~/.ssh/id_rsa'
-#         else:
-#             self.private_key_path = private_key_path
-
-#         self.client = paramiko.SSHClient()
-#         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#         self.client.load_system_host_keys()
-#         self.client.connect(self.cred.hostname, username=self.cred.username)
-
-    # def start(self, args: Optional[List[str]] = None):
-    #     command = f"gdbserver :{self.cred.port} {self.cred.bin} {' '.join(args) if args else ''}"
-    #     stdin, stdout, stderr = self.client.exec_command(command)
-    #     # You can handle the output and error streams here if needed
-    #     dev_print("Start gdbserver on remote machine... Response:")
-
-    #     # line = stdout.readline(10)
-    #     # dev_print(line)
-    #     # for line in stdout.readlines(10):
-    #     #     dev_print(line)
-
-#     def disconnect(self):
-#         self.client.close()

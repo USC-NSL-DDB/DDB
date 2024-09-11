@@ -1,5 +1,6 @@
 import os
 import re
+from ddb.gdb_controller import ServiceWeaverkubeGdbController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
@@ -82,8 +83,11 @@ class GlobalConfig:
     def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
         from kubernetes import config as kubeconfig, client as kubeclient
         from ddb.gdbserver_starter import KubeRemoteSeverClient
-
-        kubeconfig.load_incluster_config()
+        try:
+            kubeconfig.load_kube_config()
+        except Exception as e:
+            print("fail to fetch cluster information")
+            exit(0)
         clientset = kubeclient.CoreV1Api()
         prerun_cmds = config_data.get("PrerunGdbCommands",[])
         config_metadata=config_data.get("Components",{})
@@ -94,6 +98,8 @@ class GlobalConfig:
             namespace=kube_namespace, label_selector=selector_label)
         gdbSessionConfigs: List[GdbSessionConfig] = []
         for i in pods.items:
+            if i._metadata.deletion_timestamp:
+                continue
             logger.debug("%s\t%s\t%s" %
                 (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
             remoteServerConn = KubeRemoteSeverClient(
@@ -105,11 +111,12 @@ class GlobalConfig:
             if match:
                 pid = match.group(1)
                 sessionConfig= GdbSessionConfig()
+                sessionConfig.binary=remoteServerConn.execute_command(['readlink', f'/proc/{pid}/exe',])
                 sessionConfig.remote_port=30001
                 sessionConfig.remote_host=i.status.pod_ip
-                logger.debug("remote host type:", type(i.status.pod_ip))
                 sessionConfig.gdb_mode=GdbMode.REMOTE
                 sessionConfig.remote_gdbserver=remoteServerConn
+                sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,"serviceweaver",True)
                 sessionConfig.tag=i.status.pod_ip
                 sessionConfig.start_mode=StartMode.ATTACH
                 sessionConfig.attach_pid=int(pid)
@@ -150,7 +157,6 @@ class GlobalConfig:
                 try:
                     config_data = safe_load(fs)
                     logger.info(f"Loaded dbg config file: \n{pformat(config_data)}")
-                    # eprint("Loaded dbg config file:")
                     # Set parsed config to the global scope
                     GlobalConfig.set_config(GlobalConfig.parse_config_file(config_data))
                 except YAMLError as e:
