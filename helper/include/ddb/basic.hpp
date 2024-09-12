@@ -5,8 +5,9 @@
 
 #include <arpa/inet.h>  // For inet_pton and in_addr
 #include <netinet/in.h> // For struct in_addr
+#include <unistd.h> // getpid
 
-#include "ddb/common.hpp"
+#include <ddb/common.hpp>
 
 namespace DDB {
 static inline uint32_t ipv4_to_uint32(const std::string& ipv4_addr) {
@@ -25,6 +26,7 @@ static inline void populate_ddb_metadata(const std::string& ipv4_addr) {
     DDBMetadata meta;
     meta.comm_ip = ipv4_to_uint32(ipv4_addr);
     meta.ipv4_str = ipv4_addr;
+    meta.pid = getpid();
     init_ddb_meta(meta);
 }
 }

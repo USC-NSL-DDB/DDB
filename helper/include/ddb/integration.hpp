@@ -24,11 +24,11 @@ namespace DDB
                 this->deinit_discovery();
         }
 
-        inline void init_discovery() {
+        inline void init_discovery(const std::string& tag = "proc") {
             auto service = ServiceInfo {
-                .ip = ddb_meta.comm_ip,
-                .tag = (char*)"proc",
-                .pid = getpid()
+                .ip = DDB::ddb_meta.comm_ip,
+                .tag = tag,
+                .pid = DDB::ddb_meta.pid
             };
 
             if (service_reporter_init(&reporter) != 0) {
