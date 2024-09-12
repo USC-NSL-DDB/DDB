@@ -8,6 +8,7 @@ from pprint import pformat
 from ddb.gdbserver_starter import LocalClient, SSHRemoteServerClient, SSHRemoteServerCred
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
+from ddb.const import ServiceDiscoveryConst
 
 class DevFlags:
     USE_EXTENDED_REMOTE = True
@@ -41,7 +42,7 @@ class GlobalConfig:
             broker_info = config_data["ServiceDiscovery"]["Broker"]
             ddb_config.broker = BrokerInfo(
                 broker_info["hostname"],
-                broker_info["port"]
+                ServiceDiscoveryConst.BROKER_PORT
             ) 
     
         gdbSessionConfigs: List[GdbSessionConfig] = []

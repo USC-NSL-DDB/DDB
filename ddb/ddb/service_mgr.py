@@ -1,18 +1,18 @@
+import shutil
 import time
 import asyncio
+import subprocess
+import os
+import pkg_resources
 from typing import Callable
 import paho.mqtt.client as paho
 from paho.mqtt.client import CallbackAPIVersion
-from ddb.data_struct import ServiceInfo
-from ddb.logging import logger
-from ddb.utils import ip_int2ip_str
-from ddb.config import GlobalConfig
 
-# BROKER_ADDR = "10.10.2.1"
-# BROKER_PORT = 10101
-BROKER_MSG_TRANSPORT = "tcp"
-T_SERVICE_DISCOVERY = "service_discovery/report"
-CLIENT_ID = "service_manager"
+from ddb.data_struct import BrokerInfo, ServiceInfo
+from ddb.logging import logger
+from ddb.utils import ip_int2ip_str, start_mosquitto_broker, cleanup_mosquitto_broker
+from ddb.config import GlobalConfig
+from ddb.const import ServiceDiscoveryConst
 
 ON_NEW_SERVICE_CALLBACK_HANDLE = "on_new_service"
 ON_NEW_SERVICE_CALLBACK = Callable[[ServiceInfo], None]
@@ -24,30 +24,32 @@ class ServiceManager:
     MAX_RECONNECT_DELAY = 60
 
     def __init__(self) -> None:
+        broker_info = GlobalConfig.get().broker
+        start_mosquitto_broker(broker_info)
         self.userdata = {
             ON_NEW_SERVICE_CALLBACK_HANDLE: self.__default_on_new_service
         }
 
         self.client = paho.Client(
             callback_api_version=CallbackAPIVersion.VERSION2, 
-            client_id=CLIENT_ID, 
+            client_id=ServiceDiscoveryConst.CLIENT_ID, 
             userdata=self.userdata, 
             protocol=paho.MQTTv5,
-            transport=BROKER_MSG_TRANSPORT
+            transport=ServiceDiscoveryConst.BROKER_MSG_TRANSPORT
         )
         self.client.on_connect = ServiceManager.__on_connect
         self.client.on_disconnect = ServiceManager.__on_disconnect
 
         self.client.on_message = ServiceManager.__on_message
-        self.client.message_callback_add(T_SERVICE_DISCOVERY, ServiceManager.__on_service_discovery)
+        self.client.message_callback_add(ServiceDiscoveryConst.T_SERVICE_DISCOVERY, ServiceManager.__on_service_discovery)
 
-        broker_info = GlobalConfig.get().broker
         self.client.connect(broker_info.hostname, broker_info.port)
-        self.client.subscribe(T_SERVICE_DISCOVERY)
+        self.client.subscribe(ServiceDiscoveryConst.T_SERVICE_DISCOVERY)
         self.client.loop_start()
 
     def __del__(self) -> None:
         self.client.loop_stop()
+        cleanup_mosquitto_broker()
 
 # -----------------------------------------------
 # Callbacks will be triggered by ServiceManager

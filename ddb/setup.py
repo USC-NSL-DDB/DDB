@@ -8,6 +8,9 @@ setup(
     version="0.1",
     packages=find_packages(),
     install_requires=required,
+    package_data={
+        "ddb": ["conf/*.conf"],
+    },
     entry_points={
         'console_scripts': [
             'ddb = ddb.main:main',

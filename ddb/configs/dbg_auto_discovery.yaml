@@ -17,4 +17,3 @@ PrerunGdbCommands:
 ServiceDiscovery:
   Broker:
     hostname: 10.10.1.2
-    port: 10101
