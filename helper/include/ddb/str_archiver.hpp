@@ -5,7 +5,7 @@
 #include <string>
 #include <stdexcept>
 
-#include "ddb/backtrace.h"
+#include <ddb/backtrace.hpp>
 
 namespace DDB{
     static inline std::string serialize_to_str(const DDBTraceMeta& data) {

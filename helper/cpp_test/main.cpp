@@ -1,12 +1,12 @@
 #include <iostream>
 #include <string>
 
-#define DEFINE_DDB_META
-#include "ddb/common.h"
-#include "ddb/basic.h"
-#include "ddb/backtrace.h"
+#include "ddb/integration.hpp"
+#include "ddb/backtrace.hpp"
 
 #include <type_traits>
+
+using namespace DDB;
 
 class Invoker {
     public:
@@ -53,6 +53,11 @@ int main() {
     });
 
     std::cout << "rt: " << rt << std::endl;
+
+    DDB::DDBConnector connector;
+    connector.init("10.10.1.2", true);
+
+    std::cout << DDB::ddb_meta.comm_ip << " " << DDB::ddb_meta.pid << " " << DDB::ddb_meta.ipv4_str << std::endl;
 
     // auto rt = DDB::Backtrace::extraction<std::string>([&]() -> DDBTraceMeta {
     //     DDBTraceMeta meta;

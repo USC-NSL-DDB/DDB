@@ -5,24 +5,24 @@
 
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/string.hpp"
-#include "ddb/backtrace.h"
+#include "ddb/backtrace.hpp"
 
 namespace cereal {
     template <class Archive>
-    inline void serialize(Archive & ar, DDBCallerMeta& data) {
+    inline void serialize(Archive & ar, DDB::DDBCallerMeta& data) {
         ar(data.caller_comm_ip);
         ar(data.pid);
     }
 
     template <class Archive>
-    inline void serialize(Archive & ar, DDBCallerContext& data) {
+    inline void serialize(Archive & ar, DDB::DDBCallerContext& data) {
         ar(data.rbp);
         ar(data.rip);
         ar(data.rsp);
     }
     
     template <class Archive>
-    inline void serialize(Archive & ar, DDBTraceMeta& data) {
+    inline void serialize(Archive & ar, DDB::DDBTraceMeta& data) {
         ar(data.magic);
         ar(data.meta);
         ar(data.ctx);

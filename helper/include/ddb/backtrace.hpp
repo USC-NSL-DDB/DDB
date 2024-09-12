@@ -1,14 +1,12 @@
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <stdint.h>
+#include <string>
+#include <cstdint>
 #include <sched.h>
 #include <unistd.h>
+#include <functional>
 
-#include "ddb/common.h"
+#include "ddb/common.hpp"
 
 /// @brief  Added magic number for testing DDBTraceMeta 
 #define T_META_MATIC 12345ULL
@@ -32,23 +30,24 @@ extern "C" {
 //   DDBCallerContext ctx;
 // } __attribute__((packed)) DDBTraceMeta;
 
-typedef struct {
-  uint32_t caller_comm_ip;
-  pid_t pid;
-} DDBCallerMeta;
+namespace DDB {
+struct DDBCallerMeta {
+  uint32_t caller_comm_ip = 0;
+  pid_t pid = 0;
+};
 
-typedef struct {
-  uintptr_t rip;
-  uintptr_t rsp;
-  uintptr_t rbp;
-} DDBCallerContext;
+struct DDBCallerContext {
+  uintptr_t rip = 0;
+  uintptr_t rsp = 0;
+  uintptr_t rbp = 0;
+};
 
 /// @brief  Added data structure for backtrace
-typedef struct {
-  uint64_t magic;
+struct DDBTraceMeta {
+  uint64_t magic = 0;
   DDBCallerMeta meta;
   DDBCallerContext ctx;
-} DDBTraceMeta;
+};
 
 static inline __attribute__((always_inline)) void get_context(DDBCallerContext* ctx) { 
   void *rsp;
@@ -76,26 +75,19 @@ static inline __attribute__((always_inline)) void get_trace_meta(DDBTraceMeta* t
   get_context(&trace_meta->ctx);
 }
 
-#ifdef __cplusplus
-}
-#endif
-
-#include <functional>
-
-namespace DDB {
-  namespace Backtrace {
-    template<typename RT = void, class RPCCallable>
-    __attribute__((noinline))
-    static RT extraction(std::function<DDBTraceMeta()> extractor, RPCCallable&& rpc_callable) {
-      __attribute__((used)) DDBTraceMeta meta;
-      if (extractor) {
-        meta = extractor();
-      }
-      if constexpr (!std::is_void_v<RT>) {
-        return rpc_callable();
-      } else {
-        rpc_callable();
-      }
+namespace Backtrace {
+  template<typename RT = void, class RPCCallable>
+  __attribute__((noinline))
+  static RT extraction(std::function<DDBTraceMeta()> extractor, RPCCallable&& rpc_callable) {
+    __attribute__((used)) DDBTraceMeta meta;
+    if (extractor) {
+      meta = extractor();
+    }
+    if constexpr (!std::is_void_v<RT>) {
+      return rpc_callable();
+    } else {
+      rpc_callable();
     }
   }
-}
+} // namespace Backtrace
+} // namespace DDB
