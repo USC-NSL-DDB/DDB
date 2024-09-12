@@ -5,34 +5,27 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <stdint.h>
+
 #include <unistd.h>
 #include <MQTTClient.h>
 #include <string.h>
 
-// #define ADDRESS     "tcp://10.10.1.2:10101"
-// #define CLIENTID    "service_reporter"
-// #define INI_FILEPATH "/tmp/ddb/service_discovery/config"
-// // #define T_SERVICE_DISCOVERY "service_discovery/report"
-// #define QOS         1 // at least once
-// #define TIMEOUT     10000L
+#include <ddb/common.hpp>
 
 namespace DDB {
-constexpr static char CLIENTID[] = "service_reporter";
+constexpr static char CLIENTID[] = "s_";
 constexpr static char INI_FILEPATH[] = "/tmp/ddb/service_discovery/config";
 constexpr static uint8_t QOS = 1;
 constexpr static uint32_t TIMEOUT = 10000L;
 
 struct ServiceInfo {
-    uint32_t ip;    // ip address
-    std::string tag;      // tag name
-    pid_t pid;      // process ID
+    uint32_t ip;        // ip address
+    std::string tag;    // tag name
+    pid_t pid;          // process ID
 };
 
 struct DDBServiceReporter {
-    MQTTClient client; // client for pub
+    MQTTClient client;       // client for pub
     std::string address;     // broker address
     std::string topic;       // topic for pub
 };
@@ -57,7 +50,13 @@ static inline int service_reporter_init(DDBServiceReporter* reporter) {
     if (rc != 0) return rc;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    MQTTClient_create(&reporter->client, reporter->address.c_str(), CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    MQTTClient_create(
+        &reporter->client, 
+        reporter->address.c_str(), 
+        (CLIENTID + std::to_string(ddb_meta.pid)).c_str(),
+        MQTTCLIENT_PERSISTENCE_NONE, 
+        NULL
+    );
     conn_opts.keepAliveInterval = 20;
     conn_opts.cleansession = 1;
 
@@ -100,9 +99,6 @@ static inline int report_service(
 
     MQTTClient_deliveryToken token;
     MQTTClient_publishMessage(reporter->client, reporter->topic.c_str(), &pubmsg, &token);
-    // printf("Waiting for up to %d seconds for publication of %s\n"
-    //        "on topic %s for client with ClientID: %s\n",
-    //        (int)(TIMEOUT/1000), PAYLOAD, TOPIC, CLIENTID);
     rc = MQTTClient_waitForCompletion(reporter->client, token, TIMEOUT);
     printf("Message with delivery token %d delivered\n", token);
     return rc;

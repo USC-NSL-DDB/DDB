@@ -46,6 +46,11 @@ namespace DDB
             if (enable_discovery)
                 this->init_discovery();
             this->discovery = enable_discovery;
+            std::cout << "ddb initialized. meta = { pid = " 
+                    << DDB::ddb_meta.pid << ", comm_ip = " 
+                    << DDB::ddb_meta.comm_ip << ", ipv4_str =" 
+                    << DDB::ddb_meta.ipv4_str << " }" 
+                    << std::endl;
         }
 
         DDBConnector() = default;
