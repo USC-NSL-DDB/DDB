@@ -63,12 +63,10 @@ class VanillaPIDController():
         self.process.stdin.flush()
 
     def fetch_output(self, timeout=1):
-        output = ""
-        # start_time = time.time()
         line = self.process.stdout.readline()
 
-        if self.verbose and output:
-            logger.debug(f"Received output from {self.pid}: {output}")
+        if self.verbose and line:
+            logger.debug(f"Received output from {self.pid}: {line}")
         return line.encode()
 
     def is_open(self) -> bool:

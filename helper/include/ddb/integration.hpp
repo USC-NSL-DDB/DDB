@@ -10,8 +10,35 @@
 #include <ddb/basic.hpp>
 #include <ddb/service_reporter.hpp>
 
+#include <pthread.h>
+#include <stdio.h>
+
 namespace DDB
 {
+    static int SIGDDBWAIT = 40; // re-use real-time signal for ddb needs
+
+    static inline void block_signal(int sig) {
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, sig);
+        pthread_sigmask(SIG_BLOCK, &set, NULL);
+    }
+
+    static inline void wait_for_signal(int sig) {
+        sigset_t set;
+        int received_sig;
+
+        sigemptyset(&set);
+        sigaddset(&set, sig);
+
+        printf("Process PID: %d. Waiting for signal %d to continue...\n", getpid(), sig);
+
+        // Wait for the signal
+        sigwait(&set, &received_sig);
+
+        printf("Received signal %d. Resuming execution.\n", received_sig);
+    }
+
     class DDBConnector {
      public:
         inline void deinit_discovery() {
@@ -67,11 +94,9 @@ namespace DDB
         bool discovery;
 
         // sending SIGSTOP to the process to wait for debugger
-        static inline int wait_for_debugger() {
-            // int ret = raise(SIGSTOP);
-            int ret = raise(SIGTSTP);
-	    return ret;
+        static inline void wait_for_debugger() {
+            block_signal(SIGDDBWAIT); 
+            wait_for_signal(SIGDDBWAIT);
         }
     };
 } // namespace DDB
-
