@@ -5,6 +5,8 @@ from uuid import uuid4
 from typing import List, Optional
 from threading import Thread, Lock
 from time import sleep
+
+import pkg_resources
 from ddb.counter import TSCounter
 from ddb.data_struct import GdbMode, GdbSessionConfig, StartMode
 from ddb.gdb_controller import RemoteGdbController
@@ -95,12 +97,17 @@ class GdbSession:
     def remote_attach(self):
         logger.debug("start remote attach")
         if not self.gdb_controller:
-            logger.warn("Remote gdbcontroller not initialized")
+            logger.warning("Remote gdbcontroller not initialized")
             return
         gdb_cmd = " ".join(["gdb", self.get_mi_version_arg(), "-q"])
         self.gdb_controller.start(gdb_cmd)
 
+        self.gdb_controller.write_input("-gdb-set logging enabled on")
         self.gdb_controller.write_input("-gdb-set mi-async on")
+
+        extension_filepath = pkg_resources.resource_filename('ddb', 'gdb_ext/runtime-gdb-grpc.py')
+
+        self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
 
         for prerun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
@@ -108,7 +115,6 @@ class GdbSession:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
-        self.write(f"-gdb-set logging enabled on")
             
     def remote_start(self):
         if not self.remote_gdbserver:

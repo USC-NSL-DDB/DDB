@@ -1,64 +1,9 @@
-import os
-import shutil
-import subprocess
+
 import sys
 from threading import Lock
-import time
 from typing import Tuple
 
-import pkg_resources
-
-from ddb.const import ServiceDiscoveryConst
 from ddb.counter import TSCounter
-from ddb.data_struct import BrokerInfo
-from ddb.logging import logger
-
-def folder_struct_setup():
-    folders = [
-        "/tmp/ddb",
-        "/tmp/ddb/mosquitto/",
-        "/tmp/ddb/logs/mosquitto/",
-        "/tmp/ddb/service_discovery/"
-    ]
-
-    for folder in folders:
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-            logger.debug(f"Created folder: {folder}")
-
-    broker_config = pkg_resources.resource_filename('ddb', 'conf/mosquitto.conf')
-    destination_file = "/tmp/ddb/mosquitto/mosquitto.conf"
-    shutil.copy(broker_config, destination_file)
-
-def start_mosquitto_broker(broker: BrokerInfo):
-    folder_struct_setup()
-    with open(ServiceDiscoveryConst.SERVICE_DISCOVERY_INI_FILEPATH, 'w') as f:
-        f.writelines(
-            [
-                f"{ServiceDiscoveryConst.BROKER_MSG_TRANSPORT}://{broker.hostname}:{broker.port}\n",
-                f"{ServiceDiscoveryConst.T_SERVICE_DISCOVERY}\n",
-            ]
-        )
-    try:
-        subprocess.Popen(["mosquitto", "-c", "/tmp/ddb/mosquitto/mosquitto.conf", "-d"]) # run mosquitto broker in daemon mode
-        logger.debug("Mosquitto broker started successfully!")
-    except FileNotFoundError:
-        logger.error("Mosquitto program not found. Please make sure it is installed.")
-    except Exception as e:
-        logger.error(f"Failed to start Mosquitto broker: {e}")
-
-    logger.debug("Waiting 5s for broker to start...")
-    time.sleep(5) # wait for the broker to start
-
-def cleanup_mosquitto_broker():
-    try:
-        if shutil.which("sudo"):
-            subprocess.run(["sudo", "pkill", "mosquitto"])
-        else:
-            subprocess.run(["pkill", "mosquitto"])
-        logger.debug("Mosquitto broker terminated successfully!")
-    except Exception as e:
-        logger.error(f"Failed to terminate Mosquitto broker: {e}")
 
 def eprint(*args, **kwargs):
     dev_print(*args, **kwargs)

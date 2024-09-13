@@ -9,7 +9,10 @@ setup(
     packages=find_packages(),
     install_requires=required,
     package_data={
-        "ddb": ["conf/*.conf"],
+        "ddb": [
+            "conf/*.conf",
+            "gdb_ext/*.py"
+        ],
     },
     entry_points={
         'console_scripts': [

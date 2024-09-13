@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <csignal>
 #include <unistd.h> 
 
 #define DEFINE_DDB_META
@@ -31,14 +32,17 @@ namespace DDB
                 .pid = DDB::ddb_meta.pid
             };
 
+            this->discovery = false;
             if (service_reporter_init(&reporter) != 0) {
                 std::cerr << "failed to initialize service reporter" << std::endl;
             } else {
                 if (report_service(&reporter, &service) != 0) {
                     std::cerr << "failed to report new service" << std::endl;
+                } else {
+                    this->discovery = true;
+                    DDB::DDBConnector::wait_for_debugger();
                 }
             }
-            this->discovery = true;
         }
 
         inline void init(const std::string& ipv4, bool enable_discovery = true) {
@@ -61,5 +65,13 @@ namespace DDB
      private:
         DDBServiceReporter reporter;
         bool discovery;
+
+        // sending SIGSTOP to the process to wait for debugger
+        static inline int wait_for_debugger() {
+            // int ret = raise(SIGSTOP);
+            int ret = raise(SIGTSTP);
+	    return ret;
+        }
     };
 } // namespace DDB
+

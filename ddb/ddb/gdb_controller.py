@@ -44,9 +44,9 @@ class VanillaPIDController():
 
     def start(self, command: str):
         if self.verbose:
-            print(f"Starting GDB for process {self.pid}")
+            logger.debug(f"Starting GDB for process {self.pid}")
         self.process = subprocess.Popen(
-            ['gdb', '--interpreter=mi3', '-q',],
+            ['gdb', '--interpreter=mi3', '-q'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

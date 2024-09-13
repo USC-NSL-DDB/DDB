@@ -8,9 +8,9 @@
 #   command: "./nu_scripts/stop_rt.sh"
 Framework: Nu
 
-PrerunGdbCommands:
-- name: "enable script"
-  command: "source ../gdb_ext/runtime-gdb-grpc.py"
+# PrerunGdbCommands:
+# - name: "enable script"
+#   command: "source ../gdb_ext/runtime-gdb-grpc.py"
 # - name: "enable non-stop mode"
 #   command: "set non-stop off"
 

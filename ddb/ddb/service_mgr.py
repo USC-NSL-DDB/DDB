@@ -1,16 +1,12 @@
-import shutil
 import time
-import asyncio
-import subprocess
-import os
-import pkg_resources
 from typing import Callable
 import paho.mqtt.client as paho
 from paho.mqtt.client import CallbackAPIVersion
 
-from ddb.data_struct import BrokerInfo, ServiceInfo
+from ddb.data_struct import ServiceInfo
 from ddb.logging import logger
-from ddb.utils import ip_int2ip_str, start_mosquitto_broker, cleanup_mosquitto_broker
+from ddb.utils import ip_int2ip_str
+from ddb.startup import start_mosquitto_broker, cleanup_mosquitto_broker
 from ddb.config import GlobalConfig
 from ddb.const import ServiceDiscoveryConst
 

@@ -15,3 +15,6 @@ echo "set auto-load safe-path /" >> ~/.gdbinit
 
 # init submodules
 git submodule update --init --recursive
+
+# allow gdb attach via pid
+echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope

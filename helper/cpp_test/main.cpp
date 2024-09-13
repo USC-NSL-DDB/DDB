@@ -1,5 +1,8 @@
 #include <iostream>
 #include <string>
+#include <thread>
+#include <chrono>
+#include <unistd.h>
 
 #include "ddb/integration.hpp"
 #include "ddb/backtrace.hpp"
@@ -54,11 +57,20 @@ int main() {
 
     std::cout << "rt: " << rt << std::endl;
 
+    std::cout << "sleep" << std::endl;
+    std::cout << getpid() << std::endl;
+    // std::this_thread::sleep_for(std::chrono::seconds(10));
+
     DDB::DDBConnector connector;
     connector.init("10.10.1.2", true);
 
     std::cout << DDB::ddb_meta.comm_ip << " " << DDB::ddb_meta.pid << " " << DDB::ddb_meta.ipv4_str << std::endl;
 
+    // std::this_thread::sleep_for(std::chrono::seconds(10));
+
+    std::cout << "finsihed" << std::endl;
+
+    // std::this_thread::sleep_for(std::chrono::seconds(5000));
     // auto rt = DDB::Backtrace::extraction<std::string>([&]() -> DDBTraceMeta {
     //     DDBTraceMeta meta;
     //     meta.magic = 12345;
