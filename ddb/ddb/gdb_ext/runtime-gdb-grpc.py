@@ -455,10 +455,10 @@ class GetRemoteBTInfo(gdb.MICommand):
                             parent_rip = int(val['ctx']['rip'])
                             parent_rsp = int(val['ctx']['rsp'])
                             parent_rbp = int(val['ctx']['rbp'])
-                            ddb_meta = get_global_variable(
-                                "ddb_meta", to_print=False, check_is_var=False)
-                            if ddb_meta:
-                                local_ip = int(ddb_meta["comm_ip"])
+                            # ddb_meta = get_global_variable(
+                            #     "ddb_meta", to_print=False, check_is_var=False)
+                            # if ddb_meta:
+                            #     local_ip = int(ddb_meta["comm_ip"])
                             message = "success"
                             break
             print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
@@ -468,9 +468,9 @@ class GetRemoteBTInfo(gdb.MICommand):
             "message":
                 message,
             "metadata": {
-                "callee_meta": {
-                    "ip": local_ip,
-                },
+                # "callee_meta": {
+                #     "ip": local_ip,
+                # },
                 "caller_meta": {
                     "rip": parent_rip,
                     "rsp": parent_rsp,

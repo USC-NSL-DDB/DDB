@@ -57,6 +57,8 @@ class VanillaPIDController():
         time.sleep(1)
 
     def write_input(self, command):
+        if isinstance(command, list):
+            command = "\n".join(command)
         if self.verbose:
             logger.debug(f"Sending input to {self.pid}: {command}")
         self.process.stdin.write(f"{command}\n")

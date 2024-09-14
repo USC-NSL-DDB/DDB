@@ -124,14 +124,15 @@ remotebtlock = asyncio.Lock()
 class RemoteBacktraceHandler(CmdHandler):
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
-        pid, ip = caller_meta.get('pid'), caller_meta.get('ip')
+        pid, ip_int = caller_meta.get('pid'), int(caller_meta.get('ip'))
+        from ddb.utils import ip_int2ip_str
         
         return {
             'message': data.get('message'),
             'parent_rip': caller_meta.get('rip'),
             'parent_rsp': caller_meta.get('rsp'),
             'parent_rbp': caller_meta.get('rbp'),
-            'id': pid
+            'id': f"{ip_int2ip_str(ip_int)}:-{pid}"
         }
 
     async def process_command(self, command_instance: SingleCommand):
@@ -166,6 +167,10 @@ class RemoteBacktraceHandler(CmdHandler):
                         # self.router.send_to_session(
                         #     interrupt_cmd_token, interrupt_cmd, session_id=parent_session_id)
                         # just try to busy waiting here
+
+                        ## TODO: right now we need DA to send interrupt to 
+                        # all process to stop it upon breakpoints hit event
+                        # We may need to consider interrupting it in ddb itself.
                         while self.state_mgr.sessions[parent_session_id].t_status[1] != ThreadStatus.STOPPED:
                             await asyncio.sleep(0.5)
                         context_switch_cmd, context_switch_token, _ = self.router.prepend_token(

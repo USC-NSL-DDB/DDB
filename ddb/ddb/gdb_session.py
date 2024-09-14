@@ -108,12 +108,16 @@ class GdbSession:
         extension_filepath = pkg_resources.resource_filename('ddb', 'gdb_ext/runtime-gdb-grpc.py')
 
         self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
+        # self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
 
         for prerun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
         for init_cmd in self.initialize_commands:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
+        self.gdb_controller.write_input(
+            f'-interpreter-exec console "signal SIG40"'
+        )
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
