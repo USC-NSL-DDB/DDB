@@ -24,6 +24,13 @@ namespace DDB
         pthread_sigmask(SIG_BLOCK, &set, NULL);
     }
 
+    static inline void unblock_signal(int sig) {
+        sigset_t set;
+        sigemptyset(&set);                
+        sigaddset(&set, sig);
+        pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+    }
+
     static inline void wait_for_signal(int sig) {
         sigset_t set;
         int received_sig;
@@ -36,7 +43,12 @@ namespace DDB
         // Wait for the signal
         sigwait(&set, &received_sig);
 
-        printf("Received signal %d. Resuming execution.\n", received_sig);
+        // printf("Received signal %d. Resuming execution.\n", received_sig);
+        printf("Debugger attached. Resume execution...\n");
+    }
+
+    static inline void sig_ddb_wait_handler(int signum) {
+        raise(SIGTRAP);
     }
 
     class DDBConnector {
@@ -50,6 +62,7 @@ namespace DDB
         inline void deinit() {
             if (this->discovery)
                 this->deinit_discovery();
+            unblock_signal(SIGDDBWAIT);
         }
 
         inline void init_discovery(const std::string& tag = "proc") {
@@ -73,11 +86,28 @@ namespace DDB
         }
 
         inline void init(const std::string& ipv4, bool enable_discovery = true) {
+
             populate_ddb_metadata(ipv4);
-            if (enable_discovery)
+            if (enable_discovery) {
                 this->init_discovery();
+            } else {
+                // ddb will signal SIGDDBWAIT right after attaching in all cases.
+                // This is useful for debuggee who needs to wait for debugger to attach.
+                // signal SIGDDBWAIT will tell the debuggee to keep execution.
+                // 
+                // However, we want the debuggee to stop for inspection upon attach,
+                // but signal in gdb will continue the execution.
+                // Therefore, this is the hack to force trap the program after SIGDDBWAIT.
+                struct sigaction sig_ddb_wait_action;
+
+                sig_ddb_wait_action.sa_handler = sig_ddb_wait_handler;
+                sigemptyset(&sig_ddb_wait_action.sa_mask);
+                sig_ddb_wait_action.sa_flags = 0;
+
+                sigaction(SIGDDBWAIT, &sig_ddb_wait_action, NULL);
+            }
             this->discovery = enable_discovery;
-            std::cout << "ddb initialized. meta = { pid = " 
+            std::cout << "ddb connector initialized. meta = { pid = " 
                     << DDB::ddb_meta.pid << ", comm_ip = " 
                     << DDB::ddb_meta.comm_ip << ", ipv4_str =" 
                     << DDB::ddb_meta.ipv4_str << " }" 
@@ -93,10 +123,15 @@ namespace DDB
         DDBServiceReporter reporter;
         bool discovery;
 
-        // sending SIGSTOP to the process to wait for debugger
         static inline void wait_for_debugger() {
+            // Wait for the debugger to attach.
+            // Upon attaching, ddb shall signal SIGDDBWAIT and back to the regular flow
+            // but signal SIGDDBWAIT will resume execution, which is not what we want.
+            // this is the hack to re-trap the debuggee again.
             block_signal(SIGDDBWAIT); 
             wait_for_signal(SIGDDBWAIT);
+            raise(SIGTRAP); // force gdb to stop the debuggee again
         }
+
     };
 } // namespace DDB
