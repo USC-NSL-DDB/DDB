@@ -452,9 +452,9 @@ class GetRemoteBTInfo(gdb.MICommand):
                             # print("found ip")
                             pid = int(val['meta']['pid'])
                             # print("found pid")
-                            parent_rip = int(val['ctx']['rip'])
-                            parent_rsp = int(val['ctx']['rsp'])
-                            parent_rbp = int(val['ctx']['rbp'])
+                            parent_rip = int(val['ctx']['pc'])
+                            parent_rsp = int(val['ctx']['sp'])
+                            parent_rbp = int(val['ctx']['fp'])
                             # ddb_meta = get_global_variable(
                             #     "ddb_meta", to_print=False, check_is_var=False)
                             # if ddb_meta:
@@ -479,9 +479,6 @@ class GetRemoteBTInfo(gdb.MICommand):
                     "ip": remote_ip
                 }
             }}
-
-
-
 
 MIEcho("-echo-dict", "dict")
 MIEcho("-echo-list", "list")
