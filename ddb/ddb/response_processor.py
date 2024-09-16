@@ -36,7 +36,7 @@ class ResponseProcessor:
             resp_type = resp.response["type"]
 
             # Special handling for different types of response
-            mi_print(resp.response, resp.meta)
+            # mi_print(resp.response, resp.meta)
 
             if resp_type == "notify":
                 self.handle_notify(resp)

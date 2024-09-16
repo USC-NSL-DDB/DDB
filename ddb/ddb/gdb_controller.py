@@ -65,6 +65,7 @@ class VanillaPIDController():
         self.process.stdin.flush()
 
     def fetch_output(self, timeout=1):
+        # start_time = time.time()
         line = self.process.stdout.readline()
 
         if self.verbose and line:
