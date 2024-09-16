@@ -61,7 +61,6 @@ class CmdHandlerBase(CmdHandler):
 
 class BreakInsertCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
-        command_instance.thread_id = -1
         super().process_command(command_instance)
 
 
@@ -205,8 +204,7 @@ class RemoteBacktraceHandler(CmdHandler):
             logger.debug(
                 f"Error in remote backtrace: {e}")
         finally:
-            print(
-                f"[ TOOL MI OUTPUT ] \n{(PlainTransformer().format(a_bt_result))}")
+            print("\n" + f"[ TOOL MI OUTPUT ] \n{(PlainTransformer().format(a_bt_result))}\n")
 
 
 class ListGroupsCmdHandler(CmdHandlerBase):
@@ -229,6 +227,7 @@ class CommandProcessor:
             "-thread-select": ThreadSelectCmdHandler(self.router),
             "-bt-remote": RemoteBacktraceHandler(self.router),
             "-list-thread-groups": ListGroupsCmdHandler(self.router),
+            "-exec-next": CmdHandlerBase(self.router),
         }
         self.base_handler = CmdHandlerBase(self.router)
 
@@ -272,7 +271,7 @@ class CommandProcessor:
                     curr_thread)
                 cmd_instance.thread_id = curr_thread
 
-            if "--session" in cmd_split:
+            if "--session" in cmd_split: 
                 session_index = cmd_split.index("--session")
                 if session_index < len(cmd_split) - 1:
                     sid = int(cmd_split[session_index + 1])

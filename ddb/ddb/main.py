@@ -17,12 +17,12 @@ from ddb.config import GlobalConfig
 from ddb.startup import cleanup_mosquitto_broker
 import debugpy
 
-# try:
-#     debugpy.listen(("localhost", 5678))
-#     print("Waiting for debugger attach")
-#     debugpy.wait_for_client()
-# except Exception as e:
-#     print(f"Failed to attach debugger: {e}")
+try:
+    debugpy.listen(("localhost", 5678))
+    print("Waiting for debugger attach")
+    debugpy.wait_for_client()
+except Exception as e:
+    print(f"Failed to attach debugger: {e}")
 
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
@@ -70,17 +70,20 @@ gdb_manager: GdbManager = None
 
 def run_cmd_loop():
     while True:
-        cmd = input("(gdb) ").strip()
-        cmd = f"{cmd}\n"
-        gdb_manager.write(cmd) 
-        raw_cmd = cmd.strip()
-        if raw_cmd == "exit" or raw_cmd == "-gdb-exit":
-            break
+        try:
+            cmd = input("(gdb) ").strip()
+            cmd = f"{cmd}\n"
+            gdb_manager.write(cmd) 
+            raw_cmd = cmd.strip()
+            if raw_cmd == "exit" or raw_cmd == "-gdb-exit":
+                break
+        except EOFError:
+            print("\nNo input received")
     ddb_exit()
 
 def ddb_exit():
     global gdb_manager, terminated
-    cleanup_mosquitto_broker()
+    # cleanup_mosquitto_broker()
     if not terminated:
         logger.info("Exiting ddb...")
         signal.signal(signal.SIGINT, signal.SIG_IGN)

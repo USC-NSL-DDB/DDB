@@ -249,7 +249,9 @@ class SwitchContextMICmd(gdb.MICommand):
         try:
             cur_rip, cur_rsp = map(int, args[:2])
             cur_rbp = int(args[2]) if len(args) > 2 else None
-            
+            current_thread = gdb.selected_thread()
+            thread_id = current_thread.num if current_thread else None
+            print(f"Switching to context: rip: {cur_rip:#x}, rsp: {cur_rsp:#x}, rbp: {cur_rbp:#x}, thread_id: {thread_id}")
             # Save current register values
             for reg in ['sp', 'pc', 'rbp']:
                 gdb.parse_and_eval(f'$save_{reg} = ${reg}')
@@ -265,28 +267,6 @@ class SwitchContextMICmd(gdb.MICommand):
             # Store original values
             original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
                                for reg in ['pc', 'sp', 'rbp']}
-            
-            return {"message": "success", **original_values}
-        except Exception as e:
-            return {"message": "error", "rip": None, "rsp": None, "rbp": None}
-
-    def invoke(self, args):
-        try:
-            cur_rip, cur_rsp, cur_rbp = map(int, args[:3])
-            
-            # Save current register values
-            for reg in ['sp', 'pc', 'rbp']:
-                gdb.parse_and_eval(f'$save_{reg} = ${reg}')
-            
-            gdb.execute('select-frame 0')
-            
-            # Set new register values
-            for reg, value in zip(['sp', 'pc', 'rbp'], [cur_rsp, cur_rip, cur_rbp]):
-                gdb.parse_and_eval(f'${reg} = {value}')
-            
-            # Store original values
-            original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
-                            for reg in ['sp', 'pc', 'rbp']}
             
             return {"message": "success", "rip":original_values['pc'], "rsp":original_values['sp'], "rbp":original_values['rbp']}
         except Exception as e:
@@ -460,6 +440,7 @@ class GetRemoteBTInfo(gdb.MICommand):
                             if ddb_meta:
                                 local_ip = int(ddb_meta["comm_ip"])
                             message = "success"
+                            print(f"found!!! ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
                             break
             print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
         except Exception as e:
