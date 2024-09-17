@@ -49,9 +49,7 @@ namespace DDB
 
     static inline void sig_ddb_wait_handler(int signum) { raise(SIGTRAP); }
 
-    static inline void sig_ddb_wait_handler_no_trap(int signum) { /* do nothing */ }
-
-    static inline void setup_ddb_signal_handler(bool no_op = false) {
+    static inline void setup_ddb_signal_handler() {
         // ddb will signal SIGDDBWAIT right after attaching in all cases.
         // This is useful for debuggee who needs to wait for debugger to attach.
         // signal SIGDDBWAIT will tell the debuggee to keep execution.
@@ -60,11 +58,7 @@ namespace DDB
         // but signal in gdb will continue the execution.
         // Therefore, this is the hack to force trap the program after SIGDDBWAIT.
         struct sigaction sig_ddb_wait_action;
-        if (no_op) {
-            sig_ddb_wait_action.sa_handler = sig_ddb_wait_handler_no_trap;
-        } else {
-            sig_ddb_wait_action.sa_handler = sig_ddb_wait_handler;
-        }
+        sig_ddb_wait_action.sa_handler = sig_ddb_wait_handler;
         sigemptyset(&sig_ddb_wait_action.sa_mask);
         sig_ddb_wait_action.sa_flags = 0;
         sigaction(SIGDDBWAIT, &sig_ddb_wait_action, NULL);
@@ -107,7 +101,7 @@ namespace DDB
             }
 
             if (failure) {
-                setup_ddb_signal_handler(true);
+                setup_ddb_signal_handler();
             }
         }
 
