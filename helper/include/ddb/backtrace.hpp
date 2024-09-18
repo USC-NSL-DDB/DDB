@@ -1,5 +1,7 @@
 #pragma once
 
+#include <iostream>
+
 #include <string>
 #include <cstdint>
 #include <sched.h>
@@ -36,10 +38,19 @@ struct DDBCallerMeta {
   pid_t pid = 0;
 };
 
+// struct DDBCallerContext {
+//   uintptr_t rip = 0;
+//   uintptr_t rsp = 0;
+//   uintptr_t rbp = 0;
+// };
+
 struct DDBCallerContext {
-  uintptr_t rip = 0;
-  uintptr_t rsp = 0;
-  uintptr_t rbp = 0;
+  uintptr_t pc = 0;  // Program Counter
+  uintptr_t sp = 0;  // Stack Pointer
+  uintptr_t fp = 0;  // Frame Pointer
+  #ifdef __aarch64__
+  uintptr_t lr = 0;  // Link Register (only on ARM64)
+  #endif
 };
 
 /// @brief  Added data structure for backtrace
@@ -49,19 +60,58 @@ struct DDBTraceMeta {
   DDBCallerContext ctx;
 };
 
+static __attribute__((noinline)) uintptr_t get_pc() {
+  // essentially return the return address of this function
+  // to get the PC (program counter) at the caller position.
+  // NOTE: noinline should be enforced to create a stack frame here.
+  return reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+}
+
+static inline __attribute((always_inline)) uintptr_t get_sp() {
+  void* sp;
+#if defined(__x86_64__)
+  asm volatile("mov %%rsp, %0" : "=r" (sp));
+#elif defined(__aarch64__)
+  asm volatile("mov %0, sp" : "=r" (sp));
+#else
+  #error "Unsupported architecture"
+#endif
+  return reinterpret_cast<uintptr_t>(sp);
+}
+
+static inline __attribute((always_inline)) uintptr_t get_fp() {
+  return reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+}
+
 static inline __attribute__((always_inline)) void get_context(DDBCallerContext* ctx) { 
-  void *rsp;
-  void *rbp;
+  // void *rsp;
+  // void *rbp;
 
-  // Fetch the current stack pointer (RSP)
-  asm volatile ("mov %%rsp, %0" : "=r" (rsp));
+  // // Fetch the current stack pointer (RSP)
+  // asm volatile ("mov %%rsp, %0" : "=r" (rsp));
 
-  // Fetch the current base pointer (RBP)
-  asm volatile ("mov %%rbp, %0" : "=r" (rbp));
+  // // Fetch the current base pointer (RBP)
+  // asm volatile ("mov %%rbp, %0" : "=r" (rbp));
 
-  ctx->rsp = (uintptr_t) rsp;
-  ctx->rip = (uintptr_t) __builtin_return_address(0); // Approximation to get RIP
-  ctx->rbp = (uintptr_t) rbp;
+  // uintptr_t _rsp = (uintptr_t) rsp;
+  // uintptr_t _rip = (uintptr_t) __builtin_return_address(0); // Approximation to get RIP
+  // uintptr_t _rbp = (uintptr_t) rbp;
+
+  ctx->sp = get_sp();
+  ctx->pc = get_pc();
+  ctx->fp = get_fp();
+  // ctx->pc = (uintptr_t) __builtin_return_address(0);
+  // ctx->fp = (uintptr_t) __builtin_frame_address(0);
+
+#ifdef __aarch64__
+  // Grab link register at ARM64, not sure if this is useful...
+  void *lr;
+  asm volatile ("mov %0, x30" : "=r" (lr));
+  ctx->lr = (uintptr_t)lr;
+#endif
+
+  // std::cout << "rsp = " << _rsp << ", rip = " << _rip << ", rbp = " << _rbp << std::endl;
+  std::cout << "sp = " << ctx->sp << ", pc = " << ctx->pc << ", fp = " << ctx->fp << std::endl;
 }
 
 static inline __attribute__((always_inline)) void __get_caller_meta(DDBCallerMeta* meta) {

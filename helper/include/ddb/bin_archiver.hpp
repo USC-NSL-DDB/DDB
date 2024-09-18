@@ -16,9 +16,12 @@ namespace cereal {
 
     template <class Archive>
     inline void serialize(Archive & ar, DDB::DDBCallerContext& data) {
-        ar(data.rbp);
-        ar(data.rip);
-        ar(data.rsp);
+        ar(data.pc);
+        ar(data.sp);
+        ar(data.fp);
+        #ifdef __aarch64__
+        ar(data.lr);
+        #endif
     }
     
     template <class Archive>

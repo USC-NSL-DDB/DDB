@@ -326,9 +326,9 @@ class SwitchContextMICmd(gdb.MICommand):
                 try:
                     reg_real = reg_map[Reg(reg_alias)]
                     # extract the current value for that register.
-                    reg_val_to_save = gdb.parse_and_eval(f'${reg_real}') 
+                    reg_val_to_save = int(gdb.parse_and_eval(f'${reg_real}'))
                     # save it to the old context with register alias name.
-                    old_ctx[str(reg_alias)] = int(reg_val_to_save) 
+                    old_ctx[str(reg_alias)] = reg_val_to_save
                 except KeyError:
                     continue
                 gdb.parse_and_eval(f'${reg_real} = {val}')

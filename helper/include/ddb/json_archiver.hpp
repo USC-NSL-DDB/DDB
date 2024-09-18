@@ -16,9 +16,12 @@ namespace cereal {
 
     template <class Archive>
     inline void serialize(Archive & ar, DDB::DDBCallerContext& data) {
-        ar(cereal::make_nvp("rbp", data.rbp));
-        ar(cereal::make_nvp("rip", data.rip));
-        ar(cereal::make_nvp("rsp", data.rsp));
+        ar(cereal::make_nvp("pc", data.pc));
+        ar(cereal::make_nvp("sp", data.sp));
+        ar(cereal::make_nvp("fp", data.fp));
+        #ifdef __aarch64__
+        ar(cereal::make_nvp("lr", data.lr));
+        #endif
     }
     
     template <class Archive>
