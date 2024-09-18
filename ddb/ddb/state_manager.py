@@ -312,8 +312,8 @@ class StateManager:
             self.sidtid_to_gtid[(sid, tid)] = gtid
             self.gtid_to_sidtid[gtid] = (sid, tid)
         self.sessions[sid].create_thread(tid, tgid)
-        gtgid = self.sidtgid_to_giid[(sid, tgid)]
-        return (gtid, gtgid)
+        giid = self.sidtgid_to_giid[(sid, tgid)]
+        return (gtid, giid)
 
     def update_thread_status(self, sid: int, tid: int, status: ThreadStatus):
         # if status == ThreadStatus.STOPPED:
@@ -339,8 +339,15 @@ class StateManager:
         return self.current_session
 
     def get_gtid(self, sid: int, tid: int) -> int:
-        with self.lock:
+            if not (sid, tid) in self.sidtid_to_gtid:
+                return -1
             return self.sidtid_to_gtid[(sid, tid)]
+    def remove_thread(self, sid: int, tid: int) -> int:
+        with self.lock:
+            gtid = self.sidtid_to_gtid[(sid, tid)]
+            del self.sidtid_to_gtid[(sid, tid)]
+            del self.gtid_to_sidtid[gtid]
+        return gtid
 
     def get_readable_tid_by_gtid(self, gtid: int) -> str:
         with self.lock:

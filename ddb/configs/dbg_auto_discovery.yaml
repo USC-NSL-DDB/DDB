@@ -16,4 +16,4 @@ Framework: Nu
 
 ServiceDiscovery:
   Broker:
-    hostname: 10.10.1.2
+    hostname: 127.0.0.1

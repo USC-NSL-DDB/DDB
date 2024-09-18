@@ -222,7 +222,20 @@ class ThreadCreatedNotifTransformer(TransformerBase):
         # =thread-created,id="1",group-id="i1"
         out_str = f"=thread-created,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\"\n"
         return out_str 
+class ThreadExitedNotifTransformer(TransformerBase):
+    def __init__(self, gtid: int, gtgid: int) -> None:
+        super().__init__()
+        self.gtid = gtid
+        self.gtgid = gtgid
 
+    def transform(self, responses: List[SessionResponse]) -> dict:
+        pass
+
+    def format(self, responses: List[SessionResponse]) -> str:
+        # Example Output
+        # =thread-created,id="1",group-id="i1"
+        out_str = f"=thread-exited,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\"\n"
+        return out_str 
 ''' Handling `running` async record
 '''
 class RunningAsyncRecordTransformer(TransformerBase):

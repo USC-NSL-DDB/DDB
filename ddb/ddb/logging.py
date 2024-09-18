@@ -17,6 +17,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
 
 # Create a file handler
+os.makedirs("/tmp/ddb", exist_ok=True)
 file_handler = logging.FileHandler('/tmp/ddb/ddb.log')
 file_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
 

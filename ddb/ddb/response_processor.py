@@ -4,7 +4,7 @@ from ddb.cmd_tracker import CmdTracker
 from ddb.utils import mi_print
 from ddb.state_manager import StateManager, ThreadStatus
 from ddb.data_struct import SessionResponse
-from ddb.response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadGroupNotifTransformer
+from ddb.response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadExitedNotifTransformer, ThreadGroupNotifTransformer
 
 
 class ResponseProcessor:
@@ -54,10 +54,17 @@ class ResponseProcessor:
 
         if resp_msg == "thread-created":
             tgid = str(resp_payload["group-id"])
-            gtid, gtgid = self.state_manager.create_thread(
+            gtid, giid = self.state_manager.create_thread(
                 sid, int(resp_payload["id"]), tgid)
             ResponseTransformer.output(
-                response, ThreadCreatedNotifTransformer(gtid, gtgid))
+                response, ThreadCreatedNotifTransformer(gtid, giid))
+        elif resp_msg == "thread-exited":
+            gtid=self.state_manager.sidtid_to_gtid[(sid,int(resp_payload["id"]))]
+            self.state_manager.remove_thread(sid, int(resp_payload["id"]))
+            tgid = str(resp_payload["group-id"])
+            giid=self.state_manager.sidtgid_to_giid[(sid, tgid)]
+            ResponseTransformer.output(
+                response, ThreadExitedNotifTransformer(gtid, giid))
         elif resp_msg == "running":
             thread_id = resp_payload["thread-id"]
             if thread_id == "all":

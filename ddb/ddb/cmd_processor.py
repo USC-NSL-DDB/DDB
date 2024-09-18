@@ -12,8 +12,8 @@ from ddb.response_transformer import NullTransformer, PlainTransformer, ProcessI
 from ddb.state_manager import StateManager, ThreadContext, ThreadStatus
 from ddb.utils import dev_print, parse_cmd
 from ddb.mtracer import GlobalTracer
-
-
+import sys
+from ddb.utils import ip_int2ip_str
 @dataclass
 class SingleCommand:
     token: str
@@ -113,7 +113,7 @@ class ThreadSelectCmdHandler(CmdHandler):
             gtid = int(cmd_split[-1])
             sid, tid = self.router.state_mgr.get_sidtid_by_gtid(gtid)
             command_instance.thread_id = gtid
-            command_instance.command = f"{command_instance.token}-thread-select {tid}\n"
+            command_instance.command_no_token = f"-thread-select {tid}\n"
         super().process_command(command_instance)
 
 
@@ -124,14 +124,14 @@ class RemoteBacktraceHandler(CmdHandler):
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         pid, ip_int = caller_meta.get('pid'), int(caller_meta.get('ip'))
-        from ddb.utils import ip_int2ip_str
         
+        id_res= f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid
         return {
             'message': data.get('message'),
             'parent_rip': caller_meta.get('rip'),
             'parent_rsp': caller_meta.get('rsp'),
             'parent_rbp': caller_meta.get('rbp'),
-            'id': f"{ip_int2ip_str(ip_int)}:-{pid}"
+            'id': id_res
         }
 
     async def process_command(self, command_instance: SingleCommand):
@@ -201,6 +201,7 @@ class RemoteBacktraceHandler(CmdHandler):
                 remote_bt_parent_info = self.extract_remote_metadata(
                     remote_bt_parent_info[0].payload)
         except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
             logger.debug(
                 f"Error in remote backtrace: {e}")
         finally:
