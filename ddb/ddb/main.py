@@ -9,20 +9,20 @@ import argparse
 
 from typing import List, Union
 
+from ddb.startup import folder_struct_setup, cleanup_mosquitto_broker
 from ddb.data_struct import TargetFramework
 from ddb.gdb_manager import GdbManager
 from ddb.logging import logger
 from ddb.utils import *
 from ddb.config import GlobalConfig
-from ddb.startup import cleanup_mosquitto_broker
 import debugpy
 
-try:
-    debugpy.listen(("localhost", 5678))
-    print("Waiting for debugger attach")
-    debugpy.wait_for_client()
-except Exception as e:
-    print(f"Failed to attach debugger: {e}")
+# try:
+#     debugpy.listen(("localhost", 5678))
+#     print("Waiting for debugger attach")
+#     debugpy.wait_for_client()
+# except Exception as e:
+#     print(f"Failed to attach debugger: {e}")
 
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):

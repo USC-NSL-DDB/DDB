@@ -13,9 +13,12 @@ namespace DDB{
         oss << data.magic << ','
             << data.meta.caller_comm_ip << ','
             << data.meta.pid << ','
-            << data.ctx.rip << ','
-            << data.ctx.rsp << ','
-            << data.ctx.rbp;
+            << data.ctx.pc << ','
+            << data.ctx.sp << ','
+            << data.ctx.fp;
+        #ifdef __aarch64__
+            oss << ',' << data.ctx.lr;
+        #endif
         return oss.str();
     }
 
@@ -28,12 +31,18 @@ namespace DDB{
             !(iss >> trace.magic >> comma
             >> trace.meta.caller_comm_ip >> comma
             >> trace.meta.pid >> comma
-            >> trace.ctx.rip >> comma
-            >> trace.ctx.rsp >> comma
-            >> trace.ctx.rbp)
+            >> trace.ctx.pc >> comma
+            >> trace.ctx.sp >> comma
+            >> trace.ctx.fp)
         ) {
-            throw std::invalid_argument("Failed to deserialize the input string.");
+            throw std::invalid_argument("Failed to deserialize caller context.");
         }
+
+        #ifdef __aarch64__
+        if (!(iss >> comma >> trace.ctx.lr)) {
+            throw std::invalid_argument("Failed to deserialize lr value.");
+        }
+        #endif
 
         return trace;
     }

@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from dataclasses import dataclass
 import time
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 from threading import Lock
 from ddb.data_struct import SessionResponse
 from ddb.logging import logger
@@ -14,6 +14,14 @@ from ddb.utils import dev_print, parse_cmd
 from ddb.mtracer import GlobalTracer
 import sys
 from ddb.utils import ip_int2ip_str
+
+def prepare_ctx_switch_args(registers: Dict[str, int]) -> str:
+    arg = ""
+    for (reg, val) in registers.items():
+        if val is not None and val:
+            arg += f"{reg}={val} "
+    return arg.strip()
+
 @dataclass
 class SingleCommand:
     token: str
@@ -78,8 +86,10 @@ class ContinueCmdHandler(CmdHandler):
         for sid, session in self.state_mgr.sessions.items():
             async with remotebtlock:
                 if session.in_custom_context:
+                    ctx_switch_args = prepare_ctx_switch_args(session.current_context.ctx)
                     restore_cmd, restore_cmd_token, _ = self.router.prepend_token(
-                        f"-switch-context-custom {session.current_context.rip} {session.current_context.rsp} {session.current_context.rbp}")
+                        f"-switch-context-custom {ctx_switch_args}"
+                    )
                     context_switch_result = await self.router.send_to_thread_async(session.current_context.thread_id, restore_cmd_token, f"{restore_cmd_token}{restore_cmd}", transformer=NullTransformer())
                     assert len(context_switch_result) == 1
                     if context_switch_result[0].payload["message"] != "success":
@@ -99,7 +109,6 @@ class InterruptCmdHandler(CmdHandler):
                     super().process_command(command_instance)
                     break
 
-
 class ListCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
         self.state_mgr.set_current_session(1)
@@ -116,22 +125,21 @@ class ThreadSelectCmdHandler(CmdHandler):
             command_instance.command_no_token = f"-thread-select {tid}\n"
         super().process_command(command_instance)
 
-
 remotebtlock = asyncio.Lock()
-
 
 class RemoteBacktraceHandler(CmdHandler):
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
+        caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
         pid, ip_int = caller_meta.get('pid'), int(caller_meta.get('ip'))
-        
-        id_res= f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid
         return {
             'message': data.get('message'),
-            'parent_rip': caller_meta.get('rip'),
-            'parent_rsp': caller_meta.get('rsp'),
-            'parent_rbp': caller_meta.get('rbp'),
-            'id': id_res
+            'caller_ctx': caller_ctx,
+            # 'pc': caller_meta.get('pc'),
+            # 'sp': caller_meta.get('sp'),
+            # 'fp': caller_meta.get('fp'),
+            # 'lr': caller_meta.get('lr', None),
+            'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid 
         }
 
     async def process_command(self, command_instance: SingleCommand):
@@ -147,17 +155,20 @@ class RemoteBacktraceHandler(CmdHandler):
             frame['session'] = current_sid
             frame['thread'] = command_instance.thread_id
         try:
-            remote_bt_cmd, remote_bt_token, _ = self.router.prepend_token(
-                f"-get-remote-bt")
-            remote_bt_parent_info = await self.router.send_to_thread_async(command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer())
+            remote_bt_cmd, remote_bt_token, _ = self.router.prepend_token("-get-remote-bt")
+            remote_bt_parent_info = await self.router.send_to_thread_async(
+                command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer()
+            )
             assert len(remote_bt_parent_info) == 1
             remote_bt_parent_info = self.extract_remote_metadata(
-                remote_bt_parent_info[0].payload)
+                remote_bt_parent_info[0].payload
+            )
             while remote_bt_parent_info.get("message") == 'success':
                 logger.debug(
                     "trying to acquire parent info:-------------------------------------------------")
                 parent_session_id = self.state_mgr.get_session_by_tag(
-                    remote_bt_parent_info.get("id"))
+                    remote_bt_parent_info.get("id")
+                )
                 chosen_id = self.state_mgr.get_gtids_by_sid(parent_session_id)[0]
                 async with remotebtlock:
                     if not self.state_mgr.sessions[parent_session_id].in_custom_context:
@@ -171,16 +182,28 @@ class RemoteBacktraceHandler(CmdHandler):
                         # all process to stop it upon breakpoints hit event
                         # We may need to consider interrupting it in ddb itself.
                         while self.state_mgr.sessions[parent_session_id].t_status[1] != ThreadStatus.STOPPED:
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.1)
+                        ctx_switch_arg = prepare_ctx_switch_args(remote_bt_parent_info.get('caller_ctx'))
                         context_switch_cmd, context_switch_token, _ = self.router.prepend_token(
-                            f"-switch-context-custom {remote_bt_parent_info.get('parent_rip')} {remote_bt_parent_info.get('parent_rsp')} {remote_bt_parent_info.get('parent_rbp')}")
+                            f"-switch-context-custom {ctx_switch_arg}"
+                        )
                         # default choose the first thread as remote-bt-thread
                         context_switch_result = await self.router.send_to_thread_async(chosen_id, context_switch_token, f"{context_switch_token}{context_switch_cmd}",  transformer=NullTransformer())
                         assert len(context_switch_result) == 1
                         if context_switch_result[0].payload["message"] != "success":
                             return
+                        
+                        ctx_to_save = { 
+                            str(reg): int(val) 
+                            for (reg, val) in context_switch_result[0].payload["old_ctx"].items()
+                        }
+                        # ctx_to_save = {}
+                        # for (reg, val) in context_switch_result[0].payload["old_ctx"].items():
+                        #     ctx_to_save[str(reg)] = int(val)
                         self.state_mgr.sessions[parent_session_id].current_context = ThreadContext(
-                            rip=context_switch_result[0].payload["rip"], rsp=context_switch_result[0].payload["rsp"], rbp=context_switch_result[0].payload["rbp"], thread_id=chosen_id)
+                            ctx=ctx_to_save,
+                            thread_id=chosen_id
+                        )
                         self.state_mgr.sessions[parent_session_id].in_custom_context = True
                 chosen_id = self.state_mgr.sessions[parent_session_id].current_context.thread_id
                 logger.debug("chosen_id: %d" % chosen_id)
@@ -199,7 +222,8 @@ class RemoteBacktraceHandler(CmdHandler):
                 a_bt_result[0].payload['stack'].extend(
                     bt_result[0].payload['stack'])
                 remote_bt_parent_info = self.extract_remote_metadata(
-                    remote_bt_parent_info[0].payload)
+                    remote_bt_parent_info[0].payload
+                )
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             logger.debug(
