@@ -1,13 +1,16 @@
-import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 import socket
 import struct
+import platform
+import sys
+from enum import Enum
+
 import gdb
 
 import debugpy
 
 # try:
-#     debugpy.listen(("localhost", 5678))
+#     debugpy.listen(("localhost", 5680))
 #     print("Waiting for debugger attach")
 #     debugpy.wait_for_client()
 # except Exception as e:
@@ -18,6 +21,42 @@ import debugpy
 # goobjfile = gdb.current_objfile() or gdb.objfiles()[0]
 # goobjfile.pretty_printers = []
 print("Loading distributed backtrace support.",)
+
+class Arch(Enum):
+    X86_64 = "x86_64"
+    AARCH64 = "aarch64"
+
+class Reg(Enum):
+    PC = "pc"
+    SP = "sp"
+    FP = "fp"
+    LR = "lr" # only for AARCH64
+
+    def __str__(self) -> str:
+        return self.value
+
+REGISTER_MAP = {
+    Arch.X86_64: {
+        Reg.PC: "rip",
+        Reg.SP: "rsp",
+        Reg.FP: "rbp"
+    },
+    Arch.AARCH64: {
+        Reg.PC: "pc",
+        Reg.SP: "sp",
+        Reg.FP: "x29",
+        Reg.LR: "lr"
+    },
+}
+
+def get_architecture() -> Arch:
+    arch = platform.machine()
+    if arch == 'x86_64':
+        return Arch.X86_64
+    elif arch in ('aarch64', 'arm64'):
+        return Arch.AARCH64
+    else:
+        raise ValueError(f"Unsupported architecture: {arch}")
 
 class DistributedBTCmd(gdb.Command):
     def __init__(self):
@@ -239,58 +278,92 @@ def restore_context(saved_frame: Optional[gdb.Frame] = None):
     if saved_frame:
         saved_frame.select()
 
+
+
 class SwitchContextMICmd(gdb.MICommand):
     def __init__(self) -> None:
         super(SwitchContextMICmd, self).__init__(
             "-switch-context-custom"
         )
 
-    def invoke(self, args):
-        try:
-            cur_rip, cur_rsp = map(int, args[:2])
-            cur_rbp = int(args[2]) if len(args) > 2 else None
+    # def invoke(self, args):
+    #     print("invoke 1")
+    #     try:
+    #         cur_rip, cur_rsp = map(int, args[:2])
+    #         cur_rbp = int(args[2]) if len(args) > 2 else None
             
-            # Save current register values
-            for reg in ['sp', 'pc', 'rbp']:
-                gdb.parse_and_eval(f'$save_{reg} = ${reg}')
+    #         # Save current register values
+    #         for reg in ['sp', 'pc', 'rbp']:
+    #             gdb.parse_and_eval(f'$save_{reg} = ${reg}')
             
-            gdb.execute('select-frame 0')
+    #         gdb.execute('select-frame 0')
             
-            # Set new register values
-            gdb.parse_and_eval(f'$sp = {cur_rsp}')
-            gdb.parse_and_eval(f'$pc = {cur_rip}')
-            if cur_rbp is not None:
-                gdb.parse_and_eval(f'$rbp = {cur_rbp}')
+    #         # Set new register values
+    #         gdb.parse_and_eval(f'$sp = {cur_rsp}')
+    #         gdb.parse_and_eval(f'$pc = {cur_rip}')
+    #         if cur_rbp is not None:
+    #             gdb.parse_and_eval(f'$rbp = {cur_rbp}')
             
-            # Store original values
-            original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
-                               for reg in ['pc', 'sp', 'rbp']}
+    #         # Store original values
+    #         original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
+    #                            for reg in ['pc', 'sp', 'rbp']}
             
-            return {"message": "success", **original_values}
-        except Exception as e:
-            return {"message": "error", "rip": None, "rsp": None, "rbp": None}
+    #         return {"message": "success", **original_values}
+    #     except Exception as e:
+    #         return {"message": "error", "rip": None, "rsp": None, "rbp": None}
 
     def invoke(self, args):
         try:
-            cur_rip, cur_rsp, cur_rbp = map(int, args[:3])
-            
-            # Save current register values
-            for reg in ['sp', 'pc', 'rbp']:
-                gdb.parse_and_eval(f'$save_{reg} = ${reg}')
-            
+            reg_map = REGISTER_MAP[get_architecture()]
+
+            reg_to_set = map(lambda reg_pair: tuple(reg_pair.split("=")), args)
+            print("reg_to_set: ", reg_to_set)
+
+            old_ctx: Dict[str, int] = {}
+
             gdb.execute('select-frame 0')
+            for (reg_alias, val) in reg_to_set:
+                try:
+                    reg_real = reg_map[Reg(reg_alias)]
+                    # extract the current value for that register.
+                    reg_val_to_save = gdb.parse_and_eval(f'${reg_real}') 
+                    # save it to the old context with register alias name.
+                    old_ctx[str(reg_alias)] = int(reg_val_to_save) 
+                except KeyError:
+                    continue
+                gdb.parse_and_eval(f'${reg_real} = {val}')
+                print(f"set {reg_real} ({reg_alias}) to {val}. old = {reg_val_to_save}")
+
+            print(f"old ctx: {old_ctx}")
+            # for (reg_alias, reg_real) in reg_map.items():
+            #     if (str(reg_alias) == )
+                # gdb.parse_and_eval(f'${reg} = {val}')
+                
+            # cur_rip, cur_rsp, cur_rbp = map(int, args[:3])
+
+            # # Save current register values
+            # for reg in ['sp', 'pc', 'rbp']:
+            #     gdb.parse_and_eval(f'$save_{reg} = ${reg}')
             
-            # Set new register values
-            for reg, value in zip(['sp', 'pc', 'rbp'], [cur_rsp, cur_rip, cur_rbp]):
-                gdb.parse_and_eval(f'${reg} = {value}')
             
-            # Store original values
-            original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
-                            for reg in ['sp', 'pc', 'rbp']}
+            # # Set new register values
+            # for reg, value in zip(['sp', 'pc', 'rbp'], [cur_rsp, cur_rip, cur_rbp]):
+            #     gdb.parse_and_eval(f'${reg} = {value}')
             
-            return {"message": "success", "rip":original_values['pc'], "rsp":original_values['sp'], "rbp":original_values['rbp']}
+            # # Store original values
+            # original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
+            #                 for reg in ['sp', 'pc', 'rbp']}
+            
+            # return {"message": "success", "rip":original_values['pc'], "rsp":original_values['sp'], "rbp":original_values['rbp']}
+            return {
+                "message": "success",
+                "old_ctx": old_ctx
+            }
         except Exception as e:
-            return {"message": "error", "rip": None, "rsp": None, "rbp": None}
+            return {
+                "message": "error",
+                "old_ctx": {}
+            }
 
 class SwitchContextCmd(gdb.Command):
     def __init__(self):
@@ -429,18 +502,23 @@ class GetRemoteBTInfo(gdb.MICommand):
     def invoke(self, argv):
         remote_ip: Optional[int] = -1
         local_ip: Optional[int] = -1
-        parent_rip: Optional[int] = -1
-        parent_rsp: Optional[int] = -1
-        parent_rbp: Optional[int] = -1
+        # parent_pc: Optional[int] = -1
+        # parent_sp: Optional[int] = -1
+        # parent_fp: Optional[int] = -1
+        # parent_lr: Optional[int] = None
+        regs: Dict[str, int] = {}
         pid: Optional[int] = -1
         frame = gdb.selected_frame()
         frames: List[gdb.Frame] = []
         message = "failed"
+        found = False
         try:
             while frame is not None and frame.is_valid():
                     frames.append(frame)
                     frame = frame.older()
             for cur_frame in frames:
+                if found: 
+                    break
                 curr_func = cur_frame.function()
                 if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
                     for sym in get_local_variables(cur_frame):
@@ -452,16 +530,39 @@ class GetRemoteBTInfo(gdb.MICommand):
                             # print("found ip")
                             pid = int(val['meta']['pid'])
                             # print("found pid")
-                            parent_rip = int(val['ctx']['pc'])
-                            parent_rsp = int(val['ctx']['sp'])
-                            parent_rbp = int(val['ctx']['fp'])
+                            # parent_pc = int(val['ctx']['pc'])
+                            # parent_sp = int(val['ctx']['sp'])
+                            # parent_fp = int(val['ctx']['fp'])
+                            # parent_lr = int(val['ctx']['lr']) if 'lr' in val['ctx'] else None # only available on AARCH64
+                            ctx_obj = val['ctx']
+                            # ctx_map: Dict[str, int] = {}
+                            if ctx_obj.type.code == gdb.TYPE_CODE_STRUCT:
+                                for field in ctx_obj.type.fields():
+                                    fname = field.name
+                                    fval = ctx_obj[fname]
+                                    try:
+                                        regs[fname] = int(fval)
+                                    except Exception as e:
+                                        print(f"failed to convert {fname} (val = {fval}) to int")
+
+                            else:
+                                # ERROR
+                                print(f"ctx is not a struct, but {ctx_obj.type}")
+                                break
+                                    
+                            # regs = { str(reg): int(val) for (reg, val) in val['ctx'].items() }
                             # ddb_meta = get_global_variable(
                             #     "ddb_meta", to_print=False, check_is_var=False)
                             # if ddb_meta:
                             #     local_ip = int(ddb_meta["comm_ip"])
                             message = "success"
+                            found = True
                             break
-            print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
+            str_to_print = ""
+            for (reg, val) in regs.items():
+                str_to_print += f"{reg}: {val}, "
+            print(f"extracted meta: {str_to_print}")
+            # print(f"ip: {remote_ip}, pid: {pid}, pc: {parent_pc}, sp: {parent_sp}, fp: {parent_fp}, lr: {parent_lr}")
         except Exception as e:
             pass
         return {
@@ -471,10 +572,15 @@ class GetRemoteBTInfo(gdb.MICommand):
                 # "callee_meta": {
                 #     "ip": local_ip,
                 # },
+                # "caller_meta": {
+                #     "rip": parent_rip,
+                #     "rsp": parent_rsp,
+                #     "rbp": parent_rbp,
+                #     "pid": pid,
+                #     "ip": remote_ip
+                # }
+                "caller_ctx": regs,
                 "caller_meta": {
-                    "rip": parent_rip,
-                    "rsp": parent_rsp,
-                    "rbp": parent_rbp,
                     "pid": pid,
                     "ip": remote_ip
                 }

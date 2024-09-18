@@ -18,12 +18,16 @@ class ThreadGroupStatus(Enum):
     STOPPED = 2
     RUNNING = 3
     EXITED = 4
+
 @dataclass
 class ThreadContext:
     thread_id:int
-    rsp:int
-    rip:int
-    rbp:int
+    ctx: dict[str, int]
+    # sp: int
+    # pc: int
+    # fp: int
+    # lr: int
+
 class SessionMeta:
     def __init__(self, sid: int, tag: str, session: "GdbSession") -> None:
         self.tag = tag
