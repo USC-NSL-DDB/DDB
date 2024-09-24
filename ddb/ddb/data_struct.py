@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional 
 from pprint import pformat
+import getpass
 
 from ddb.gdb_controller import RemoteGdbController
-from ddb.gdbserver_starter import RemoteServerConnection
 
 class SessionResponse:
     def __init__(self, sid: int, meta: str, response: dict) -> None:
@@ -44,7 +44,7 @@ class GdbSessionConfig:
     remote_port: int = -1
     remote_host: str = ""
     username: str = "" 
-    remote_gdbserver: RemoteServerConnection = None
+    # remote_gdbserver: RemoteServerConnection = None
     gdb_controller:RemoteGdbController = None
     attach_pid: int = -1
     binary: str = ""
@@ -70,6 +70,11 @@ class BrokerInfo:
     hostname: str
     port: int
 
+@dataclass
+class SSHInfo:
+    port: int = 22
+    user: str = getpass.getuser()
+
 class TargetFramework(Enum):
     UNSPECIFIED = 1
     NU = 2
@@ -80,6 +85,7 @@ class DDBConfig:
     framework = TargetFramework.UNSPECIFIED
     gdb_sessions_configs: List[GdbSessionConfig] = field(default_factory=list)
     broker: BrokerInfo = None
+    ssh: SSHInfo = SSHInfo()
 
     def __repr__(self):
         formatted_dict = pformat(self.__dict__)

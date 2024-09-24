@@ -3,7 +3,7 @@ from threading import Lock, Thread
 from typing import List
 from time import sleep
 from ddb.cmd_processor import CommandProcessor
-from ddb.gdbserver_starter import LocalClient
+from ddb.gdbserver_starter import SSHRemoteServerCred
 from ddb.state_manager import StateManager
 from ddb.status_server import FlaskApp
 from ddb.utils import *
@@ -15,7 +15,7 @@ from ddb.data_struct import ServiceInfo
 from ddb.config import GlobalConfig
 from ddb.event_loop import GlobalRunningLoop
 from ddb.port_mgr import PortManager
-from ddb.gdb_controller import VanillaPIDController
+from ddb.gdb_controller import SSHAttachController
 
 
 class GdbManager:
@@ -51,26 +51,24 @@ class GdbManager:
         asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):
-        port = PortManager.reserve_port(session_info.ip)
+        # port = PortManager.reserve_port(session_info.ip)
         hostname = session_info.ip
-        username = "ybyan"
         pid = session_info.pid
         tag = f"{hostname}:-{pid}"
-        logger.debug(f"New session discovered: port={port}, hostname={hostname}, username={username}, pid={pid}, tag={tag}")
+        ddb_conf = GlobalConfig.get()
+        logger.debug(f"New session discovered: hostname={hostname}, pid={pid}, tag={tag}")
         config = GdbSessionConfig(
-            remote_port=port,
+            # remote_port=port,
             remote_host=hostname,
-            username=username,
-            # remote_gdbserver=SSHRemoteServerClient(
-            #     cred=SSHRemoteServerCred(
-            #         port=port,
-            #         bin="",
-            #         hostname=hostname,
-            #         username=username
-            #     )
-            # ),
-            remote_gdbserver=LocalClient(),
-            gdb_controller=VanillaPIDController(pid=pid, verbose=True),
+            gdb_controller=SSHAttachController(
+                pid=pid,
+                cred=SSHRemoteServerCred(
+                    port=ddb_conf.ssh.port,
+                    hostname=hostname,
+                    username=ddb_conf.ssh.user
+                ),
+                verbose=True
+            ),
             attach_pid=pid,
             tag=tag,
             gdb_mode=GdbMode.REMOTE,
@@ -94,7 +92,11 @@ class GdbManager:
         # start the session: 
         # 1. start gdbserver on the remote 
         # 2. start local gdb process and attach
-        gdb_session.start()
+        try:
+            gdb_session.start()
+        except Exception as e:
+            logger.error(f"Failed to start gdb session: {e}")
+            return
 
     def cleanup(self):
         print("Cleaning up GdbManager resource")

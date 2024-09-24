@@ -1,11 +1,12 @@
 import os
 import re
-from ddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController
+from ddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
+import getpass
 
-from ddb.gdbserver_starter import LocalClient, SSHRemoteServerClient, SSHRemoteServerCred
+from ddb.gdbserver_starter import SSHRemoteServerCred
 from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
 from ddb.logging import logger
 from ddb.const import ServiceDiscoveryConst
@@ -44,6 +45,12 @@ class GlobalConfig:
                 broker_info["hostname"],
                 ServiceDiscoveryConst.BROKER_PORT
             ) 
+
+        ssh_provided = ("SSH" in config_data)
+        if ssh_provided:
+            ssh_info = config_data["SSH"]
+            ddb_config.ssh.user = ssh_info.get("user", getpass.getuser())
+            ddb_config.ssh.port = ssh_info.get("port", 22)
     
         gdbSessionConfigs: List[GdbSessionConfig] = []
         components = config_data["Components"] if "Components" in config_data else []
@@ -66,16 +73,17 @@ class GlobalConfig:
                 "mode" in component.keys() and component["mode"] == "remote" \
                 else GdbMode.LOCAL
             if sessionConfig.gdb_mode == GdbMode.REMOTE:
-                sessionConfig.remote_port = component["remote_port"]
-                sessionConfig.remote_host = component["cred"]["hostname"]
-                sessionConfig.username = component["cred"]["user"]
-                remote_cred = SSHRemoteServerCred(
-                    port=sessionConfig.remote_port,
-                    bin=os.path.join(sessionConfig.cwd, sessionConfig.binary), # respect current working directoy.
-                    hostname=sessionConfig.remote_host,
-                    username=sessionConfig.username
-                )
-                sessionConfig.remote_gdbserver = SSHRemoteServerClient(cred=remote_cred)
+                # TODO: implement a controller that run binary instead of attach pid
+                pass
+                # sessionConfig.gdb_controller = SSHAttachController(
+                #     pid=sessionConfig.attach_pid,
+                #     cred=SSHRemoteServerCred(
+                #         port=sessionConfig.remote_port,
+                #         hostname=sessionConfig.remote_host,
+                #         username=sessionConfig.username
+                #     ),
+                #     verbose=True
+                # )
 
             gdbSessionConfigs.append(sessionConfig)
         ddb_config.gdb_sessions_configs = gdbSessionConfigs
@@ -140,9 +148,10 @@ class GlobalConfig:
             sessionConfig.gdb_mode=GdbMode.REMOTE
             sessionConfig.prerun_cmds=config_data.get("PrerunGdbCommands",[])
             sessionConfig.gdb_controller=VanillaPIDController(pid,True)
-            sessionConfig.remote_gdbserver=LocalClient()
+            # sessionConfig.remote_gdbserver=LocalClient()
             # sessionConfig.initialize_commands.append(f"-file-exec-and-symbols /proc/{pid}/exe")
             ddb_config.gdb_sessions_configs.append(sessionConfig)
+
     @staticmethod
     def parse_config_file(config_data: any) -> DDBConfig:
         ddb_config = DDBConfig()

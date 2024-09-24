@@ -7,7 +7,10 @@ from enum import Enum
 
 import gdb
 
-import debugpy
+try:
+    import debugpy
+except ImportError:
+    print("Failed to import debugpy")
 
 # try:
 #     debugpy.listen(("localhost", 5680))
@@ -586,9 +589,9 @@ class GetRemoteBTInfo(gdb.MICommand):
                 }
             }}
 
-MIEcho("-echo-dict", "dict")
-MIEcho("-echo-list", "list")
-MIEcho("-echo-string", "string")
+# MIEcho("-echo-dict", "dict")
+# MIEcho("-echo-list", "list")
+# MIEcho("-echo-string", "string")
 
 GetGlobalVarCommand()
 dbt_mi_cmd = DistributedBacktraceMICmd()

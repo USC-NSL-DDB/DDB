@@ -56,7 +56,7 @@ class GdbSession:
         # Prepare for the remote mode
         self.remote_host: str = config.remote_host
         self.remote_port: str = str(config.remote_port)
-        self.remote_gdbserver: RemoteServerConnection = config.remote_gdbserver
+        # self.remote_gdbserver: RemoteServerConnection = config.remote_gdbserver
         self.gdb_controller:RemoteGdbController=config.gdb_controller
         self.gdb_response_parser=GdbParser()
         self.mode: GdbMode = config.gdb_mode
@@ -149,6 +149,9 @@ class GdbSession:
 
 
     def start(self) -> None:
+        ''' start a gdbsessoin
+        Exception: exception will be raise if it failed to start the session
+        '''
         if self.mode == GdbMode.LOCAL:
             self.local_start()
         elif self.mode == GdbMode.REMOTE:
@@ -213,13 +216,14 @@ class GdbSession:
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
         
+        # FIXME: check if this special handling is actually needed?
         # Special case for handling interruption when child process is spawned.
         # `exec-interrupt` won't work in this case. Need manually send kill signal.
         # TODO: how to handle this elegantly?
-        if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
-            logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
-            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
-            return
+        # if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
+        #     logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
+        #     self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+        #     return
 
         self.gdb_controller.write_input(cmd)
 
