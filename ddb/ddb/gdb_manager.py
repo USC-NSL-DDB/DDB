@@ -90,8 +90,8 @@ class GdbManager:
         self.router.add_session(gdb_session)
 
         # start the session: 
-        # 1. start gdbserver on the remote 
-        # 2. start local gdb process and attach
+        # 1. start ssh to the remote 
+        # 2. start a gdb process on the remote and attach to the pid
         try:
             gdb_session.start()
         except Exception as e:

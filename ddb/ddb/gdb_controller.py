@@ -186,6 +186,7 @@ class SSHAttachController(RemoteGdbController):
             raise e # TODO: wrap exceptino to an internal data structure
         self.open = True
         # TODO: should we wait a bit to more gracefully handle potential startup error?
+        # FIXME: figure out a way to pass back stderr
     
     def write_input(self, command: str):
         if self.verbose:
@@ -204,23 +205,3 @@ class SSHAttachController(RemoteGdbController):
 
     def __str__(self):
         return f"GDBController-SSH-(pid={self.pid}, cred={self.cred})"
-    
-
-class RemoteSSHGdbController(RemoteGdbController):
-    def __init__(self, cred: SSHRemoteServerCred, pid: Optional[int] = None):
-        self.client = SSHRemoteServerClient(cred)
-
-    def start(self, command: str):
-        pass
-    
-    def write_input(self, command: str):
-        pass
-    
-    def fetch_output(self, timeout=1) -> bytes:
-        pass
-    
-    def is_open(self) -> bool:
-        pass
-    
-    def close(self):
-        pass

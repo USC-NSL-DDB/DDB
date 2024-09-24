@@ -121,32 +121,18 @@ class GdbSession:
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
-        if not self.remote_gdbserver:
-            logger.warn("Remote gdbserver not initialized")
-            return
-        
-        self.remote_gdbserver.start(self.args, sudo=self.sudo)
+        self.gdb_controller.start()
+        # self.remote_gdbserver.start(self.args, sudo=self.sudo)
         gdb_cmd = [ "gdb", self.get_mi_version_arg(), "-q" ]
         self.session_ctrl = GdbController(gdb_cmd)
 
         self.write("-gdb-set mi-async on")
-        # https://github.com/USC-NSL/distributed-debugger/issues/62
-        # Workaround for async+all-stop mode for gdbserver
-        self.write("maint set target-non-stop on")
-        self.write("-gdb-set non-stop off")
         
         for prerun_cmd in self.prerun_cmds:
             self.write(prerun_cmd["command"])
 
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"-target-select extended-remote {self.remote_host}:{self.remote_port}")
-        else:
-            self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
-
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"set remote exec-file {self.bin}")
-            self.write(f"set args {' '.join(self.args)}")
-
+        self.write(f"-file-exec-and-symbols {self.bin}")
+        self.write(f"-exec-arguments {' '.join(self.args)}")
 
     def start(self) -> None:
         ''' start a gdbsessoin

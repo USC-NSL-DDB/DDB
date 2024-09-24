@@ -12,7 +12,8 @@ from ddb.logging import logger
 from ddb.const import ServiceDiscoveryConst
 
 class DevFlags:
-    USE_EXTENDED_REMOTE = True
+    pass
+    # USE_EXTENDED_REMOTE = True
 
 class GlobalConfig:
     __global_config = DDBConfig()
