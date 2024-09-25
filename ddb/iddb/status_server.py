@@ -1,8 +1,8 @@
 import json
 import threading
-from ddb.cmd_router import CmdRouter
-from ddb.cmd_tracker import CmdTracker
-from ddb.state_manager import StateManager
+from iddb.cmd_router import CmdRouter
+from iddb.cmd_tracker import CmdTracker
+from iddb.state_manager import StateManager
 from flask import Flask, jsonify, request
 
 

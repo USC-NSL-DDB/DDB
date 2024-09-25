@@ -7,18 +7,18 @@ from threading import Thread, Lock
 from time import sleep
 
 import pkg_resources
-from ddb.counter import TSCounter
-from ddb.data_struct import GdbMode, GdbSessionConfig, StartMode
-from ddb.gdb_controller import RemoteGdbController
-from ddb.gdbparser import GdbParser
-from ddb.response_processor import ResponseProcessor, SessionResponse
+from iddb.counter import TSCounter
+from iddb.data_struct import GdbMode, GdbSessionConfig, StartMode
+from iddb.gdb_controller import RemoteGdbController
+from iddb.gdbparser import GdbParser
+from iddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
-from ddb.state_manager import StateManager
-from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
-from ddb.utils import parse_cmd
-from ddb.logging import logger
-from ddb.config import DevFlags
+from iddb.state_manager import StateManager
+from iddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
+from iddb.utils import parse_cmd
+from iddb.logging import logger
+from iddb.config import DevFlags
 
 class SessionCounter:
     _sc: "SessionCounter" = None

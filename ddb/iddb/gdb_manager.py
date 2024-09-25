@@ -2,20 +2,20 @@ import asyncio
 from threading import Lock, Thread
 from typing import List
 from time import sleep
-from ddb.cmd_processor import CommandProcessor
-from ddb.gdbserver_starter import SSHRemoteServerCred
-from ddb.state_manager import StateManager
-from ddb.status_server import FlaskApp
-from ddb.utils import *
-from ddb.cmd_router import CmdRouter
-from ddb.service_mgr import ServiceManager
-from ddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
-from ddb.logging import logger
-from ddb.data_struct import ServiceInfo
-from ddb.config import GlobalConfig
-from ddb.event_loop import GlobalRunningLoop
-from ddb.port_mgr import PortManager
-from ddb.gdb_controller import SSHAttachController
+from iddb.cmd_processor import CommandProcessor
+from iddb.gdbserver_starter import SSHRemoteServerCred
+from iddb.state_manager import StateManager
+from iddb.status_server import FlaskApp
+from iddb.utils import *
+from iddb.cmd_router import CmdRouter
+from iddb.service_mgr import ServiceManager
+from iddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
+from iddb.logging import logger
+from iddb.data_struct import ServiceInfo
+from iddb.config import GlobalConfig
+from iddb.event_loop import GlobalRunningLoop
+from iddb.port_mgr import PortManager
+from iddb.gdb_controller import SSHAttachController
 
 
 class GdbManager:

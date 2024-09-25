@@ -4,16 +4,16 @@ from dataclasses import dataclass
 import time
 from typing import Dict, List, Optional, Set, Tuple, Union
 from threading import Lock
-from ddb.data_struct import SessionResponse
-from ddb.logging import logger
-from ddb.cmd_router import CmdRouter
-from ddb.mi_formatter import MIFormatter
-from ddb.response_transformer import NullTransformer, PlainTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoTransformer, TransformerBase
-from ddb.state_manager import StateManager, ThreadContext, ThreadStatus
-from ddb.utils import dev_print, parse_cmd
-from ddb.mtracer import GlobalTracer
+from iddb.data_struct import SessionResponse
+from iddb.logging import logger
+from iddb.cmd_router import CmdRouter
+from iddb.mi_formatter import MIFormatter
+from iddb.response_transformer import NullTransformer, PlainTransformer, ProcessInfoTransformer, ProcessReadableTransformer, ResponseTransformer, ThreadInfoTransformer, TransformerBase
+from iddb.state_manager import StateManager, ThreadContext, ThreadStatus
+from iddb.utils import dev_print, parse_cmd
+from iddb.mtracer import GlobalTracer
 import sys
-from ddb.utils import ip_int2ip_str
+from iddb.utils import ip_int2ip_str
 
 def prepare_ctx_switch_args(registers: Dict[str, int]) -> str:
     arg = ""

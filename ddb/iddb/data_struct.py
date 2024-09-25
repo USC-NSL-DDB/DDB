@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from pprint import pformat
 import getpass
 
-from ddb.gdb_controller import RemoteGdbController
+from iddb.gdb_controller import RemoteGdbController
 
 class SessionResponse:
     def __init__(self, sid: int, meta: str, response: dict) -> None:

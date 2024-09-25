@@ -8,6 +8,12 @@ setup(
     version="0.1",
     packages=find_packages(),
     install_requires=required,
+    author="NSL",
+    author_email="yiboyan@usc.edu",
+    description="Interactive Distributed Debugger (DDB)",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
+    url="",
     package_data={
         "ddb": [
             "conf/*.conf",

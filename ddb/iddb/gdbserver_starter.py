@@ -3,7 +3,7 @@ from typing import List, Optional
 import paramiko
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from ddb.logging import logger
+from iddb.logging import logger
 
 class RemoteServerConnection(ABC):
     @abstractmethod

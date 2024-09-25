@@ -143,7 +143,7 @@ class GlobalInferiorIdCounter:
     _lock = Lock()
     
     def __init__(self) -> None:
-        from ddb.counter import TSCounter
+        from iddb.counter import TSCounter
         self.counter = TSCounter()
 
     @staticmethod
@@ -167,7 +167,7 @@ class GlobalThreadIdCounter:
     _lock = Lock()
     
     def __init__(self) -> None:
-        from ddb.counter import TSCounter
+        from iddb.counter import TSCounter
         self.counter = TSCounter()
 
     @staticmethod

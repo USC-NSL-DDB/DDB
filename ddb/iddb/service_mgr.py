@@ -3,12 +3,12 @@ from typing import Callable
 import paho.mqtt.client as paho
 from paho.mqtt.client import CallbackAPIVersion
 
-from ddb.data_struct import ServiceInfo
-from ddb.logging import logger
-from ddb.utils import ip_int2ip_str
-from ddb.startup import start_mosquitto_broker, cleanup_mosquitto_broker
-from ddb.config import GlobalConfig
-from ddb.const import ServiceDiscoveryConst
+from iddb.data_struct import ServiceInfo
+from iddb.logging import logger
+from iddb.utils import ip_int2ip_str
+from iddb.startup import start_mosquitto_broker, cleanup_mosquitto_broker
+from iddb.config import GlobalConfig
+from iddb.const import ServiceDiscoveryConst
 
 ON_NEW_SERVICE_CALLBACK_HANDLE = "on_new_service"
 ON_NEW_SERVICE_CALLBACK = Callable[[ServiceInfo], None]

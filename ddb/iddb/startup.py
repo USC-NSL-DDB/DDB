@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 
-from ddb.const import ServiceDiscoveryConst
+from iddb.const import ServiceDiscoveryConst
 
 def folder_struct_setup():
     folders = [
@@ -18,15 +18,15 @@ def folder_struct_setup():
         if not os.path.exists(folder):
             os.makedirs(folder)
 
-    broker_config = pkg_resources.resource_filename('ddb', 'conf/mosquitto.conf')
+    broker_config = pkg_resources.resource_filename('iddb', 'conf/mosquitto.conf')
     destination_file = "/tmp/ddb/mosquitto/mosquitto.conf"
     shutil.copy(broker_config, destination_file)
 
 # prepare the folder at the startup (import this file at very beginning of this entry point)
 folder_struct_setup() 
 
-from ddb.logging import logger
-from ddb.data_struct import BrokerInfo
+from iddb.logging import logger
+from iddb.data_struct import BrokerInfo
 
 def start_mosquitto_broker(broker: BrokerInfo):
     with open(ServiceDiscoveryConst.SERVICE_DISCOVERY_INI_FILEPATH, 'w') as f:

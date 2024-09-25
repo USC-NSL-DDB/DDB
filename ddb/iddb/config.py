@@ -1,15 +1,15 @@
 import os
 import re
-from ddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
+from iddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
 import getpass
 
-from ddb.gdbserver_starter import SSHRemoteServerCred
-from ddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
-from ddb.logging import logger
-from ddb.const import ServiceDiscoveryConst
+from iddb.gdbserver_starter import SSHRemoteServerCred
+from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
+from iddb.logging import logger
+from iddb.const import ServiceDiscoveryConst
 
 class DevFlags:
     pass
@@ -92,7 +92,7 @@ class GlobalConfig:
     @staticmethod
     def parse_serviceweaver_kube_config(ddb_config: DDBConfig, config_data: any):
         from kubernetes import config as kubeconfig, client as kubeclient
-        from ddb.gdbserver_starter import KubeRemoteSeverClient
+        from iddb.gdbserver_starter import KubeRemoteSeverClient
         try:
             kubeconfig.load_kube_config()
         except Exception as e:

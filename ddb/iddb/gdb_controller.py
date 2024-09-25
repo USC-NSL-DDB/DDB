@@ -7,8 +7,8 @@ from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
 import uuid
-from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
-from ddb.logging import logger
+from iddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
+from iddb.logging import logger
 
 
 class RemoteGdbController(ABC):

@@ -1,11 +1,11 @@
 import time
 from typing import List, Optional, Set
-from ddb.data_struct import SessionResponse
-from ddb.event_loop import GlobalRunningLoop
-from ddb.mtracer import GlobalTracer
-from ddb.utils import CmdTokenGenerator
-from ddb.response_transformer import *
-from ddb.logging import logger
+from iddb.data_struct import SessionResponse
+from iddb.event_loop import GlobalRunningLoop
+from iddb.mtracer import GlobalTracer
+from iddb.utils import CmdTokenGenerator
+from iddb.response_transformer import *
+from iddb.logging import logger
 from threading import Lock, Thread
 from queue import Queue
 import asyncio
