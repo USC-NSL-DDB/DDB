@@ -3,6 +3,7 @@ from typing import Any, List, Union
 from ddb.mi_formatter import MIFormatter
 from ddb.state_manager import StateManager
 from ddb import utils
+from ddb.logging import logger
 
 class TransformerBase:
     def __init__(self) -> None:
@@ -281,7 +282,7 @@ class StopAsyncRecordTransformer(TransformerBase):
 
         payload = response.payload.copy()
         payload["thread-id"] = StateManager.inst().get_gtid(response.sid, int(payload["thread-id"]))
-
+        payload["session-id"] = response.sid
         stopped_threads = payload["stopped-threads"]
         new_stopped_threads = []
         if isinstance(stopped_threads, list):
@@ -402,6 +403,7 @@ class ResponseTransformer:
         transformed_output=transformer.format(responses).replace("\n", "")
         if transformed_output is not None and len(transformed_output) > 0:
             print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+            logger.debug(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):
