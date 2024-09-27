@@ -1,10 +1,10 @@
 from threading import Lock, Thread
 from queue import Queue
-from ddb.cmd_tracker import CmdTracker
-from ddb.utils import mi_print
-from ddb.state_manager import StateManager, ThreadStatus
-from ddb.data_struct import SessionResponse
-from ddb.response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadExitedNotifTransformer, ThreadGroupNotifTransformer
+from iddb.cmd_tracker import CmdTracker
+from iddb.utils import mi_print
+from iddb.state_manager import StateManager, ThreadStatus
+from iddb.data_struct import SessionResponse
+from iddb.response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadExitedNotifTransformer, ThreadGroupNotifTransformer
 
 
 class ResponseProcessor:

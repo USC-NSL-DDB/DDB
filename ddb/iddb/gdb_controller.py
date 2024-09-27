@@ -2,12 +2,13 @@ from abc import ABC, abstractmethod
 import subprocess
 from time import sleep
 import time
+from typing import Optional
 from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
 import uuid
-from ddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
-from ddb.logging import logger
+from iddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
+from iddb.logging import logger
 
 
 class RemoteGdbController(ABC):
@@ -168,21 +169,39 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
     def close(self):
         self.resp.close()
 
-class RemoteSSHGdbController(RemoteGdbController):
-    def __init__(self, cred: SSHRemoteServerCred):
+class SSHAttachController(RemoteGdbController):
+    def __init__(self, pid: int, cred: SSHRemoteServerCred, verbose: bool = False):
+        self.pid = pid
+        self.verbose = verbose
         self.client = SSHRemoteServerClient(cred)
+        self.cred = cred
+        self.open = False
 
     def start(self, command: str):
-        pass
+        if self.verbose:
+            logger.debug(f"Starting {str(self)}")
+        try:
+            self.client.start("gdb --interpreter=mi3 -q")
+        except Exception as e:
+            raise e # TODO: wrap exceptino to an internal data structure
+        self.open = True
+        # TODO: should we wait a bit to more gracefully handle potential startup error?
+        # FIXME: figure out a way to pass back stderr
     
     def write_input(self, command: str):
-        pass
+        if self.verbose:
+            logger.debug(f"Sending input to {str(self)}: {command}")
+        self.client.write(command)
     
     def fetch_output(self, timeout=1) -> bytes:
-        pass
+        return self.client.readline().encode()
     
     def is_open(self) -> bool:
-        pass
+        return self.open 
     
     def close(self):
-        pass
+        self.client.close()
+        self.open = False
+
+    def __str__(self):
+        return f"GDBController-SSH-(pid={self.pid}, cred={self.cred})"

@@ -7,18 +7,18 @@ from threading import Thread, Lock
 from time import sleep
 
 import pkg_resources
-from ddb.counter import TSCounter
-from ddb.data_struct import GdbMode, GdbSessionConfig, StartMode
-from ddb.gdb_controller import RemoteGdbController
-from ddb.gdbparser import GdbParser
-from ddb.response_processor import ResponseProcessor, SessionResponse
+from iddb.counter import TSCounter
+from iddb.data_struct import GdbMode, GdbSessionConfig, StartMode
+from iddb.gdb_controller import RemoteGdbController
+from iddb.gdbparser import GdbParser
+from iddb.response_processor import ResponseProcessor, SessionResponse
 from pygdbmi.gdbcontroller import GdbController
 
-from ddb.state_manager import StateManager
-from ddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
-from ddb.utils import parse_cmd
-from ddb.logging import logger
-from ddb.config import DevFlags
+from iddb.state_manager import StateManager
+from iddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
+from iddb.utils import parse_cmd
+from iddb.logging import logger
+from iddb.config import DevFlags
 
 class SessionCounter:
     _sc: "SessionCounter" = None
@@ -56,7 +56,7 @@ class GdbSession:
         # Prepare for the remote mode
         self.remote_host: str = config.remote_host
         self.remote_port: str = str(config.remote_port)
-        self.remote_gdbserver: RemoteServerConnection = config.remote_gdbserver
+        # self.remote_gdbserver: RemoteServerConnection = config.remote_gdbserver
         self.gdb_controller:RemoteGdbController=config.gdb_controller
         self.gdb_response_parser=GdbParser()
         self.mode: GdbMode = config.gdb_mode
@@ -121,34 +121,23 @@ class GdbSession:
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
-        if not self.remote_gdbserver:
-            logger.warn("Remote gdbserver not initialized")
-            return
-        
-        self.remote_gdbserver.start(self.args, sudo=self.sudo)
+        self.gdb_controller.start()
+        # self.remote_gdbserver.start(self.args, sudo=self.sudo)
         gdb_cmd = [ "gdb", self.get_mi_version_arg(), "-q" ]
         self.session_ctrl = GdbController(gdb_cmd)
 
         self.write("-gdb-set mi-async on")
-        # https://github.com/USC-NSL/distributed-debugger/issues/62
-        # Workaround for async+all-stop mode for gdbserver
-        self.write("maint set target-non-stop on")
-        self.write("-gdb-set non-stop off")
         
         for prerun_cmd in self.prerun_cmds:
             self.write(prerun_cmd["command"])
 
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"-target-select extended-remote {self.remote_host}:{self.remote_port}")
-        else:
-            self.write(f"-target-select remote {self.remote_host}:{self.remote_port}")
-
-        if DevFlags.USE_EXTENDED_REMOTE:
-            self.write(f"set remote exec-file {self.bin}")
-            self.write(f"set args {' '.join(self.args)}")
-
+        self.write(f"-file-exec-and-symbols {self.bin}")
+        self.write(f"-exec-arguments {' '.join(self.args)}")
 
     def start(self) -> None:
+        ''' start a gdbsessoin
+        Exception: exception will be raise if it failed to start the session
+        '''
         if self.mode == GdbMode.LOCAL:
             self.local_start()
         elif self.mode == GdbMode.REMOTE:
@@ -213,13 +202,14 @@ class GdbSession:
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
             sleep(self.run_delay)
         
+        # FIXME: check if this special handling is actually needed?
         # Special case for handling interruption when child process is spawned.
         # `exec-interrupt` won't work in this case. Need manually send kill signal.
         # TODO: how to handle this elegantly?
-        if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
-            logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
-            self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
-            return
+        # if ("-exec-interrupt" == cmd_no_token.strip()) and self.startMode == StartMode.ATTACH:
+        #     logger.debug(f"session {self.sid} sending kill to {self.attach_pid}")
+        #     self.remote_gdbserver.execute_command(["kill", "-5", str(self.attach_pid)])
+        #     return
 
         self.gdb_controller.write_input(cmd)
 

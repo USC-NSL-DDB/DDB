@@ -3,7 +3,7 @@ import sys
 from threading import Lock
 from typing import Tuple
 
-from ddb.counter import TSCounter
+from iddb.counter import TSCounter
 
 def eprint(*args, **kwargs):
     dev_print(*args, **kwargs)

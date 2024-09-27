@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iddb"
+version = "0.0.0.dev3"
+authors = [
+  { name="NSL", email="yiboyan@usc.edu" },
+]
+description = "Interactive Distributed Debugger (iDDB)"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+
+  "Topic :: Software Development :: Debuggers",
+  "Topic :: System :: Distributed Computing",
+
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+]
+dependencies = [
+  "pygdbmi",
+  "paramiko",
+  "kubernetes",
+  "pyyaml>=5.4.1",
+  "paho-mqtt",
+  "flask",
+  "opentelemetry-sdk",
+  "opentelemetry-exporter-jaeger",
+  "debugpy",
+]
+
+[project.scripts]
+ddb = "iddb.main:main"
+
+[project.urls]
+Homepage = "https://github.com/"
+Issues = "https://github.com/"

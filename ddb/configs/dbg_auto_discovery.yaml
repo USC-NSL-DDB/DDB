@@ -6,7 +6,7 @@
 # PostTasks:
 # - name: "Shutdown runtime"
 #   command: "./nu_scripts/stop_rt.sh"
-Framework: Nu
+# Framework: Nu
 
 # PrerunGdbCommands:
 # - name: "enable script"
@@ -14,6 +14,10 @@ Framework: Nu
 # - name: "enable non-stop mode"
 #   command: "set non-stop off"
 
+# SSH:
+#   user: ybyan
+  # port: 22
+
 ServiceDiscovery:
   Broker:
-    hostname: 127.0.0.1
+    hostname: 10.10.1.2

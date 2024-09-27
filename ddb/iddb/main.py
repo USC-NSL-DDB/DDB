@@ -9,12 +9,12 @@ import argparse
 
 from typing import List, Union
 
-from ddb.startup import folder_struct_setup, cleanup_mosquitto_broker
-from ddb.data_struct import TargetFramework
-from ddb.gdb_manager import GdbManager
-from ddb.logging import logger
-from ddb.utils import *
-from ddb.config import GlobalConfig
+from iddb.startup import folder_struct_setup, cleanup_mosquitto_broker
+from iddb.data_struct import TargetFramework
+from iddb.gdb_manager import GdbManager
+from iddb.logging import logger
+from iddb.utils import *
+from iddb.config import GlobalConfig
 import debugpy
 
 # try:

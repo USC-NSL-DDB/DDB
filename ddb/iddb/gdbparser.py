@@ -1,7 +1,7 @@
 from pprint import pformat
 from typing import Optional,Tuple,Dict,List,Any
 from pygdbmi import gdbmiparser
-from ddb.logging import logger
+from iddb.logging import logger
 def _buffer_incomplete_responses(
 raw_output: Optional[bytes], buf: Optional[bytes]
 ) -> Tuple[Optional[bytes], Optional[bytes]]:
