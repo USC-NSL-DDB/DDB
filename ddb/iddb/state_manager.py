@@ -374,7 +374,10 @@ class StateManager:
     
     def get_sidtid_by_gtid(self, gtid: int) -> Tuple[int, int]:
         with self.lock:
-            return self.gtid_to_sidtid[gtid]
+            try:
+                return self.gtid_to_sidtid[gtid]
+            except KeyError:
+                return (-1, -1)  
 
     def get_readable_giid(self, sid: int, tgid: str) -> str:
         with self.lock:

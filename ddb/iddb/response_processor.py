@@ -58,14 +58,14 @@ class ResponseProcessor:
             gtid, giid = self.state_manager.create_thread(
                 sid, int(resp_payload["id"]), tgid)
             ResponseTransformer.output(
-                response, ThreadCreatedNotifTransformer(gtid, giid))
+                response, ThreadCreatedNotifTransformer(gtid, giid,sid))
         elif resp_msg == "thread-exited":
             gtid=self.state_manager.sidtid_to_gtid[(sid,int(resp_payload["id"]))]
             self.state_manager.remove_thread(sid, int(resp_payload["id"]))
             tgid = str(resp_payload["group-id"])
             giid=self.state_manager.sidtgid_to_giid[(sid, tgid)]
             ResponseTransformer.output(
-                response, ThreadExitedNotifTransformer(gtid, giid))
+                response, ThreadExitedNotifTransformer(gtid, giid,sid))
         elif resp_msg == "running":
             thread_id = resp_payload["thread-id"]
             if thread_id == "all":
