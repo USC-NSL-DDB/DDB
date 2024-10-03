@@ -157,4 +157,4 @@ class ResponseProcessor:
 
 
 # Eager instantiation
-_ = ResponseProcessor.inst()
+# _ = ResponseProcessor.inst()

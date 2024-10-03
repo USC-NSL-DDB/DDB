@@ -31,4 +31,4 @@ class GlobalRunningLoop:
     def get_loop(self):
         return self._loop.get_loop()
 
-GlobalRunningLoop()
+# GlobalRunningLoop()

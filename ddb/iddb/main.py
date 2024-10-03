@@ -1,7 +1,4 @@
-#!/usr/bin/env python3
-
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -9,20 +6,14 @@ import argparse
 
 from typing import List, Union
 
-from iddb.startup import folder_struct_setup, cleanup_mosquitto_broker
+from iddb.event_loop import GlobalRunningLoop
+from iddb.response_processor import ResponseProcessor
 from iddb.data_struct import TargetFramework
 from iddb.gdb_manager import GdbManager
 from iddb.logging import logger
+from iddb.startup import cleanup_mosquitto_broker
 from iddb.utils import *
 from iddb.config import GlobalConfig
-import debugpy
-
-# try:
-#     debugpy.listen(("localhost", 5678))
-#     print("Waiting for debugger attach")
-#     debugpy.wait_for_client()
-# except Exception as e:
-#     print(f"Failed to attach debugger: {e}")
 
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
@@ -83,7 +74,7 @@ def run_cmd_loop():
 
 def ddb_exit():
     global gdb_manager, terminated
-    # cleanup_mosquitto_broker()
+    cleanup_mosquitto_broker()
     if not terminated:
         logger.info("Exiting ddb...")
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -112,22 +103,49 @@ def handle_interrupt(signal_num, frame):
     logger.debug("Handling interrupt...")
     ddb_exit()
 
-def main():
-    global gdb_manager, terminated
-    gdb_manager=GdbManager()
-    signal.signal(signal.SIGINT, handle_interrupt)
-    parser = argparse.ArgumentParser(
-        description="interactive debugging for distributed software.",
-    )
-
+def prepare_args() -> argparse.Namespace:
+    # pre-parser to handle --debug and --version flags
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode.")
     parser.add_argument(
-        "config",
-        metavar="conf_file",
-        type=str,
-        help="Path of the debugging config file."
+        "-v", "--version", action="store_true", help="Version of ddb."
     )
+    args, remaining_argv = parser.parse_known_args()
 
-    args = parser.parse_args()
+    if args.debug:
+        try:
+            import debugpy
+            debugpy.listen(("localhost", 5678))
+            print("Waiting for debugger attach")
+            debugpy.wait_for_client()
+        except ImportError as ie:
+            print(f"Failed to import debugpy: {ie}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Failed to attach debugger: {e}")
+            sys.exit(1)
+
+    if args.version:
+        from iddb import about
+        print(about.__version__)
+        sys.exit(0)
+
+    parser = argparse.ArgumentParser(description="Interactive debugging for distributed software.")
+    parser.add_argument("config", metavar="conf_file", type=str, help="Path of the debugging config file.")
+    args = parser.parse_args(remaining_argv)
+    return args
+
+def eager_init():
+    _ = ResponseProcessor.inst()
+    GlobalRunningLoop()
+
+def main():
+    args = prepare_args()
+
+    global gdb_manager, terminated
+    signal.signal(signal.SIGINT, handle_interrupt)
+    eager_init()
+    gdb_manager = GdbManager()
 
     if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
         logger.info(f"Loaded config. content: \n{GlobalConfig.get()}")    
@@ -152,7 +170,6 @@ def main():
     except KeyboardInterrupt:
         logger.debug("Received interrupt signal.")
         ddb_exit()
-    
     pass 
 
 if __name__ == "__main__":

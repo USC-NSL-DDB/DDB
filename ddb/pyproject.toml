@@ -4,7 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iddb"
-version = "0.0.0.dev3"
+dynamic = [
+  "version"
+]
 authors = [
   { name="NSL", email="yiboyan@usc.edu" },
 ]
@@ -33,6 +35,9 @@ dependencies = [
   "opentelemetry-exporter-jaeger",
   "debugpy",
 ]
+
+[tool.hatch.version]
+path = "iddb/about.py"
 
 [project.scripts]
 ddb = "iddb.main:main"

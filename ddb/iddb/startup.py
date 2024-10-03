@@ -50,9 +50,9 @@ def start_mosquitto_broker(broker: BrokerInfo):
 def cleanup_mosquitto_broker():
     try:
         if shutil.which("sudo"):
-            subprocess.run(["sudo", "pkill", "mosquitto"])
+            subprocess.run(["sudo", "pkill", "-9", "mosquitto"])
         else:
-            subprocess.run(["pkill", "mosquitto"])
+            subprocess.run(["pkill", "-9", "mosquitto"])
         logger.debug("Mosquitto broker terminated successfully!")
     except Exception as e:
         logger.error(f"Failed to terminate Mosquitto broker: {e}")

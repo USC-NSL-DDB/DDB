@@ -105,7 +105,7 @@ class GdbSession:
         self.gdb_controller.write_input("-gdb-set logging enabled on")
         self.gdb_controller.write_input("-gdb-set mi-async on")
 
-        extension_filepath = pkg_resources.resource_filename('ddb', 'gdb_ext/runtime-gdb-grpc.py')
+        extension_filepath = pkg_resources.resource_filename('iddb', 'gdb_ext/runtime-gdb-grpc.py')
 
         self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
         # self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
