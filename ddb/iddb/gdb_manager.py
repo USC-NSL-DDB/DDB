@@ -4,6 +4,7 @@ from typing import List
 from time import sleep
 from iddb.cmd_processor import CommandProcessor
 from iddb.gdbserver_starter import SSHRemoteServerCred
+from iddb.mi_formatter import MIFormatter
 from iddb.state_manager import StateManager
 from iddb.status_server import FlaskApp
 from iddb.utils import *
@@ -16,6 +17,7 @@ from iddb.config import GlobalConfig
 from iddb.event_loop import GlobalRunningLoop
 from iddb.port_mgr import PortManager
 from iddb.gdb_controller import SSHAttachController
+from iddb.global_handler import GlobalHandler
 
 
 class GdbManager:
@@ -35,10 +37,13 @@ class GdbManager:
         for config in global_config.gdb_sessions_configs:
             self.sessions.append(GdbSession(config))
 
+        GlobalHandler.GDB_SESSION_CLEAN_HANDLE = lambda x: self.remove_session(x)
+
         self.router = CmdRouter(self.sessions)
         ddbapiserver=FlaskApp(router=self.router)
         Thread(target=ddbapiserver.app.run).start()
         self.processor=CommandProcessor(self.router)
+
         self.state_mgr = StateManager.inst()
         for s in self.sessions:
             s.start()
@@ -97,6 +102,18 @@ class GdbManager:
         except Exception as e:
             logger.error(f"Failed to start gdb session: {e}")
             return
+
+    def remove_session(self, sid: int):
+        with self.lock:
+            for s in self.sessions:
+                if s.sid == sid:
+                    s.cleanup()
+                    self.sessions.remove(s)
+                    StateManager.inst().remove_session(sid)
+                    break
+            if len(self.sessions) == 0:
+                logger.info("No more sessions. Cleaning up.")
+                GlobalHandler.exit_ddb()
 
     def cleanup(self):
         print("Cleaning up GdbManager resource")

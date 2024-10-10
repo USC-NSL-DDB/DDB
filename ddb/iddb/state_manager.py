@@ -220,6 +220,9 @@ class StateManager:
     def register_session(self, sid: int, tag: str, session: "GdbSession"):
         self.sessions[sid] = SessionMeta(sid, tag, session)
 
+    def remove_session(self, sid: int):
+        del self.sessions[sid]
+
     def get_gtids_by_sid(self, sid: int) -> List[int]:
         with self.lock:
             results = []

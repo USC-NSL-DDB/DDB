@@ -1,11 +1,12 @@
 from threading import Lock, Thread
 from queue import Queue
 from iddb.cmd_tracker import CmdTracker
+from iddb.global_handler import GlobalHandler
 from iddb.utils import mi_print
 from iddb.state_manager import StateManager, ThreadStatus
 from iddb.data_struct import SessionResponse
 from iddb.response_transformer import GenericStopAsyncRecordTransformer, ResponseTransformer, RunningAsyncRecordTransformer, StopAsyncRecordTransformer, ThreadCreatedNotifTransformer, ThreadExitedNotifTransformer, ThreadGroupNotifTransformer
-
+from iddb.logging import logger
 
 class ResponseProcessor:
     _instance: "ResponseProcessor" = None
@@ -79,6 +80,11 @@ class ResponseProcessor:
                 ResponseTransformer.output(
                     response, RunningAsyncRecordTransformer(all_running=False))
         elif resp_msg == "stopped":
+            if "reason" in resp_payload and "exit" in resp_payload["reason"]:
+                GlobalHandler.remove_session(sid)
+                # self.state_manager.remove_session(sid)
+                return
+
             if "thread-id" in resp_payload:
                 thread_id = resp_payload["thread-id"]
                 if thread_id == "all":
@@ -135,7 +141,7 @@ class ResponseProcessor:
             ResponseTransformer.output(
                 response, ThreadGroupNotifTransformer(gtgid))
         else:
-            print("Ignoring this notify record for now.")
+            logger.debug(f"Ignoring this notify record for now: {response}")
 
     # def handle_notify_thread_group(self, response: SessionResponse):
     #     sid = response.sid

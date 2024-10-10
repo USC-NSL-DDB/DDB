@@ -7,6 +7,8 @@ import argparse
 from typing import List, Union
 
 from iddb.event_loop import GlobalRunningLoop
+from iddb.global_handler import GlobalHandler
+from iddb.mi_formatter import MIFormatter
 from iddb.response_processor import ResponseProcessor
 from iddb.data_struct import TargetFramework
 from iddb.gdb_manager import GdbManager
@@ -77,7 +79,9 @@ def ddb_exit():
     cleanup_mosquitto_broker()
     if not terminated:
         logger.info("Exiting ddb...")
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        print("[ TOOL MI OUTPUT ]")
+        print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
+        # signal.signal(signal.SIGINT, signal.SIG_IGN)
         terminated=True
         if gdb_manager:
             gdb_manager.cleanup()
@@ -145,6 +149,8 @@ def main():
     global gdb_manager, terminated
     signal.signal(signal.SIGINT, handle_interrupt)
     eager_init()
+    GlobalHandler.DDB_EXIT_HANDLE = lambda: ddb_exit()
+
     gdb_manager = GdbManager()
 
     if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
