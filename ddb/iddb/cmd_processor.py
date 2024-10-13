@@ -91,7 +91,7 @@ class ContinueCmdHandler(CmdHandler):
 
         for session in session_metas:
             if session.in_custom_context:
-                self._switch_context(session)
+                await self._switch_context(session)
 
             
 
