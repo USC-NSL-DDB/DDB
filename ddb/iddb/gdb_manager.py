@@ -109,6 +109,7 @@ class GdbManager:
                 if s.sid == sid:
                     s.cleanup()
                     self.sessions.remove(s)
+                    del self.router.sessions[s.sid]
                     StateManager.inst().remove_session(sid)
                     break
             if len(self.sessions) == 0:
