@@ -210,10 +210,11 @@ class ThreadGroupNotifTransformer(TransformerBase):
 ''' Handling `thread-created` async record
 '''
 class ThreadCreatedNotifTransformer(TransformerBase):
-    def __init__(self, gtid: int, gtgid: int) -> None:
+    def __init__(self, gtid: int, gtgid: int,session_id:int ) -> None:
         super().__init__()
         self.gtid = gtid
         self.gtgid = gtgid
+        self.session_id = session_id
 
     def transform(self, responses: List[SessionResponse]) -> dict:
         pass
@@ -221,21 +222,21 @@ class ThreadCreatedNotifTransformer(TransformerBase):
     def format(self, responses: List[SessionResponse]) -> str:
         # Example Output
         # =thread-created,id="1",group-id="i1"
-        out_str = f"=thread-created,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\"\n"
+        out_str = f"=thread-created,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\",session-id=\"{self.session_id}\"\n"
         return out_str 
 class ThreadExitedNotifTransformer(TransformerBase):
-    def __init__(self, gtid: int, gtgid: int) -> None:
+    def __init__(self, gtid: int, gtgid: int,session_id:int ) -> None:
         super().__init__()
         self.gtid = gtid
         self.gtgid = gtgid
-
+        self.session_id = session_id
     def transform(self, responses: List[SessionResponse]) -> dict:
         pass
 
     def format(self, responses: List[SessionResponse]) -> str:
         # Example Output
         # =thread-created,id="1",group-id="i1"
-        out_str = f"=thread-exited,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\"\n"
+        out_str = f"=thread-exited,id=\"{self.gtid}\",group-id=\"i{self.gtgid}\",session-id=\"{self.session_id}\"\n"
         return out_str 
 ''' Handling `running` async record
 '''

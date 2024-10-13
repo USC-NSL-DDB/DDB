@@ -82,32 +82,60 @@ class ThreadInfoCmdHandler(CmdHandler):
 
 class ContinueCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
-        command_instance.thread_id = -1
-        for sid, session in self.state_mgr.sessions.items():
-            async with remotebtlock:
-                if session.in_custom_context:
-                    ctx_switch_args = prepare_ctx_switch_args(session.current_context.ctx)
-                    restore_cmd, restore_cmd_token, _ = self.router.prepend_token(
-                        f"-switch-context-custom {ctx_switch_args}"
-                    )
-                    context_switch_result = await self.router.send_to_thread_async(session.current_context.thread_id, restore_cmd_token, f"{restore_cmd_token}{restore_cmd}", transformer=NullTransformer())
-                    assert len(context_switch_result) == 1
-                    if context_switch_result[0].payload["message"] != "success":
-                        return
-                    self.state_mgr.sessions[sid].in_custom_context = False
+        session_metas=[]
+        if command_instance.session_id is None:
+            session_metas = self.state_mgr.sessions.values()
+            command_instance.thread_id = -1
+        else:
+            session_metas = [self.state_mgr.sessions.get(command_instance.session_id)]
+
+        for session in session_metas:
+            if session.in_custom_context:
+                await self._switch_context(session)
+
+            
 
         super().process_command(command_instance)
+
+    async def _switch_context(self, session):
+        ctx_switch_args = prepare_ctx_switch_args(session.current_context.ctx)
+        restore_cmd, restore_cmd_token, _ = self.router.prepend_token(
+            f"-switch-context-custom {ctx_switch_args}"
+        )
+        
+        async with remotebtlock:
+            context_switch_result = await self.router.send_to_thread_async(
+                session.current_context.thread_id,
+                restore_cmd_token,
+                f"{restore_cmd_token}{restore_cmd}",
+                transformer=NullTransformer()
+            )
+            
+            if len(context_switch_result) != 1 or context_switch_result[0].payload["message"] != "success":
+                return False
+
+            session.in_custom_context = False
+            return True
 
 
 class InterruptCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
-        state_manager = StateManager.inst()
-        for sid, session in state_manager.sessions.items():
-            for status in session.t_status.values():
-                if status == ThreadStatus.RUNNING:
-                    command_instance.session_id = sid
-                    super().process_command(command_instance)
-                    break
+        logger.debug(f"Received command in interrupt handler: {command_instance}")
+        state_manager=StateManager().inst()
+        if command_instance.session_id is not None:
+            session = state_manager.sessions.get(command_instance.session_id)
+            if session:
+                for status in session.t_status.values():
+                    if status == ThreadStatus.RUNNING:
+                        super().process_command(command_instance)
+                        break
+        else:
+            for sid, session in state_manager.sessions.items():
+                for status in session.t_status.values():
+                    if status == ThreadStatus.RUNNING:
+                        command_instance.session_id = sid
+                        super().process_command(command_instance)
+                        break
 
 class ListCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
