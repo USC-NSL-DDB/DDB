@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package commpb;
+
+service NodeAService {
+  rpc ExecuteA(NodeRequest) returns (NodeReply) {}
+}
+
+service NodeBService {
+  rpc ExecuteB(NodeRequest) returns (NodeReply) {}
+}
+
+message NodeRequest {
+  uint64 id = 1;
+}
+
+message NodeReply {
+  uint64 id = 1;
+  string msg = 2;
+}
+
