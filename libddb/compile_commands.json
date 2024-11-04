@@ -1,0 +1,21 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O3",
+      "-I./include",
+      "-O1",
+      "-g",
+      "-fno-omit-frame-pointer",
+      "-fPIC",
+      "-c",
+      "-o",
+      "shim.o",
+      "shim.c"
+    ],
+    "directory": "/home/ybyan/proj/distributed-debugger/libddb",
+    "file": "/home/ybyan/proj/distributed-debugger/libddb/shim.c",
+    "output": "/home/ybyan/proj/distributed-debugger/libddb/shim.o"
+  }
+]

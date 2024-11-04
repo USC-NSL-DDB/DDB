@@ -52,11 +52,8 @@ grpc::Status NodeA::ExecuteA(grpc::ServerContext *context,
                              const commpb::NodeRequest *request,
                              commpb::NodeReply *response) {
   std::cout << "NodeA ExecuteA method called." << std::endl;
-
   std::lock_guard guard(mtx); // Lock A again
-
   response->set_msg("Hello from NodeA!");
-
   return grpc::Status::OK;
 }
 
