@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <stdbool.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -11,9 +12,10 @@
 #include <bits/pthreadtypes.h>
 #include <dlfcn.h>
 
-#include "common.h"
+#include "ddb/common.h"
 
 ddb_shmseg *ddb_shared;
+// extern ddb_shmseg *ddb_shared;
 
 typedef struct {   
   void *(*worker_func)(void *param);
@@ -27,6 +29,65 @@ typedef struct {
 
 //   return ngen;
 // }
+
+static inline int get_lowner_idx() {
+  ddb_lowner_t *lowners = &ddb_shared->ddb_lowners;
+  // find reusable slot
+  if (lowners->n != lowners->max_n) {
+    for (int i = 0; i < lowners->max_n; ++i) {
+      if (!lowners->lowner_entries[i].valid) {
+        lowners->n++;
+        return i;
+      }
+    }
+  }
+
+  // new slot
+  lowners->max_n++;
+  lowners->n++;
+
+  return (lowners->max_n - 1);
+}
+
+static inline void put_lowner_idx(int idx) {
+  ddb_lowner_t *lowners = &ddb_shared->ddb_lowners;
+  memset(&lowners->lowner_entries[idx], 0, sizeof(ddb_lowner_entry_t));
+  lowners->lowner_entries[idx].valid = false;
+
+  // This is the last slot
+  if (idx == lowners->max_n - 1) {
+    lowners->max_n--;
+  }
+  lowners->n--;
+}
+
+static inline int get_wait_idx(ddb_wait_buffer_t *wbuf) {
+  if (wbuf->n != wbuf->max_n) {
+    for (int i = 0; i < wbuf->max_n; ++i) {
+      if (!wbuf->wait_entries[i].valid) {
+        wbuf->n++;
+        return i;
+      }
+    }
+  }
+
+  // new slot
+  wbuf->max_n++;
+  wbuf->n++;
+
+  return (wbuf->max_n - 1);
+}
+
+static inline void put_wait_idx(ddb_wait_buffer_t *wbuf, int idx) {
+  memset(&wbuf->wait_entries[idx], 0, sizeof(ddb_wait_entry_t));
+  wbuf->wait_entries[idx].valid = false;
+
+  // This is the last slot
+  if (idx == wbuf->max_n - 1) {
+    wbuf->max_n--;
+  }
+  wbuf->n--;
+}
 
 static inline int get_tidx() {
   // find reusable slot
@@ -47,7 +108,7 @@ static inline int get_tidx() {
 }
 
 static inline void put_tidx(int tidx) {
-  memset(&ddb_shared->ddb_thread_infos[tidx], 0, sizeof(ldb_thread_info_t));
+  memset(&ddb_shared->ddb_thread_infos[tidx], 0, sizeof(ddb_thread_info_t));
 
   // This is the last slot
   if (tidx == ddb_shared->ddb_max_idx - 1) {
@@ -67,7 +128,7 @@ static void event_record_mutex(pthread_mutex_t *mutex) {
 
   struct timespec now;
   int tinfo_idx = get_thread_info_idx();
-  ldb_thread_info_t *tinfo = &ddb_shared->ddb_thread_infos[tinfo_idx];
+  ddb_thread_info_t *tinfo = &ddb_shared->ddb_thread_infos[tinfo_idx];
 
   clock_gettime(CLOCK_MONOTONIC_RAW, &now);
 
@@ -111,10 +172,10 @@ void *__ddb_thread_start(void *arg) {
   }
 
   // allocate & initialize event buffer
-  ldb_event_buffer_t *ebuf = (ldb_event_buffer_t *)malloc(sizeof(ldb_event_buffer_t));
-  memset(ebuf, 0, sizeof(ldb_event_buffer_t));
-  ebuf->events = (ldb_event_entry *)malloc(sizeof(ldb_event_entry) * LDB_EVENT_BUF_SIZE);
-  if (ebuf->events == 0) {
+  ddb_wait_buffer_t *wbuf = (ddb_wait_buffer_t *)malloc(sizeof(ddb_wait_buffer_t));
+  memset(wbuf, 0, sizeof(ddb_wait_buffer_t));
+  wbuf->wait_entries = (ddb_wait_entry_t *)malloc(sizeof(ddb_wait_entry_t) * LDB_EVENT_BUF_SIZE);
+  if (wbuf->wait_entries == 0) {
     fprintf(stderr, "\tmalloc() failed\n");
   }
 
@@ -122,41 +183,43 @@ void *__ddb_thread_start(void *arg) {
   clock_gettime(CLOCK_MONOTONIC_RAW, &now);
 
   // start tracking
-  pthread_spin_lock(&(ddb_shared->ldb_tlock));
+  pthread_spin_lock(&(ddb_shared->ddb_tlock));
   tidx = get_tidx();
   pid_t id = syscall(SYS_gettid);
-  ddb_shared->ldb_thread_infos[tidx].id = id;
-  ddb_shared->ldb_thread_infos[tidx].fsbase = (char **)(rdfsbase());
-  ddb_shared->ldb_thread_infos[tidx].stackbase = rbp;
-  ddb_shared->ldb_thread_infos[tidx].ebuf = ebuf;
-  pthread_spin_unlock(&(ddb_shared->ldb_tlock));
+  ddb_shared->ddb_thread_infos[tidx].id = id;
+  ddb_shared->ddb_thread_infos[tidx].fsbase = (char **)(rdfsbase());
+  ddb_shared->ddb_thread_infos[tidx].stackbase = rbp;
+  ddb_shared->ddb_thread_infos[tidx].wbuf = wbuf;
+  pthread_spin_unlock(&(ddb_shared->ddb_tlock));
 
-  ddb_shared->ldb_thread_infos[tidx].ts_wait = now;
-  ddb_shared->ldb_thread_infos[tidx].ts_lock = now;
-  ddb_shared->ldb_thread_infos[tidx].ts_scan = now;
+  // ddb_shared->ddb_thread_infos[tidx].ts_wait = now;
+  // ddb_shared->ddb_thread_infos[tidx].ts_lock = now;
+  // ddb_shared->ddb_thread_infos[tidx].ts_scan = now;
 
-  register_thread_info(tidx);
+  // register_thread_info(tidx);
 
   // record an event for the creation of the thread
-  event_record(ebuf, LDB_EVENT_THREAD_CREATE, now, id,
-               (uintptr_t)real_thread_params.worker_func, 0, 0);
+  // event_record(ebuf, LDB_EVENT_THREAD_CREATE, now, id,
+  //              (uintptr_t)real_thread_params.worker_func, 0, 0);
 
   // execute real thread
   ret = real_thread_params.worker_func(real_thread_params.param);
 
   // record an event for the exiting of the thread
-  clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-  event_record(ebuf, LDB_EVENT_THREAD_EXIT, now, id, 0, 0, 0);
+  // clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+  // event_record(ebuf, LDB_EVENT_THREAD_EXIT, now, id, 0, 0, 0);
 
   // stop tracking
-  pthread_spin_lock(&(ddb_shared->ldb_tlock));
+  pthread_spin_lock(&(ddb_shared->ddb_tlock));
   put_tidx(tidx);
-  pthread_spin_unlock(&(ddb_shared->ldb_tlock));
+  // TODO: clean up the thread meta?
+  pthread_spin_unlock(&(ddb_shared->ddb_tlock));
 
-  printf("Application thread is exitting... %lu data point ignored\n", ebuf->nignored);
+  // printf("Application thread is exitting... %lu data point ignored\n", ebuf->nignored);
+  printf("Application thread is exitting... \n");
 
-  free(ebuf->events);
-  free(ebuf);
+  free(wbuf->wait_entries);
+  free(wbuf);
 
   return ret;
 }
@@ -224,15 +287,17 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
       return -1;
     }
   }
-  if (likely(ddb_shared)) {
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
-  }
+  // if (likely(ddb_shared)) {
+  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
+  // }
+
+  printf("mutex lock\n");
 
   ret = real_pthread_mutex_lock(mutex);
 
-  if (likely(ddb_shared && ret == 0)) {
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
-  }
+  // if (likely(ddb_shared && ret == 0)) {
+  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
+  // }
 
   return ret;
 }
@@ -250,6 +315,8 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) {
       return -1;
     }
   }
+
+  printf("mutex unlock\n");
 
   ret = real_pthread_mutex_unlock(mutex);
 
@@ -274,15 +341,15 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex) {
     }
   }
 
-  if (likely(ddb_shared)) {
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
-  }
+  // if (likely(ddb_shared)) {
+  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
+  // }
 
   ret = real_pthread_mutex_trylock(mutex);
 
-  if (likely(ddb_shared) && ret == 0) {
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
-  }
+  // if (likely(ddb_shared) && ret == 0) {
+  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
+  // }
 
   return ret;
 }

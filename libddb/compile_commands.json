@@ -2,13 +2,12 @@
   {
     "arguments": [
       "/usr/bin/gcc",
-      "-g",
-      "-O3",
       "-I./include",
       "-O1",
       "-g",
       "-fno-omit-frame-pointer",
       "-fPIC",
+      "-lpthread",
       "-c",
       "-o",
       "shim.o",

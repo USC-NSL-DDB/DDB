@@ -1,8 +1,11 @@
 #pragma once
-#include <bits/pthreadtypes.h>
+
 #include <inttypes.h>
+#include <sched.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <bits/pthreadtypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,10 +16,14 @@
 
 #define CYCLES_PER_US 2396
 #define SHM_KEY 401916
+
 #define LDB_MAX_NTHREAD 128
 #define LDB_MAX_CALLDEPTH 1024
 #define LDB_EVENT_BUF_SIZE 524288
-#define LDB_CANARY 0xDEADBEEF
+// #define LDB_CANARY 0xDEADBEEF
+
+#define DDB_MAX_NLOCK 2048 
+#define DDB_MAX_NWAIT 128
 
 #define LDB_MUTEX_EVENT_THRESH_NS 1000
 
@@ -30,54 +37,52 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #endif
 
-pthread_key_t ddb_tls_key;
+// pthread_key_t ddb_tls_key;
 
-enum ldb_event_type {
-  LDB_EVENT_STACK = 1,
-  LDB_EVENT_TAG_SET,
-  LDB_EVENT_TAG_BLOCK,
-  LDB_EVENT_TAG_UNSET,
-  LDB_EVENT_TAG_CLEAR,
-  LDB_EVENT_MUTEX_WAIT,
-  LDB_EVENT_MUTEX_LOCK,
-  LDB_EVENT_MUTEX_UNLOCK,
-  LDB_EVENT_JOIN_WAIT,
-  LDB_EVENT_JOIN_JOINED,
-  LDB_EVENT_THREAD_CREATE,
-  LDB_EVENT_THREAD_EXIT,
+enum ddb_wait_type {
+  DDB_WAIT_MUTEX = 1,
+  DDB_WAIT_THREAD,
+  DDB_WAIT_JOIN, // unused for now
 };
 
-// typedef struct {
-//   int event_type; 
-//   uint32_t sec;
-//   uint32_t nsec;
-//   uint32_t tid;
-//   uint64_t arg1;
-//   uint64_t arg2;
-//   uint64_t arg3;
-// }__attribute__((packed, aligned(8))) ldb_event_entry;
+typedef struct {
+  bool valid;
+  uint8_t type;
+  uint64_t identifier;  // mutex ptr (uintptr_t) or thread id (pid_t)
+}__attribute__((packed, aligned(8))) ddb_wait_entry_t;
 
-// typedef struct {
-//   uint64_t head;   // current read index
-//   char pad1[56];
-//   int tail;   // current write index
-//   char pad2[56];
-//   uint64_t nignored;
-//   ldb_event_entry *events;
-// } ldb_event_buffer_t;
+typedef struct {
+  int64_t n;
+  // char pad1[56];
+  int64_t max_n;
+  // char pad2[56];
+  ddb_wait_entry_t *wait_entries;
+} ddb_wait_buffer_t;
 
 typedef struct {
   pid_t id;
-  // char **fsbase;
+  char **fsbase;
   char *stackbase;
-  // ldb_event_buffer_t *ebuf;
-  // struct timespec ts_wait;
-  // struct timespec ts_lock;
-  // struct timespec ts_scan;
-} ldb_thread_info_t;
+  ddb_wait_buffer_t *wbuf;
+} ddb_thread_info_t;
 
 typedef struct {
-  ldb_thread_info_t *ddb_thread_infos;
+  bool valid;     // if the lock is still valid (valid == false means the lock is released)
+  uintptr_t lptr; // lock's pointer as its id
+  pid_t tid;      // it's owner's tid (can be assigned to other value as long as it can be used to identify the owner)
+}__attribute__((packed, aligned(8))) ddb_lowner_entry_t;
+
+typedef struct {
+  int64_t n;
+  // char pad1[56];
+  int64_t max_n;
+  // char pad2[56];
+  ddb_lowner_entry_t *lowner_entries;
+} ddb_lowner_t;
+
+typedef struct {
+  ddb_thread_info_t *ddb_thread_infos;
+  ddb_lowner_t ddb_lowners;
   int ddb_nthread;
   int ddb_max_idx;
   pthread_spinlock_t ddb_tlock;

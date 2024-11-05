@@ -1,48 +1,71 @@
-// #include "common.h"
+#include "ddb/common.h"
+#include <stdint.h>
 
-// extern ddb_shmseg *ldb_shared;
+extern ddb_shmseg *ddb_shared;
 
-// void event_record(ldb_event_buffer_t *ebuf, int event_type, struct timespec ts,
-//     uint32_t tid, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+void mark_wait(
+    ddb_wait_buffer_t *wbuf, uint8_t wait_type, 
+    struct timespec ts, uint64_t identifier
+) {
 
-//   if (unlikely(!ebuf || !ebuf->events))
-//     return;
+  if (unlikely(!wbuf || !wbuf->wait_entries))
+    return;
 
-//   int tail = ebuf->tail;
-//   barrier();
+  int tail = wbuf->tail;
+  barrier();
   
-//   if (tail >= ebuf->head + LDB_EVENT_BUF_SIZE) {
-//     //fprintf(stderr, "[%d] WARNING: event buffer full: event ignored\n", syscall(SYS_gettid));
-//     ebuf->nignored++;
-//     return;
-//   }
+  if (tail >= wbuf->head + LDB_EVENT_BUF_SIZE) {
+    fprintf(stderr, "[%ld] WARNING: wait buffer full: wait resource ignored\n", syscall(SYS_gettid));
+    return;
+  }
 
-//   ldb_event_entry *e = &ebuf->events[tail % LDB_EVENT_BUF_SIZE];
+  ddb_wait_entry_t *e = &wbuf->wait_entries[tail % LDB_EVENT_BUF_SIZE];
 
-//   e->event_type = event_type;
-//   e->sec = ts.tv_sec;
-//   e->nsec = ts.tv_nsec;
-//   e->tid = tid;
-//   e->arg1 = arg1;
-//   e->arg2 = arg2;
-//   e->arg3 = arg3;
+  e->type = wait_type;
+  e->identifier = identifier;
 
-//   barrier();
+  barrier();
 
-//   ebuf->tail = tail + 1;
-// }
+  wbuf->tail = tail + 1;
+}
 
-// inline void event_record_now(int event_type, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-//   // attach shared memory
-//   if (unlikely(!ldb_shared)) {
-//     ldb_shared = attach_shared_memory();
-//   }
+void event_record(
+    ddb_wait_buffer_t *wbuf, uint8_t wait_type, 
+    struct timespec ts, uint64_t identifier
+) {
 
-//   struct timespec now;
-//   int tinfo_idx = get_thread_info_idx();
-//   ldb_thread_info_t *tinfo = &ldb_shared->ddb_thread_infos[tinfo_idx];
+  if (unlikely(!wbuf || !wbuf->wait_entries))
+    return;
 
-//   clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+  int tail = wbuf->tail;
+  barrier();
+  
+  if (tail >= wbuf->head + LDB_EVENT_BUF_SIZE) {
+    fprintf(stderr, "[%ld] WARNING: wait buffer full: wait resource ignored\n", syscall(SYS_gettid));
+    return;
+  }
 
-//   event_record(tinfo->ebuf, event_type, now, tinfo->id, arg1, arg2, arg3);
-// }
+  ddb_wait_entry_t *e = &wbuf->wait_entries[tail % LDB_EVENT_BUF_SIZE];
+
+  e->type = wait_type;
+  e->identifier = identifier;
+
+  barrier();
+
+  wbuf->tail = tail + 1;
+}
+
+inline void event_record_now(uint8_t wait_type) {
+  // attach shared memory
+  if (unlikely(!ddb_shared)) {
+    ddb_shared = attach_shared_memory();
+  }
+
+  struct timespec now;
+  int tinfo_idx = get_thread_info_idx();
+  ddb_thread_info_t *tinfo = &ddb_shared->ddb_thread_infos[tinfo_idx];
+
+  clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+
+  event_record(tinfo->wbuf, wait_type, now, tinfo->id);
+}
