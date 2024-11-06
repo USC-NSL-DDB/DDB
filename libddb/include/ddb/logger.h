@@ -1,3 +1,3 @@
 #pragma once
 
-void logger_reset();
+void dump_shared_memory();

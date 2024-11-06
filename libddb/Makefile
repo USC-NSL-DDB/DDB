@@ -11,13 +11,16 @@ all: libshim.so test_bins/dummy
 # libddb.a: hook.o logger.o monitor.o event.o tag.o
 # 	$(AR) qc $@ $^
 
-libshim.so: hook.o shim.o
+libshim.so: hook.o logger.o shim.o 
 	$(GCC) -g -shared -fPIC -lpthread -ldl -o $@ $^
 
 shim.o: shim.c
 	$(GCC) -I./include -O0 -g -fno-omit-frame-pointer -fPIC -o $@ -c $<
 
-hook.o: hook.c
+logger.o: logger.c
+	$(GCC) -I./include -O0 -g -fPIC -o $@ -c $<
+
+hook.o: hook.c 
 	$(GCC) -I./include -O0 -g -fPIC -o $@ -c $<
 
 # test_bins/dummy: test_bins/dummy.c hook.o
@@ -26,8 +29,6 @@ hook.o: hook.c
 test_bins/dummy: test_bins/dummy.c
 	$(GCC) -I./include -g -O0 -lpthread -o $@ $<
 
-# logger.o: logger.c
-# 	$(CC) $(CFLAGS) -I./include -o $@ -c $<
 
 # monitor.o: monitor.c
 # 	$(CC) $(CFLAGS) -o $@ -c $<

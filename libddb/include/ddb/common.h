@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ddb/lock.h"
 #include <inttypes.h>
 #include <sched.h>
 #include <stdint.h>
@@ -37,7 +38,7 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #endif
 
-// pthread_key_t ddb_tls_key;
+extern pthread_key_t ddb_tls_key;
 
 enum ddb_wait_type {
   DDB_WAIT_MUTEX = 1,
@@ -57,9 +58,11 @@ typedef struct {
   int64_t max_n;
   // char pad2[56];
   ddb_wait_entry_t *wait_entries;
+  ddb_rwlock_t lock;
 } ddb_wait_buffer_t;
 
 typedef struct {
+  bool valid; // indicates if the thread is still valid
   pid_t id;
   char **fsbase;
   char *stackbase;
@@ -78,6 +81,7 @@ typedef struct {
   int64_t max_n;
   // char pad2[56];
   ddb_lowner_entry_t *lowner_entries;
+  ddb_rwlock_t lock;
 } ddb_lowner_t;
 
 typedef struct {
@@ -87,6 +91,7 @@ typedef struct {
   int ddb_max_idx;
   pthread_spinlock_t ddb_tlock;
 } ddb_shmseg;
+  
 
 inline __attribute__((always_inline)) void destructor(void* ptr) {
     free(ptr); // Free the memory allocated for the thread-local storage
@@ -152,16 +157,17 @@ inline __attribute__((always_inline)) char *rdfsbase() {
 //   __asm volatile ("movq %0, %%fs:-216 \n\t" :: "r"(tag): "memory");
 // }
 
-inline __attribute__((always_inline)) void register_thread_info(int idx) {
-  __asm volatile ("mov %0, %%fs:-208 \n\t" :: "r"(idx): "memory");
+inline __attribute__((always_inline)) void register_thread_info(pid_t idx) {
+  // __asm volatile ("mov %0, %%fs:-208 \n\t" :: "r"(idx): "memory");
+  pid_t* tidx = malloc(sizeof(pid_t));
+  *tidx = idx;
+  pthread_setspecific(ddb_tls_key, tidx);
 }
 
 inline __attribute__((always_inline)) pid_t get_thread_info_idx() {
-  int idx;
-
-  __asm volatile ("mov %%fs:-208, %0 \n\t" : "=r"(idx) :: "memory");
-
-  return idx;
+  // __asm volatile ("mov %%fs:-208, %0 \n\t" : "=r"(idx) :: "memory");
+  pid_t* value = (pid_t*)pthread_getspecific(ddb_tls_key);
+  return *value;
 }
 
 /* shared memory related functions */

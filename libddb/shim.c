@@ -13,22 +13,16 @@
 #include <dlfcn.h>
 
 #include "ddb/common.h"
+#include "ddb/lock.h"
+#include "ddb/logger.h"
 
-ddb_shmseg *ddb_shared;
-// extern ddb_shmseg *ddb_shared;
+extern ddb_shmseg *ddb_shared;
+extern pthread_key_t ddb_tls_key;
 
 typedef struct {   
   void *(*worker_func)(void *param);
   void *param;
 } pthread_param_t;
-
-// static inline __attribute__((always_inline)) uint64_t get_ngen() {
-//   uint64_t ngen;
-
-//   asm volatile ("movq %%fs:-344, %0 \n\t" : "=r"(ngen) :: "memory");
-
-//   return ngen;
-// }
 
 static inline int get_lowner_idx() {
   ddb_lowner_t *lowners = &ddb_shared->ddb_lowners;
@@ -131,18 +125,6 @@ static void event_record_mutex(pthread_mutex_t *mutex) {
   ddb_thread_info_t *tinfo = &ddb_shared->ddb_thread_infos[tinfo_idx];
 
   clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-
-  // uint64_t wait_time = timespec_diff_ns(tinfo->ts_lock, tinfo->ts_wait);
-  // uint64_t lock_time = timespec_diff_ns(now, tinfo->ts_lock);
-
-  // if (wait_time >= LDB_MUTEX_EVENT_THRESH_NS || lock_time >= LDB_MUTEX_EVENT_THRESH_NS) {
-  //   // event_record(tinfo->ebuf, LDB_EVENT_MUTEX_WAIT, tinfo->ts_wait, tinfo->id,
-  //   //     (uintptr_t)mutex, 0, 0);
-  //   // event_record(tinfo->ebuf, LDB_EVENT_MUTEX_LOCK, tinfo->ts_lock, tinfo->id,
-  //   //     (uintptr_t)mutex, 0, 0);
-  //   // event_record(tinfo->ebuf, LDB_EVENT_MUTEX_UNLOCK, now, tinfo->id,
-  //   //     (uintptr_t)mutex, 0, 0);
-  // }
 }
 
 /* pthread-related functions */
@@ -155,16 +137,10 @@ void *__ddb_thread_start(void *arg) {
 
   free(arg);
 
-  // initialize canary
-  // setup_canary();
-
   // initialize stack
   char *rbp = get_rbp(); // this is the rbp of thread main
   
-  
-
   printf("New interposed thread is starting... thread ID = %ld\n", syscall(SYS_gettid));
-  // printf("ngen = %lu, tls rbp = %p, real rbp = %p, tls = %p - %p\n", get_ngen(), get_fs_rbp(), get_rbp(), (void *)(rdfsbase()-200), (void *)rdfsbase());
 
   // attach shared memory
   if (unlikely(!ddb_shared)) {
@@ -174,7 +150,7 @@ void *__ddb_thread_start(void *arg) {
   // allocate & initialize event buffer
   ddb_wait_buffer_t *wbuf = (ddb_wait_buffer_t *)malloc(sizeof(ddb_wait_buffer_t));
   memset(wbuf, 0, sizeof(ddb_wait_buffer_t));
-  wbuf->wait_entries = (ddb_wait_entry_t *)malloc(sizeof(ddb_wait_entry_t) * LDB_EVENT_BUF_SIZE);
+  wbuf->wait_entries = (ddb_wait_entry_t *)malloc(sizeof(ddb_wait_entry_t) * DDB_MAX_NWAIT);
   if (wbuf->wait_entries == 0) {
     fprintf(stderr, "\tmalloc() failed\n");
   }
@@ -186,21 +162,14 @@ void *__ddb_thread_start(void *arg) {
   pthread_spin_lock(&(ddb_shared->ddb_tlock));
   tidx = get_tidx();
   pid_t id = syscall(SYS_gettid);
+  ddb_shared->ddb_thread_infos[tidx].valid = true;
   ddb_shared->ddb_thread_infos[tidx].id = id;
   ddb_shared->ddb_thread_infos[tidx].fsbase = (char **)(rdfsbase());
   ddb_shared->ddb_thread_infos[tidx].stackbase = rbp;
   ddb_shared->ddb_thread_infos[tidx].wbuf = wbuf;
   pthread_spin_unlock(&(ddb_shared->ddb_tlock));
 
-  // ddb_shared->ddb_thread_infos[tidx].ts_wait = now;
-  // ddb_shared->ddb_thread_infos[tidx].ts_lock = now;
-  // ddb_shared->ddb_thread_infos[tidx].ts_scan = now;
-
-  // register_thread_info(tidx);
-
-  // record an event for the creation of the thread
-  // event_record(ebuf, LDB_EVENT_THREAD_CREATE, now, id,
-  //              (uintptr_t)real_thread_params.worker_func, 0, 0);
+  register_thread_info(tidx);
 
   // execute real thread
   ret = real_thread_params.worker_func(real_thread_params.param);
@@ -211,11 +180,10 @@ void *__ddb_thread_start(void *arg) {
 
   // stop tracking
   pthread_spin_lock(&(ddb_shared->ddb_tlock));
+  ddb_shared->ddb_thread_infos[tidx].valid = false;
   put_tidx(tidx);
-  // TODO: clean up the thread meta?
   pthread_spin_unlock(&(ddb_shared->ddb_tlock));
 
-  // printf("Application thread is exitting... %lu data point ignored\n", ebuf->nignored);
   printf("Application thread is exitting... \n");
 
   free(wbuf->wait_entries);
@@ -287,17 +255,38 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
       return -1;
     }
   }
-  // if (likely(ddb_shared)) {
-  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
-  // }
+
+  ddb_wait_buffer_t* wbuf = NULL;
+  pid_t tid = -1;
+  int widx = -1;
+  // TODO: lock protection
+  if (likely(ddb_shared)) {
+    tid = ddb_shared->ddb_thread_infos[thread_info_idx].id;
+    wbuf = ddb_shared->ddb_thread_infos[thread_info_idx].wbuf;
+    widx = get_wait_idx(wbuf);
+    wbuf->wait_entries[widx].valid = true; // mark as valid (waiting the lock)
+    wbuf->wait_entries[widx].type = DDB_WAIT_MUTEX;
+    wbuf->wait_entries[widx].identifier = (uintptr_t)mutex;
+  }
+
+  printf("Getting the mutex lock\n");
+  dump_shared_memory();
 
   printf("mutex lock\n");
-
   ret = real_pthread_mutex_lock(mutex);
 
-  // if (likely(ddb_shared && ret == 0)) {
-  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
-  // }
+  if (likely(ddb_shared && tid != -1)) {
+    wbuf->wait_entries[widx].valid = false; // mark as invalid (accquired, no longer wait)
+    put_wait_idx(wbuf, widx);
+
+    // Register the owner of the lock
+    int lidx = get_lowner_idx();
+    ddb_shared->ddb_lowners.lowner_entries[lidx].valid = true;
+    ddb_shared->ddb_lowners.lowner_entries[lidx].lptr = (uintptr_t)mutex;
+    ddb_shared->ddb_lowners.lowner_entries[lidx].tid = tid;
+  }
+  printf("Have the mutex lock\n");
+  dump_shared_memory();
 
   return ret;
 }
@@ -320,8 +309,22 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) {
 
   ret = real_pthread_mutex_unlock(mutex);
 
-  if (likely(ret == 0)) {
-    event_record_mutex(mutex);
+  if (likely(ddb_shared)) {
+    printf("unlocking the mutex\n");
+    dump_shared_memory();
+    // Unregister the owner of the lock
+    for (int i = 0; i < ddb_shared->ddb_lowners.max_n; i++) {
+      ddb_lowner_entry_t *lowner_ent = &ddb_shared->ddb_lowners.lowner_entries[i];
+      if (lowner_ent->valid && lowner_ent->lptr == (uintptr_t)mutex) {
+        lowner_ent->valid = false;
+        lowner_ent->lptr = (uintptr_t)NULL;
+        lowner_ent->tid = -1;
+        put_lowner_idx(i);
+        break;
+      }
+    }
+    printf("unlocked the mutex\n");
+    dump_shared_memory();
   }
 
   return ret;
