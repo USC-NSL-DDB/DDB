@@ -8,10 +8,10 @@
 #include "ddb/common.h"
 #include "ddb/logger.h"
 
-// extern ddb_shmseg *ddb_shared;
 ddb_shmseg *ddb_shared = NULL;
 pthread_key_t ddb_tls_key;
 bool running;
+bool cleaned;
 
 static void cleanup_tls(void* data) {
     free(data);
@@ -23,27 +23,6 @@ void __ddbInit(void) {
   char *rbp = get_rbp(); // this is rbp of __ddbInit()
   rbp = (char *)(*((uint64_t *)rbp)); // this is rbp of main()
 
-  // // *((uint64_t *)(rbp + 16)) = 0;
-  // // *((uint64_t *)(rbp + 8)) = (uint64_t)LDB_CANARY << 32;
-  // // *((uint64_t *)rbp) = 0;
-
-  key_t key = ftok("/tmp", 'R'); // Generate unique key
-  if (key == -1) {
-      perror("ftok failed");
-      exit(1);
-  }
-
-  // attach shared memory
-  // int shmid = shmget(key, sizeof(ddb_shmseg), 0666 | IPC_CREAT);
-  // if (shmid == -1) {
-  //   char buf[256];
-  //   snprintf(buf, sizeof(buf), 
-  //           "shmget failed: errno=%d (%s)\n", 
-  //           errno, strerror(errno));
-  //   write(STDERR_FILENO, buf, strlen(buf));
-  //   exit(1);
-  // }
-  // ddb_shared = shmat(shmid, NULL, 0);
   ddb_shared = (ddb_shmseg *) malloc(sizeof(ddb_shmseg));
   memset(ddb_shared, 0, sizeof(ddb_shmseg));
   
@@ -60,6 +39,8 @@ void __ddbInit(void) {
   memset(wbuf, 0, sizeof(ddb_wait_buffer_t));
   wbuf->wait_entries = (ddb_wait_entry_t *) malloc(sizeof(ddb_wait_entry_t) * DDB_MAX_NWAIT);
 
+  cleaned = false;
+
   // initialize main thread's info
   ddb_shared->ddb_thread_infos[0].valid = true;
   ddb_shared->ddb_thread_infos[0].id = syscall(SYS_gettid);
@@ -70,7 +51,7 @@ void __ddbInit(void) {
   ddb_shared->ddb_nthread = 1;
   ddb_shared->ddb_max_idx = 1;
 
-  printf("thread id: %d\n", ddb_shared->ddb_thread_infos[0].id);
+  // printf("thread id: %d\n", ddb_shared->ddb_thread_infos[0].id);
 
   // Initialize the pthread key
   if (pthread_key_create(&ddb_tls_key, cleanup_tls) != 0) {
@@ -86,27 +67,30 @@ void __ddbInit(void) {
 }
 
 void __ddbExit(void) {
-  void *ret;
-
-  // Join monitor and destroy spin lock?
   printf("Main app is exiting...\n");
   running = false;
 
-  dump_shared_memory();
+  // dump_shared_memory();
 
-  free(ddb_shared->ddb_thread_infos[0].wbuf->wait_entries);
-  free(ddb_shared->ddb_thread_infos[0].wbuf);
-  free(ddb_shared->ddb_thread_infos);
+  if (ddb_shared && !cleaned) {
+    free(ddb_shared->ddb_thread_infos[0].wbuf->wait_entries);
+    free(ddb_shared->ddb_thread_infos[0].wbuf);
+    free(ddb_shared->ddb_thread_infos);
+    free(ddb_shared);
+    cleaned = true;
+  }
 
   // clean up TLS
   pthread_key_delete(ddb_tls_key);
-
-  shmdt(ddb_shared);
 }
 
 void sig_hdlr(int signum) {
   printf("Received signal %d, exiting...\n", signum);
   __ddbExit();
+  // Restore default handler
+  signal(signum, SIG_DFL);
+  // Rethrow the signal
+  raise(signum);
 }
 
 __attribute__((constructor)) void init() {

@@ -19,9 +19,6 @@
 #define SHM_KEY 401916
 
 #define LDB_MAX_NTHREAD 128
-#define LDB_MAX_CALLDEPTH 1024
-#define LDB_EVENT_BUF_SIZE 524288
-// #define LDB_CANARY 0xDEADBEEF
 
 #define DDB_MAX_NLOCK 2048 
 #define DDB_MAX_NWAIT 128
@@ -71,8 +68,8 @@ typedef struct {
 
 typedef struct {
   bool valid;     // if the lock is still valid (valid == false means the lock is released)
-  uintptr_t lptr; // lock's pointer as its id
-  pid_t tid;      // it's owner's tid (can be assigned to other value as long as it can be used to identify the owner)
+  uintptr_t lid; // lock's pointer as its id
+  pid_t owner_tid;      // it's owner's tid (can be assigned to other value as long as it can be used to identify the owner)
 }__attribute__((packed, aligned(8))) ddb_lowner_entry_t;
 
 typedef struct {
@@ -152,11 +149,6 @@ inline __attribute__((always_inline)) char *rdfsbase() {
   return fsbase;
 }
 
-// inline __attribute__((always_inline)) void setup_canary() {
-//   uint64_t tag = ((uint64_t)LDB_CANARY) << 32;
-//   __asm volatile ("movq %0, %%fs:-216 \n\t" :: "r"(tag): "memory");
-// }
-
 inline __attribute__((always_inline)) void register_thread_info(pid_t idx) {
   // __asm volatile ("mov %0, %%fs:-208 \n\t" :: "r"(idx): "memory");
   pid_t* tidx = malloc(sizeof(pid_t));
@@ -169,16 +161,3 @@ inline __attribute__((always_inline)) pid_t get_thread_info_idx() {
   pid_t* value = (pid_t*)pthread_getspecific(ddb_tls_key);
   return *value;
 }
-
-/* shared memory related functions */
-inline __attribute__((always_inline)) ddb_shmseg *attach_shared_memory() {
-  int shmid = shmget(SHM_KEY, sizeof(ddb_shmseg), 0666);
-  ddb_shmseg *ddb_shared = shmat(shmid, NULL, 0);
-
-  return ddb_shared;
-}
-
-/* Event logging functions */
-// void event_record(ldb_event_buffer_t *event, int event_type, struct timespec ts,
-// 		uint32_t tid, uint64_t arg1, uint64_t arg2, uint64_t arg3);
-// void event_record_now(int event_type, uint64_t arg1, uint64_t arg2, uint64_t arg3);

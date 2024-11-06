@@ -142,9 +142,9 @@ void *__ddb_thread_start(void *arg) {
   
   printf("New interposed thread is starting... thread ID = %ld\n", syscall(SYS_gettid));
 
-  // attach shared memory
   if (unlikely(!ddb_shared)) {
-    ddb_shared = attach_shared_memory();
+    printf("ddb shared memory is not properly initialized\n");
+    exit(1);
   }
 
   // allocate & initialize event buffer
@@ -173,10 +173,6 @@ void *__ddb_thread_start(void *arg) {
 
   // execute real thread
   ret = real_thread_params.worker_func(real_thread_params.param);
-
-  // record an event for the exiting of the thread
-  // clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-  // event_record(ebuf, LDB_EVENT_THREAD_EXIT, now, id, 0, 0, 0);
 
   // stop tracking
   pthread_spin_lock(&(ddb_shared->ddb_tlock));
@@ -231,8 +227,6 @@ int pthread_join(pthread_t thread, void **retval) {
     }
   }
 
-  // pthread_t -> tid mapping should be stored at pthread_create
-  // event_record_now(LDB_EVENT_JOIN_WAIT, (uint64_t)thread, 0, 0);
   ret = real_pthread_join(thread, retval);
   if (likely(ret == 0)) {
     // event_record_now(LDB_EVENT_JOIN_JOINED, (uint64_t)thread, 0, 0);
@@ -259,34 +253,37 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
   ddb_wait_buffer_t* wbuf = NULL;
   pid_t tid = -1;
   int widx = -1;
-  // TODO: lock protection
   if (likely(ddb_shared)) {
     tid = ddb_shared->ddb_thread_infos[thread_info_idx].id;
     wbuf = ddb_shared->ddb_thread_infos[thread_info_idx].wbuf;
+    get_wlock(&wbuf->lock);
     widx = get_wait_idx(wbuf);
     wbuf->wait_entries[widx].valid = true; // mark as valid (waiting the lock)
     wbuf->wait_entries[widx].type = DDB_WAIT_MUTEX;
     wbuf->wait_entries[widx].identifier = (uintptr_t)mutex;
+    rel_wlock(&wbuf->lock);
   }
 
-  printf("Getting the mutex lock\n");
-  dump_shared_memory();
+  // dump_shared_memory();
 
-  printf("mutex lock\n");
   ret = real_pthread_mutex_lock(mutex);
 
   if (likely(ddb_shared && tid != -1)) {
+    get_wlock(&wbuf->lock);
     wbuf->wait_entries[widx].valid = false; // mark as invalid (accquired, no longer wait)
     put_wait_idx(wbuf, widx);
+    rel_wlock(&wbuf->lock);
 
     // Register the owner of the lock
+    get_wlock(&ddb_shared->ddb_lowners.lock);
     int lidx = get_lowner_idx();
     ddb_shared->ddb_lowners.lowner_entries[lidx].valid = true;
-    ddb_shared->ddb_lowners.lowner_entries[lidx].lptr = (uintptr_t)mutex;
-    ddb_shared->ddb_lowners.lowner_entries[lidx].tid = tid;
+    ddb_shared->ddb_lowners.lowner_entries[lidx].lid = (uintptr_t)mutex;
+    ddb_shared->ddb_lowners.lowner_entries[lidx].owner_tid = tid;
+    rel_wlock(&ddb_shared->ddb_lowners.lock);
   }
-  printf("Have the mutex lock\n");
-  dump_shared_memory();
+  // printf("Have the mutex lock\n");
+  // dump_shared_memory();
 
   return ret;
 }
@@ -305,26 +302,26 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) {
     }
   }
 
-  printf("mutex unlock\n");
-
   ret = real_pthread_mutex_unlock(mutex);
 
   if (likely(ddb_shared)) {
-    printf("unlocking the mutex\n");
-    dump_shared_memory();
+    // printf("unlocking the mutex\n");
+    // dump_shared_memory();
     // Unregister the owner of the lock
+    get_wlock(&ddb_shared->ddb_lowners.lock);
     for (int i = 0; i < ddb_shared->ddb_lowners.max_n; i++) {
       ddb_lowner_entry_t *lowner_ent = &ddb_shared->ddb_lowners.lowner_entries[i];
-      if (lowner_ent->valid && lowner_ent->lptr == (uintptr_t)mutex) {
+      if (lowner_ent->valid && lowner_ent->lid == (uintptr_t)mutex) {
         lowner_ent->valid = false;
-        lowner_ent->lptr = (uintptr_t)NULL;
-        lowner_ent->tid = -1;
+        lowner_ent->lid = (uintptr_t)NULL;
+        lowner_ent->owner_tid = -1;
         put_lowner_idx(i);
         break;
       }
     }
-    printf("unlocked the mutex\n");
-    dump_shared_memory();
+    rel_wlock(&ddb_shared->ddb_lowners.lock);
+    // printf("unlocked the mutex\n");
+    // dump_shared_memory();
   }
 
   return ret;
@@ -343,17 +340,7 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex) {
       return -1;
     }
   }
-
-  // if (likely(ddb_shared)) {
-  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_wait);
-  // }
-
   ret = real_pthread_mutex_trylock(mutex);
-
-  // if (likely(ddb_shared) && ret == 0) {
-  //   clock_gettime(CLOCK_MONOTONIC_RAW, &ddb_shared->ldb_thread_infos[thread_info_idx].ts_lock);
-  // }
-
   return ret;
 }
 
