@@ -15,6 +15,8 @@ from iddb.mtracer import GlobalTracer
 import sys
 from iddb.utils import ip_int2ip_str
 
+ENABLE_DEADLOCK_DETECTION = False
+
 def prepare_ctx_switch_args(registers: Dict[str, int]) -> str:
     arg = ""
     for (reg, val) in registers.items():
@@ -167,12 +169,18 @@ class RemoteBacktraceHandler(CmdHandler):
             # 'sp': caller_meta.get('sp'),
             # 'fp': caller_meta.get('fp'),
             # 'lr': caller_meta.get('lr', None),
-            'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid 
+            'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
+            'pid': pid,
         }
 
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
             return
+
+        # used for deadlock detection
+        all_lock_states = []
+        call_dependencies = []
+
         aggreated_bt_result = []
         current_sid, current_tid = self.state_mgr.get_sidtid_by_gtid(
             command_instance.thread_id)
@@ -187,6 +195,19 @@ class RemoteBacktraceHandler(CmdHandler):
             remote_bt_parent_info = await self.router.send_to_thread_async(
                 command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer()
             )
+
+            # deadlock detection #
+            if ENABLE_DEADLOCK_DETECTION:
+                lock_state_cmd, lock_state_token, _ = self.router.prepend_token("-get-lock-state")
+                lock_state_info = await self.router.send_to_thread_async(
+                    command_instance.thread_id, lock_state_token, f"{lock_state_token}{lock_state_cmd}", NullTransformer()
+                )
+                all_lock_states.append({
+                    "id": 
+                    lock_state_info[0].payload
+                })
+            # deadlock detection #
+
             assert len(remote_bt_parent_info) == 1
             remote_bt_parent_info = self.extract_remote_metadata(
                 remote_bt_parent_info[0].payload
