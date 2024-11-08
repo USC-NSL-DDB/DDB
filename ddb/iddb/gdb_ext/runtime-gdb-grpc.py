@@ -456,11 +456,6 @@ class GetRemoteBTInfo(gdb.MICommand):
 
     def invoke(self, argv):
         remote_ip: Optional[int] = -1
-        local_ip: Optional[int] = -1
-        # parent_pc: Optional[int] = -1
-        # parent_sp: Optional[int] = -1
-        # parent_fp: Optional[int] = -1
-        # parent_lr: Optional[int] = None
         regs: Dict[str, int] = {}
         pid: Optional[int] = -1
         tid: Optional[int] = -1
@@ -526,11 +521,6 @@ class GetRemoteBTInfo(gdb.MICommand):
                     "tid": tid,
                     "ip": remote_ip
                 },
-                # "local_meta": {
-                #     "ip": 0,
-                #     "pid": -1,
-                #     "tid": -1
-                # }
             }
         }
 

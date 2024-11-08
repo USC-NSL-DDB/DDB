@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import time
 from typing import Dict, List, Optional, Set, Tuple, Union
 from threading import Lock
+from iddb.extension.dl_detector import DeadlockDetector
 from iddb.data_struct import SessionResponse
 from iddb.logging import logger
 from iddb.cmd_router import CmdRouter
@@ -14,6 +15,7 @@ from iddb.utils import dev_print, parse_cmd
 from iddb.mtracer import GlobalTracer
 import sys
 from iddb.utils import ip_int2ip_str
+from collections import deque
 
 ENABLE_DEADLOCK_DETECTION = False
 
@@ -178,8 +180,8 @@ class RemoteBacktraceHandler(CmdHandler):
             return
 
         # used for deadlock detection
-        all_lock_states = []
-        call_dependencies = []
+        dl_detector = DeadlockDetector()
+        call_chain = deque()
 
         aggreated_bt_result = []
         current_sid, current_tid = self.state_mgr.get_sidtid_by_gtid(
@@ -196,22 +198,26 @@ class RemoteBacktraceHandler(CmdHandler):
                 command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer()
             )
 
-            # deadlock detection #
-            if ENABLE_DEADLOCK_DETECTION:
-                lock_state_cmd, lock_state_token, _ = self.router.prepend_token("-get-lock-state")
-                lock_state_info = await self.router.send_to_thread_async(
-                    command_instance.thread_id, lock_state_token, f"{lock_state_token}{lock_state_cmd}", NullTransformer()
-                )
-                all_lock_states.append({
-                    "id": 
-                    lock_state_info[0].payload
-                })
-            # deadlock detection #
-
             assert len(remote_bt_parent_info) == 1
             remote_bt_parent_info = self.extract_remote_metadata(
                 remote_bt_parent_info[0].payload
             )
+
+            # deadlock detection #
+            if ENABLE_DEADLOCK_DETECTION:
+                lock_state_cmd, lock_state_token, _ = self.router.prepend_token("-get-lock-state")
+                lock_state_info = await self.router.send_to_thread_async(
+                    command_instance.thread_id, lock_state_token, 
+                    f"{lock_state_token}{lock_state_cmd}", NullTransformer()
+                )
+                session_tag, local_tid = self.state_mgr.inst().get_tag_with_tid_by_gtid(command_instance.thread_id)
+                # thread tag format: "<ip>:-<pid>:<tid>"
+                # for example: "192.168.1.1:-1234:5678"
+                thrd_tag = ":".join([session_tag, local_tid])
+                dl_detector.add_data(session_tag, lock_state_info[0].payload)
+                call_chain.append(thrd_tag)
+            # deadlock detection #
+
             while remote_bt_parent_info.get("message") == 'success':
                 logger.debug(
                     "trying to acquire parent info:-------------------------------------------------")
@@ -273,11 +279,31 @@ class RemoteBacktraceHandler(CmdHandler):
                 remote_bt_parent_info = self.extract_remote_metadata(
                     remote_bt_parent_info[0].payload
                 )
+
+                # deadlock detection #
+                if ENABLE_DEADLOCK_DETECTION:
+                    lock_state_cmd, lock_state_token, _ = self.router.prepend_token("-get-lock-state")
+                    lock_state_info = await self.router.send_to_thread_async(
+                        command_instance.thread_id, lock_state_token, 
+                        f"{lock_state_token}{lock_state_cmd}", NullTransformer()
+                    )
+                    session_tag, local_tid = self.state_mgr.inst().get_tag_with_tid_by_gtid(command_instance.thread_id)
+                    # thread tag format: "<ip>:-<pid>:<tid>"
+                    # for example: "192.168.1.1:-1234:5678"
+                    thrd_tag = ":".join([session_tag, local_tid])
+                    dl_detector.add_data(session_tag, lock_state_info[0].payload)
+                    call_chain.append(thrd_tag)
+                # deadlock detection #
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             logger.debug(
                 f"Error in remote backtrace: {e}")
         finally:
+            dl_detector.add_call_chain(call_chain)
+            is_dl = dl_detector.detect()
+            if is_dl:
+                logger.info(f"Deadlock detected!")
+                logger.info(f"Call chain: {call_chain}")
             print("\n" + f"[ TOOL MI OUTPUT ] \n{(PlainTransformer().format(a_bt_result))}\n")
 
 

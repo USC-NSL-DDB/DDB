@@ -400,10 +400,20 @@ class StateManager:
         for sid in self.sessions:
             out += f"{str(self.sessions[sid])}\n"
         return out
+
     def get_session_by_tag(self,tag:str)->int:
         for sid in self.sessions:
             if self.sessions[sid].tag == tag:
                 return sid
         return -1
+
+    def get_tag_with_tid_by_gtid(self, gtid: int) -> Tuple[str, int]:
+        sid, tid = self.get_sidtid_by_gtid(gtid)
+        return (self.sessions[sid].tag, tid)
+
+    def get_tag_by_gtid(self, gtid: int) -> str:
+        return self.get_tag_with_tid_by_gtid(gtid)[0]
+
+
 # Eager instantiation
 _ = StateManager.inst()
