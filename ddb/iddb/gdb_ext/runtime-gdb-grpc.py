@@ -463,6 +463,7 @@ class GetRemoteBTInfo(gdb.MICommand):
         # parent_lr: Optional[int] = None
         regs: Dict[str, int] = {}
         pid: Optional[int] = -1
+        tid: Optional[int] = -1
         frame = gdb.selected_frame()
         frames: List[gdb.Frame] = []
         message = "failed"
@@ -484,6 +485,7 @@ class GetRemoteBTInfo(gdb.MICommand):
                             remote_ip = int(val['meta']['caller_comm_ip'])
                             # print("found ip")
                             pid = int(val['meta']['pid'])
+                            tid = int(val['meta']['tid'])
                             # print("found pid")
                             ctx_obj = val['ctx']
                             if ctx_obj.type.code == gdb.TYPE_CODE_STRUCT:
@@ -521,6 +523,7 @@ class GetRemoteBTInfo(gdb.MICommand):
                 "caller_ctx": regs,
                 "caller_meta": {
                     "pid": pid,
+                    "tid": tid,
                     "ip": remote_ip
                 },
                 # "local_meta": {

@@ -161,17 +161,17 @@ class RemoteBacktraceHandler(CmdHandler):
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
-        pid, ip_int = caller_meta.get('pid'), int(caller_meta.get('ip'))
-        return {
+        pid, ip_int = int(caller_meta.get('pid')), int(caller_meta.get('ip'))
+        data = {
             'message': data.get('message'),
             'caller_ctx': caller_ctx,
-            # 'pc': caller_meta.get('pc'),
-            # 'sp': caller_meta.get('sp'),
-            # 'fp': caller_meta.get('fp'),
-            # 'lr': caller_meta.get('lr', None),
             'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
             'pid': pid,
         }
+
+        if ENABLE_DEADLOCK_DETECTION:
+            data["tid"] = int(caller_meta.get('tid')) if caller_meta.get('tid') else None
+        return data
 
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
