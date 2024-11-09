@@ -12,6 +12,83 @@ try:
 except ImportError:
     print("Failed to import debugpy")
 
+def get_thread_tid(thread: gdb.Thread = None):
+    """Get kernel thread ID (LWP) for a given thread or current thread"""
+    try:
+        if thread is None:
+            thread = gdb.selected_thread()
+        if thread is None:
+            return None
+            
+        # Get thread info string which contains LWP
+        thread_info = thread.ptid
+        # PTID is a tuple of (pid, lwpid, tid)
+        # For Linux threads, lwpid is the kernel thread ID
+        return thread_info[1]
+    except gdb.error:
+        return None
+
+class GetThreadKtid(gdb.Command):
+    """Command to print kernel thread ID for current or specified thread
+    Usage: thread-tid [thread_num]"""
+    
+    def __init__(self):
+        super(GetThreadKtid, self).__init__("get-thread-ktid", gdb.COMMAND_DATA)
+    
+    def invoke(self, arg, from_tty):
+        global get_thrd_ktid_cmd_mi
+        result = get_thrd_ktid_cmd_mi.invoke(arg)
+        if "error" in result:
+            print(f"Error: {result['error']}")
+        else:
+            print(f"Kernel thread ID (LWP) for thread {result['thrd_num']}: {result['ktid']}")
+       
+
+class GetThreadKtidMI(gdb.MICommand):
+    """MI Command to print kernel thread ID for current or specified thread
+    Usage: thread-tid [thread_num]"""
+    
+    def __init__(self):
+        super().__init__("-get-lock-state")
+
+    def invoke(self, argv):
+        result = {
+            "ktid": None
+        }
+        try:
+            if argv and argv[0]:
+                # If thread number specified, find that thread
+                thread_num = int(argv[0])
+                thread = None
+                for t in gdb.selected_inferior().threads():
+                    if t.num == thread_num:
+                        thread = t
+                        break
+                if thread is None:
+                    result["error"] = f"Thread {thread_num} not found"
+                    return
+            else:
+                thread = gdb.selected_thread()
+                if thread is None:
+                    result["error"] = "No thread selected"
+                    return
+            
+            tid = get_thread_tid(thread)
+            if tid is not None:
+                result["ktid"] = tid
+                result["thrd_num"] = thread.num
+                # print(f"Kernel thread ID (LWP) for thread {thread.num}: {tid}")
+            else:
+                result["error"] = "Failed to get kernel thread ID"
+        except ValueError:
+            result["error"] = "Invalid thread number"
+        except gdb.error as e:
+            result["error"] = str(e)
+            print(f"Error: {str(e)}")
+        return result
+
+
+
 def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
     """Get all local variables (symbols) of the given frame."""
     if frame is None:
@@ -155,3 +232,5 @@ get_lock_state_cmd_mi = GetLockStateMI()
 get_lock_state_cmd =GetLockState()
 # dbt_mi_cmd = DistributedBacktraceMICmd()
 # dbt_cmd = DistributedBTCmd()
+get_thrd_ktid_cmd_mi = GetThreadKtidMI()
+GetThreadKtid()

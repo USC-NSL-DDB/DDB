@@ -1,6 +1,9 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <syscall.h>
+#include <bits/pthreadtypes.h>
+#include <pthread.h>
 
 #include "comm.pb.h"
 #include "example/nodea.hpp"
@@ -31,6 +34,7 @@ void NodeA::Wait() {
 int NodeA::Invoke() {
   std::cout << "NodeA invoke method called." << std::endl;
 
+
   std::lock_guard guard(mtx); // Lock A
 
   commpb::NodeRequest request;
@@ -52,6 +56,12 @@ grpc::Status NodeA::ExecuteA(grpc::ServerContext *context,
                              const commpb::NodeRequest *request,
                              commpb::NodeReply *response) {
   std::cout << "NodeA ExecuteA method called." << std::endl;
+
+  pid_t pid = getpid();
+  pthread_t tid = pthread_self();
+  pid_t the_tid = syscall(SYS_gettid);
+
+  std::cout << "Process ID: " << pid << ", Thread ID: " << tid << ", TID: " << the_tid << std::endl;
   std::lock_guard guard(mtx); // Lock A again
   response->set_msg("Hello from NodeA!");
   return grpc::Status::OK;
