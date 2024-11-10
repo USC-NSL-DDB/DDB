@@ -13,11 +13,15 @@ class DeadlockDetector:
         self.lock_owners: Dict[str, str] = {}
         self.start_thrd = None
 
+        self.added_session: Dict[str, bool] = {}
+
     def add_data(self, session_tag: str, data: dict):
         """ Add data to the detector
         @param session_tag: the tag of the session that the data belongs to
         @param data: the data to be added to the detector. It should be consistent with that data format.
         """
+        if session_tag in self.added_session:
+            return
         thread_data =  data["thread_info"]
         lock_data = data["lock_info"]
         for td in thread_data:
@@ -35,6 +39,7 @@ class DeadlockDetector:
             lock_id = ld["lid"]
             owner_tid = ld["owner_tid"]
             self.lock_owners[f"{session_tag}:{lock_id}"] = f"{session_tag}:{owner_tid}"
+        self.added_session[session_tag] = True
 
     def set_starting_thread(self, thrd_tag: str):
         self.start_thrd = thrd_tag

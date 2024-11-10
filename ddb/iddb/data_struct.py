@@ -40,6 +40,11 @@ class StartMode(Enum):
     ATTACH = 2
 
 @dataclass
+class PrerunGdbCommand:
+    name: str
+    command: str
+
+@dataclass
 class GdbSessionConfig:
     remote_port: int = -1
     remote_host: str = ""
@@ -57,7 +62,8 @@ class GdbSessionConfig:
     args: List[str] = field(default_factory=list)
     run_delay: int = 0
     sudo: bool = False
-    prerun_cmds:List[Dict[str,str]] = field(default_factory=list)
+    # prerun_cmds:List[Dict[str,str]] = field(default_factory=list)
+    prerun_cmds: List[PrerunGdbCommand] = field(default_factory=list)
     initialize_commands:List[str] = field(default_factory=list)
 
     def __repr__(self):
@@ -80,12 +86,14 @@ class TargetFramework(Enum):
     NU = 2
     SERVICE_WEAVER_K8S = 3
 
+
 @dataclass
 class DDBConfig:
     framework = TargetFramework.UNSPECIFIED
     gdb_sessions_configs: List[GdbSessionConfig] = field(default_factory=list)
     broker: BrokerInfo = None
     ssh: SSHInfo = SSHInfo()
+    prerun_cmds: List[PrerunGdbCommand] = field(default_factory=list)
 
     def __repr__(self):
         formatted_dict = pformat(self.__dict__)

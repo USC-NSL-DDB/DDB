@@ -6,8 +6,7 @@ from typing import List, Optional
 from pprint import pformat
 import getpass
 
-from iddb.gdbserver_starter import SSHRemoteServerCred
-from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, StartMode, TargetFramework
+from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, PrerunGdbCommand, StartMode, TargetFramework
 from iddb.logging import logger
 from iddb.const import ServiceDiscoveryConst
 
@@ -38,6 +37,15 @@ class GlobalConfig:
         GlobalConfig.__global_config = config
 
     @staticmethod
+    def __parse_prerun_cmds(prerun_cmds: List[dict]) -> List[PrerunGdbCommand]:
+        cmds: List[PrerunGdbCommand] = []
+        for cmd in prerun_cmds:
+            if "command" in cmd:
+                name = cmd.get("name", "unnamed cmd")
+                cmds.append(PrerunGdbCommand(name, cmd["command"]))
+        return cmds
+
+    @staticmethod
     def parse_nu_config(ddb_config: DDBConfig, config_data: any):
         service_discovery_enabled = ("ServiceDiscovery" in config_data)
         if service_discovery_enabled:
@@ -55,7 +63,10 @@ class GlobalConfig:
     
         gdbSessionConfigs: List[GdbSessionConfig] = []
         components = config_data["Components"] if "Components" in config_data else []
-        prerun_cmds = config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
+        prerun_cmds = GlobalConfig.__parse_prerun_cmds(
+            config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
+        )
+        ddb_config.prerun_cmds = prerun_cmds
 
         for component in components:
             sessionConfig = GdbSessionConfig()
@@ -99,7 +110,11 @@ class GlobalConfig:
             print("fail to fetch cluster information")
             exit(0)
         clientset = kubeclient.CoreV1Api()
-        prerun_cmds = config_data.get("PrerunGdbCommands",[])
+        # prerun_cmds = config_data.get("PrerunGdbCommands",[])
+        prerun_cmds = GlobalConfig.__parse_prerun_cmds(
+            config_data.get("PrerunGdbCommands",[])
+        )
+        ddb_config.prerun_cmds = prerun_cmds
         config_metadata=config_data.get("Components",{})
         kube_namespace = config_metadata.get("kube_namespace","default")
         sw_name = config_metadata.get("binary_name","serviceweaver")
@@ -141,13 +156,17 @@ class GlobalConfig:
 
     def parse_vanillapid_config(ddb_config: DDBConfig, config_data: any):
         pids=config_data.get("Pids",[])
+        prerun_cmds = GlobalConfig.__parse_prerun_cmds(
+            config_data.get("PrerunGdbCommands",[])
+        )
+        ddb_config.prerun_cmds = prerun_cmds
         for pid in pids:
             sessionConfig= GdbSessionConfig()
             sessionConfig.tag=str(pid)
             sessionConfig.attach_pid=pid
             sessionConfig.start_mode=StartMode.ATTACH
             sessionConfig.gdb_mode=GdbMode.REMOTE
-            sessionConfig.prerun_cmds=config_data.get("PrerunGdbCommands",[])
+            sessionConfig.prerun_cmds=prerun_cmds
             sessionConfig.gdb_controller=VanillaPIDController(pid,True)
             # sessionConfig.remote_gdbserver=LocalClient()
             # sessionConfig.initialize_commands.append(f"-file-exec-and-symbols /proc/{pid}/exe")

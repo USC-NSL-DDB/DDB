@@ -17,7 +17,7 @@ import sys
 from iddb.utils import ip_int2ip_str
 from collections import deque
 
-ENABLE_DEADLOCK_DETECTION = True
+ENABLE_DEADLOCK_DETECTION = False
 
 def prepare_ctx_switch_args(registers: Dict[str, int]) -> str:
     arg = ""
@@ -164,7 +164,7 @@ class RemoteBacktraceHandler(CmdHandler):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
         pid, ip_int = int(caller_meta.get('pid')), int(caller_meta.get('ip'))
-        data = {
+        out_data = {
             'message': data.get('message'),
             'caller_ctx': caller_ctx,
             'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
@@ -172,10 +172,10 @@ class RemoteBacktraceHandler(CmdHandler):
         }
 
         if ENABLE_DEADLOCK_DETECTION:
-            data["tid"] = int(caller_meta.get('tid')) if caller_meta.get('tid') else None
+            out_data["tid"] = int(caller_meta.get('tid')) if caller_meta.get('tid') else None
             local_meta = data.get('metadata', {}).get('local_meta', {})
-            data["local_tid"] = int(local_meta.get('tid')) if caller_meta.get('tid') else None
-        return data
+            out_data["local_tid"] = int(local_meta.get('tid')) if caller_meta.get('tid') else None
+        return out_data
 
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
@@ -213,7 +213,7 @@ class RemoteBacktraceHandler(CmdHandler):
                     f"{lock_state_token}{lock_state_cmd}", NullTransformer()
                 )
                 session_tag, _ = self.state_mgr.inst().get_tag_with_tid_by_gtid(command_instance.thread_id)
-                ktid = remote_bt_parent_info["local_tid"]
+                ktid = str(remote_bt_parent_info["local_tid"])
                 # thread tag format: "<ip>:-<pid>:<tid>" (tid here is the kernel thread id or LWP ID)
                 # for example: "192.168.1.1:-1234:5678"
                 thrd_tag = ":".join([session_tag, ktid])
@@ -291,7 +291,7 @@ class RemoteBacktraceHandler(CmdHandler):
                         f"{lock_state_token}{lock_state_cmd}", NullTransformer()
                     )
                     session_tag, _ = self.state_mgr.inst().get_tag_with_tid_by_gtid(command_instance.thread_id)
-                    ktid = remote_bt_parent_info["local_tid"]
+                    ktid = str(remote_bt_parent_info["local_tid"])
                     # thread tag format: "<ip>:-<pid>:<tid>" (tid here is the kernel thread id or LWP ID)
                     # for example: "192.168.1.1:-1234:5678"
                     thrd_tag = ":".join([session_tag, ktid])

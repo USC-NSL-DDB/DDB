@@ -7,14 +7,17 @@ from enum import Enum
 
 import gdb
 
-try:
-    import debugpy
-except ImportError:
-    print("Failed to import debugpy")
+# try:
+#     import debugpy
+# except ImportError:
+#     print("Failed to import debugpy")
 
 # try:
-#     debugpy.listen(("localhost", 5680))
-#     print("Waiting for debugger attach")
+#     import random
+#     # port = random.randint(5700, 5800)
+#     port = 5800
+#     debugpy.listen(("localhost", port))
+#     print(f"Waiting for debugger attach: {port}")
 #     debugpy.wait_for_client()
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
@@ -513,7 +516,7 @@ class GetRemoteBTInfo(gdb.MICommand):
         except Exception as e:
             pass
         global get_thrd_ktid_cmd_mi
-        result = get_thrd_ktid_cmd_mi.invoke()
+        result = get_thrd_ktid_cmd_mi.invoke([])
         if "error" in result:
             print(f"Error: {result['error']}")
         ktid = result["ktid"] if ("ktid" in result) and (result["ktid"]) else -1
@@ -643,7 +646,7 @@ class GetThreadKtidMI(gdb.MICommand):
     Usage: thread-tid [thread_num]"""
     
     def __init__(self):
-        super().__init__("-get-lock-state")
+        super().__init__("-get-thread-ktid")
 
     def invoke(self, argv):
         result = {
@@ -651,6 +654,7 @@ class GetThreadKtidMI(gdb.MICommand):
         }
         try:
             if argv and argv[0]:
+                print(f"argv: {argv}, type: {type(argv)}")
                 # If thread number specified, find that thread
                 thread_num = int(argv[0])
                 thread = None

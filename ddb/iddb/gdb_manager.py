@@ -12,7 +12,7 @@ from iddb.cmd_router import CmdRouter
 from iddb.service_mgr import ServiceManager
 from iddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from iddb.logging import logger
-from iddb.data_struct import ServiceInfo
+from iddb.data_struct import PrerunGdbCommand, ServiceInfo
 from iddb.config import GlobalConfig
 from iddb.event_loop import GlobalRunningLoop
 from iddb.port_mgr import PortManager
@@ -61,6 +61,10 @@ class GdbManager:
         pid = session_info.pid
         tag = f"{hostname}:-{pid}"
         ddb_conf = GlobalConfig.get()
+        prerun_cmds = [
+            PrerunGdbCommand("async mode", "set mi-async on")
+        ]
+        prerun_cmds.extend(ddb_conf.prerun_cmds)
         logger.debug(f"New session discovered: hostname={hostname}, pid={pid}, tag={tag}")
         config = GdbSessionConfig(
             # remote_port=port,
@@ -79,12 +83,7 @@ class GdbManager:
             gdb_mode=GdbMode.REMOTE,
             start_mode=StartMode.ATTACH,
             sudo=True,
-            prerun_cmds=[
-                {
-                    "name": "async mode",
-                    "command": "set mi-async on"
-                }
-            ]
+            prerun_cmds=prerun_cmds
         )
         gdb_session = GdbSession(config)
 

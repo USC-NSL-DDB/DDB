@@ -8,7 +8,7 @@ from time import sleep
 
 import pkg_resources
 from iddb.counter import TSCounter
-from iddb.data_struct import GdbMode, GdbSessionConfig, StartMode
+from iddb.data_struct import GdbMode, GdbSessionConfig, PrerunGdbCommand, StartMode
 from iddb.gdb_controller import RemoteGdbController
 from iddb.gdbparser import GdbParser
 from iddb.response_processor import ResponseProcessor, SessionResponse
@@ -62,7 +62,7 @@ class GdbSession:
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
-        self.prerun_cmds=config.prerun_cmds
+        self.prerun_cmds: List[PrerunGdbCommand] = config.prerun_cmds
         self.initialize_commands = config.initialize_commands
         self.sudo = config.sudo
 
@@ -89,7 +89,7 @@ class GdbSession:
         self.session_ctrl = GdbController(full_args)
 
         for prerun_cmd in self.prerun_cmds:
-            self.write(f'-interpreter-exec console "{prerun_cmd["command"]}"')
+            self.write(f'-interpreter-exec console "{prerun_cmd.command}"')
 
         self.write("-gdb-set mi-async on")
         self.write("-gdb-set non-stop off")
@@ -111,7 +111,7 @@ class GdbSession:
         # self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
 
         for prerun_cmd in self.prerun_cmds:
-            self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd["command"]}"')
+            self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd.command}"')
         for init_cmd in self.initialize_commands:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
@@ -129,7 +129,7 @@ class GdbSession:
         self.write("-gdb-set mi-async on")
         
         for prerun_cmd in self.prerun_cmds:
-            self.write(prerun_cmd["command"])
+            self.write(prerun_cmd.command)
 
         self.write(f"-file-exec-and-symbols {self.bin}")
         self.write(f"-exec-arguments {' '.join(self.args)}")
