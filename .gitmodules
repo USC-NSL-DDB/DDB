@@ -2,3 +2,7 @@
 	path = rpc_frameworks/Nu
 	url = https://github.com/totoroyyb/Nu.git
 	branch = dev
+[submodule "rpc_frameworks/grpc"]
+	path = rpc_frameworks/grpc
+	url = https://github.com/totoroyyb/grpc-ddb.git
+	branch = main
