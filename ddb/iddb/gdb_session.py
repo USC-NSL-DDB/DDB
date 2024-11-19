@@ -115,9 +115,9 @@ class GdbSession:
         for init_cmd in self.initialize_commands:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
-        self.gdb_controller.write_input(
-            f'-interpreter-exec console "signal SIG40"'
-        )
+        # self.gdb_controller.write_input(
+        #     f'-interpreter-exec console "signal SIG40"'
+        # )
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
@@ -223,7 +223,7 @@ class GdbSession:
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
         )
         if self.gdb_controller.is_open():
-            self.gdb_controller.write_input("kill")
+            self.gdb_controller.write_input("detach")
             self.gdb_controller.write_input("exit")
             self.gdb_controller.close()
     

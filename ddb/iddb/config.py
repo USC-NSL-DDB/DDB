@@ -105,7 +105,7 @@ class GlobalConfig:
         from kubernetes import config as kubeconfig, client as kubeclient
         from iddb.gdbserver_starter import KubeRemoteSeverClient
         try:
-            kubeconfig.load_kube_config()
+            kubeconfig.load_kube_config("~/.kube/config")
         except Exception as e:
             print("fail to fetch cluster information")
             exit(0)

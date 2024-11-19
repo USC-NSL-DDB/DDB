@@ -163,11 +163,12 @@ class RemoteBacktraceHandler(CmdHandler):
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
-        pid, ip_int = int(caller_meta.get('pid')), int(caller_meta.get('ip'))
+        pid, ip_int = int(caller_meta.get('pid',0)), int(caller_meta.get('ip',0))
         out_data = {
             'message': data.get('message'),
             'caller_ctx': caller_ctx,
-            'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
+            # 'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
+            'id': f"{ip_int2ip_str(ip_int)}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
             'pid': pid,
         }
 

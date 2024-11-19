@@ -76,26 +76,30 @@ class SSHRemoteServerClient(RemoteServerConnection):
         if self.stderr:
             self.stderr.close()
 
-# class KubeRemoteSeverClient(RemoteServerConnection):
-#     from kubernetes import config as kubeconfig, client as kubeclient, stream
+class KubeRemoteSeverClient(RemoteServerConnection):
+    from kubernetes import config as kubeconfig, client as kubeclient, stream
 
-#     def __init__(self, pod_name: str, pod_namespace: str):
-#         self.pod_name = pod_name
-#         self.pod_namespace = pod_namespace
+    def __init__(self, pod_name: str, pod_namespace: str):
+        self.pod_name = pod_name
+        self.pod_namespace = pod_namespace
 
-#     def connect(self):
-#         pass
+    def connect(self):
+        pass
 
-#     def execute_command(self, command):
-#         self.clientset=KubeRemoteSeverClient.kubeclient.CoreV1Api()
-#         output = KubeRemoteSeverClient.stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
-#                                command=command, stderr=True, stdin=False,
-#                                stdout=True, tty=False)
-#         return output
-#     def close(self):
-#         pass
-#     def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
-#         pass
+    def execute_command(self, command):
+        self.clientset=KubeRemoteSeverClient.kubeclient.CoreV1Api()
+        output = KubeRemoteSeverClient.stream.stream(self.clientset.connect_get_namespaced_pod_exec, self.pod_name, self.pod_namespace,
+                               command=command, stderr=True, stdin=False,
+                               stdout=True, tty=False)
+        return output
+    def readline(self):
+        pass
+    def write(self):
+        pass
+    def close(self):
+        pass
+    def start(self, args: Optional[List[str]] = None, attach_pid: Optional[int] = None, sudo: bool = False):
+        pass
 
 
 # class LocalClient(RemoteServerConnection):

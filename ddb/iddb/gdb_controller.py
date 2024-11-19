@@ -113,9 +113,9 @@ class ServiceWeaverkubeGdbController(RemoteGdbController):
         # Add a debug container to it
         debug_container = kubeclient.V1EphemeralContainer(
             name=self.debugger_container_name,
-            image="h21565897/debuggerimage:latest2",
+            image="debugimage:latest",
             target_container_name=self.target_container_name,
-            image_pull_policy="Always",
+            image_pull_policy="IfNotPresent",
             stdin=True,
             tty=False
         )

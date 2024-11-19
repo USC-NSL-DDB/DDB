@@ -92,7 +92,7 @@ class DDBConfig:
     framework = TargetFramework.UNSPECIFIED
     gdb_sessions_configs: List[GdbSessionConfig] = field(default_factory=list)
     broker: BrokerInfo = None
-    ssh: SSHInfo = SSHInfo()
+    ssh: SSHInfo = field(default_factory=SSHInfo)
     prerun_cmds: List[PrerunGdbCommand] = field(default_factory=list)
 
     def __repr__(self):
