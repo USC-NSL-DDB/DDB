@@ -8,7 +8,7 @@ from time import sleep
 
 import pkg_resources
 from iddb.counter import TSCounter
-from iddb.data_struct import GdbMode, GdbSessionConfig, PrerunGdbCommand, StartMode
+from iddb.data_struct import GdbMode, GdbSessionConfig, GdbCommand, StartMode
 from iddb.gdb_controller import RemoteGdbController
 from iddb.gdbparser import GdbParser
 from iddb.response_processor import ResponseProcessor, SessionResponse
@@ -62,7 +62,7 @@ class GdbSession:
         self.mode: GdbMode = config.gdb_mode
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
-        self.prerun_cmds: List[PrerunGdbCommand] = config.prerun_cmds
+        self.prerun_cmds: List[GdbCommand] = config.prerun_cmds
         self.initialize_commands = config.initialize_commands
         self.sudo = config.sudo
 
@@ -115,6 +115,8 @@ class GdbSession:
         for init_cmd in self.initialize_commands:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
+        for postrun_cmd in self.prerun_cmds:
+            self.gdb_controller.write_input(postrun_cmd.command)
         # self.gdb_controller.write_input(
         #     f'-interpreter-exec console "signal SIG40"'
         # )

@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from pprint import pformat
 import getpass
 
+from iddb.framework_adoption import FrameWorkAdapter
 from iddb.gdb_controller import RemoteGdbController
 
 class SessionResponse:
@@ -40,7 +41,7 @@ class StartMode(Enum):
     ATTACH = 2
 
 @dataclass
-class PrerunGdbCommand:
+class GdbCommand:
     name: str
     command: str
 
@@ -63,7 +64,8 @@ class GdbSessionConfig:
     run_delay: int = 0
     sudo: bool = False
     # prerun_cmds:List[Dict[str,str]] = field(default_factory=list)
-    prerun_cmds: List[PrerunGdbCommand] = field(default_factory=list)
+    prerun_cmds: List[GdbCommand] = field(default_factory=list)
+    postrun_cmds: List[GdbCommand] = field(default_factory=list)
     initialize_commands:List[str] = field(default_factory=list)
 
     def __repr__(self):
@@ -93,7 +95,8 @@ class DDBConfig:
     gdb_sessions_configs: List[GdbSessionConfig] = field(default_factory=list)
     broker: BrokerInfo = None
     ssh: SSHInfo = field(default_factory=SSHInfo)
-    prerun_cmds: List[PrerunGdbCommand] = field(default_factory=list)
+    prerun_cmds: List[GdbCommand] = field(default_factory=list)
+    adapter: Optional[FrameWorkAdapter] = None
 
     def __repr__(self):
         formatted_dict = pformat(self.__dict__)

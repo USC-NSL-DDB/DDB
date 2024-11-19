@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 from threading import Lock
 from iddb.extension.dl_detector import DeadlockDetector
 from iddb.data_struct import SessionResponse
+from iddb.framework_adoption import FrameWorkAdapter
 from iddb.logging import logger
 from iddb.cmd_router import CmdRouter
 from iddb.mi_formatter import MIFormatter
@@ -31,6 +32,7 @@ class SingleCommand:
     token: str
     origin_token: str
     command_no_token: str
+    origin_command_no_token: str = ""
     # from user's perspective they are only aware of threads but not sessions
     thread_id: Optional[int] = None
     # for internal use
@@ -40,6 +42,9 @@ class SingleCommand:
     @property
     def command(self) -> str:
         return f"{self.token}{self.command_no_token}"
+    @property
+    def origin_command(self) -> str:
+        return f"{self.origin_token}{self.origin_command_no_token}"
 
 
 class CmdHandler(ABC):
@@ -160,6 +165,9 @@ class ThreadSelectCmdHandler(CmdHandler):
 remotebtlock = asyncio.Lock()
 
 class RemoteBacktraceHandler(CmdHandler):
+    def __init__(self, router: CmdRouter,adapter:FrameWorkAdapter):
+        super().__init__(router)
+        self.adapter=adapter
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
@@ -168,7 +176,7 @@ class RemoteBacktraceHandler(CmdHandler):
             'message': data.get('message'),
             'caller_ctx': caller_ctx,
             # 'id': f"{ip_int2ip_str(ip_int)}:-{pid}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
-            'id': f"{ip_int2ip_str(ip_int)}" if 0 <= ip_int <= 0xFFFFFFFF else pid,
+            'id': self.adapter.extract_id_from_metaddata(caller_meta),
             'pid': pid,
         }
 
@@ -181,7 +189,11 @@ class RemoteBacktraceHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
             return
-
+        # logger.debug(f"Received command in remote backtrace handler: {command_instance}")
+        # Framework Adaption
+        bt_command_name=self.adapter.get_bt_command_name()
+        
+        
         # used for deadlock detection
         dl_detector = DeadlockDetector()
         call_chain = deque()
@@ -196,7 +208,7 @@ class RemoteBacktraceHandler(CmdHandler):
             frame['session'] = current_sid
             frame['thread'] = command_instance.thread_id
         try:
-            remote_bt_cmd, remote_bt_token, _ = self.router.prepend_token("-get-remote-bt")
+            remote_bt_cmd, remote_bt_token, _ = self.router.prepend_token(bt_command_name)
             remote_bt_parent_info = await self.router.send_to_thread_async(
                 command_instance.thread_id, remote_bt_token, f"{remote_bt_token}{remote_bt_cmd}", NullTransformer()
             )
@@ -310,6 +322,8 @@ class RemoteBacktraceHandler(CmdHandler):
                 if is_dl:
                     logger.info(f"Deadlock detected!")
                     logger.info(f"Call chain: {call_chain}")
+            if command_instance.command in GlobalTracer().command_history:
+                GlobalTracer().command_history[command_instance.command]["finish"] = time.time_ns()
             print("\n" + f"[ TOOL MI OUTPUT ] \n{(PlainTransformer().format(a_bt_result))}\n")
 
 
@@ -321,7 +335,8 @@ class ListGroupsCmdHandler(CmdHandlerBase):
 
 
 class CommandProcessor:
-    def __init__(self, router: CmdRouter):
+    def __init__(self, router: CmdRouter,adapter:FrameWorkAdapter):
+        self.adapter=adapter
         self.alock = asyncio.Lock()
         self.router = router
         self.command_handlers: dict[str, CmdHandler] = {
@@ -331,7 +346,7 @@ class CommandProcessor:
             "-exec-interrupt": InterruptCmdHandler(self.router),
             "-file-list-lines": ListCmdHandler(self.router),
             "-thread-select": ThreadSelectCmdHandler(self.router),
-            "-bt-remote": RemoteBacktraceHandler(self.router),
+            "-bt-remote": RemoteBacktraceHandler(self.router,self.adapter),
             "-list-thread-groups": ListGroupsCmdHandler(self.router),
             "-exec-next": CmdHandlerBase(self.router),
         }
@@ -353,44 +368,49 @@ class CommandProcessor:
         while not self.is_ready():
             await asyncio.sleep(0.5)
         # Command parsing and preparation logic
+        cmd=cmd.rstrip('\n')
         cmd_no_token, token, origin_token = self.router.prepend_token(cmd)
         if not (cmd_split := cmd_no_token.split()):
             return
-        with GlobalTracer().tracer.start_as_current_span("process_command", attributes={"command": f"{token}{cmd_no_token}", "token": token}):
-            prefix = cmd_split[0]
-            cmd_instance = SingleCommand(
-                token=token, origin_token=origin_token, command_no_token=cmd_no_token)
-            # Command routing logic
-            if len(cmd_split) >= 2 and cmd_split[-1] == "--all":
-                cmd_instance.thread_id = -1
-                cmd_instance.command_no_token = " ".join(cmd_split[0:-1])
-            elif "--thread" in cmd_split:
-                thread_index = cmd_split.index("--thread")
-                if thread_index < len(cmd_split) - 1:
-                    gtid = int(cmd_split[thread_index + 1])
-                    sid, tid = self.router.state_mgr.get_sidtid_by_gtid(gtid)
-                    cmd_instance.thread_id = gtid
-                    cmd_split[thread_index + 1] = str(tid)
-                    cmd_instance.command_no_token = " ".join(cmd_split)
-            elif curr_thread := self.router.state_mgr.get_current_gthread():
-                sid, tid = self.router.state_mgr.get_sidtid_by_gtid(
-                    curr_thread)
-                cmd_instance.thread_id = curr_thread
+        # with GlobalTracer().tracer.start_as_current_span("process_command", attributes={"command": f"{token}{cmd_no_token}", "token": token}):
+        prefix = cmd_split[0]
+        cmd_instance = SingleCommand(
+            token=token, origin_token=origin_token, command_no_token=cmd_no_token,origin_command_no_token=cmd_no_token)
+        # Command routing logic
+        if len(cmd_split) >= 2 and cmd_split[-1] == "--all":
+            cmd_instance.thread_id = -1
+            cmd_instance.command_no_token = " ".join(cmd_split[0:-1])
+        elif "--thread" in cmd_split:
+            thread_index = cmd_split.index("--thread")
+            if thread_index < len(cmd_split) - 1:
+                gtid = int(cmd_split[thread_index + 1])
+                sid, tid = self.router.state_mgr.get_sidtid_by_gtid(gtid)
+                cmd_instance.thread_id = gtid
+                cmd_split[thread_index + 1] = str(tid)
+                cmd_instance.command_no_token = " ".join(cmd_split)
+        elif curr_thread := self.router.state_mgr.get_current_gthread():
+            sid, tid = self.router.state_mgr.get_sidtid_by_gtid(
+                curr_thread)
+            cmd_instance.thread_id = curr_thread
 
-            if "--session" in cmd_split: 
-                session_index = cmd_split.index("--session")
-                if session_index < len(cmd_split) - 1:
-                    sid = int(cmd_split[session_index + 1])
-                    cmd_instance.session_id = sid
-                    cmd_split.pop(session_index + 1)  # Remove the session ID
-                    cmd_split.pop(session_index)      # Remove "--session"
-                    cmd_instance.command_no_token = " ".join(cmd_split)
+        if "--session" in cmd_split: 
+            session_index = cmd_split.index("--session")
+            if session_index < len(cmd_split) - 1:
+                sid = int(cmd_split[session_index + 1])
+                cmd_instance.session_id = sid
+                cmd_split.pop(session_index + 1)  # Remove the session ID
+                cmd_split.pop(session_index)      # Remove "--session"
+                cmd_instance.command_no_token = " ".join(cmd_split)
 
-            # Command handling
+        # Command handling
 
-            handler = self.command_handlers.get(prefix)
-            GlobalTracer().request_times[token] = time.time_ns()
-            # async with self.alock:
-            if not handler:
-                return await self.base_handler.process_command(cmd_instance)
-            return await handler.process_command(cmd_instance)
+        handler = self.command_handlers.get(prefix)
+        # GlobalTracer().request_times[token] = time.time_ns()
+        # async with self.alock:
+        GlobalTracer().command_history[cmd_instance.command]={
+            "start":time.time_ns(),
+            "command":cmd_instance.origin_command
+        }
+        if not handler:
+            return await self.base_handler.process_command(cmd_instance)
+        return await handler.process_command(cmd_instance)

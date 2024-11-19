@@ -97,20 +97,22 @@ class CmdTracker:
                     cmd_meta = self.waiting_cmds.get(response.token)
                     result = cmd_meta.recv_response(response)
                     if result:
-                        with GlobalTracer().tracer.start_as_current_span("process response") as span:
-                            span.set_attribute("token", response.token)
-                            span.set_attribute(
-                                "duration", (time.time_ns()-GlobalTracer().request_times[response.token])/1e9)
-                            # if no one is waiting
-                            if cmd_meta.get_loop().is_running():
-                                cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
-                            token = self.outTokenToInToken[cmd_meta.token]
-                            del self.waiting_cmds[response.token]
-                            for cmd_response in cmd_meta.responses:
-                                cmd_response.token = token
-                            self.finished_cmds[token] = cmd_meta
-                            self.finished_response.put(cmd_meta)
-                            # self.finished_response.put(result)
+                        # with GlobalTracer().tracer.start_as_current_span("process response") as span:
+                        #     span.set_attribute("token", response.token)
+                        #     span.set_attribute(
+                        #         "duration", (time.time_ns()-GlobalTracer().request_times[response.token])/1e9)
+                        # if no one is waiting
+                        if cmd_meta.get_loop().is_running():
+                            cmd_meta.get_loop().call_soon_threadsafe(cmd_meta.set_result, result)
+                        token = self.outTokenToInToken[cmd_meta.token]
+                        if cmd_meta.command in GlobalTracer().command_history:
+                            GlobalTracer().command_history[cmd_meta.command]["finish"]=time.time_ns()
+                        del self.waiting_cmds[response.token]
+                        for cmd_response in cmd_meta.responses:
+                            cmd_response.token = token
+                        self.finished_cmds[token] = cmd_meta
+                        self.finished_response.put(cmd_meta)
+                        # self.finished_response.put(result)
                     else:
                         logger.debug("no token presented. skip.")
                 except Exception as e:

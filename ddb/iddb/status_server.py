@@ -2,6 +2,7 @@ import json
 import threading
 from iddb.cmd_router import CmdRouter
 from iddb.cmd_tracker import CmdTracker
+from iddb.mtracer import GlobalTracer
 from iddb.state_manager import StateManager
 from flask import Flask, jsonify, request
 
@@ -41,6 +42,7 @@ class FlaskApp:
         self.app.route(
             '/fcommands', methods=['GET'])(self.get_finished_commands)
         self.app.route('/status', methods=['GET'])(self.get_status)
+        self.app.route('/history', methods=['GET'])(self.get_commnad_history)
     def get_status(self):
         if self.DDB_up_and_running:
             return jsonify({"status": "up"}),200
@@ -76,3 +78,6 @@ class FlaskApp:
         return jsonify(results)
     def run(self, host='0.0.0.0', port=5000, debug=True):
         self.app.run(host=host, port=port, debug=debug)
+    
+    def get_commnad_history(self):
+        return jsonify(GlobalTracer().command_history)

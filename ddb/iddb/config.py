@@ -1,12 +1,13 @@
 import os
 import re
+from iddb.framework_adoption import GRPCAdapter, ServiceWeaverAdapter
 from iddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
 import getpass
 
-from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, PrerunGdbCommand, StartMode, TargetFramework
+from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, GdbCommand, StartMode, TargetFramework
 from iddb.logging import logger
 from iddb.const import ServiceDiscoveryConst
 
@@ -37,12 +38,12 @@ class GlobalConfig:
         GlobalConfig.__global_config = config
 
     @staticmethod
-    def __parse_prerun_cmds(prerun_cmds: List[dict]) -> List[PrerunGdbCommand]:
-        cmds: List[PrerunGdbCommand] = []
+    def __parse_gdb_cmds(prerun_cmds: List[dict]) -> List[GdbCommand]:
+        cmds: List[GdbCommand] = []
         for cmd in prerun_cmds:
             if "command" in cmd:
                 name = cmd.get("name", "unnamed cmd")
-                cmds.append(PrerunGdbCommand(name, cmd["command"]))
+                cmds.append(GdbCommand(name, cmd["command"]))
         return cmds
 
     @staticmethod
@@ -56,6 +57,7 @@ class GlobalConfig:
             ) 
 
         ssh_provided = ("SSH" in config_data)
+        ddb_config.adapter = GRPCAdapter()
         if ssh_provided:
             ssh_info = config_data["SSH"]
             ddb_config.ssh.user = ssh_info.get("user", getpass.getuser())
@@ -63,8 +65,11 @@ class GlobalConfig:
     
         gdbSessionConfigs: List[GdbSessionConfig] = []
         components = config_data["Components"] if "Components" in config_data else []
-        prerun_cmds = GlobalConfig.__parse_prerun_cmds(
+        prerun_cmds = GlobalConfig.__parse_gdb_cmds(
             config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
+        )
+        postrun_cmds = GlobalConfig.__parse_gdb_cmds(
+            config_data["PostrunGdbCommands"] if "PostrunGdbCommands" in config_data else []
         )
         ddb_config.prerun_cmds = prerun_cmds
 
@@ -80,7 +85,7 @@ class GlobalConfig:
             sessionConfig.run_delay = component.get("run_delay", 0)
             sessionConfig.sudo = component.get("sudo", False)
             sessionConfig.prerun_cmds = prerun_cmds
-
+            sessionConfig.postrun_cmds = postrun_cmds
             sessionConfig.gdb_mode = GdbMode.REMOTE if \
                 "mode" in component.keys() and component["mode"] == "remote" \
                 else GdbMode.LOCAL
@@ -111,10 +116,14 @@ class GlobalConfig:
             exit(0)
         clientset = kubeclient.CoreV1Api()
         # prerun_cmds = config_data.get("PrerunGdbCommands",[])
-        prerun_cmds = GlobalConfig.__parse_prerun_cmds(
-            config_data.get("PrerunGdbCommands",[])
+        prerun_cmds = GlobalConfig.__parse_gdb_cmds(
+            config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
+        )
+        postrun_cmds = GlobalConfig.__parse_gdb_cmds(
+            config_data["PostrunGdbCommands"] if "PostrunGdbCommands" in config_data else []
         )
         ddb_config.prerun_cmds = prerun_cmds
+        ddb_config.adapter = ServiceWeaverAdapter()
         config_metadata=config_data.get("Components",{})
         kube_namespace = config_metadata.get("kube_namespace","default")
         sw_name = config_metadata.get("binary_name","serviceweaver")
@@ -136,6 +145,7 @@ class GlobalConfig:
             if match:
                 pid = match.group(1)
                 sessionConfig= GdbSessionConfig()
+                sessionConfig.postrun_cmds=postrun_cmds
                 sessionConfig.binary=remoteServerConn.execute_command(['readlink', f'/proc/{pid}/exe',])
                 sessionConfig.remote_port=30001
                 sessionConfig.remote_host=i.status.pod_ip

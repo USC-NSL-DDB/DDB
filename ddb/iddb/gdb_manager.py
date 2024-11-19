@@ -12,7 +12,7 @@ from iddb.cmd_router import CmdRouter
 from iddb.service_mgr import ServiceManager
 from iddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
 from iddb.logging import logger
-from iddb.data_struct import PrerunGdbCommand, ServiceInfo
+from iddb.data_struct import GdbCommand, ServiceInfo
 from iddb.config import GlobalConfig
 from iddb.event_loop import GlobalRunningLoop
 from iddb.port_mgr import PortManager
@@ -42,7 +42,7 @@ class GdbManager:
         self.router = CmdRouter(self.sessions)
         ddbapiserver=FlaskApp(router=self.router)
         Thread(target=ddbapiserver.app.run).start()
-        self.processor=CommandProcessor(self.router)
+        self.processor=CommandProcessor(self.router, GlobalConfig.get().adapter)
 
         self.state_mgr = StateManager.inst()
         for s in self.sessions:
@@ -62,7 +62,7 @@ class GdbManager:
         tag = f"{hostname}:-{pid}"
         ddb_conf = GlobalConfig.get()
         prerun_cmds = [
-            PrerunGdbCommand("async mode", "set mi-async on")
+            GdbCommand("async mode", "set mi-async on")
         ]
         prerun_cmds.extend(ddb_conf.prerun_cmds)
         logger.debug(f"New session discovered: hostname={hostname}, pid={pid}, tag={tag}")
