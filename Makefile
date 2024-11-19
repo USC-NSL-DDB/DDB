@@ -94,6 +94,14 @@ gdb: gdb-clean
 gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install
 
+.PHONY: rpc-framework-setup
+rpc-framework-setup:
+	cd ./scripts && ./rpc_framework_setup.sh
+
+.PHONY: gdb-config-setup
+gdb-config-setup:
+	cd ./scripts && ./setup_gdb.sh
+
 .PHONY: clean
 clean: clean_nu_binaries gdb-clean
 	rm -rf $(TEST_BINARIES_PATH)/*.o bin/*
