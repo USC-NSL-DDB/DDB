@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package testerpb;
+
+import "google/protobuf/empty.proto";
+
+// tester -> node
+service TesterCommNodeService {
+    // Control RPCs
+    rpc Prepare(PrepareReq) returns (CmdReply) {}
+    rpc Run(google.protobuf.Empty) returns (CmdReply) {}
+    // rpc ConnectPeers(google.protobuf.Empty) returns (CmdReply) {}
+    rpc Kill(google.protobuf.Empty) returns (CmdReply) {}
+    
+    rpc Disconnect(ConnOpt) returns (CmdReply) {}
+    rpc Reconnect(ConnOpt) returns (CmdReply) {}
+
+    // Testing-related RPCs
+    rpc GetRPCStats(google.protobuf.Empty) returns (RPCStats) {}
+    rpc GetState(google.protobuf.Empty) returns (State) {}
+    rpc Propose(ProposalReq) returns (ProposalResult) {}
+
+    rpc ProposeSync(ProposalReq) returns (ProposalResult) {}
+
+    // streaming service for Apply
+    rpc Apply(google.protobuf.Empty) returns (stream ApplyResult) {}
+}
+
+message PrepareReq {
+    repeated uint32 world = 1;
+    uint32 fail_type = 2;
+    uint32 verbosity = 3; 
+}
+
+message RPCStats {
+    uint64 bytes = 1;
+    uint64 count = 2;
+    uint64 id = 3;
+}
+
+message State {
+    uint64 term = 1;
+    bool is_leader = 2;
+    uint64 id = 3;
+}
+
+message ProposalReq {
+    bytes data = 1;
+}
+
+message ProposalResult {
+    uint64 index = 1;
+    uint64 term = 2;
+    bool is_leader = 3;
+    uint64 id = 4;
+}
+
+message ConnOpt {
+    repeated uint32 ids = 1;
+}
+
+// node -> tester
+service TesterCommCtrlService {
+    rpc ReportReady(NodeMeta) returns (CmdReply) {}
+}
+
+message NodeMeta {
+    uint64 pid = 1;
+    uint64 id = 2;
+}
+
+message ApplyResult {
+    bool valid = 1;
+    bytes data = 2;
+    uint64 index = 3;
+    uint64 id = 4;
+}
+
+message CmdReply {
+    bool success = 1;
+    bytes msg = 2;
+}

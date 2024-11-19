@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package raftpb;
+
+// The request message containing the user's name.
+message HelloRequest {
+  string name = 1;
+}
+
+// The response message containing the greetings
+message HelloReply {
+  string message = 1;
+}
+
+service RaftService {
+  rpc SayHello (HelloRequest) returns (HelloReply) {}
+  rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesReply) {}
+  rpc RequestVote (RequestVoteRequest) returns (RequestVoteReply) {}
+}
+
+message AppendEntriesRequest {
+  uint64 term = 1;
+  uint64 leader_id = 2;
+  uint64 prev_log_idx = 3;
+  uint64 prev_log_term = 4;
+  repeated Entry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message AppendEntriesReply {
+  uint64 term = 1;
+  bool success = 2;
+  uint64 conflict_idx = 3;
+  uint64 conflict_term = 4;
+}
+
+message RequestVoteRequest {
+  uint64 term = 1;
+  uint64 candidate_id = 2;
+  uint64 last_log_idx = 3;
+  uint64 last_log_term = 4;
+}
+
+message RequestVoteReply {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+message Entry {
+	uint64 term = 1;
+	uint64 index = 2;
+	bytes data = 3;
+}
