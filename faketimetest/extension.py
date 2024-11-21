@@ -1,3 +1,4 @@
+import ctypes
 import time
 from typing import Dict, List, Optional
 import socket
@@ -14,15 +15,16 @@ import gdb
 #     print("Failed to import debugpy")
 
 # try:
-#     import random
-#     # port = random.randint(5700, 5800)
-#     port = 5800
-#     debugpy.listen(("localhost", port))
-#     print(f"Waiting for debugger attach: {port}")
+#     debugpy.listen(("localhost", 5680))
+#     print("Waiting for debugger attach")
 #     debugpy.wait_for_client()
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
+# print("Loading distributed backtrace support.", file=sys.stderr)
 
+# allow to manually reload while developing
+# goobjfile = gdb.current_objfile() or gdb.objfiles()[0]
+# goobjfile.pretty_printers = []
 print("Loading distributed backtrace support.",)
 
 class Arch(Enum):
@@ -117,6 +119,8 @@ def int_to_ip(ip_int: int) -> str:
     return socket.inet_ntoa(struct.pack('!I', ip_int))
 
 # Function to fetch and print the global variable
+
+
 def get_global_variable(var_name, to_print: bool = False, check_is_var: bool = True) -> gdb.Value:
     try:
         var = gdb.lookup_symbol(var_name)[0]
@@ -279,11 +283,39 @@ def restore_context(saved_frame: Optional[gdb.Frame] = None):
     if saved_frame:
         saved_frame.select()
 
+
+
 class SwitchContextMICmd(gdb.MICommand):
     def __init__(self) -> None:
         super(SwitchContextMICmd, self).__init__(
             "-switch-context-custom"
         )
+
+    # def invoke(self, args):
+    #     print("invoke 1")
+    #     try:
+    #         cur_rip, cur_rsp = map(int, args[:2])
+    #         cur_rbp = int(args[2]) if len(args) > 2 else None
+            
+    #         # Save current register values
+    #         for reg in ['sp', 'pc', 'rbp']:
+    #             gdb.parse_and_eval(f'$save_{reg} = ${reg}')
+            
+    #         gdb.execute('select-frame 0')
+            
+    #         # Set new register values
+    #         gdb.parse_and_eval(f'$sp = {cur_rsp}')
+    #         gdb.parse_and_eval(f'$pc = {cur_rip}')
+    #         if cur_rbp is not None:
+    #             gdb.parse_and_eval(f'$rbp = {cur_rbp}')
+            
+    #         # Store original values
+    #         original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
+    #                            for reg in ['pc', 'sp', 'rbp']}
+            
+    #         return {"message": "success", **original_values}
+    #     except Exception as e:
+    #         return {"message": "error", "rip": None, "rsp": None, "rbp": None}
 
     def invoke(self, args):
         try:
@@ -453,6 +485,20 @@ def pc_to_int(pc):
         # chop at first space.
         pc = int(str(pc).split(None, 1)[0], 16)
     return pc
+class MIEcho(gdb.MICommand):
+    """Echo arguments passed to the command."""
+
+    def __init__(self, name, mode):
+        self._mode = mode
+        super(MIEcho, self).__init__(name)
+
+    def invoke(self, argv):
+        if self._mode == 'dict':
+            return {'dict': {'argv': argv}}
+        elif self._mode == 'list':
+            return {'list': argv}
+        else:
+            return {'string': ", ".join(argv)}
 
 class GetRemoteBTInfo(gdb.MICommand):
     def __init__(self):
@@ -460,9 +506,13 @@ class GetRemoteBTInfo(gdb.MICommand):
 
     def invoke(self, argv):
         remote_ip: Optional[int] = -1
+        local_ip: Optional[int] = -1
+        # parent_pc: Optional[int] = -1
+        # parent_sp: Optional[int] = -1
+        # parent_fp: Optional[int] = -1
+        # parent_lr: Optional[int] = None
         regs: Dict[str, int] = {}
         pid: Optional[int] = -1
-        tid: Optional[int] = -1
         frame = gdb.selected_frame()
         frames: List[gdb.Frame] = []
         message = "failed"
@@ -484,9 +534,13 @@ class GetRemoteBTInfo(gdb.MICommand):
                             remote_ip = int(val['meta']['caller_comm_ip'])
                             # print("found ip")
                             pid = int(val['meta']['pid'])
-                            tid = int(val['meta']['tid'])
                             # print("found pid")
+                            # parent_pc = int(val['ctx']['pc'])
+                            # parent_sp = int(val['ctx']['sp'])
+                            # parent_fp = int(val['ctx']['fp'])
+                            # parent_lr = int(val['ctx']['lr']) if 'lr' in val['ctx'] else None # only available on AARCH64
                             ctx_obj = val['ctx']
+                            # ctx_map: Dict[str, int] = {}
                             if ctx_obj.type.code == gdb.TYPE_CODE_STRUCT:
                                 for field in ctx_obj.type.fields():
                                     fname = field.name
@@ -516,175 +570,27 @@ class GetRemoteBTInfo(gdb.MICommand):
             # print(f"ip: {remote_ip}, pid: {pid}, pc: {parent_pc}, sp: {parent_sp}, fp: {parent_fp}, lr: {parent_lr}")
         except Exception as e:
             pass
-        global get_thrd_ktid_cmd_mi
-        result = get_thrd_ktid_cmd_mi.invoke([])
-        if "error" in result:
-            print(f"Error: {result['error']}")
-        ktid = result["ktid"] if ("ktid" in result) and (result["ktid"]) else -1
         return {
-            "message": message,
+            "message":
+                message,
             "metadata": {
+                # "callee_meta": {
+                #     "ip": local_ip,
+                # },
+                # "caller_meta": {
+                #     "rip": parent_rip,
+                #     "rsp": parent_rsp,
+                #     "rbp": parent_rbp,
+                #     "pid": pid,
+                #     "ip": remote_ip
+                # }
                 "caller_ctx": regs,
                 "caller_meta": {
                     "pid": pid,
-                    "tid": tid,
                     "ip": remote_ip
-                },
-                "local_meta": {
-                    "tid": ktid
                 }
-            }
-        }
+            }}
 
-class GetLockStateMI(gdb.MICommand):
-    """A custom command to fetch the lock state (MI)"""
-
-    def __init__(self):
-        super().__init__("-get-lock-state")
-
-    def invoke(self, argv):
-        ddb_shared: gdb.Value = get_global_variable("ddb_shared", to_print=True, check_is_var=False)
-        if not ddb_shared:
-            print("didn't find ddb_shared")
-            return {}
-
-        thread_infos = ddb_shared['ddb_thread_infos']
-        lowners = ddb_shared['ddb_lowners']
-            
-        # Parse thread infos array
-        thread_max_count = int(ddb_shared['ddb_max_idx'])
-        thread_data = []
-        for i in range(thread_max_count):
-            info = thread_infos[i]
-            if info["valid"]:
-                wbuf = info['wbuf']
-                wbuf_len = wbuf['max_n']
-                wait_entries = wbuf['wait_entries']
-                wait_buf = []
-                for j in range(wbuf_len):
-                    wait_ent = wait_entries[j]
-                    if wait_ent['valid']:
-                        wait_buf.append({
-                            "type": int(wait_ent['type']),
-                            "id": int(wait_ent['identifier']),
-                        })
-
-                thread_data.append({
-                    'tid': int(info['id']),
-                    'fsbase': int(info['fsbase']),
-                    'stackbase': int(info['stackbase']),
-                    'wait': wait_buf
-                })
-
-        from pprint import pprint
-        # pprint(thread_data)
-        # Parse lock states array
-        lock_max_count = int(lowners['max_n'])
-        lock_data = []
-        for i in range(lock_max_count):
-            lock = lowners['lowner_entries'][i]
-            if lock['valid']:
-                lock_data.append({
-                    'lid': int(lock['lid']),
-                    'owner_tid': int(lock['owner_tid'])
-                })
-        return {
-            "thread_info": thread_data,
-            "lock_info": lock_data
-        }
-
-        # pprint(lock_data)
-
-class GetLockState(gdb.Command):
-    """A custom command to fetch the lock state"""
-
-    def __init__(self):
-        super(GetLockState, self).__init__(
-            "get-lock-state",
-            gdb.COMMAND_DATA,
-            gdb.COMPLETE_SYMBOL
-        )
-
-    def invoke(self, arg, from_tty):
-        from pprint import pprint
-        global get_lock_state_cmd_mi
-        r = get_lock_state_cmd_mi.invoke(None)
-        pprint(r)
-
-def get_thread_tid(thread: gdb.Thread = None):
-    """Get kernel thread ID (LWP) for a given thread or current thread"""
-    try:
-        if thread is None:
-            thread = gdb.selected_thread()
-        if thread is None:
-            return None
-            
-        # Get thread info string which contains LWP
-        thread_info = thread.ptid
-        # PTID is a tuple of (pid, lwpid, tid)
-        # For Linux threads, lwpid is the kernel thread ID
-        return thread_info[1]
-    except gdb.error:
-        return None
-
-class GetThreadKtid(gdb.Command):
-    """Command to print kernel thread ID for current or specified thread
-    Usage: thread-tid [thread_num]"""
-    
-    def __init__(self):
-        super(GetThreadKtid, self).__init__("get-thread-ktid", gdb.COMMAND_DATA)
-    
-    def invoke(self, arg, from_tty):
-        global get_thrd_ktid_cmd_mi
-        result = get_thrd_ktid_cmd_mi.invoke(arg)
-        if "error" in result:
-            print(f"Error: {result['error']}")
-        else:
-            print(f"Kernel thread ID (LWP) for thread {result['thrd_num']}: {result['ktid']}")
-       
-class GetThreadKtidMI(gdb.MICommand):
-    """MI Command to print kernel thread ID for current or specified thread
-    Usage: thread-tid [thread_num]"""
-    
-    def __init__(self):
-        super().__init__("-get-thread-ktid")
-
-    def invoke(self, argv):
-        result = {
-            "ktid": None
-        }
-        try:
-            if argv and argv[0]:
-                print(f"argv: {argv}, type: {type(argv)}")
-                # If thread number specified, find that thread
-                thread_num = int(argv[0])
-                thread = None
-                for t in gdb.selected_inferior().threads():
-                    if t.num == thread_num:
-                        thread = t
-                        break
-                if thread is None:
-                    result["error"] = f"Thread {thread_num} not found"
-                    return
-            else:
-                thread = gdb.selected_thread()
-                if thread is None:
-                    result["error"] = "No thread selected"
-                    return
-            
-            tid = get_thread_tid(thread)
-            if tid is not None:
-                result["ktid"] = tid
-                result["thrd_num"] = thread.num
-                # print(f"Kernel thread ID (LWP) for thread {thread.num}: {tid}")
-            else:
-                result["error"] = "Failed to get kernel thread ID"
-        except ValueError:
-            result["error"] = "Invalid thread number"
-        except gdb.error as e:
-            result["error"] = str(e)
-            print(f"Error: {str(e)}")
-        return result
 
 pause_start_time = 0
 accumulated_time = 0
@@ -701,6 +607,7 @@ def cont_handler(event:gdb.ContinueEvent):
 
 gdb.events.stop.connect(stop_handler)
 gdb.events.cont.connect(cont_handler)
+
 
 class RecordTimeAndContinueMiCommand(gdb.MICommand):
     def __init__(self):
@@ -730,7 +637,7 @@ class RecordTimeAndContinueMiCommand(gdb.MICommand):
             # safe_setenv("FAKETIME", f"-{accumulated_time}", 1)
             # time.sleep(0.5)
             cont_time = time.perf_counter_ns()
-            gdb.execute_mi("-exec-continue")
+            gdb.execute("continue")
         except Exception as e:
             return {"message": "error", "error": str(e)}
         return {"message": "success", "paused_time": accumulated_time} 
@@ -828,12 +735,5 @@ sctx_cmd = SwitchContextCmd()
 rctx_mi_cmd = RestoreContextMICmd()
 rctx_cmd = RestoreContextCmd()
 GetRemoteBTInfo()
-ShowCaladanThreadCmd()
-
 RecordTimeAndContinueMiCommand()
-
-get_lock_state_cmd_mi = GetLockStateMI()
-get_lock_state_cmd =GetLockState()
-
-get_thrd_ktid_cmd_mi = GetThreadKtidMI()
-get_thrd_ktid_cmd = GetThreadKtid()
+ShowCaladanThreadCmd()

@@ -1,5 +1,6 @@
 import logging
 import os
+from iddb.about import DEBUG
 
 class CustomFilter(logging.Filter):
     def filter(self, record):
@@ -10,16 +11,25 @@ class CustomFilter(logging.Filter):
 
 # Create a logger for the current module
 logger = logging.getLogger("DDB")
-logger.setLevel(logging.DEBUG)  # Set the desired logging level
+if DEBUG:
+    logger.setLevel(logging.DEBUG)  # Set the desired logging level
+else:
+    logger.setLevel(logging.INFO)
 
 # Create a console handler
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
+if DEBUG:
+    console_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
+else:
+    console_handler.setLevel(logging.INFO)
 
 # Create a file handler
 os.makedirs("/tmp/ddb", exist_ok=True)
 file_handler = logging.FileHandler('/tmp/ddb/ddb.log')
-file_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
+if DEBUG:
+    file_handler.setLevel(logging.DEBUG)  # Set the desired logging level for the handler
+else:
+    file_handler.setLevel(logging.INFO)
 
 # Create a formatter and set it for the handler
 formatter = logging.Formatter('%(asctime)s | %(name)s.%(custom_filename)s <%(levelname)s> | %(message)s')

@@ -16,14 +16,16 @@ from iddb.logging import logger
 from iddb.startup import cleanup_mosquitto_broker
 from iddb.utils import *
 from iddb.config import GlobalConfig
+from iddb.about import ENABLE_DEBUGGER
 
-# try:
-#     import debugpy
-#     debugpy.listen(("localhost", 5678))
-#     print("Waiting for debugger attach")
-#     debugpy.wait_for_client()
-# except Exception as e:
-#     print(f"Failed to attach debugger: {e}")
+if ENABLE_DEBUGGER:
+    try:
+        import debugpy
+        debugpy.listen(("localhost", 5678))
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+    except Exception as e:
+        print(f"Failed to attach debugger: {e}")
 
 def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
