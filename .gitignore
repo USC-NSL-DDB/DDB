@@ -13,7 +13,8 @@ Dockerfile
 /gdb*/build
 # /gdb*/config.*
 /gdb*/Makefile
-scripts/
+# scripts/
+
 # Nu runtime files
 .conf_*
 /caladan_bin
