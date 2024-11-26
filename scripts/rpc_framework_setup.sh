@@ -16,7 +16,7 @@ clean() {
     cd $mod
     git checkout .
     git clean -df .
-    rm -rf build/
+    # rm -rf build/
     cd ..
   done
   cd ..
