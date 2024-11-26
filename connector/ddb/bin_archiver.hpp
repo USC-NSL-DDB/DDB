@@ -22,7 +22,7 @@ namespace cereal {
         ar(data.lr);
         #endif
     }
-    
+
     template <class Archive>
     inline void serialize(Archive & ar, DDB::DDBTraceMeta& data) {
         ar(data.magic);
@@ -42,10 +42,10 @@ namespace DDB
 
     static inline DDBTraceMeta deserialize_from_bin(const std::string& data) {
         DDBTraceMeta meta;
-        std::istringstream is(data, std::ios::binary); 
-        cereal::BinaryInputArchive archive(is);        
-        archive(meta);                                 
-        return meta;           
+        std::istringstream is(data, std::ios::binary);
+        cereal::BinaryInputArchive archive(is);
+        archive(meta);
+        return meta;
     }
 } // namespace DDB
 

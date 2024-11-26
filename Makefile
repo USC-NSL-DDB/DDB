@@ -25,6 +25,13 @@ CXXFLAGS = -std=gnu++23 $(FLAGS)
 
 BIN_FOLDER := ./bin
 
+# Directory for include files (ddb)
+INCLUDE_DIR = $(INSTALL_PREFIX)/include
+
+DDB_HDRS_PREFIX = connector
+DDB_CEREAL_HDRS = $(DDB_HDRS_PREFIX)/cereal
+DDB_HDRS = $(DDB_HDRS_PREFIX)/ddb
+
 # Build
 TEST_BINARIES_PATH = test_binaries
 
@@ -93,6 +100,11 @@ gdb: gdb-clean
 
 gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install
+
+install-hdrs:
+	install -d $(INCLUDE_DIR)
+	cp -r $(DDB_CEREAL_HDRS) $(INCLUDE_DIR)
+	cp -r $(DDB_HDRS) $(INCLUDE_DIR)
 
 .PHONY: rpc-framework-setup
 rpc-framework-setup:
