@@ -28,7 +28,7 @@ if [ "$1" = "clean" ]; then
 fi
 
 echo building grpc
-rm -rf $fw_folder/grpc/include/cereal $fw_folder/grpc/include/ddb > /dev/null 2>&1
+rm -rf $fw_folder/grpc/include/cereal $fw_folder/grpc/include/ddb >/dev/null 2>&1
 cp -r ../connector/cereal ../connector/ddb $fw_folder/grpc/include/
 cd $fw_folder/grpc
 if ! ./setup.sh; then
@@ -37,9 +37,9 @@ if ! ./setup.sh; then
 fi
 cd ..
 
-# echo building Nu
-# rm -rf $fw_folder/Nu/include/ddb > /dev/null 2>&1
-# cp -r ../connector/ddb $fw_folder/Nu/include/
-# cd $fw_folder/Nu
-# ./build_all.sh
-# cd ../../
+echo building Nu
+rm -rf $fw_folder/Nu/include/ddb >/dev/null 2>&1
+cp -r ../connector/ddb $fw_folder/Nu/include/
+cd $fw_folder/Nu
+NODE_TYPE=c6526 ./build_all.sh
+cd ../../

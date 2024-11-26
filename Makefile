@@ -106,8 +106,12 @@ install-hdrs:
 	cp -r $(DDB_CEREAL_HDRS) $(INCLUDE_DIR)
 	cp -r $(DDB_HDRS) $(INCLUDE_DIR)
 
+.PHONY: install-broker
+install-broker:
+	cd ./scripts && ./prepare_mosquitto.sh
+
 .PHONY: rpc-framework-setup
-rpc-framework-setup:
+rpc-framework-setup: install-broker
 	cd ./scripts && ./rpc_framework_setup.sh
 
 .PHONY: gdb-config-setup
