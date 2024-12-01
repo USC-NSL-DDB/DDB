@@ -18,7 +18,7 @@ from iddb.state_manager import StateManager
 from iddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
 from iddb.utils import parse_cmd
 from iddb.logging import logger
-from iddb.config import DevFlags
+from iddb.config import DevFlags, GlobalConfig
 
 class SessionCounter:
     _sc: "SessionCounter" = None
@@ -117,9 +117,11 @@ class GdbSession:
         self.write(f"-target-attach {self.attach_pid}")
         for postrun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(postrun_cmd.command)
-        # self.gdb_controller.write_input(
-        #     f'-interpreter-exec console "signal SIG40"'
-        # )
+
+        if GlobalConfig.get().broker:
+            self.gdb_controller.write_input(
+                f'-interpreter-exec console "signal SIG40"'
+            )
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
