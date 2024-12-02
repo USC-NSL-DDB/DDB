@@ -5,4 +5,4 @@ PrerunGdbCommands:
 
 Components:
   kube_namespace: default
-  binary_name: "serviceweaver1"
+  binary_name: "server.out"

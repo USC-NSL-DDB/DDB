@@ -158,7 +158,7 @@ class GlobalConfig:
             logger.debug("%s\t%s\t%s" %
                 (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
             remoteServerConn = KubeRemoteSeverClient(
-                i.metadata.name, i.metadata.namespace)
+                i.metadata.name, i.metadata.namespace,"serviceweaver")
             remoteServerConn.connect()
             output = remoteServerConn.execute_command(['ps', '-eo', "pid,comm"])
             # Use a regular expression to find the PID for 'serviceweaver1'
