@@ -138,4 +138,4 @@ bin/
 debug-adapter/out
 debug-adapter/dist
 
-*.txt
+# *.txt

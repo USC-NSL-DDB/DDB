@@ -110,13 +110,17 @@ install-hdrs:
 install-broker:
 	cd ./scripts && ./prepare_mosquitto.sh
 
-.PHONY: rpc-framework-setup
-rpc-framework-setup: install-broker
-	cd ./scripts && ./rpc_framework_setup.sh
-
 .PHONY: gdb-config-setup
 gdb-config-setup:
 	cd ./scripts && ./setup_gdb.sh
+
+.PHONY: prepare-machine
+setup-machine:
+	cd ./scripts && ./setup_machine.sh
+
+.PHONY: rpc-framework-setup
+rpc-framework-setup: install-broker
+	cd ./scripts && ./rpc_framework_setup.sh
 
 .PHONY: clean
 clean: clean_nu_binaries gdb-clean

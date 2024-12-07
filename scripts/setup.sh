@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Install dependencies
-bash ./dep.sh
+# bash ./dep.sh
 
 # source config.sh
 
@@ -13,8 +13,11 @@ bash ./dep.sh
 echo "handle SIGUSR1 SIGUSR2 nostop noprint" >> ~/.gdbinit
 echo "set auto-load safe-path /" >> ~/.gdbinit
 
+echo "handle SIGUSR1 SIGUSR2 nostop noprint" >> ~/.config/gdb/gdbinit
+echo "set auto-load safe-path /" >> ~/.config/gdb/gdbinit
+
 # init submodules
-git submodule update --init --recursive
+# git submodule update --init --recursive
 
 # allow gdb attach via pid
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
