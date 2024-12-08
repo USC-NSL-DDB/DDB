@@ -7,7 +7,7 @@ from typing import List, Optional
 from pprint import pformat
 import getpass
 
-from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, GdbCommand, StartMode, TargetFramework
+from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, GdbCommand, StartMode, TargetFramework, Conf
 from iddb.logging import logger
 from iddb.const import ServiceDiscoveryConst
 
@@ -68,10 +68,19 @@ class GlobalConfig:
         prerun_cmds = GlobalConfig.__parse_gdb_cmds(
             config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
         )
+        ddb_config.prerun_cmds = prerun_cmds
         postrun_cmds = GlobalConfig.__parse_gdb_cmds(
             config_data["PostrunGdbCommands"] if "PostrunGdbCommands" in config_data else []
         )
-        ddb_config.prerun_cmds = prerun_cmds
+        ddb_config.postrun_cmds = postrun_cmds
+
+        if "Conf" in config_data:
+            conf_data = config_data["Conf"]
+            g_conf = Conf()
+            if "sudo" in conf_data:
+                g_conf.sudo = conf_data["sudo"]
+
+            ddb_config.conf = g_conf
 
         for component in components:
             sessionConfig = GdbSessionConfig()
@@ -83,7 +92,7 @@ class GlobalConfig:
             sessionConfig.cwd = component.get("cwd", os.getcwd())
             sessionConfig.args = component.get("args", [])
             sessionConfig.run_delay = component.get("run_delay", 0)
-            sessionConfig.sudo = component.get("sudo", False)
+            sessionConfig.sudo = ddb_config.conf.sudo if component.get("sudo", "") == "" else component.get("sudo")
             sessionConfig.prerun_cmds = prerun_cmds
             sessionConfig.postrun_cmds = postrun_cmds
             sessionConfig.gdb_mode = GdbMode.REMOTE if \

@@ -88,6 +88,9 @@ class TargetFramework(Enum):
     NU = 2
     SERVICE_WEAVER_K8S = 3
 
+@dataclass
+class Conf:
+    sudo: bool = False
 
 @dataclass
 class DDBConfig:
@@ -96,6 +99,9 @@ class DDBConfig:
     broker: BrokerInfo = None
     ssh: SSHInfo = field(default_factory=SSHInfo)
     prerun_cmds: List[GdbCommand] = field(default_factory=list)
+    postrun_cmds: List[GdbCommand] = field(default_factory=list)
+    conf: Conf = Conf()
+
     adapter: Optional[FrameWorkAdapter] = None
 
     def __repr__(self):

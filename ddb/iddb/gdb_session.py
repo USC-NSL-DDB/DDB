@@ -63,6 +63,7 @@ class GdbSession:
         self.startMode: StartMode = config.start_mode
         self.attach_pid = config.attach_pid
         self.prerun_cmds: List[GdbCommand] = config.prerun_cmds
+        self.postrun_cmds: List[GdbCommand] = config.postrun_cmds
         self.initialize_commands = config.initialize_commands
         self.sudo = config.sudo
 
@@ -81,11 +82,15 @@ class GdbSession:
     def get_mi_version_arg(self) -> str:
         return f"--interpreter={self.mi_version}"
 
+    def __prepare_gdb_start_cmd(self) -> List[str]:
+        return [ f"{'sudo' if self.sudo else ''}", "gdb", self.get_mi_version_arg(), "-q" ]
+
     def local_start(self):
-        full_args = [ "gdb", self.get_mi_version_arg(), "-q" ]
+        full_args = self.__prepare_gdb_start_cmd()
         full_args.append("--args")
         full_args.append(self.bin)
         full_args.extend(self.args)
+        logger.debug(f"start gdb with: {' '.join(gdb_cmd)}")
         self.session_ctrl = GdbController(full_args)
 
         for prerun_cmd in self.prerun_cmds:
@@ -94,12 +99,18 @@ class GdbSession:
         self.write("-gdb-set mi-async on")
         self.write("-gdb-set non-stop off")
 
+        for postrun_cmd in self.postrun_cmds:
+            self.gdb_controller.write_input(postrun_cmd.command)
+
     def remote_attach(self):
         logger.debug("start remote attach")
         if not self.gdb_controller:
             logger.warning("Remote gdbcontroller not initialized")
             return
-        gdb_cmd = " ".join(["gdb", self.get_mi_version_arg(), "-q"])
+        
+        full_args = self.__prepare_gdb_start_cmd()
+        gdb_cmd = " ".join(full_args)
+        logger.debug(f"start gdb with: {gdb_cmd}")
         self.gdb_controller.start(gdb_cmd)
 
         self.gdb_controller.write_input("-gdb-set logging enabled on")
@@ -112,22 +123,25 @@ class GdbSession:
 
         for prerun_cmd in self.prerun_cmds:
             self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd.command}"')
+
         for init_cmd in self.initialize_commands:
             self.write(init_cmd)
         self.write(f"-target-attach {self.attach_pid}")
-        for postrun_cmd in self.prerun_cmds:
-            self.gdb_controller.write_input(postrun_cmd.command)
 
         if GlobalConfig.get().broker:
             self.gdb_controller.write_input(
                 f'-interpreter-exec console "signal SIG40"'
             )
+
+        for postrun_cmd in self.postrun_cmds:
+            self.gdb_controller.write_input(postrun_cmd.command)
         # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
             
     def remote_start(self):
         self.gdb_controller.start()
         # self.remote_gdbserver.start(self.args, sudo=self.sudo)
-        gdb_cmd = [ "gdb", self.get_mi_version_arg(), "-q" ]
+        gdb_cmd = self.__prepare_gdb_start_cmd()
+        logger.debug(f"start gdb with: {' '.join(gdb_cmd)}")
         self.session_ctrl = GdbController(gdb_cmd)
 
         self.write("-gdb-set mi-async on")
@@ -137,6 +151,9 @@ class GdbSession:
 
         self.write(f"-file-exec-and-symbols {self.bin}")
         self.write(f"-exec-arguments {' '.join(self.args)}")
+
+        for postrun_cmd in self.postrun_cmds:
+            self.gdb_controller.write_input(postrun_cmd.command)
 
     def start(self) -> None:
         ''' start a gdbsessoin

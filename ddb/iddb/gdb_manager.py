@@ -50,9 +50,7 @@ class GdbManager:
         ddbapiserver.DDB_up_and_running=True
 
     def write(self, cmd: str):
-        # asyncio.run_coroutine_threadsafe(self.router.send_cmd(cmd), GlobalRunningLoop().get_loop())
         lp=GlobalRunningLoop().get_loop()
-        # logger.debug(f"Sending command: {cmd} {len(asyncio.all_tasks(lp))} {lp} {lp.is_running()}")
         asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
     def __discover_new_session(self, session_info: ServiceInfo):
@@ -82,8 +80,9 @@ class GdbManager:
             tag=tag,
             gdb_mode=GdbMode.REMOTE,
             start_mode=StartMode.ATTACH,
-            sudo=True,
-            prerun_cmds=prerun_cmds
+            sudo=ddb_conf.conf.sudo,
+            prerun_cmds=prerun_cmds,
+            postrun_cmds=ddb_conf.postrun_cmds
         )
         gdb_session = GdbSession(config)
 

@@ -181,7 +181,7 @@ class SSHAttachController(RemoteGdbController):
         if self.verbose:
             logger.debug(f"Starting {str(self)}")
         try:
-            self.client.start("gdb --interpreter=mi3 -q")
+            self.client.start(command)
         except Exception as e:
             raise e # TODO: wrap exceptino to an internal data structure
         self.open = True
