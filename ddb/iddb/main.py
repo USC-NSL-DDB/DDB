@@ -88,7 +88,7 @@ def ddb_exit():
     global gdb_manager, terminated
     cleanup_mosquitto_broker()
     if not terminated:
-        logger.info("Exiting ddb...")
+        logger.debug("Exiting ddb...")
         print("[ TOOL MI OUTPUT ]")
         print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
         terminated=True

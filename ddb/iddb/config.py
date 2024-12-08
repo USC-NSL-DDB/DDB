@@ -7,7 +7,7 @@ from typing import List, Optional
 from pprint import pformat
 import getpass
 
-from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, GdbCommand, StartMode, TargetFramework, Conf
+from iddb.data_struct import BrokerInfo, DDBConfig, GdbMode, GdbSessionConfig, GdbCommand, StartMode, TargetFramework, Conf, OnExitBehavior
 from iddb.logging import logger
 from iddb.const import ServiceDiscoveryConst
 
@@ -47,7 +47,7 @@ class GlobalConfig:
         return cmds
 
     @staticmethod
-    def parse_nu_config(ddb_config: DDBConfig, config_data: any):
+    def parse_common_config(ddb_config: DDBConfig, config_data: any):
         service_discovery_enabled = ("ServiceDiscovery" in config_data)
         if service_discovery_enabled:
             broker_info = config_data["ServiceDiscovery"]["Broker"]
@@ -62,9 +62,7 @@ class GlobalConfig:
             ssh_info = config_data["SSH"]
             ddb_config.ssh.user = ssh_info.get("user", getpass.getuser())
             ddb_config.ssh.port = ssh_info.get("port", 22)
-    
-        gdbSessionConfigs: List[GdbSessionConfig] = []
-        components = config_data["Components"] if "Components" in config_data else []
+
         prerun_cmds = GlobalConfig.__parse_gdb_cmds(
             config_data["PrerunGdbCommands"] if "PrerunGdbCommands" in config_data else []
         )
@@ -79,8 +77,22 @@ class GlobalConfig:
             g_conf = Conf()
             if "sudo" in conf_data:
                 g_conf.sudo = conf_data["sudo"]
+            if "on_exit" in conf_data:
+                if conf_data['on_exit'] == "kill":
+                    g_conf.on_exit = OnExitBehavior.KILL
+                elif conf_data['on_exit'] == "detach":
+                    g_conf.on_exit = OnExitBehavior.DETACH
+                else:
+                    logger.warn(f"Unrecognized on_exit option: {conf_data['on_exit']}.")
 
             ddb_config.conf = g_conf
+
+    @staticmethod
+    def parse_nu_config(ddb_config: DDBConfig, config_data: any):
+        GlobalConfig.parse_common_config(ddb_config, config_data)
+        
+        gdbSessionConfigs: List[GdbSessionConfig] = []
+        components = config_data["Components"] if "Components" in config_data else []
 
         for component in components:
             sessionConfig = GdbSessionConfig()
@@ -174,6 +186,7 @@ class GlobalConfig:
         ddb_config.gdb_sessions_configs=gdbSessionConfigs
 
     def parse_vanillapid_config(ddb_config: DDBConfig, config_data: any):
+        # FIXME: use new APIs, organize and clean this function
         pids=config_data.get("Pids",[])
         prerun_cmds = GlobalConfig.__parse_prerun_cmds(
             config_data.get("PrerunGdbCommands",[])

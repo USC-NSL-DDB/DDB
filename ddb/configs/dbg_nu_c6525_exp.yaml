@@ -1,16 +1,9 @@
 ---
 Framework: Nu
 
-# PreTasks:
-# - name: "configure gdb"
-#   command: "echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope"
-
-# PostTasks:
-# - name: "Shutdown runtime"
-#   command: "./nu_scripts/stop_rt.sh"
-
 Conf:
   sudo: true
+  on_exit: "kill"
 
 PrerunGdbCommands:
 - name: "disable CALADAN's custom signal handling"

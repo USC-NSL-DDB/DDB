@@ -8,7 +8,7 @@ from time import sleep
 
 import pkg_resources
 from iddb.counter import TSCounter
-from iddb.data_struct import GdbMode, GdbSessionConfig, GdbCommand, StartMode
+from iddb.data_struct import GdbMode, GdbSessionConfig, GdbCommand, StartMode, OnExitBehavior
 from iddb.gdb_controller import RemoteGdbController
 from iddb.gdbparser import GdbParser
 from iddb.response_processor import ResponseProcessor, SessionResponse
@@ -244,7 +244,14 @@ class GdbSession:
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
         )
         if self.gdb_controller.is_open():
-            self.gdb_controller.write_input("detach")
+            on_exit = GlobalConfig.get().conf.on_exit
+            if on_exit == OnExitBehavior.KILL:
+                self.gdb_controller.write_input("kill")
+            elif on_exit == OnExitBehavior.DETACH:
+                self.gdb_controller.write_input("detach")
+            else:
+                logger.error("Undefined on_exit behavior, maybe parse error or logic error. Please report. Using detach as fallback.")
+                self.gdb_controller.write_input("detach")
             self.gdb_controller.write_input("exit")
             self.gdb_controller.close()
     

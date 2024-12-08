@@ -88,9 +88,14 @@ class TargetFramework(Enum):
     NU = 2
     SERVICE_WEAVER_K8S = 3
 
+class OnExitBehavior(Enum):
+    DETACH = 1
+    KILL = 2
+
 @dataclass
 class Conf:
     sudo: bool = False
+    on_exit: OnExitBehavior = OnExitBehavior.DETACH 
 
 @dataclass
 class DDBConfig:
