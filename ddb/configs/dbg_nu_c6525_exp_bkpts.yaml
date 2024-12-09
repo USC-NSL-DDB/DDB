@@ -10,6 +10,8 @@ PrerunGdbCommands:
   command: "handle SIGUSR1 SIGUSR2 nostop noprint"
 
 PostrunGdbCommands:
+- name: "run auto-break-resume script"
+  command: "source /proj/flashburst-PG0/code/distributed-debugger/rpc_frameworks/Nu/auto.gdb"
 - name: "auto continue attached process"
   command: "-exec-continue"
 
