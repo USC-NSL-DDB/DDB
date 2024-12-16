@@ -5,7 +5,7 @@ from typing import Optional
 class EventLoopThread(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
-        self.loop = asyncio.new_event_loop()
+        self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self.futures = {}
         self.runnning = False
 
@@ -28,7 +28,61 @@ class GlobalRunningLoop:
             cls._instance._loop.start()
         return cls._instance
 
-    def get_loop(self):
+    def get_loop(self) -> asyncio.AbstractEventLoop:
         return self._loop.get_loop()
 
-# GlobalRunningLoop()
+class AsyncSSHLoopThread(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self.runnning = False
+
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        self.runnning = True
+        self.loop.run_forever()
+
+    def get_loop(self):
+        return self.loop
+
+class AsyncSSHLoop:
+    _instance: Optional["AsyncSSHLoop"] = None
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super(AsyncSSHLoop, cls).__new__(cls)
+            cls._instance._loop = AsyncSSHLoopThread()
+            cls._instance._loop.loop.set_debug(True)
+            cls._instance._loop.start()
+        return cls._instance
+
+    def get_loop(self) -> asyncio.AbstractEventLoop:
+        return self._loop.get_loop()
+
+class AsyncSSHConnLoopThread(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self.runnning = False
+
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        self.runnning = True
+        self.loop.run_forever()
+
+    def get_loop(self):
+        return self.loop
+
+class AsyncSSHConnLoop:
+    _instance: Optional["AsyncSSHConnLoop"] = None
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super(AsyncSSHConnLoop, cls).__new__(cls)
+            cls._instance._loop = AsyncSSHConnLoopThread()
+            cls._instance._loop.loop.set_debug(True)
+            cls._instance._loop.start()
+        return cls._instance
+
+    def get_loop(self) -> asyncio.AbstractEventLoop:
+        return self._loop.get_loop()

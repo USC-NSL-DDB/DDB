@@ -68,12 +68,7 @@ class DistributedBTCmd(gdb.Command):
         self.mi_cmd = dbt_mi_cmd
 
     def invoke(self, _arg, _from_tty):
-        # handle_invoke()
-        # result = gdb.execute_mi("-stack-list-distributed-frames")
-        # print(f"result:\n{result}")
-        # print(gdb.execute("bt"))
         result = self.mi_cmd.invoke(None)
-        
         if "stack" in result:
             stacks = result["stack"]
             for stack in stacks:
@@ -81,15 +76,6 @@ class DistributedBTCmd(gdb.Command):
                 print(f"{stack['level']} {stack['func']} file:{filepath}") 
         else:
             print("no stack info presented")
-        # command = 'nc localhost 12345'
-        # result = subprocess.run(command, input=input_data, shell=True, text=True, capture_output=True)
-
-        # # Capture the output
-        # output = result.stdout
-
-        # # Print the output
-        # print(output)
-        print("executed dbt")
 
 
 def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
@@ -181,41 +167,27 @@ class DistributedBacktraceMICmd(gdb.MICommand):
         for cur_frame in frames:
             curr_func = cur_frame.function()
             if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
-                # print("found")
                 is_remote_call = True
                 for sym in get_local_variables(cur_frame):
                     if sym.name == "meta":
-                        # print("found meta")
                         val = sym.value(cur_frame)
-                        # print("found val")
                         remote_ip = int(val['meta']['caller_comm_ip'])
-                        # print("found ip")
                         pid = int(val['meta']['pid'])
-                        # print("found pid")
                         parent_rip = int(val['ctx']['rip'])
                         parent_rsp = int(val['ctx']['rsp'])
                         parent_rbp = int(val['ctx']['rbp'])
-                        # print("found ctx")
                         break
-                        # print(f"caller ip: {int_to_ip(remote_ip)}")
-                        # print(f"rip: {parent_rip:#x}")
-                        # print(f"rsp: {parent_rsp:#x}")
-                        # print(f"rbp: {parent_rbp:#x}")
-                        # print(f"pid: {pid}")
             if is_remote_call:
                 break
         print(f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
-        # print("get all data")
 
         if not is_remote_call:
-            # print("Did not find a valid remote call")
             return result
         
         ddb_meta = get_global_variable(
             "ddb_meta", to_print=False, check_is_var=False)
         if ddb_meta:
             local_ip = int(ddb_meta["comm_ip"])
-            # print(f"local ip: {int_to_ip(local_ip)}")
         else:
             print("Failed to find ddb_meta")
 
@@ -288,12 +260,8 @@ class SwitchContextMICmd(gdb.MICommand):
     def invoke(self, args):
         try:
             reg_map = REGISTER_MAP[get_architecture()]
-
             reg_to_set = map(lambda reg_pair: tuple(reg_pair.split("=")), args)
-            print("reg_to_set: ", reg_to_set)
-
             old_ctx: Dict[str, int] = {}
-
             gdb.execute('select-frame 0')
             for (reg_alias, val) in reg_to_set:
                 try:
@@ -305,29 +273,6 @@ class SwitchContextMICmd(gdb.MICommand):
                 except KeyError:
                     continue
                 gdb.parse_and_eval(f'${reg_real} = {val}')
-                print(f"set {reg_real} ({reg_alias}) to {val}. old = {reg_val_to_save}")
-
-            print(f"old ctx: {old_ctx}")
-            # for (reg_alias, reg_real) in reg_map.items():
-            #     if (str(reg_alias) == )
-                # gdb.parse_and_eval(f'${reg} = {val}')
-                
-            # cur_rip, cur_rsp, cur_rbp = map(int, args[:3])
-
-            # # Save current register values
-            # for reg in ['sp', 'pc', 'rbp']:
-            #     gdb.parse_and_eval(f'$save_{reg} = ${reg}')
-            
-            
-            # # Set new register values
-            # for reg, value in zip(['sp', 'pc', 'rbp'], [cur_rsp, cur_rip, cur_rbp]):
-            #     gdb.parse_and_eval(f'${reg} = {value}')
-            
-            # # Store original values
-            # original_values = {reg: int(gdb.parse_and_eval(f'$save_{reg}')) 
-            #                 for reg in ['sp', 'pc', 'rbp']}
-            
-            # return {"message": "success", "rip":original_values['pc'], "rsp":original_values['sp'], "rbp":original_values['rbp']}
             return {
                 "message": "success",
                 "old_ctx": old_ctx
@@ -709,11 +654,6 @@ class RecordTimeAndContinueMiCommand(gdb.MICommand):
 
     def invoke(self, args):
         global pause_start_time, accumulated_time,cont_time
-        # if len(args) < 2:
-        #     return {"message": "error", "error": "missing arguments"}
-        # pause_start_time=float(args[0])
-        # accumulated_time=float(args[1])
-        # print(f"pause_start_time:{pause_start_time}, accumulated_time:{accumulated_time}")
         try:
             print(f"timestamp: {time.perf_counter_ns()}")
             paused_time_ns=time.perf_counter_ns()

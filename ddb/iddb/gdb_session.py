@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import os
 import time
@@ -6,6 +7,7 @@ from typing import List, Optional
 from threading import Thread, Lock
 from time import sleep
 
+from iddb.event_loop import AsyncSSHLoop, GlobalRunningLoop
 import pkg_resources
 from iddb.counter import TSCounter
 from iddb.data_struct import GdbMode, GdbSessionConfig, GdbCommand, StartMode, OnExitBehavior
@@ -155,9 +157,77 @@ class GdbSession:
         for postrun_cmd in self.postrun_cmds:
             self.gdb_controller.write_input(postrun_cmd.command)
 
+    async def local_start_async(self):
+        full_args = self.__prepare_gdb_start_cmd()
+        full_args.append("--args")
+        full_args.append(self.bin)
+        full_args.extend(self.args)
+        logger.debug(f"start gdb with: {' '.join(gdb_cmd)}")
+        self.session_ctrl = GdbController(full_args)
+
+        for prerun_cmd in self.prerun_cmds:
+            await self.write(f'-interpreter-exec console "{prerun_cmd.command}"')
+
+        await self.write("-gdb-set mi-async on")
+        await self.write("-gdb-set non-stop off")
+
+        for postrun_cmd in self.postrun_cmds:
+            await self.write(postrun_cmd.command)
+
+    async def remote_attach_async(self):
+        logger.debug("start remote attach")
+        if not self.gdb_controller:
+            logger.warning("Remote gdbcontroller not initialized")
+            return
+        
+        full_args = self.__prepare_gdb_start_cmd()
+        gdb_cmd = " ".join(full_args)
+        logger.debug(f"start gdb with: {gdb_cmd}")
+        await self.gdb_controller.start(gdb_cmd)
+
+        self.gdb_controller.write_input("-gdb-set logging enabled on")
+        self.gdb_controller.write_input("-gdb-set mi-async on")
+
+        extension_filepath = pkg_resources.resource_filename('iddb', 'gdb_ext/runtime-gdb-grpc.py')
+
+        self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
+
+        for prerun_cmd in self.prerun_cmds:
+            self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd.command}"')
+
+        for init_cmd in self.initialize_commands:
+            self.write(init_cmd)
+        self.write(f"-target-attach {self.attach_pid}")
+
+        if GlobalConfig.get().broker:
+            self.gdb_controller.write_input(
+                f'-interpreter-exec console "signal SIG40"'
+            )
+
+        for postrun_cmd in self.postrun_cmds:
+            self.gdb_controller.write_input(postrun_cmd.command)
+        # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
+
+    async def remote_start_async(self):
+        await self.gdb_controller.start()
+        # self.remote_gdbserver.start(self.args, sudo=self.sudo)
+        gdb_cmd = self.__prepare_gdb_start_cmd()
+        logger.debug(f"start gdb with: {' '.join(gdb_cmd)}")
+        self.session_ctrl = GdbController(gdb_cmd)
+
+        await self.write("-gdb-set mi-async on")
+        
+        for prerun_cmd in self.prerun_cmds:
+            await self.write(prerun_cmd.command)
+
+        await self.write(f"-file-exec-and-symbols {self.bin}")
+        await self.write(f"-exec-arguments {' '.join(self.args)}")
+
+        for postrun_cmd in self.postrun_cmds:
+            await self.gdb_controller.write_input(postrun_cmd.command)
+
     def start(self) -> None:
         ''' start a gdbsessoin
-        Exception: exception will be raise if it failed to start the session
         '''
         if self.mode == GdbMode.LOCAL:
             self.local_start()
@@ -181,37 +251,102 @@ class GdbSession:
         )
         self.mi_output_t_handle.start()
 
-    def fetch_mi_output(self):
-        while not self._stop_event.is_set() and self.gdb_controller.is_open():
-            response = self.gdb_controller.fetch_output(
-                timeout=1)
-            # logger.debug(f"raw response from session [{self.sid}] ,{response}")
-            responses=self.gdb_response_parser.get_responses_list(response,"stdout")
-            # logger.debug(f"parsed response from gdb,${responses}")
-            if responses:
-                payload = ""
-                for r in responses:
-                    if r["type"] == "console":
-                        payload += r["payload"]
-                    else:
-                        self.processor.put(
-                            SessionResponse(self.sid, self.get_meta_str(), r)
-                        )
+    async def start_async(self) -> None:
+        if self.mode == GdbMode.LOCAL:
+            await self.local_start_async()
+        elif self.mode == GdbMode.REMOTE:
+            if self.startMode == StartMode.ATTACH:
+                await self.remote_attach_async()
+            elif self.startMode == StartMode.BINARY:
+                await self.remote_start_async()
+        else:
+            logger.error("Invalid mode")
+            return
 
-                console_out = {
-                    "type": "console",
-                    "message": None,
-                    "stream": "stdout",
-                    "payload": None
-                }
-                payload = payload.strip()
-                if payload:
-                    console_out["payload"] = payload
-                    self.processor.put(
-                        SessionResponse(
-                            self.sid, self.get_meta_str(), console_out)
-                    )
-            # logger.debug(f"raw response from session [{self.sid}] ,{response}")
+        self.state_mgr.register_session(self.sid, self.tag, self)
+        
+        # Start output fetching as a background task
+        # self.mi_output_task = asyncio.run_coroutine_threadsafe(self.fetch_mi_output_async(), AsyncSSHLoop().get_loop())
+        self.mi_output_task = asyncio.create_task(self.fetch_mi_output_async())
+
+    async def fetch_mi_output_async(self):
+        while True:
+            try:
+                response = await self.gdb_controller.fetch_output()
+                # logger.debug(f"raw response from session [{self.sid}] ,{response}")
+                responses=self.gdb_response_parser.get_responses_list(response, "stdout")
+                # logger.debug(f"parsed response from gdb,${responses}")
+                if responses:
+                    payload = ""
+                    for r in responses:
+                        if r["type"] == "console":
+                            payload += r["payload"]
+                        else:
+                            asyncio.run_coroutine_threadsafe(
+                                self.processor.put(
+                                    SessionResponse(self.sid, self.get_meta_str(), r)
+                                ), GlobalRunningLoop().get_loop()
+                            )
+                            # await self.processor.put(
+                            #     SessionResponse(self.sid, self.get_meta_str(), r)
+                            # )
+
+                    console_out = {
+                        "type": "console",
+                        "message": None,
+                        "stream": "stdout",
+                        "payload": None
+                    }
+                    payload = payload.strip()
+                    if payload:
+                        console_out["payload"] = payload
+                        asyncio.run_coroutine_threadsafe(
+                            self.processor.put(
+                                SessionResponse(
+                                    self.sid, self.get_meta_str(), console_out)
+                            ), GlobalRunningLoop().get_loop()
+                        )
+                        # await self.processor.put(
+                        #     SessionResponse(
+                        #         self.sid, self.get_meta_str(), console_out)
+                        # )
+            except Exception as e:
+                logger.error(f"Error in fetch_mi_output: {e}")
+                break
+
+    def fetch_mi_output(self):
+        try:
+            while self.gdb_controller.is_open():
+                response = self.gdb_controller.fetch_output(
+                    timeout=1)
+                # logger.debug(f"raw response from session [{self.sid}] ,{response}")
+                responses=self.gdb_response_parser.get_responses_list(response,"stdout")
+                # logger.debug(f"parsed response from gdb,${responses}")
+                if responses:
+                    payload = ""
+                    for r in responses:
+                        if r["type"] == "console":
+                            payload += r["payload"]
+                        else:
+                            self.processor.put(
+                                SessionResponse(self.sid, self.get_meta_str(), r)
+                            )
+
+                    console_out = {
+                        "type": "console",
+                        "message": None,
+                        "stream": "stdout",
+                        "payload": None
+                    }
+                    payload = payload.strip()
+                    if payload:
+                        console_out["payload"] = payload
+                        self.processor.put(
+                            SessionResponse(
+                                self.sid, self.get_meta_str(), console_out)
+                        )
+        except Exception as e:
+            logger.exception(f"Error in fetch_mi_output: {e}")
 
     def write(self, cmd: str):
         _, cmd_no_token, _, cmd = parse_cmd(cmd)
@@ -237,23 +372,30 @@ class GdbSession:
     def get_meta_str(self) -> str:
         return f"[ {self.tag}, {self.bin}, {self.sid} ]"
 
-    def cleanup(self):
-        self._stop_event.set()
-        sleep(1) # wait to let fetch thread to stop should be larger than timeout
+    async def cleanup_async(self):
+        # self._stop_event.set()
+        # sleep(1) # wait to let fetch thread to stop should be larger than timeout
+        asyncio.sleep(1)
+        self.mi_output_task.cancel()
         logger.debug(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
         )
         if self.gdb_controller.is_open():
             on_exit = GlobalConfig.get().conf.on_exit
             if on_exit == OnExitBehavior.KILL:
-                self.gdb_controller.write_input("kill")
+                await self.gdb_controller.write_input("kill")
             elif on_exit == OnExitBehavior.DETACH:
-                self.gdb_controller.write_input("detach")
+                await self.gdb_controller.write_input("detach")
             else:
                 logger.error("Undefined on_exit behavior, maybe parse error or logic error. Please report. Using detach as fallback.")
-                self.gdb_controller.write_input("detach")
-            self.gdb_controller.write_input("exit")
-            self.gdb_controller.close()
+                await self.gdb_controller.write_input("detach")
+            await self.gdb_controller.write_input("exit")
+            await self.gdb_controller.close()
+
+    def cleanup(self):
+        loop = asyncio.get_event_loop()
+        future = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
+        future.result()
     
-    def __del__(self):
-        self.cleanup()
+    # def __del__(self):
+    #     self.cleanup()

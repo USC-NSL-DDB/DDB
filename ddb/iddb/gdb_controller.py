@@ -9,11 +9,12 @@ from kubernetes.client.rest import ApiException
 import uuid
 from iddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
 from iddb.logging import logger
+import asyncio, asyncssh, sys
 
 
 class RemoteGdbController(ABC):
     @abstractmethod
-    def start(self,command):
+    async def start(self,command):
         """
         connect to server and start gdb with the given command
         """
@@ -25,7 +26,7 @@ class RemoteGdbController(ABC):
         """
         pass
     @abstractmethod
-    def fetch_output(self,timeout=1)->bytes:
+    async def fetch_output(self,timeout=1)->bytes:
         """
         fetch output with optional timeout
         """
@@ -34,7 +35,7 @@ class RemoteGdbController(ABC):
     def is_open(self)->bool:
         pass
     @abstractmethod
-    def close(self):
+    async def close(self):
         pass
 
 class VanillaPIDController():
@@ -177,24 +178,39 @@ class SSHAttachController(RemoteGdbController):
         self.cred = cred
         self.open = False
 
-    def start(self, command: str):
+    # def start(self, command: str):
+    #     if self.verbose:
+    #         logger.debug(f"Starting {str(self)}")
+    #     try:
+    #         self.client.start(command)
+    #     except Exception as e:
+    #         raise e # TODO: wrap exceptino to an internal data structure
+    #     self.open = True
+    #     # TODO: should we wait a bit to more gracefully handle potential startup error?
+    #     # FIXME: figure out a way to pass back stderr
+
+    async def start(self, command: str):
         if self.verbose:
             logger.debug(f"Starting {str(self)}")
         try:
-            self.client.start(command)
-        except Exception as e:
-            raise e # TODO: wrap exceptino to an internal data structure
+            await self.client.start(command) 
+        except (OSError, asyncssh.Error) as e:
+            logger.error(f"SSH connection failed: {str(e)}")
+            raise e
         self.open = True
-        # TODO: should we wait a bit to more gracefully handle potential startup error?
-        # FIXME: figure out a way to pass back stderr
     
+    # def write_input(self, command: str):
+    #     if self.verbose:
+    #         logger.debug(f"Sending input to {str(self)}: {command}")
+    #     self.client.write(command)
+
     def write_input(self, command: str):
         if self.verbose:
             logger.debug(f"Sending input to {str(self)}: {command}")
         self.client.write(command)
     
-    def fetch_output(self, timeout=1) -> bytes:
-        line = self.client.readline()
+    async def fetch_output(self, timeout=1) -> bytes:
+        line = await self.client.readline()
         if self.verbose:
             logger.debug(f"Fetching output from {str(self)}: {line}")
         return line.encode()
@@ -202,8 +218,8 @@ class SSHAttachController(RemoteGdbController):
     def is_open(self) -> bool:
         return self.open 
     
-    def close(self):
-        self.client.close()
+    async def close(self):
+        await self.client.close()
         self.open = False
 
     def __str__(self):

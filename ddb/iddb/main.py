@@ -3,10 +3,11 @@ import signal
 import subprocess
 import sys
 import argparse
+import asyncio
 
 from typing import List, Union
 
-from iddb.event_loop import GlobalRunningLoop
+from iddb.event_loop import AsyncSSHConnLoop, AsyncSSHLoop, GlobalRunningLoop
 from iddb.global_handler import GlobalHandler
 from iddb.mi_formatter import MIFormatter
 from iddb.response_processor import ResponseProcessor
@@ -17,6 +18,8 @@ from iddb.startup import cleanup_mosquitto_broker
 from iddb.utils import *
 from iddb.config import GlobalConfig
 from iddb.about import ENABLE_DEBUGGER
+from iddb.helper.tracer import VizTracerHelper
+from viztracer import VizTracer
 
 if ENABLE_DEBUGGER:
     try:
@@ -27,94 +30,89 @@ if ENABLE_DEBUGGER:
     except Exception as e:
         print(f"Failed to attach debugger: {e}")
 
-def exec_cmd(cmd: Union[List[str], str]):
+async def exec_cmd(cmd: Union[List[str], str]):
     if isinstance(cmd, str):
         cmd = [cmd]
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
-    eprint(result.stdout.decode("utf-8"))
-    eprint(result.stderr.decode("utf-8"))
+    stdout, stderr = await proc.communicate()
+    eprint(stdout.decode("utf-8"))
+    eprint(stderr.decode("utf-8"))
 
+async def exec_task(task: dict):
+    name = task.get("name", "Unnamed")
+    command = task.get("command")
 
-def exec_task(task: dict):
-    name = None
-    command = None
-    if "name" in task:
-        name = task["name"]
-    if "command" in task:
-        command = task["command"]
-
-    if not name:
-        name = "Unnamed"
     if not command:
         eprint("Didn't specify command.")
         return
 
     eprint(f"Executing task: {name}, command: {command}")
-    exec_cmd(command)
+    await exec_cmd(command)
 
-def exec_pretasks(config_data):
+async def exec_pretasks(config_data):
     if ("PreTasks" in config_data) and config_data["PreTasks"]:
-        tasks = config_data["PreTasks"]
-        for task in tasks:
-            exec_task(task)
+        for task in config_data["PreTasks"]:
+            await exec_task(task)
 
-def exec_posttasks(config_data):
+async def exec_posttasks(config_data):
     if ("PostTasks" in config_data) and config_data["PostTasks"]:
-        tasks = config_data["PostTasks"]
-        for task in tasks:
-            exec_task(task)
+        for task in config_data["PostTasks"]:
+            await exec_task(task)
 
 terminated = False
 gdb_manager: GdbManager = None
 
-def run_cmd_loop():
+async def run_cmd_loop():
     while True:
         try:
-            cmd = input("(gdb) ").strip()
-            cmd = f"{cmd}\n"
-            gdb_manager.write(cmd) 
+            cmd = await asyncio.get_event_loop().run_in_executor(None, input, "(gdb) ")
+            cmd = f"{cmd.strip()}\n"
+            await gdb_manager.write_async(cmd)
             raw_cmd = cmd.strip()
             if raw_cmd == "exit" or raw_cmd == "-gdb-exit":
                 break
         except EOFError:
             print("\nNo input received")
-    ddb_exit()
+    await ddb_exit()
 
-def ddb_exit():
+async def ddb_exit():
     global gdb_manager, terminated
     cleanup_mosquitto_broker()
     if not terminated:
         logger.debug("Exiting ddb...")
         print("[ TOOL MI OUTPUT ]")
         print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
-        terminated=True
-        if gdb_manager:
-            gdb_manager.cleanup()
 
-        # TODO: reimplement the following functions
-        # if config_data is not None:
-        #     exec_posttasks(config_data)
+        VizTracerHelper.deinit()
+
+        terminated = True
+        if gdb_manager:
+            await gdb_manager.cleanup_async()  # Assuming GdbManager has async cleanup
+
+        asyncio.get_event_loop().stop()
 
         try:
             sys.exit(130)
         except SystemExit:
             os._exit(130)
 
-def bootFromNuConfig(gdb_manager: GdbManager):
-    gdb_manager.start()
-    run_cmd_loop()
+async def bootFromNuConfig(gdb_manager: GdbManager):
+    await gdb_manager.start_async()  # Assuming GdbManager has async start
+    await run_cmd_loop()
 
-def bootServiceWeaverKube(gdb_manager: GdbManager):
-    gdb_manager.start()
-    run_cmd_loop()
+async def bootServiceWeaverKube(gdb_manager: GdbManager):
+    await gdb_manager.start_async()  # Assuming GdbManager has async start
+    await run_cmd_loop()
 
-def handle_interrupt(signal_num, frame):
+MAIN_LOOP: asyncio.AbstractEventLoop = None
+
+def handle_interrupt():
     logger.debug("Handling interrupt...")
-    ddb_exit()
+    asyncio.create_task(ddb_exit())
 
 def prepare_args() -> argparse.Namespace:
     # pre-parser to handle --debug and --version flags
@@ -149,43 +147,51 @@ def prepare_args() -> argparse.Namespace:
     return args
 
 def eager_init():
-    _ = ResponseProcessor.inst()
     GlobalRunningLoop()
+    AsyncSSHLoop()
+    AsyncSSHConnLoop()
+    _ = ResponseProcessor.inst()
 
 def main():
-    args = prepare_args()
-
-    global gdb_manager, terminated
-    signal.signal(signal.SIGINT, handle_interrupt)
+    VizTracerHelper.init()
     eager_init()
-    GlobalHandler.DDB_EXIT_HANDLE = lambda: ddb_exit()
 
-    gdb_manager = GdbManager()
+    async def run_async():
+        global gdb_manager
+        args = prepare_args()
 
-    if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
-        logger.info(f"Loaded config. content: \n{GlobalConfig.get()}")    
-    else:
-        logger.info(f"Configuration file is not provided or something goes wrong. Skipping...")    
+        loop = asyncio.get_event_loop()
 
-    # TODO: implement the following functions
-    # exec_pretasks(config_data)
+        loop.add_signal_handler(signal.SIGINT, handle_interrupt)
+        # signal.signal(signal.SIGINT, handle_interrupt)
 
-    global_config = GlobalConfig.get()
-    try:
-        if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
-            from kubernetes import config
-            try:
-                bootServiceWeaverKube(gdb_manager)
-            except Exception as e:
-                print("fail to laod kubernetes config, check path again")
-        elif global_config.framework == TargetFramework.NU:
-            bootFromNuConfig(gdb_manager)
+        GlobalHandler.DDB_EXIT_HANDLE = lambda: asyncio.create_task(ddb_exit())
+
+        gdb_manager = GdbManager()
+
+        if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
+            logger.info(f"Loaded config. content: \n{GlobalConfig.get()}")    
         else:
-            bootFromNuConfig(gdb_manager)
-    except KeyboardInterrupt:
-        logger.debug("Received interrupt signal.")
-        ddb_exit()
-    pass 
+            logger.info(f"Configuration file is not provided or something goes wrong. Skipping...")    
+
+        global_config = GlobalConfig.get()
+        try:
+            if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
+                from kubernetes import config
+                try:
+                    await bootServiceWeaverKube(gdb_manager)
+                except Exception as e:
+                    print("fail to load kubernetes config, check path again")
+            elif global_config.framework == TargetFramework.NU:
+                await bootFromNuConfig(gdb_manager)
+            else:
+                await bootFromNuConfig(gdb_manager)
+        except KeyboardInterrupt:
+            logger.debug("Received interrupt signal.")
+            await ddb_exit()
+
+    asyncio.run(run_async())
 
 if __name__ == "__main__":
+    # asyncio.run(main())
     main()

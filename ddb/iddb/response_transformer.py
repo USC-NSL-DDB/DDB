@@ -4,6 +4,7 @@ from iddb.mi_formatter import MIFormatter
 from iddb.state_manager import StateManager
 from iddb import utils
 from iddb.logging import logger
+from iddb.helper.tracer import VizTracerHelper as vt
 
 class TransformerBase:
     def __init__(self) -> None:
@@ -402,9 +403,12 @@ class ResponseTransformer:
         if isinstance(responses, SessionResponse):
             responses = [ responses ]
         transformed_output=transformer.format(responses).replace("\n", "")
+
         if transformed_output is not None and len(transformed_output) > 0:
             print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
             logger.debug(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+            # vt.tracer.log_var("transformed_output", transformed_output)
+            # vt.tracer.log_print(f"transformed_output: {transformed_output}") 
 
     @staticmethod
     def output(responses: Union[List[SessionResponse], SessionResponse], transformer: TransformerBase):

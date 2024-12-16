@@ -36,6 +36,9 @@ dependencies = [
   "debugpy",
   "setuptools>=75.3.0",
   "hatch>=1.13.0",
+  "yappi>=1.6.10",
+  "viztracer>=0.16.3",
+  "asyncssh>=2.19.0",
 ]
 
 [tool.hatch.version]

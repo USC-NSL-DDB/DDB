@@ -27,6 +27,7 @@ folder_struct_setup()
 
 from iddb.logging import logger
 from iddb.data_struct import BrokerInfo
+import asyncio
 
 def start_mosquitto_broker(broker: BrokerInfo):
     with open(ServiceDiscoveryConst.SERVICE_DISCOVERY_INI_FILEPATH, 'w') as f:
@@ -56,3 +57,12 @@ def cleanup_mosquitto_broker():
         logger.debug("Mosquitto broker terminated successfully!")
     except Exception as e:
         logger.error(f"Failed to terminate Mosquitto broker: {e}")
+
+async def async_folder_struct_setup():
+    folder_struct_setup()
+
+async def async_start_mosquitto_broker(broker: BrokerInfo):
+    start_mosquitto_broker(broker)
+    
+async def async_cleanup_mosquitto_broker():
+    cleanup_mosquitto_broker()

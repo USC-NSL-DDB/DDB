@@ -2,6 +2,9 @@ from pprint import pformat
 from typing import Optional,Tuple,Dict,List,Any
 from pygdbmi import gdbmiparser
 from iddb.logging import logger
+from iddb.helper.tracer import VizTracerHelper as vt
+from viztracer import get_tracer
+
 def _buffer_incomplete_responses(
 raw_output: Optional[bytes], buf: Optional[bytes]
 ) -> Tuple[Optional[bytes], Optional[bytes]]:
@@ -25,7 +28,6 @@ raw_output: Optional[bytes], buf: Optional[bytes]
 
     return (raw_output, buf)
 class GdbParser:
-
     def __init__(self,verbose=False):
         self._incomplete_output={"stdout":None,"stderr":None}
         self.verbose=verbose
@@ -37,6 +39,8 @@ class GdbParser:
             raw_output (unicode): gdb output to parse
             stream (str): either stdout or stderr
         """
+        # vt.tracer.log_var("raw_output", raw_output)
+        get_tracer().log_var("raw_output", raw_output)
         responses: List[Dict[Any, Any]] = []
 
         (_new_output, self._incomplete_output[stream],) = _buffer_incomplete_responses(
@@ -60,4 +64,6 @@ class GdbParser:
                 if self.verbose:
                     logger.debug(pformat(parsed_response))
                 responses.append(parsed_response)
+        # vt.tracer.log_var("responses", responses)
+        get_tracer().log_var("responses", responses)
         return responses

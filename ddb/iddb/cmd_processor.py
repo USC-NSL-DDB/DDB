@@ -18,6 +18,9 @@ import sys
 from iddb.utils import ip_int2ip_str
 from collections import deque
 
+from iddb.helper.tracer import VizTracerHelper as vt
+from viztracer import get_tracer
+
 ENABLE_DEADLOCK_DETECTION = False
 
 def prepare_ctx_switch_args(registers: Dict[str, int]) -> str:
@@ -53,32 +56,32 @@ class CmdHandler(ABC):
         self.state_mgr = StateManager().inst()
 
     @abstractmethod
-    def process_command(self, command_instance: SingleCommand):
+    async def process_command(self, command_instance: SingleCommand):
         logger.debug(f"Received command in base handler: {command_instance}")
 
         if command_instance.session_id:
-            self.router.send_to_session(command_instance.token, command_instance.command,
+            await self.router.send_to_session(command_instance.token, command_instance.command,
                                         command_instance.result_transformer, command_instance.session_id)
         elif command_instance.thread_id == -1:
-            self.router.broadcast(
+            await self.router.broadcast(
                 command_instance.token, command_instance.command, command_instance.result_transformer)
         # fallback send to first thread
         elif not command_instance.thread_id:
-            self.router.send_to_first(
+            await self.router.send_to_first(
                 command_instance.token, command_instance.command, command_instance.result_transformer)
         else:
-            self.router.send_to_thread(command_instance.thread_id, command_instance.token, command_instance.command,
+            await self.router.send_to_thread(command_instance.thread_id, command_instance.token, command_instance.command,
                                        command_instance.result_transformer)
 
 
 class CmdHandlerBase(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
 
 class BreakInsertCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
 
 class ThreadInfoCmdHandler(CmdHandler):
@@ -86,7 +89,7 @@ class ThreadInfoCmdHandler(CmdHandler):
         logger.debug(f"Received command in handler: {command_instance}")
         command_instance.thread_id = -1
         command_instance.result_transformer = ThreadInfoTransformer()
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
 
 class ContinueCmdHandler(CmdHandler):
@@ -101,10 +104,8 @@ class ContinueCmdHandler(CmdHandler):
         for session in session_metas:
             if session.in_custom_context:
                 await self._switch_context(session)
-
             
-
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
     async def _switch_context(self, session):
         ctx_switch_args = prepare_ctx_switch_args(session.current_context.ctx)
@@ -136,14 +137,14 @@ class InterruptCmdHandler(CmdHandler):
             if session:
                 for status in session.t_status.values():
                     if status == ThreadStatus.RUNNING:
-                        super().process_command(command_instance)
+                        await super().process_command(command_instance)
                         break
         else:
             for sid, session in state_manager.sessions.items():
                 for status in session.t_status.values():
                     if status == ThreadStatus.RUNNING:
                         command_instance.session_id = sid
-                        super().process_command(command_instance)
+                        await super().process_command(command_instance)
                         break
 
 class ListCmdHandler(CmdHandler):
@@ -160,7 +161,7 @@ class ThreadSelectCmdHandler(CmdHandler):
             sid, tid = self.router.state_mgr.get_sidtid_by_gtid(gtid)
             command_instance.thread_id = gtid
             command_instance.command_no_token = f"-thread-select {tid}\n"
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
 remotebtlock = asyncio.Lock()
 
@@ -168,6 +169,7 @@ class RemoteBacktraceHandler(CmdHandler):
     def __init__(self, router: CmdRouter,adapter:FrameWorkAdapter):
         super().__init__(router)
         self.adapter=adapter
+
     def extract_remote_metadata(self, data):
         caller_meta = data.get('metadata', {}).get('caller_meta', {})
         caller_ctx = data.get('metadata', {}).get('caller_ctx', {})
@@ -331,13 +333,12 @@ class ListGroupsCmdHandler(CmdHandlerBase):
     async def process_command(self, command_instance: SingleCommand):
         command_instance.thread_id = -1
         command_instance.result_transformer = ProcessReadableTransformer()
-        super().process_command(command_instance)
+        await super().process_command(command_instance)
 
 
 class CommandProcessor:
-    def __init__(self, router: CmdRouter,adapter:FrameWorkAdapter):
-        self.adapter=adapter
-        self.alock = asyncio.Lock()
+    def __init__(self, router: CmdRouter, adapter: FrameWorkAdapter):
+        self.adapter = adapter
         self.router = router
         self.command_handlers: dict[str, CmdHandler] = {
             "-break-insert": BreakInsertCmdHandler(self.router),
@@ -346,7 +347,7 @@ class CommandProcessor:
             "-exec-interrupt": InterruptCmdHandler(self.router),
             "-file-list-lines": ListCmdHandler(self.router),
             "-thread-select": ThreadSelectCmdHandler(self.router),
-            "-bt-remote": RemoteBacktraceHandler(self.router,self.adapter),
+            "-bt-remote": RemoteBacktraceHandler(self.router, self.adapter),
             "-list-thread-groups": ListGroupsCmdHandler(self.router),
             "-exec-next": CmdHandlerBase(self.router),
         }
@@ -367,15 +368,21 @@ class CommandProcessor:
     async def send_command(self, cmd: str):
         while not self.is_ready():
             await asyncio.sleep(0.5)
+        if cmd.strip() == "":
+            return 
+
+        print(f"Sending command: {cmd}")
+
+        get_tracer().log_var("send_command", cmd)
+        # vt.tracer.log_var("send_command", cmd)
         # Command parsing and preparation logic
-        cmd=cmd.rstrip('\n')
+        cmd = cmd.rstrip('\n')
         cmd_no_token, token, origin_token = self.router.prepend_token(cmd)
         if not (cmd_split := cmd_no_token.split()):
             return
-        # with GlobalTracer().tracer.start_as_current_span("process_command", attributes={"command": f"{token}{cmd_no_token}", "token": token}):
         prefix = cmd_split[0]
         cmd_instance = SingleCommand(
-            token=token, origin_token=origin_token, command_no_token=cmd_no_token,origin_command_no_token=cmd_no_token)
+            token=token, origin_token=origin_token, command_no_token=cmd_no_token, origin_command_no_token=cmd_no_token)
         # Command routing logic
         if len(cmd_split) >= 2 and cmd_split[-1] == "--all":
             cmd_instance.thread_id = -1
@@ -389,11 +396,10 @@ class CommandProcessor:
                 cmd_split[thread_index + 1] = str(tid)
                 cmd_instance.command_no_token = " ".join(cmd_split)
         elif curr_thread := self.router.state_mgr.get_current_gthread():
-            sid, tid = self.router.state_mgr.get_sidtid_by_gtid(
-                curr_thread)
+            sid, tid = self.router.state_mgr.get_sidtid_by_gtid(curr_thread)
             cmd_instance.thread_id = curr_thread
 
-        if "--session" in cmd_split: 
+        if "--session" in cmd_split:
             session_index = cmd_split.index("--session")
             if session_index < len(cmd_split) - 1:
                 sid = int(cmd_split[session_index + 1])
@@ -403,14 +409,28 @@ class CommandProcessor:
                 cmd_instance.command_no_token = " ".join(cmd_split)
 
         # Command handling
-
         handler = self.command_handlers.get(prefix)
-        # GlobalTracer().request_times[token] = time.time_ns()
-        # async with self.alock:
-        GlobalTracer().command_history[cmd_instance.command]={
-            "start":time.time_ns(),
-            "command":cmd_instance.origin_command
-        }
+        # GlobalTracer().command_history[cmd_instance.command] = {
+        #     "start": time.time_ns(),
+        #     "command": cmd_instance.origin_command
+        # }
         if not handler:
             return await self.base_handler.process_command(cmd_instance)
-        return await handler.process_command(cmd_instance)
+        else:
+            return await handler.process_command(cmd_instance) #
+        # ret = None
+        # if not handler:
+        #     ret = await self.base_handler.process_command(cmd_instance)
+        # else:
+        #     ret = await handler.process_command(cmd_instance)
+        # GlobalTracer().command_history[cmd_instance.command]["finish"] = time.time_ns()
+        # return ret
+
+    def get_command_timings(self):
+        timings = {}
+        for command, data in GlobalTracer().command_history.items():
+            start = data.get("start")
+            finish = data.get("finish")
+            if start and finish:
+                timings[command] = (finish - start) / 1e6  # Convert to milliseconds
+        return timings
