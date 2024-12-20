@@ -30,20 +30,22 @@ class ResponseProcessor:
         await self.queue.put(response)
 
     async def process(self):
-        try:
-            while True:
+        while True:
+            try:
                 resp = await self.queue.get()
                 resp_type = resp.response["type"]
 
                 if resp_type == "notify":
-                    await self.handle_notify(resp)
+                    asyncio.create_task(self.handle_notify(resp))
 
                 if resp_type == "result":
-                    await self.handle_result(resp)
+                    asyncio.create_task(self.handle_result(resp))
                 
                 self.queue.task_done()
-        except Exception as e:
-            logger.exception(f"Error in response processor: {e}")
+            except asyncio.CancelledError as e:
+                break
+            except Exception as e:
+                logger.exception(f"Error in response processor: {e}")
 
     async def handle_result(self, response: SessionResponse):
         await CmdTracker.inst().recv_response(response)

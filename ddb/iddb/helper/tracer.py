@@ -55,8 +55,8 @@ class VizTracerHelper:
             output_file="/tmp/trace.json",
             log_async=True,
             register_global=True,
-            tracer_entries=5000000,
-            ignore_frozen=False,
+            tracer_entries=3000000,
+            ignore_frozen=True,
         )
         VizTracerHelper.tracer.start()
 

@@ -133,6 +133,7 @@ class InterruptCmdHandler(CmdHandler):
         logger.debug(f"Received command in interrupt handler: {command_instance}")
         state_manager=StateManager().inst()
         if command_instance.session_id is not None:
+            logger.debug(f"in 1") 
             session = state_manager.sessions.get(command_instance.session_id)
             if session:
                 for status in session.t_status.values():
@@ -356,7 +357,7 @@ class CommandProcessor:
     def is_ready(self):
         for _, s in self.router.sessions.items():
             if not s.gdb_controller.is_open():
-                logger.debug(f"not ready yet")
+                logger.debug(f"not ready yet: {s.sid}, pid: {s.attach_pid}")
                 return False
         return True
 

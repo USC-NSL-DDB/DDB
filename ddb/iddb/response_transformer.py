@@ -1,3 +1,4 @@
+from viztracer import get_tracer
 from iddb.data_struct import SessionResponse
 from typing import Any, List, Union
 from iddb.mi_formatter import MIFormatter
@@ -407,6 +408,7 @@ class ResponseTransformer:
         if transformed_output is not None and len(transformed_output) > 0:
             print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
             logger.debug(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
+            get_tracer().log_var("transformed_output", transformed_output)
             # vt.tracer.log_var("transformed_output", transformed_output)
             # vt.tracer.log_print(f"transformed_output: {transformed_output}") 
 

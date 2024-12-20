@@ -76,6 +76,8 @@ def nu_concat_stack(stack: List[dict], bt_data: dict) -> List[dict]:
 
 remoteBt = True
 import re
+import asyncio
+
 def get_token_and_command(command):
     pattern = r'^(\d+)-.+$'
     match = re.match(pattern, command)
@@ -101,6 +103,7 @@ class CmdRouter:
         self.lock = Lock()
         self.sessions = {s.sid: s for s in sessions}
         self.state_mgr = StateManager.inst()
+
     def add_session(self, session: GdbSession):
         with self.lock:
             self.sessions[session.sid] = session
@@ -292,18 +295,22 @@ class CmdRouter:
 
     async def broadcast(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         await self.register_cmd_for_all(token, cmd, transformer)
-        for _, s in self.sessions.items():
+
+        async def write_to_session(s: GdbSession, cmd: str):
             cmd_to_send = cmd
             if FORCE_INTERRUPT_ON_COMMADN:
                 # We only force interrupt if the thread is running
                 s_meta = StateManager.inst().get_session_meta(s.sid)
-                logger.debug(f"Broadcast - Session {s.sid} meta: \n{s_meta}")
                 # We assume in all-stop mode, so only check the first thread status. 
                 # Assumption is all threads are at the same status.
                 cond = (s_meta and len(s_meta.t_status) > 0) and s_meta.t_status[1] == ThreadStatus.RUNNING
                 if cond:
                     cmd_to_send = self.prepare_force_interrupt_command(cmd_to_send, resume=True)
             s.write(cmd_to_send)
+
+        # Create tasks for all sessions and run them concurrently
+        tasks = [write_to_session(s, cmd) for _, s in self.sessions.items()]
+        await asyncio.gather(*tasks)
 
     async def send_to_first(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         await self.register_cmd(token, cmd, self.sessions[1].sid, transformer)

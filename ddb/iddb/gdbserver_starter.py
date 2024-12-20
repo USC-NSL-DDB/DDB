@@ -89,7 +89,8 @@ class SSHRemoteServerClient(RemoteServerConnection):
         self.conn = await asyncssh.connect(
             self.cred.hostname, 
             username=self.cred.username,
-            client_keys=[self.private_key_path]
+            client_keys=[self.private_key_path],
+            connect_timeout=10
         )
 
         # Start the process
@@ -113,7 +114,7 @@ class SSHRemoteServerClient(RemoteServerConnection):
 
     async def close(self):
         if self.process:
-            await self.process.wait()
+            self.process.close()
             self.process = None
         if self.conn:
             self.conn.close()

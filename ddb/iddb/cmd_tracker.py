@@ -108,7 +108,11 @@ class CmdTracker:
 
     async def process_finished_response(self):
         while True:
-            cmd_meta = await self.response_queue.get()
-            logger.debug("Start to process a grouped response.")
-            ResponseTransformer.transform(cmd_meta.responses, cmd_meta.transformer)
-            self.response_queue.task_done()
+            try:
+                cmd_meta = await self.response_queue.get()
+                logger.debug("Start to process a grouped response.")
+                ResponseTransformer.transform(cmd_meta.responses, cmd_meta.transformer)
+                self.response_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error when processing response: {e}")
+                break

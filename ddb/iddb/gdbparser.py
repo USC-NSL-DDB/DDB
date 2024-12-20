@@ -40,7 +40,7 @@ class GdbParser:
             stream (str): either stdout or stderr
         """
         # vt.tracer.log_var("raw_output", raw_output)
-        get_tracer().log_var("raw_output", raw_output)
+        # get_tracer().log_var("raw_output", raw_output)
         responses: List[Dict[Any, Any]] = []
 
         (_new_output, self._incomplete_output[stream],) = _buffer_incomplete_responses(
@@ -65,5 +65,5 @@ class GdbParser:
                     logger.debug(pformat(parsed_response))
                 responses.append(parsed_response)
         # vt.tracer.log_var("responses", responses)
-        get_tracer().log_var("responses", responses)
+        # get_tracer().log_var("responses", responses)
         return responses

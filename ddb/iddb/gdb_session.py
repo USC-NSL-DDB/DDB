@@ -375,7 +375,7 @@ class GdbSession:
     async def cleanup_async(self):
         # self._stop_event.set()
         # sleep(1) # wait to let fetch thread to stop should be larger than timeout
-        asyncio.sleep(1)
+        # await asyncio.sleep(1)
         self.mi_output_task.cancel()
         logger.debug(
             f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
@@ -383,13 +383,13 @@ class GdbSession:
         if self.gdb_controller.is_open():
             on_exit = GlobalConfig.get().conf.on_exit
             if on_exit == OnExitBehavior.KILL:
-                await self.gdb_controller.write_input("kill")
+                self.gdb_controller.write_input("kill")
             elif on_exit == OnExitBehavior.DETACH:
-                await self.gdb_controller.write_input("detach")
+                self.gdb_controller.write_input("detach")
             else:
                 logger.error("Undefined on_exit behavior, maybe parse error or logic error. Please report. Using detach as fallback.")
-                await self.gdb_controller.write_input("detach")
-            await self.gdb_controller.write_input("exit")
+                self.gdb_controller.write_input("detach")
+            self.gdb_controller.write_input("exit")
             await self.gdb_controller.close()
 
     def cleanup(self):

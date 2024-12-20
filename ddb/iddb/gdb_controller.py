@@ -198,6 +198,7 @@ class SSHAttachController(RemoteGdbController):
             logger.error(f"SSH connection failed: {str(e)}")
             raise e
         self.open = True
+        logger.debug(f"SSH connection established: {str(self)}")
     
     # def write_input(self, command: str):
     #     if self.verbose:

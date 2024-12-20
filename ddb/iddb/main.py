@@ -77,7 +77,33 @@ async def run_cmd_loop():
                 break
         except EOFError:
             print("\nNo input received")
+        except asyncio.CancelledError as e:
+            print(f"Error: {e}")
+            break
     await ddb_exit()
+
+async def stop_event_loop(loop: asyncio.AbstractEventLoop):
+    """Gracefully stop and clean up the given event loop."""
+    # Cancel all running tasks
+    tasks = [t for t in asyncio.all_tasks(loop) if not t.done()]
+    for task in tasks:
+        task.cancel()
+    print(f"Cancelling {len(tasks)} tasks...")
+
+    # Wait for all tasks to finish
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass
+    print("All tasks cancelled.")
+
+    # Stop the loop
+    loop.stop()
+    print("Event loop stopped.")
+
+    # Close the loop
+    loop.close()
+    print("Event loop closed.")
 
 async def ddb_exit():
     global gdb_manager, terminated
@@ -93,7 +119,20 @@ async def ddb_exit():
         if gdb_manager:
             await gdb_manager.cleanup_async()  # Assuming GdbManager has async cleanup
 
-        asyncio.get_event_loop().stop()
+        # GlobalRunningLoop().get_loop().close()
+        # AsyncSSHLoop().get_loop().close()
+        # AsyncSSHConnLoop().get_loop().close()
+        # asyncio.get_event_loop().close()
+
+        # GlobalRunningLoop().stop()
+        # AsyncSSHLoop().stop()
+        # AsyncSSHConnLoop().stop()
+        # asyncio.get_event_loop().stop()
+        # GlobalRunningLoop().stop()
+        # await stop_event_loop(GlobalRunningLoop().get_loop())
+        # await stop_event_loop(AsyncSSHLoop().get_loop())
+        # await stop_event_loop(AsyncSSHConnLoop().get_loop())
+        # await stop_event_loop(asyncio.get_event_loop())
 
         try:
             sys.exit(130)
