@@ -1,25 +1,23 @@
 import os
 import signal
-import subprocess
 import sys
 import argparse
 import asyncio
 
-from typing import List, Union
+from typing import List, Optional, Union
 
-from iddb.event_loop import AsyncSSHConnLoop, AsyncSSHLoop, GlobalRunningLoop
+from iddb.event_loop import AsyncSSHLoop, GlobalRunningLoop
 from iddb.global_handler import GlobalHandler
 from iddb.mi_formatter import MIFormatter
 from iddb.response_processor import ResponseProcessor
 from iddb.data_struct import TargetFramework
 from iddb.gdb_manager import GdbManager
 from iddb.logging import logger
-from iddb.startup import cleanup_mosquitto_broker
 from iddb.utils import *
 from iddb.config import GlobalConfig
 from iddb.about import ENABLE_DEBUGGER
 from iddb.helper.tracer import VizTracerHelper
-from viztracer import VizTracer
+from iddb import globals
 
 if ENABLE_DEBUGGER:
     try:
@@ -63,95 +61,65 @@ async def exec_posttasks(config_data):
         for task in config_data["PostTasks"]:
             await exec_task(task)
 
-terminated = False
-gdb_manager: GdbManager = None
-
 async def run_cmd_loop():
     while True:
         try:
             cmd = await asyncio.get_event_loop().run_in_executor(None, input, "(gdb) ")
             cmd = f"{cmd.strip()}\n"
-            await gdb_manager.write_async(cmd)
+            await globals.DBG_MANAGER.write_async(cmd)
             raw_cmd = cmd.strip()
             if raw_cmd == "exit" or raw_cmd == "-gdb-exit":
                 break
         except EOFError:
             print("\nNo input received")
         except asyncio.CancelledError as e:
-            print(f"Error: {e}")
+            logger.info(f"run_cmd_loop cancelled: {e}")
             break
-    await ddb_exit()
-
-async def stop_event_loop(loop: asyncio.AbstractEventLoop):
-    """Gracefully stop and clean up the given event loop."""
-    # Cancel all running tasks
-    tasks = [t for t in asyncio.all_tasks(loop) if not t.done()]
-    for task in tasks:
-        task.cancel()
-    print(f"Cancelling {len(tasks)} tasks...")
-
-    # Wait for all tasks to finish
-    try:
-        await asyncio.gather(*tasks, return_exceptions=True)
-    except asyncio.CancelledError:
-        pass
-    print("All tasks cancelled.")
-
-    # Stop the loop
-    loop.stop()
-    print("Event loop stopped.")
-
-    # Close the loop
-    loop.close()
-    print("Event loop closed.")
+    proper_cleanup()
 
 async def ddb_exit():
-    global gdb_manager, terminated
-    cleanup_mosquitto_broker()
-    if not terminated:
-        logger.debug("Exiting ddb...")
-        print("[ TOOL MI OUTPUT ]")
-        print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
+    with globals.G_LOCK:
+        if not globals.TERMINATED:
+            logger.debug("Exiting ddb...")
+            print("[ TOOL MI OUTPUT ]")
+            print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
 
-        VizTracerHelper.deinit()
+            VizTracerHelper.deinit()
 
-        terminated = True
-        if gdb_manager:
-            await gdb_manager.cleanup_async()  # Assuming GdbManager has async cleanup
+            globals.TERMINATED = True
+            if globals.DBG_MANAGER:
+                await globals.DBG_MANAGER.cleanup_async()
 
-        # GlobalRunningLoop().get_loop().close()
-        # AsyncSSHLoop().get_loop().close()
-        # AsyncSSHConnLoop().get_loop().close()
-        # asyncio.get_event_loop().close()
-
-        # GlobalRunningLoop().stop()
-        # AsyncSSHLoop().stop()
-        # AsyncSSHConnLoop().stop()
-        # asyncio.get_event_loop().stop()
-        # GlobalRunningLoop().stop()
-        # await stop_event_loop(GlobalRunningLoop().get_loop())
-        # await stop_event_loop(AsyncSSHLoop().get_loop())
-        # await stop_event_loop(AsyncSSHConnLoop().get_loop())
-        # await stop_event_loop(asyncio.get_event_loop())
-
-        try:
-            sys.exit(130)
-        except SystemExit:
-            os._exit(130)
+            try:
+                sys.exit(130)
+            except SystemExit:
+                os._exit(130)
 
 async def bootFromNuConfig(gdb_manager: GdbManager):
-    await gdb_manager.start_async()  # Assuming GdbManager has async start
+    await gdb_manager.start_async()
     await run_cmd_loop()
 
 async def bootServiceWeaverKube(gdb_manager: GdbManager):
-    await gdb_manager.start_async()  # Assuming GdbManager has async start
+    await gdb_manager.start_async()
     await run_cmd_loop()
 
-MAIN_LOOP: asyncio.AbstractEventLoop = None
+def proper_cleanup(signal_name: Optional[str] = None):
+    if globals.TERMINATED: return
+    if signal_name:
+        logger.info(f"Caught signal [{signal_name}]...")
 
-def handle_interrupt():
-    logger.debug("Handling interrupt...")
-    asyncio.create_task(ddb_exit())
+    GlobalRunningLoop().stop()
+    AsyncSSHLoop().stop()
+
+    # Ensure the clean up logic is happening in the main loop.
+    if globals.MAIN_LOOP.is_running():
+        try:
+            if asyncio.get_running_loop() == globals.MAIN_LOOP:
+                asyncio.create_task(ddb_exit())
+            else:
+                asyncio.run_coroutine_threadsafe(ddb_exit(), globals.MAIN_LOOP)
+        except Exception as e:
+            print(f"Error in proper_cleanup: {e}")
 
 def prepare_args() -> argparse.Namespace:
     # pre-parser to handle --debug and --version flags
@@ -188,7 +156,6 @@ def prepare_args() -> argparse.Namespace:
 def eager_init():
     GlobalRunningLoop()
     AsyncSSHLoop()
-    AsyncSSHConnLoop()
     _ = ResponseProcessor.inst()
 
 def main():
@@ -196,17 +163,17 @@ def main():
     eager_init()
 
     async def run_async():
-        global gdb_manager
         args = prepare_args()
 
         loop = asyncio.get_event_loop()
+        globals.MAIN_LOOP = loop
 
-        loop.add_signal_handler(signal.SIGINT, handle_interrupt)
-        # signal.signal(signal.SIGINT, handle_interrupt)
+        loop.add_signal_handler(signal.SIGINT, proper_cleanup, "SIGINT")
+        loop.add_signal_handler(signal.SIGTERM, proper_cleanup, "SIGTERM")
 
-        GlobalHandler.DDB_EXIT_HANDLE = lambda: asyncio.create_task(ddb_exit())
+        GlobalHandler.DDB_EXIT_HANDLE = lambda: proper_cleanup()
 
-        gdb_manager = GdbManager()
+        globals.DBG_MANAGER = GdbManager()
 
         if (args.config is not None) and GlobalConfig.load_config(str(args.config)):
             logger.info(f"Loaded config. content: \n{GlobalConfig.get()}")    
@@ -218,19 +185,21 @@ def main():
             if global_config.framework == TargetFramework.SERVICE_WEAVER_K8S:
                 from kubernetes import config
                 try:
-                    await bootServiceWeaverKube(gdb_manager)
+                    await bootServiceWeaverKube(globals.DBG_MANAGER)
                 except Exception as e:
                     print("fail to load kubernetes config, check path again")
             elif global_config.framework == TargetFramework.NU:
-                await bootFromNuConfig(gdb_manager)
+                await bootFromNuConfig(globals.DBG_MANAGER)
             else:
-                await bootFromNuConfig(gdb_manager)
+                await bootFromNuConfig(globals.DBG_MANAGER)
         except KeyboardInterrupt:
-            logger.debug("Received interrupt signal.")
-            await ddb_exit()
+            logger.debug("Received keyboard signal.")
+            proper_cleanup()
 
-    asyncio.run(run_async())
-
+    try:
+        asyncio.run(run_async())
+    except Exception as e:
+        logger.error(f"Failed to run main function [run_async]: {e}")
+        
 if __name__ == "__main__":
-    # asyncio.run(main())
     main()

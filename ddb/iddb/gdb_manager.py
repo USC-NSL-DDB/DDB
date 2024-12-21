@@ -18,6 +18,7 @@ from iddb.event_loop import GlobalRunningLoop
 from iddb.port_mgr import PortManager
 from iddb.gdb_controller import SSHAttachController
 from iddb.global_handler import GlobalHandler
+from iddb import globals
 
 import asyncio
 
@@ -26,7 +27,6 @@ class GdbManager:
     def __init__(self) -> None:
         self.lock = Lock()
         self.sessions: List[GdbSession] = []
-        self.main_loop = asyncio.get_running_loop()
 
     def start(self)->None:
         # start a global running loop for asyncio context
@@ -177,22 +177,17 @@ class GdbManager:
             self.router.add_session(gdb_session)
 
             try:
-                await gdb_session.start_async()
+                # await gdb_session.start_async()
+                asyncio.create_task(gdb_session.start_async())
             except Exception as e:
                 logger.error(f"Failed to start gdb session: {e}")
 
         # start the session in the main event loop
-        if self.main_loop.is_running():
-            asyncio.run_coroutine_threadsafe(start_session(), self.main_loop)
+        if globals.MAIN_LOOP.is_running():
+            asyncio.run_coroutine_threadsafe(start_session(), globals.MAIN_LOOP)
         else:
             logger.error("Main event loop is not running.")
             return
-        # # start the session in the main event loop
-        # try:
-        #     asyncio.create_task(gdb_session.start_async())
-        # except Exception as e:
-        #     logger.error(f"Failed to start gdb session: {e}")
-        #     return
 
     def remove_session(self, sid: int):
         with self.lock:
@@ -221,12 +216,17 @@ class GdbManager:
 
     async def cleanup_async(self):
         print("Cleaning up GdbManager resource")
+        if self.service_mgr:
+            self.service_mgr.cleanup()
         await asyncio.gather(*[s.cleanup_async() for s in self.sessions])
 
     def cleanup(self):
-        loop = asyncio.get_event_loop()
-        fut = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
-        fut.result()
+        loop = globals.MAIN_LOOP
+        if asyncio.get_event_loop() != loop:
+            fut = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
+            fut.result()
+        else:
+            asyncio.create_task(self.cleanup_async())
 
     # def __del__(self):
     #     self.cleanup()

@@ -372,8 +372,6 @@ class CommandProcessor:
         if cmd.strip() == "":
             return 
 
-        print(f"Sending command: {cmd}")
-
         get_tracer().log_var("send_command", cmd)
         # vt.tracer.log_var("send_command", cmd)
         # Command parsing and preparation logic

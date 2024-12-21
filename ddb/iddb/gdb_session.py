@@ -21,6 +21,7 @@ from iddb.gdbserver_starter import RemoteServerConnection, SSHRemoteServerClient
 from iddb.utils import parse_cmd
 from iddb.logging import logger
 from iddb.config import DevFlags, GlobalConfig
+from iddb import globals
 
 class SessionCounter:
     _sc: "SessionCounter" = None
@@ -267,9 +268,12 @@ class GdbSession:
         
         # Start output fetching as a background task
         # self.mi_output_task = asyncio.run_coroutine_threadsafe(self.fetch_mi_output_async(), AsyncSSHLoop().get_loop())
+        
+        # currently this runs in the main loop
         self.mi_output_task = asyncio.create_task(self.fetch_mi_output_async())
 
     async def fetch_mi_output_async(self):
+        # currently this runs in the main loop
         while True:
             try:
                 response = await self.gdb_controller.fetch_output()
@@ -356,7 +360,7 @@ class GdbSession:
             # cmd=" ".join(cmd)
         logger.debug(f"send command to session {self.sid}:\n{cmd}")
         if (cmd_no_token.strip() in [ "run", "r", "-exec-run" ]) and self.run_delay:
-            sleep(self.run_delay)
+            asyncio.sleep(self.run_delay)
         
         # FIXME: check if this special handling is actually needed?
         # Special case for handling interruption when child process is spawned.
@@ -393,9 +397,12 @@ class GdbSession:
             await self.gdb_controller.close()
 
     def cleanup(self):
-        loop = asyncio.get_event_loop()
-        future = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
-        future.result()
+        loop = globals.MAIN_LOOP
+        if asyncio.get_event_loop() != loop:
+            future = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
+            future.result()
+        else:
+            asyncio.create_task(self.cleanup_async())
     
     # def __del__(self):
     #     self.cleanup()

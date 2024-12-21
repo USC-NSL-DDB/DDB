@@ -43,9 +43,13 @@ class ServiceManager:
         self.client.subscribe(ServiceDiscoveryConst.T_SERVICE_DISCOVERY)
         self.client.loop_start()
 
-    def __del__(self) -> None:
+    def cleanup(self):
+        self.client.disconnect()
         self.client.loop_stop()
         cleanup_mosquitto_broker()
+
+    def __del__(self) -> None:
+        self.cleanup()
 
 # -----------------------------------------------
 # Callbacks will be triggered by ServiceManager

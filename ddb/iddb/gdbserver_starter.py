@@ -95,10 +95,10 @@ class SSHRemoteServerClient(RemoteServerConnection):
 
         # Start the process
         self.process = await self.conn.create_process(command)
-        if self.process:
-            print(f"Process started: {command}")
-        else:
-            print(f"Failed to start process: {command}")
+        # if self.process:
+        #     print(f"Process started: {command}")
+        # else:
+        #     print(f"Failed to start process: {command}")
         return True
 
     async def readline(self) -> str:
