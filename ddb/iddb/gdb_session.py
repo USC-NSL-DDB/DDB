@@ -71,7 +71,7 @@ class GdbSession:
         self.sudo = config.sudo
 
         # Session metadata
-        self.suid = uuid4()
+        # self.suid = uuid4()
         self.sid = SessionCounter.get()
         self.state_mgr = StateManager.inst()
 

@@ -7,6 +7,8 @@ from iddb import utils
 from iddb.logging import logger
 from iddb.helper.tracer import VizTracerHelper as vt
 
+from viztracer import log_sparse
+
 class TransformerBase:
     def __init__(self) -> None:
         # self.responses = responses
@@ -399,6 +401,7 @@ class ErrorResponseTransformer(TransformerBase):
         return MIFormatter.format("^", "error", payload, None) 
 
 class ResponseTransformer:
+    @log_sparse
     @staticmethod
     def transform(responses: List[SessionResponse], transformer: TransformerBase):
         if isinstance(responses, SessionResponse):

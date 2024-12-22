@@ -53,9 +53,10 @@ class VizTracerHelper:
     def init():
         VizTracerHelper.tracer = VizTracer(
             output_file="/tmp/trace.json",
-            log_async=True,
+            log_async=False,
             register_global=True,
-            tracer_entries=3000000,
+            # tracer_entries=3000000,
+            log_sparse=True,
             ignore_frozen=True,
         )
         VizTracerHelper.tracer.start()

@@ -262,24 +262,20 @@ class CmdRouter:
             "-thread-select " + str(tid) + "\n" + 
                                  cmd)
     async def send_to_thread_async(self, gtid: int, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
-        self.send_to_thread(gtid, token, cmd, transformer)
+        await self.send_to_thread(gtid, token, cmd, transformer)
         future = CmdTracker.inst().get_cmdmeta(token)
         result = await future
         return result
 
-    def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
+    async def send_to_current_thread(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
         curr_thread = self.state_mgr.get_current_gthread()
         if not curr_thread:
             print("use -thread-select #gtid to select the thread.")
             return
-        self.send_to_thread(curr_thread, token, cmd, transformer)
+        await self.send_to_thread(curr_thread, token, cmd, transformer)
 
     async def send_to_current_thread_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None):
-        curr_thread = self.state_mgr.get_current_gthread()
-        if not curr_thread:
-            print("use -thread-select #gtid to select the thread.")
-            return
-        self.send_to_thread(curr_thread, token, cmd, transformer)
+        await self.send_to_current_thread(token, cmd, transformer)
         future = CmdTracker.inst().get_cmdmeta(token)
         result = await future
         return result
@@ -288,7 +284,6 @@ class CmdRouter:
         curr_session = self.state_mgr.get_current_session()
         if not curr_session:
             return
-
         await self.register_cmd(token, cmd, curr_session, transformer)
         [s.write(cmd)
         for _, s in self.sessions.items() if s.sid == curr_session]
@@ -317,24 +312,28 @@ class CmdRouter:
         self.sessions[1].write(cmd)
 
     async def send_to_session(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
-        assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
+        # assert(session_id>=0 and session_id<=len(self.state_mgr.sessions)),"invalid session id for `send_to_session`"
+        # if session_id:
+        #     self.state_mgr.set_current_session(session_id)
+        if session_id == -1:
+            raise Exception("session is None")
         if session_id:
             self.state_mgr.set_current_session(session_id)
-        # dev_print("current async session:",self.sessions[session_id])
+
         if token:
             await self.register_cmd(
                 token, cmd, self.sessions[session_id].sid, transformer)
         self.sessions[session_id].write(cmd)
 
     async def send_to_session_async(self, token: Optional[str], cmd: str, transformer: Optional[ResponseTransformer] = None, session_id: Optional[int] = -1):
-        if session_id == -1:
-            raise Exception("session is None")
-        if session_id:
-            self.state_mgr.set_current_session(session_id)
-        dev_print("current async session:",self.sessions[session_id])
-        await self.register_cmd(
-            token, cmd, self.sessions[session_id].sid, transformer)
-        self.sessions[session_id].write(cmd)
+        # if session_id == -1:
+        #     raise Exception("session is None")
+        # if session_id:
+        #     self.state_mgr.set_current_session(session_id)
+        # await self.register_cmd(
+        #     token, cmd, self.sessions[session_id].sid, transformer)
+        # self.sessions[session_id].write(cmd)
+        await self.send_to_session(token, cmd, transformer, session_id)
         future = CmdTracker.inst().get_cmdmeta(token)
         result = await future
         return result
@@ -372,6 +371,6 @@ class CmdRouter:
                 return
             session_id = int(cmd[1])
             cmd = " ".join(cmd[2:])
-            self.send_to_session(None, cmd, session_id=session_id)
+            asyncio.create_task(self.send_to_session(None, cmd, session_id=session_id))
         else:
             logger.debug("Unknown private command.")

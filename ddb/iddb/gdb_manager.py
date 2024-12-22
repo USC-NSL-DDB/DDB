@@ -18,6 +18,7 @@ from iddb.global_handler import GlobalHandler
 from iddb import globals
 
 import asyncio
+from viztracer import log_sparse
 
 
 class GdbManager:
@@ -66,6 +67,7 @@ class GdbManager:
         '''
         asyncio.run_coroutine_threadsafe(self.processor.send_command(cmd), GlobalRunningLoop().get_loop())
 
+    @log_sparse
     def __discover_new_session_async(self, session_info: ServiceInfo):
         # port = PortManager.reserve_port(session_info.ip)
         hostname = session_info.ip
@@ -98,6 +100,7 @@ class GdbManager:
             postrun_cmds=ddb_conf.postrun_cmds
         )
 
+        @log_sparse
         async def start_session():
             gdb_session = GdbSession(config)
 

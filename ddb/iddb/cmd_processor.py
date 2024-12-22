@@ -19,7 +19,7 @@ from iddb.utils import ip_int2ip_str
 from collections import deque
 
 from iddb.helper.tracer import VizTracerHelper as vt
-from viztracer import get_tracer
+from viztracer import get_tracer, log_sparse
 
 ENABLE_DEADLOCK_DETECTION = False
 
@@ -151,7 +151,8 @@ class InterruptCmdHandler(CmdHandler):
 class ListCmdHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
         self.state_mgr.set_current_session(1)
-        self.send_to_current_session(command_instance)
+        command_instance.session_id = 1
+        await super().process_command(command_instance)
 
 
 class ThreadSelectCmdHandler(CmdHandler):
@@ -189,6 +190,7 @@ class RemoteBacktraceHandler(CmdHandler):
             out_data["local_tid"] = int(local_meta.get('tid')) if caller_meta.get('tid') else None
         return out_data
 
+    @log_sparse
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
             return
@@ -373,6 +375,7 @@ class CommandProcessor:
         for pattern in patterns:
             self.command_handlers[pattern] = handler
 
+    @log_sparse
     async def send_command(self, cmd: str):
         while not self.is_ready():
             await asyncio.sleep(0.5)

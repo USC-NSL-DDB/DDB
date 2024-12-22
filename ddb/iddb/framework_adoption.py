@@ -21,7 +21,8 @@ class GRPCAdapter(FrameWorkAdapter):
         pass
 
     def get_bt_command_name(self):
-        return "-grpc-bt-remote"
+        # return "-grpc-bt-remote"
+        return "-get-remote-bt"
 
     def extract_id_from_metaddata(self, metadata):
         pid, ip_int = int(metadata.get('pid',0)), int(metadata.get('ip',0))
