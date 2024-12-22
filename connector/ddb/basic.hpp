@@ -69,7 +69,4 @@ static inline uint32_t get_ipv4_from_local() {
     freeifaddrs(ifaddr);
     return 0;
 }
-
-// static inline 
-
 }

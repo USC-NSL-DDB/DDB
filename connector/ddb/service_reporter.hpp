@@ -85,12 +85,6 @@ static inline int report_service(
     ss << service_info->ip << ":" << service_info->tag << ":" << service_info->pid;
     std::string payload = ss.str();
 
-    // char payload[256];
-
-    // // Format the ServiceInfo struct fields into the buffer
-    // snprintf(payload, sizeof(payload), "%u:%s:%d",
-    //          service_info->ip, service_info->tag.c_str(), service_info->pid);
-
     pubmsg.payload = (void*) payload.c_str();
     // pubmsg.payloadlen = (int) strlen(payload);
     pubmsg.payloadlen = (int) payload.size();

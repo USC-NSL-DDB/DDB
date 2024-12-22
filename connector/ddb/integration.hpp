@@ -5,8 +5,6 @@
 #include <csignal>
 #include <unistd.h> 
 
-// #define DEFINE_DDB_META
-// #include <ddb/common.hpp>
 #include "ddb/basic.hpp"
 #include "ddb/service_reporter.hpp"
 
@@ -123,7 +121,6 @@ namespace DDB
      private:
         Config config;
         DDBServiceReporter reporter;
-        // bool discovery;
 
         static inline void wait_for_debugger() {
             // Wait for the debugger to attach.

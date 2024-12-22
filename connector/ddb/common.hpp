@@ -14,10 +14,7 @@ struct DDBMetadata{
   bool initialized = false;
 };
 
-// extern DDBMetadata ddb_meta;
-// #ifdef DEFINE_DDB_META
 inline DDBMetadata ddb_meta = {};
-// #endif
 
 static inline DDBMetadata* get_global_ddb_meta() {
   return &ddb_meta;

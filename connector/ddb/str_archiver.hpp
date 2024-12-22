@@ -49,7 +49,3 @@ namespace DDB {
         return trace;
     }
 }
-
-// namespace DDB
-// {
-// } // namespace DDB
