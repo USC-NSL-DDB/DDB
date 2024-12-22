@@ -411,7 +411,7 @@ class ResponseTransformer:
         if transformed_output is not None and len(transformed_output) > 0:
             print(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
             logger.debug(f"\n[ TOOL MI OUTPUT ] \n{transformed_output}\n")
-            get_tracer().log_var("transformed_output", transformed_output)
+            # get_tracer().log_var("transformed_output", transformed_output)
             # vt.tracer.log_var("transformed_output", transformed_output)
             # vt.tracer.log_print(f"transformed_output: {transformed_output}") 
 

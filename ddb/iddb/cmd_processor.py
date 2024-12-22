@@ -19,6 +19,7 @@ from iddb.utils import ip_int2ip_str
 from collections import deque
 
 from iddb.helper.tracer import VizTracerHelper as vt
+from iddb.logging import trace_logger
 from viztracer import get_tracer, log_sparse
 
 ENABLE_DEADLOCK_DETECTION = False
@@ -194,8 +195,7 @@ class RemoteBacktraceHandler(CmdHandler):
     async def process_command(self, command_instance: SingleCommand):
         if not command_instance.thread_id:
             return
-        # logger.debug(f"Received command in remote backtrace handler: {command_instance}")
-        # Framework Adaption
+        trace_logger.debug(f"[process_command_start] dbt (token={command_instance.token}, time={time.perf_counter()})")
         bt_command_name=self.adapter.get_bt_command_name()
         
         
@@ -330,6 +330,7 @@ class RemoteBacktraceHandler(CmdHandler):
             if command_instance.command in GlobalTracer().command_history:
                 GlobalTracer().command_history[command_instance.command]["finish"] = time.time_ns()
             print("\n" + f"[ TOOL MI OUTPUT ] \n{(PlainTransformer().format(a_bt_result))}\n")
+            trace_logger.debug(f"[process_command_end] dbt (token={command_instance.token}, time={time.perf_counter()})")
 
 
 class ListGroupsCmdHandler(CmdHandlerBase):
@@ -383,7 +384,7 @@ class CommandProcessor:
         # if cmd.strip() == "":
         #     return 
 
-        get_tracer().log_var("send_command", cmd)
+        # get_tracer().log_var("send_command", cmd)
         # vt.tracer.log_var("send_command", cmd)
         # Command parsing and preparation logic
         cmd = cmd.rstrip('\n')

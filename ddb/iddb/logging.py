@@ -43,6 +43,28 @@ logger.addHandler(file_handler)
 # Add the custom filter to the logger
 logger.addFilter(CustomFilter())
 
+def setup_tracing_logger(trace_file="/tmp/ddb/trace.log", level=logging.DEBUG):
+    """
+    Set up a dedicated logger for tracing logs.
+    """
+    # Create a logger
+    trace_logger = logging.getLogger("tracing")
+    trace_logger.setLevel(level)
+
+    # Create a file handler for writing logs to a file
+    file_handler = logging.FileHandler(trace_file)
+    file_handler.setLevel(level)
+
+    # Create a formatter
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    # Add the handler to the logger
+    trace_logger.addHandler(file_handler)
+    return trace_logger
+
+trace_logger = setup_tracing_logger()
+
 # Suppress logs from other modules by setting a higher log level for the root logger
 # logging.getLogger().setLevel(logging.WARNING)
 

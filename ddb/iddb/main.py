@@ -84,7 +84,7 @@ async def ddb_exit():
             print("[ TOOL MI OUTPUT ]")
             print(MIFormatter.format("*", "stopped", {"reason": "exited"}, None))
 
-            VizTracerHelper.deinit()
+            # VizTracerHelper.deinit()
 
             globals.TERMINATED = True
             if globals.DBG_MANAGER:
@@ -159,7 +159,7 @@ def eager_init():
     _ = ResponseProcessor.inst()
 
 def main():
-    VizTracerHelper.init()
+    # VizTracerHelper.init()
     eager_init()
 
     async def run_async():

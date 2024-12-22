@@ -152,7 +152,7 @@ class GdbManager:
         print("Cleaning up GdbManager resource")
         if self.service_mgr:
             self.service_mgr.cleanup()
-        await asyncio.gather(*[s.cleanup_async() for s in self.sessions])
+        await asyncio.gather(*[s.cleanup_async() for s in self.sessions], return_exceptions=True)
 
     def cleanup(self):
         loop = globals.MAIN_LOOP
