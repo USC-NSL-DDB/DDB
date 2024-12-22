@@ -353,13 +353,20 @@ class CommandProcessor:
             "-exec-next": CmdHandlerBase(self.router),
         }
         self.base_handler = CmdHandlerBase(self.router)
+        self.ready_to_send = False
 
     def is_ready(self):
+        # fast path
+        if self.ready_to_send: return True
+
+        # slow path
+        ready = True
         for _, s in self.router.sessions.items():
             if not s.gdb_controller.is_open():
                 logger.debug(f"not ready yet: {s.sid}, pid: {s.attach_pid}")
-                return False
-        return True
+                ready = False
+        self.ready_to_send = ready
+        return self.ready_to_send 
 
     def register_handler(self, patterns: list[str], handler_class: type[CmdHandler]):
         handler = handler_class(self.router)
@@ -369,8 +376,9 @@ class CommandProcessor:
     async def send_command(self, cmd: str):
         while not self.is_ready():
             await asyncio.sleep(0.5)
-        if cmd.strip() == "":
-            return 
+
+        # if cmd.strip() == "":
+        #     return 
 
         get_tracer().log_var("send_command", cmd)
         # vt.tracer.log_var("send_command", cmd)
