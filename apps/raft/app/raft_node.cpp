@@ -99,9 +99,21 @@ ABSL_FLAG(bool, enable_ctrl, false, "Enable a test controller");
 ABSL_FLAG(std::string, ctrl_addr, "localhost:55000", "Address for the test controller");
 ABSL_FLAG(uint64_t, node_tester_port, 55001, "Port for the node tester that will listen to.");
 
+// enable non-interactive mode
+ABSL_FLAG(bool, ni, false, "Enable non-interactive mode");
+
 // for ddb support
 ABSL_FLAG(bool, enable_ddb, false, "Enable DDB.");
 ABSL_FLAG(std::string, ddb_addr, "", "IP Address reported to DDB service.");
+
+void run_in_ni_mode(rafty::Raft &raft) {
+  raft.connect_peers();
+  raft.run();
+  std::cout << "Running in non-interactive mode. Press Ctrl+C to exit." << std::endl;
+  std::promise<void> exit_signal;
+  std::future<void> future = exit_signal.get_future();
+  future.wait();
+}
 
 void command_loop(rafty::Raft &raft) {
   std::string command;
@@ -247,12 +259,19 @@ int main(int argc, char **argv) {
 
   raft.start_server();
 
-  if (enable_tester) {
-    // control via grpc tester controller
-    raft.start_svr_loop();
+  if (absl::GetFlag(FLAGS_ni)) {
+    // run in non-ineractive mode
+    // it will run the application directly
+    // until the process is killed
+    run_in_ni_mode(raft);
   } else {
-    // cli command loop
-    command_loop(raft);
+    if (enable_tester) {
+      // control via grpc tester controller
+      raft.start_svr_loop();
+    } else {
+      // cli command loop
+      command_loop(raft);
+    }
   }
 
   std::cout << "wait 2 seconds for cleanup." << std::endl;
