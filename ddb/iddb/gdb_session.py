@@ -45,6 +45,51 @@ class SessionCounter:
     def get() -> int:
         return SessionCounter.inst().inc()
 
+class SessionCreationTaskQueue:
+    ''' Singleton class for managing session creation tasks
+    Debugger session creation is a relative heavy task, so we need to manage it in a queue.
+    Each creation may takes a few hundred milliseconds, we should avoid overload the asyncio loop.
+    '''
+    _instance = None
+    _lock = Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(SessionCreationTaskQueue, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self, max_workers=5):
+        if not self._initialized:
+            self.queue = asyncio.Queue()
+            self.max_workers = max_workers
+            self._initialized = True
+
+    @staticmethod
+    def inst():
+        return SessionCreationTaskQueue()
+
+    async def worker(self):
+        while True:
+            args, callback = await self.queue.get()
+            try:
+                if args:
+                    await callback(args)
+                else:
+                    await callback()
+            except Exception as e:
+                logger.error(f"Error in worker: {e}")
+            finally:
+                self.queue.task_done()
+
+    async def add_task(self, config, callback):
+        asyncio.run_coroutine_threadsafe(self.queue.put((config, callback)), AsyncSSHLoop().get_loop())
+
+    def start_workers(self):
+        for _ in range(self.max_workers):
+            asyncio.run_coroutine_threadsafe(self.worker(), AsyncSSHLoop().get_loop())
+
 class GdbSession:
     def __init__(self, config: GdbSessionConfig, mi_version: str = None) -> None:
         # Basic information
@@ -252,7 +297,7 @@ class GdbSession:
         )
         self.mi_output_t_handle.start()
 
-    async def start_async(self) -> None:
+    async def __start_async(self):
         if self.mode == GdbMode.LOCAL:
             await self.local_start_async()
         elif self.mode == GdbMode.REMOTE:
@@ -271,6 +316,9 @@ class GdbSession:
         
         # currently this runs in the main loop
         self.mi_output_task = asyncio.create_task(self.fetch_mi_output_async())
+        
+    async def start_async(self) -> None:
+        await SessionCreationTaskQueue.inst().add_task(None, self.__start_async)
 
     async def fetch_mi_output_async(self):
         # currently this runs in the main loop
@@ -380,24 +428,27 @@ class GdbSession:
         # self._stop_event.set()
         # sleep(1) # wait to let fetch thread to stop should be larger than timeout
         # await asyncio.sleep(1)
-        self.mi_output_task.cancel()
-        logger.debug(
-            f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
-        )
-        if self.gdb_controller.is_open():
-            on_exit = GlobalConfig.get().conf.on_exit
-            if on_exit == OnExitBehavior.KILL:
-                self.gdb_controller.write_input("kill")
-            elif on_exit == OnExitBehavior.DETACH:
-                self.gdb_controller.write_input("detach")
-            else:
-                logger.error("Undefined on_exit behavior, maybe parse error or logic error. Please report. Using detach as fallback.")
-                self.gdb_controller.write_input("detach")
-            self.gdb_controller.write_input("exit")
-            await self.gdb_controller.close()
+        try:
+            self.mi_output_task.cancel()
+            logger.debug(
+                f"Exiting gdb/mi controller - \n\ttag: {self.tag}, \n\tbin: {self.bin}"
+            )
+            if self.gdb_controller and self.gdb_controller.is_open():
+                on_exit = GlobalConfig.get().conf.on_exit
+                if on_exit == OnExitBehavior.KILL:
+                    self.gdb_controller.write_input("kill")
+                elif on_exit == OnExitBehavior.DETACH:
+                    self.gdb_controller.write_input("detach")
+                else:
+                    logger.error("Undefined on_exit behavior, maybe parse error or logic error. Please report. Using detach as fallback.")
+                    self.gdb_controller.write_input("detach")
+                self.gdb_controller.write_input("exit")
+                await self.gdb_controller.close()
+        except Exception as e:
+            logger.error(f"Error in cleanup: {e}")
 
     def cleanup(self):
-        loop = globals.MAIN_LOOP
+        loop = AsyncSSHLoop().get_loop()
         if asyncio.get_event_loop() != loop:
             future = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
             future.result()

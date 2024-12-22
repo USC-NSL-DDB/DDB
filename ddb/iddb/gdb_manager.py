@@ -8,11 +8,11 @@ from iddb.status_server import FlaskApp
 from iddb.utils import *
 from iddb.cmd_router import CmdRouter
 from iddb.service_mgr import ServiceManager
-from iddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode
+from iddb.gdb_session import GdbMode, GdbSession, GdbSessionConfig, StartMode, SessionCreationTaskQueue
 from iddb.logging import logger
 from iddb.data_struct import GdbCommand, ServiceInfo
 from iddb.config import GlobalConfig
-from iddb.event_loop import GlobalRunningLoop
+from iddb.event_loop import AsyncSSHLoop, GlobalRunningLoop
 from iddb.gdb_controller import SSHAttachController
 from iddb.global_handler import GlobalHandler
 from iddb import globals
@@ -148,14 +148,18 @@ class GdbManager:
     #             logger.info("No more sessions. Cleaning up.")
     #             GlobalHandler.exit_ddb()
 
-    async def cleanup_async(self):
+    async def __cleanup_async(self):
         print("Cleaning up GdbManager resource")
         if self.service_mgr:
             self.service_mgr.cleanup()
         await asyncio.gather(*[s.cleanup_async() for s in self.sessions], return_exceptions=True)
+        
+    async def cleanup_async(self):
+        fut = asyncio.run_coroutine_threadsafe(self.__cleanup_async(), AsyncSSHLoop().get_loop())
+        await asyncio.wrap_future(fut)
 
     def cleanup(self):
-        loop = globals.MAIN_LOOP
+        loop = AsyncSSHLoop().get_loop()
         if asyncio.get_event_loop() != loop:
             fut = asyncio.run_coroutine_threadsafe(self.cleanup_async(), loop)
             fut.result()

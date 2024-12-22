@@ -178,17 +178,6 @@ class SSHAttachController(RemoteGdbController):
         self.cred = cred
         self.open = False
 
-    # def start(self, command: str):
-    #     if self.verbose:
-    #         logger.debug(f"Starting {str(self)}")
-    #     try:
-    #         self.client.start(command)
-    #     except Exception as e:
-    #         raise e # TODO: wrap exceptino to an internal data structure
-    #     self.open = True
-    #     # TODO: should we wait a bit to more gracefully handle potential startup error?
-    #     # FIXME: figure out a way to pass back stderr
-
     async def start(self, command: str):
         if self.verbose:
             logger.debug(f"Starting {str(self)}")

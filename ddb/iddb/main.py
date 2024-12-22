@@ -7,6 +7,7 @@ import asyncio
 from typing import List, Optional, Union
 
 from iddb.event_loop import AsyncSSHLoop, GlobalRunningLoop
+from iddb.gdb_session import SessionCreationTaskQueue
 from iddb.global_handler import GlobalHandler
 from iddb.mi_formatter import MIFormatter
 from iddb.response_processor import ResponseProcessor
@@ -89,11 +90,14 @@ async def ddb_exit():
             globals.TERMINATED = True
             if globals.DBG_MANAGER:
                 await globals.DBG_MANAGER.cleanup_async()
+            
+            GlobalRunningLoop().stop()
+            AsyncSSHLoop().stop()
 
             try:
-                sys.exit(130)
+                sys.exit(0)
             except SystemExit:
-                os._exit(130)
+                os._exit(0)
 
 async def bootFromNuConfig(gdb_manager: GdbManager):
     await gdb_manager.start_async()
@@ -107,9 +111,6 @@ def proper_cleanup(signal_name: Optional[str] = None):
     if globals.TERMINATED: return
     if signal_name:
         logger.info(f"Caught signal [{signal_name}]...")
-
-    GlobalRunningLoop().stop()
-    AsyncSSHLoop().stop()
 
     # Ensure the clean up logic is happening in the main loop.
     if globals.MAIN_LOOP.is_running():
@@ -158,6 +159,9 @@ def eager_init():
     AsyncSSHLoop()
     _ = ResponseProcessor.inst()
 
+    tq = SessionCreationTaskQueue.inst()
+    tq.start_workers()
+
 def main():
     # VizTracerHelper.init()
     eager_init()
@@ -197,7 +201,7 @@ def main():
             proper_cleanup()
 
     try:
-        asyncio.run(run_async())
+        asyncio.run(run_async(), debug=False)
     except Exception as e:
         logger.error(f"Failed to run main function [run_async]: {e}")
         
