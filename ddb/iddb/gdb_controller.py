@@ -192,19 +192,10 @@ class SSHAttachController(RemoteGdbController):
     async def start(self, command: str):
         if self.verbose:
             logger.debug(f"Starting {str(self)}")
-        try:
-            await self.client.start(command) 
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"SSH connection failed: {str(e)}")
-            raise e
+        await self.client.start(command) 
         self.open = True
         logger.debug(f"SSH connection established: {str(self)}")
     
-    # def write_input(self, command: str):
-    #     if self.verbose:
-    #         logger.debug(f"Sending input to {str(self)}: {command}")
-    #     self.client.write(command)
-
     def write_input(self, command: str):
         if self.verbose:
             logger.debug(f"Sending input to {str(self)}: {command}")

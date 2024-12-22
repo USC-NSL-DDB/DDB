@@ -1,3 +1,4 @@
+import asyncio
 import threading
 from typing import List, Optional
 import asyncssh
@@ -31,75 +32,59 @@ class SSHRemoteServerCred:
     hostname: str
     username: str
 
-
-# class SSHRemoteServerClient(RemoteServerConnection):
-#     def __init__(self, cred: SSHRemoteServerCred, private_key_path=None):
-#         self.cred = cred
-
-#         if private_key_path is None:
-#             self.private_key_path = '~/.ssh/id_rsa'
-#         else:
-#             self.private_key_path = private_key_path
-
-#         self.client = paramiko.SSHClient()
-#         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#         self.client.load_system_host_keys()
-
-#     ''' New API for non-gdbserver impl
-#     '''
-#     def start(self, command: str) -> bool:
-#         # connect ssh first
-#         self.client.connect(self.cred.hostname, username=self.cred.username)
-
-#         # TODO: need to setup remote environment first...
-#         # such as cp'ing extension scripts
-#         stdin, stdout, stderr = self.client.exec_command(command)
-#         self.stdin = stdin
-#         self.stdout = stdout
-#         self.stderr = stderr
-
-#     def readline(self) -> str:
-#         ''' raise socket.error if connection is closed
-#         '''
-#         return self.stdout.readline()
-
-#     def write(self, command: str):
-#         self.stdin.write(command.strip() + "\n")
-#         self.stdin.flush()
-        
-#     def close(self):
-#         if self.client:
-#             self.client.close()
-#         if self.stdin:
-#             self.stdin.close()
-#         if self.stdout:
-#             self.stdout.close()
-#         if self.stderr:
-#             self.stderr.close()
-
 class SSHRemoteServerClient(RemoteServerConnection):
-    def __init__(self, cred: SSHRemoteServerCred, private_key_path=None):
+    def __init__(self, cred: SSHRemoteServerCred, private_key_path=None, max_retries=5, base_delay=0.5, backoff_factor=2):
         self.cred = cred
         self.private_key_path = private_key_path or '~/.ssh/id_rsa'
         self.conn = None
         self.process = None
+        # Automatic retry logic for SSH connection
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.backoff_factor = backoff_factor
+
+    async def connect(self) -> bool:
+        connected = False
+        attempt = 0
+        while attempt < self.max_retries:
+            try:
+                self.conn = await asyncssh.connect(
+                    self.cred.hostname, 
+                    username=self.cred.username,
+                    client_keys=[self.private_key_path],
+                    connect_timeout=10
+                )
+                connected = True
+                break
+            except (asyncssh.Error, OSError) as e:
+                attempt += 1
+                # exponential backoff
+                delay = self.base_delay * (self.backoff_factor ** attempt)
+                logger.info(f"Failed to connect to {self.cred.hostname}, retrying in {delay} seconds")
+                await asyncio.sleep(delay)
+        if not connected:
+            logger.error(f"Failed to connect to {self.cred.hostname} after {self.max_retries} attempts")
+            raise RuntimeError(f"Failed to connect to {self.cred.hostname} after {self.max_retries} attempts")
+        return connected
 
     async def start(self, command: str) -> bool:
-        # connect ssh first
-        self.conn = await asyncssh.connect(
-            self.cred.hostname, 
-            username=self.cred.username,
-            client_keys=[self.private_key_path],
-            connect_timeout=10
-        )
+        ''' Start the debugger process on the remote server.
+        Returns True if the connection is successful, False otherwise.
+        If the connection is unsuccessful, the process will not be started.
+        The caller should carefully cleanup the state by invoking close() method.
 
-        # Start the process
-        self.process = await self.conn.create_process(command)
-        # if self.process:
-        #     print(f"Process started: {command}")
-        # else:
-        #     print(f"Failed to start process: {command}")
-        return True
+        TODO: 
+        ATM, no-retry will be attempted if the connection is lost after the first connection.
+        When the SSH connection is lost and re-established, we lost the states of the previous connection.
+        Thus, the previous debugger session is lost and we need more careful thought regarding how to handle this case.
+        '''
+        # connect ssh first
+        connected = await self.connect()
+
+        if connected:
+            # Start the debugger process
+            self.process = await self.conn.create_process(command)
+        return connected
 
     async def readline(self) -> str:
         '''raise socket.error if connection is closed'''
