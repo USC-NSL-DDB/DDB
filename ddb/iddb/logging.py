@@ -1,6 +1,6 @@
 import logging
 import os
-from iddb.about import DEBUG
+from iddb.about import DEBUG, ENABLE_TRACER_LOGGING
 
 class CustomFilter(logging.Filter):
     def filter(self, record):
@@ -63,7 +63,7 @@ def setup_tracing_logger(trace_file="/tmp/ddb/trace.log", level=logging.DEBUG):
     trace_logger.addHandler(file_handler)
     return trace_logger
 
-trace_logger = setup_tracing_logger()
+trace_logger = setup_tracing_logger(level=logging.CRITICAL if not ENABLE_TRACER_LOGGING else logging.DEBUG)
 
 # Suppress logs from other modules by setting a higher log level for the root logger
 # logging.getLogger().setLevel(logging.WARNING)
