@@ -45,8 +45,8 @@ def start_mosquitto_broker(broker: BrokerInfo):
     except Exception as e:
         logger.error(f"Failed to start Mosquitto broker: {e}")
 
-    logger.debug("Waiting 5s for broker to start...")
-    time.sleep(5) # wait for the broker to start
+    # logger.debug("Waiting 5s for broker to start...")
+    # time.sleep(5) # wait for the broker to start
 
 def cleanup_mosquitto_broker():
     try:

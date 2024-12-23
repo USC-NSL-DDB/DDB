@@ -212,13 +212,13 @@ class GdbSession:
         self.session_ctrl = GdbController(full_args)
 
         for prerun_cmd in self.prerun_cmds:
-            await self.write(f'-interpreter-exec console "{prerun_cmd.command}"')
+            self.write(f'-interpreter-exec console "{prerun_cmd.command}"')
 
-        await self.write("-gdb-set mi-async on")
-        await self.write("-gdb-set non-stop off")
+        self.write("-gdb-set mi-async on")
+        self.write("-gdb-set non-stop off")
 
         for postrun_cmd in self.postrun_cmds:
-            await self.write(postrun_cmd.command)
+            self.write(postrun_cmd.command)
 
     async def remote_attach_async(self):
         logger.debug("start remote attach")
@@ -231,28 +231,29 @@ class GdbSession:
         logger.debug(f"start gdb with: {gdb_cmd}")
         await self.gdb_controller.start(gdb_cmd)
 
-        self.gdb_controller.write_input("-gdb-set logging enabled on")
-        self.gdb_controller.write_input("-gdb-set mi-async on")
-
+        commands_to_send = [
+            "-gdb-set logging enabled on",
+            "-gdb-set mi-async on",
+        ]
         extension_filepath = pkg_resources.resource_filename('iddb', 'gdb_ext/runtime-gdb-grpc.py')
-
-        self.gdb_controller.write_input(f'-interpreter-exec console "source {extension_filepath}"')
+        commands_to_send.append(f'-interpreter-exec console "source {extension_filepath}"')
 
         for prerun_cmd in self.prerun_cmds:
-            self.gdb_controller.write_input(f'-interpreter-exec console "{prerun_cmd.command}"')
+            commands_to_send.append(f'-interpreter-exec console "{prerun_cmd.command}"')
 
         for init_cmd in self.initialize_commands:
-            self.write(init_cmd)
-        self.write(f"-target-attach {self.attach_pid}")
+            commands_to_send.append(init_cmd)
+        commands_to_send.append(f"-target-attach {self.attach_pid}")
 
         if GlobalConfig.get().broker:
-            self.gdb_controller.write_input(
+            commands_to_send.append(
                 f'-interpreter-exec console "signal SIG40"'
             )
 
         for postrun_cmd in self.postrun_cmds:
-            self.gdb_controller.write_input(postrun_cmd.command)
-        # self.write(f"-file-exec-and-symbols /proc/{self.attach_pid}/root{self.bin}")
+            # self.gdb_controller.write_input(postrun_cmd.command)
+            commands_to_send.append(postrun_cmd.command)
+        self.gdb_controller.write_input("\n".join(commands_to_send))
 
     async def remote_start_async(self):
         await self.gdb_controller.start()
@@ -261,16 +262,16 @@ class GdbSession:
         logger.debug(f"start gdb with: {' '.join(gdb_cmd)}")
         self.session_ctrl = GdbController(gdb_cmd)
 
-        await self.write("-gdb-set mi-async on")
+        self.write("-gdb-set mi-async on")
         
         for prerun_cmd in self.prerun_cmds:
-            await self.write(prerun_cmd.command)
+            self.write(prerun_cmd.command)
 
-        await self.write(f"-file-exec-and-symbols {self.bin}")
-        await self.write(f"-exec-arguments {' '.join(self.args)}")
+        self.write(f"-file-exec-and-symbols {self.bin}")
+        self.write(f"-exec-arguments {' '.join(self.args)}")
 
         for postrun_cmd in self.postrun_cmds:
-            await self.gdb_controller.write_input(postrun_cmd.command)
+            self.gdb_controller.write_input(postrun_cmd.command)
 
     def start(self) -> None:
         ''' start a gdbsessoin

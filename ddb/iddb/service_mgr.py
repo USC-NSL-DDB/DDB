@@ -22,9 +22,12 @@ class ServiceManager:
     def __init__(self) -> None:
         broker_info = GlobalConfig.get().broker
         start_mosquitto_broker(broker_info)
+
         self.userdata = {
-            ON_NEW_SERVICE_CALLBACK_HANDLE: self.__default_on_new_service
+            ON_NEW_SERVICE_CALLBACK_HANDLE: self.__default_on_new_service,
         }
+
+        self.check_online(broker_info)
 
         self.client = paho.Client(
             callback_api_version=CallbackAPIVersion.VERSION2, 
@@ -42,6 +45,20 @@ class ServiceManager:
         self.client.connect(broker_info.hostname, broker_info.port)
         self.client.subscribe(ServiceDiscoveryConst.T_SERVICE_DISCOVERY)
         self.client.loop_start()
+
+    def check_online(self, broker_info: ServiceInfo):
+        attempt = 0
+        while attempt < 10:
+            try:
+                temp_client = paho.Client(transport=ServiceDiscoveryConst.BROKER_MSG_TRANSPORT)
+                temp_client.connect(broker_info.hostname, broker_info.port)
+                temp_client.disconnect()
+                break
+            except ConnectionRefusedError:
+                time.sleep(0.5)
+                attempt += 1
+        if attempt == 10:
+            raise RuntimeError(f"Failed to connect to MQTT Broker at {broker_info.hostname}:{broker_info.port}")
 
     def cleanup(self):
         self.client.disconnect()
@@ -89,6 +106,7 @@ class ServiceManager:
             logger.debug("Connected to MQTT Broker!")
         else:
             logger.debug("Failed to connect, return code %d\n", rc)
+            raise RuntimeError(f"Failed to connect to MQTT Broker, return code {rc}")
 
     def __on_disconnect(client: paho.Client, userdata, flags, rc, properties):
         ''' auto-reconnection logic here
