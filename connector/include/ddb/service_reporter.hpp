@@ -18,8 +18,12 @@
 namespace DDB {
 constexpr static char CLIENTID[] = "s_";
 constexpr static char INI_FILEPATH[] = "/tmp/ddb/service_discovery/config";
-constexpr static uint8_t QOS = 1;
+constexpr static uint8_t QOS = 2;
 constexpr static uint32_t TIMEOUT = 10000L;
+
+static inline std::string default_ini_filepath() {
+    return std::string(INI_FILEPATH);
+}
 
 struct ServiceInfo {
     uint32_t ip;        // ip address
@@ -35,8 +39,8 @@ struct DDBServiceReporter {
     std::string topic;       // topic for pub
 };
 
-static inline int read_config_data(DDBServiceReporter* reporter) {
-    std::ifstream file(INI_FILEPATH);
+static inline int read_config_data(DDBServiceReporter* reporter, const std::string& ini_filepath) {
+    std::ifstream file(ini_filepath);
     if (!file.is_open()) {
         std::cerr << "Failed to open service discovery config file" << std::endl;
         return -1;
@@ -50,8 +54,8 @@ static inline int read_config_data(DDBServiceReporter* reporter) {
     return 0;
 }
 
-static inline int service_reporter_init(DDBServiceReporter* reporter) {
-    int rc = read_config_data(reporter);
+static inline int service_reporter_init(DDBServiceReporter* reporter, const std::string& ini_filepath = INI_FILEPATH) {
+    int rc = read_config_data(reporter, ini_filepath);
     if (rc != 0) return rc;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
@@ -123,6 +127,8 @@ static inline int report_service(
     ss << service_info->ip << ":" << service_info->tag << ":" << service_info->pid << ":" << service_info->hash << "=" << service_info->alias;
     std::string payload = ss.str();
 
+    std::cout << "send payload: " << payload << std::endl;
+
     pubmsg.payload = (void*) payload.c_str();
     // pubmsg.payloadlen = (int) strlen(payload);
     pubmsg.payloadlen = (int) payload.size();
@@ -132,7 +138,6 @@ static inline int report_service(
     MQTTClient_deliveryToken token;
     MQTTClient_publishMessage(reporter->client, reporter->topic.c_str(), &pubmsg, &token);
     rc = MQTTClient_waitForCompletion(reporter->client, token, TIMEOUT);
-    printf("Message with delivery token %d delivered\n", token);
     return rc;
 }
 } // namespace DDB

@@ -1,0 +1,13 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-I/usr/local/include",
+      "-Iinclude",
+      "-c",
+      "test_reporter.cpp"
+    ],
+    "directory": "/home/ybyan/proj/distributed-debugger/connector/tests/service_discovery",
+    "file": "/home/ybyan/proj/distributed-debugger/connector/tests/service_discovery/test_reporter.cpp"
+  }
+]
