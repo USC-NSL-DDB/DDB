@@ -7,7 +7,6 @@
 
 #include "ddb/basic.hpp"
 #include "ddb/service_reporter.hpp"
-#include "service_reporter.hpp"
 
 #include <pthread.h>
 #include <stdio.h>
