@@ -30,4 +30,4 @@ stop_broker:
 	@sudo pkill -9 mosquitto
 
 clean:
-	rm -f *.o mqtt_publisher test_reporter
+	rm -f *.o test_binaries/mqtt_publisher test_reporter
