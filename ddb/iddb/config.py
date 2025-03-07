@@ -1,7 +1,8 @@
 import os
 import re
 from iddb.framework_adoption import GRPCAdapter, ServiceWeaverAdapter
-from iddb.gdb_controller import ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
+from iddb.gdb_controller import SSHBridgeAttachController, ServiceWeaverkubeGdbController, VanillaPIDController, SSHAttachController
+from iddb.gdbserver_starter import SSHRemoteServerCred
 from yaml import YAMLError, safe_load
 from typing import List, Optional
 from pprint import pformat
@@ -131,7 +132,7 @@ class GlobalConfig:
         from kubernetes import config as kubeconfig, client as kubeclient
         from iddb.gdbserver_starter import KubeRemoteSeverClient
         try:
-            kubeconfig.load_kube_config("~/.kube/config")
+            kubeconfig.load_kube_config("/home/junzhouh/distributed_debugger/SocialNetwork-serviceweaver/kubeconfig")
         except Exception as e:
             print("fail to fetch cluster information")
             exit(0)
@@ -172,7 +173,22 @@ class GlobalConfig:
                 sessionConfig.remote_host=i.status.pod_ip
                 sessionConfig.gdb_mode=GdbMode.REMOTE
                 sessionConfig.remote_gdbserver=remoteServerConn
-                sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,"serviceweaver",True)
+                # sessionConfig.gdb_controller=ServiceWeaverkubeGdbController(i.metadata.name, i.metadata.namespace,"serviceweaver",True)
+                sessionConfig.gdb_controller=SSHBridgeAttachController(
+                    pid=-1,
+                    target_cred=SSHRemoteServerCred(
+                        port=22,
+                        hostname=i.status.pod_ip,
+                        username="root",
+                        password="admin123",
+                    ),
+                    jump_cred=SSHRemoteServerCred(
+                        port=30024,
+                        hostname="localhost",
+                        username="root",
+                        password="password123",
+                    )
+                )
                 sessionConfig.tag=i.status.pod_ip
                 sessionConfig.start_mode=StartMode.ATTACH
                 sessionConfig.attach_pid=int(pid)

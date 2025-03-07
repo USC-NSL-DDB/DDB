@@ -7,7 +7,7 @@ from kubernetes import config as kubeconfig, client as kubeclient
 from kubernetes.stream import stream
 from kubernetes.client.rest import ApiException
 import uuid
-from iddb.gdbserver_starter import SSHRemoteServerClient, SSHRemoteServerCred
+from iddb.gdbserver_starter import SSHBridgeRemoteServerClient, SSHRemoteServerClient, SSHRemoteServerCred
 from iddb.logging import logger
 import asyncio, asyncssh, sys
 
@@ -205,3 +205,64 @@ class SSHAttachController(RemoteGdbController):
 
     def __str__(self):
         return f"GDBController-SSH-(pid={self.pid}, cred={self.cred})"
+
+class SSHBridgeAttachController(RemoteGdbController):
+    def __init__(
+        self,
+        pid: int,
+        jump_cred: SSHRemoteServerCred,
+        target_cred: SSHRemoteServerCred,
+        verbose: bool = False
+    ):
+        self.pid = pid
+        self.verbose = verbose
+        self.jump_cred = jump_cred
+        self.target_cred = target_cred
+        self.open = False
+
+        # Use the bridging client that we introduced earlier
+        self.client = SSHBridgeRemoteServerClient(
+            jump_cred=jump_cred,
+            target_cred=target_cred
+        )
+    async def start(self, command: str):
+        if self.verbose:
+            logger.debug(f"Starting {str(self)}")
+
+        # 1. Establish the bridged SSH connection and run the command (e.g., gdbserver)
+        await self.client.start(command)
+
+        # 2. Mark as open if no exceptions were raised
+        self.open = True
+        logger.debug(f"Bridged SSH connection established: {str(self)}")
+
+    def write_input(self, command: str):
+        if self.verbose:
+            logger.debug(f"Sending input to {str(self)}: {command}")
+        self.client.write(command)
+
+    async def fetch_output(self, timeout=1) -> bytes:
+        try:
+            line = await asyncio.wait_for(self.client.readline(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # You might choose to log or handle a read timeout differently
+            line = ""
+        if self.verbose:
+            logger.debug(f"Fetching output from {str(self)}: {line}")
+        return line.encode()
+
+    def is_open(self) -> bool:
+        return self.open
+
+    async def close(self):
+        await self.client.close()
+        self.open = False
+
+    def __str__(self):
+        return (
+            f"GDBController-SSHBridge-("
+            f"pid={self.pid}, "
+            f"jump_host={self.jump_cred.hostname}, "
+            f"target_host={self.target_cred.hostname}"
+            f")"
+        )
