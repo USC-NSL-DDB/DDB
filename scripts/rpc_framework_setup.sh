@@ -29,7 +29,7 @@ fi
 
 echo building grpc
 rm -rf $fw_folder/grpc/include/cereal $fw_folder/grpc/include/ddb >/dev/null 2>&1
-cp -r ../connector/cereal ../connector/ddb $fw_folder/grpc/include/
+cp -r ../connector/include/* $fw_folder/grpc/include/
 cd $fw_folder/grpc
 if ! ./setup.sh; then
   echo "Building grpc failed"

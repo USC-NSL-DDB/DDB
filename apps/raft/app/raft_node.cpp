@@ -210,7 +210,8 @@ int main(int argc, char **argv) {
       std::cerr << "Error: --ddb_addr flag is required when ddb is enabled" << std::endl;
       return 1;
     }
-    auto ddb_config = DDB::Config::get_default(ip_addr);
+    auto ddb_config = DDB::Config::get_default(ip_addr)
+      .with_alias("raft_node");
     auto connector = DDB::DDBConnector(ddb_config);
     connector.init();
   }
