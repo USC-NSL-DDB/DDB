@@ -11,7 +11,7 @@
 #include "toolings/config_gen.hpp"
 #include "toolings/test_ctrl.hpp"
 
-constexpr std::string_view node_path = "./node";
+constexpr std::string_view node_path = "./raft_node";
 constexpr std::string_view ctrl_addr = "0.0.0.0:55000";
 
 ABSL_FLAG(uint64_t, num, 3, "number of nodes to spawn (>= 3)");
@@ -22,7 +22,7 @@ ABSL_FLAG(int, fail_type, 0, "Failure Type: 0 (disonnection), 1 (partition)");
 
 // for ddb support
 ABSL_FLAG(bool, enable_ddb, false, "Enable DDB.");
-ABSL_FLAG(std::string, ddb_addr, "localhost:50051", "IP Address reported to DDB service.");
+ABSL_FLAG(std::string, ddb_addr, "127.0.0.1", "IP Address reported to DDB service.");
 
 void command_loop(toolings::RaftTestCtrl &ctrl) {
   std::string command;
