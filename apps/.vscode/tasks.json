@@ -1,0 +1,119 @@
+// Available variables which can be used inside of strings.
+// ${workspaceRoot}: the root folder of the team
+// ${file}: the current opened file
+// ${fileBasename}: the current opened file's basename
+// ${fileDirname}: the current opened file's dirname
+// ${fileExtname}: the current opened file's extension
+// ${cwd}: the current working directory of the spawned process
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			// A task runner that calls a custom npm script that compiles the extension.
+			"label": "compile",
+			// Run in a shell so "npm" command is properly resolved to "npm.cmd" on Windows systems.
+			"type": "shell",
+			// we want to run npm
+			"command": "npm",
+			// we run the custom script "compile" as defined in package.json
+			"args": [
+				"run",
+				"compile",
+				"--loglevel",
+				"silent"
+			],
+			// The tsc compiler is started in background mode
+			"isBackground": true,
+			// use the standard tsc in watch mode problem matcher to find compile problems in the output.
+			"problemMatcher": "$tsc-watch",
+			// that's our build
+			"group":{
+				"kind": "build",
+				"isDefault": true
+			}
+		},
+		{
+			"label": "npm:lint",
+			"detail": "Lint (ESLint) Project",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "lint"],
+			"problemMatcher": "$eslint-compact"
+		},
+		{
+			"label": "npm:lint-fix",
+			"detail": "Lint Project with Auto-fix",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "lint-and-fix"],
+			"problemMatcher": "$eslint-compact"
+		},
+		// Ctrl + Shift + P (Command Palette), then select "Tasks: Run Test Task" and select "npm:test"
+		{
+			"label": "npm:test",
+			"detail": "Run Project Tests",
+			"type": "shell",
+			"command": "npm",
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"args": ["test"]
+		},
+		{
+			"label": "npm:coverage",
+			"detail": "Run Test Coverage Report",
+			"type": "shell",
+			"command": "npm",
+			"group": "test",
+			"args": ["run", "coverage"]
+		},
+		{
+			"label": "npm:lint-docs",
+			"detail": "Lint Project Documentation",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "lint-docs"],
+			"problemMatcher": "$markdownlint"
+		},
+		{
+			"label": "npm:link-check",
+			"detail": "Link Check Project Documentation",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "link-check"]
+		},
+		{
+			"label": "npm:spellcheck-docs",
+			"detail": "Spellcheck Project Documentation",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "spellcheck-docs"],
+			"problemMatcher": {
+				"fileLocation": "absolute",
+				"owner": "spellcheck-docs",
+				"pattern": {
+					"regexp": "^(.+)?:(\\d+):(\\d+) - (.+)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"message": 4
+				},
+				"severity": "info"
+			}
+		},
+		{
+			"label": "npm:prettier-write-docs",
+			"detail": "Reformat Project Documentation",
+			"type": "shell",
+			"command": "npm",
+			"group": "build",
+			"args": ["run", "prettier-write-docs"]
+		}
+	]
+}

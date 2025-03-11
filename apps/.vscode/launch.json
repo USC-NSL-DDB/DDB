@@ -1,0 +1,17 @@
+// A launch configuration that compiles the extension and then opens it inside a new window
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "ddb",
+			"request": "launch",
+			"name": "Attach ddb debugger",
+			"ddbpath": "${env:HOME}/.cargo/bin/ddb",
+			"configFilePath":"${workspaceFolder}/.ddb/dbg_auto_discovery.yaml",
+			// "debugger_args": [ "--console-log", "--console-level", "debug" ],
+			"debugger_args": [ "--console-log", "--console-level", "info" ],
+			"debugServer": 4711,
+			"valuesFormatting": "prettyPrinters",
+		}, 
+	],
+}
