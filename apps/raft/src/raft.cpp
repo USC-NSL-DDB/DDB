@@ -5,22 +5,21 @@
 
 #include "common/common.hpp"
 #include "common/utils/rand_gen.hpp"
+#include "common/utils/thread_pool.hpp"
 #include "rafty/raft.hpp"
 
 namespace rafty {
 using grpc::ServerBuilder;
 using grpc::ServerContext;
-using grpc::experimental::ClientInterceptorFactoryInterface;
-using grpc::experimental::CreateCustomChannelWithInterceptors;
 
 Raft::Raft(const Config &config, MessageQueue<ApplyResult> &ready)
     : id(config.id), listening_addr(config.addr), peer_addrs(config.peer_addrs),
-      dead(false), ready_queue(ready), service_(this), current_term(0),
-      voted_for(std::nullopt), commit_index(0), last_applied(0),
-      tracker(std::set<uint64_t>()), state(RaftState::FOLLOWER),
-      leader_id(std::nullopt), leader_transferee(std::nullopt),
-      heartbeat_elapsed(0), election_elapsed(0),
-      logger(utils::logger::get_logger(id)) {
+      dead(false), ready_queue(ready), tpool(10), service_(this),
+      current_term(0), voted_for(std::nullopt), commit_index(0),
+      last_applied(0), tracker(std::set<uint64_t>()),
+      state(RaftState::FOLLOWER), leader_id(std::nullopt),
+      leader_transferee(std::nullopt), heartbeat_elapsed(0),
+      election_elapsed(0), logger(utils::logger::get_logger(id)) {
   std::set<uint64_t> ids;
   for (const auto &peer_addr : this->peer_addrs) {
     ids.insert(peer_addr.first);
@@ -54,7 +53,7 @@ void Raft::say_hello() {
 
   if (status.ok()) {
     logger->debug("Raft {} received the return msg from: {}", id,
-                 reply.message());
+                  reply.message());
   } else {
     logger->error("Raft {} failed to receive msg from: {}", id,
                   status.error_message());
@@ -80,8 +79,9 @@ ProposalResult Raft::propose(const std::string &data) {
 
   this->logs.emplace_back(new_entry);
   this->progress_index(index, this->id);
-  this->logger->debug("{} [term {}, index {}] received a proposal with data: {}",
-                     this->id, term, index, data);
+  this->logger->debug(
+      "{} [term {}, index {}] received a proposal with data: {}", this->id,
+      term, index, data);
 
   return {.index = index,
           .term = term,
@@ -103,13 +103,13 @@ ProposalResult Raft::propose_sync(const std::string &data) {
   new_entry.set_index(index);
 
   this->logs.emplace_back(new_entry);
-  this->logger->debug("{} [term {}, index {}] received a proposal with data: {}",
-                     this->id, term, index, data);
-  ProposalResult prop_result = {
-    .index = index,
-    .term = term,
-    .is_leader = (this->state == RaftState::LEADER)
-  };
+  this->logger->debug(
+      "{} [term {}, index {}] received a proposal with data: {}", this->id,
+      term, index, data);
+  ProposalResult prop_result = {.index = index,
+                                .term = term,
+                                .is_leader =
+                                    (this->state == RaftState::LEADER)};
 
   auto committed = std::make_shared<std::promise<bool>>();
   this->prop_promises.insert({index, committed});
@@ -156,7 +156,7 @@ void Raft::become_leader() {
   this->bcast_heartbeat();
 
   this->logger->debug("{} become leader at term {}", this->id,
-                     this->current_term);
+                      this->current_term);
 }
 
 void Raft::become_follower(uint64_t term, std::optional<uint64_t> leader_id) {
@@ -167,7 +167,7 @@ void Raft::become_follower(uint64_t term, std::optional<uint64_t> leader_id) {
     auto old_state = this->state;
     this->state = RaftState::FOLLOWER;
     this->logger->debug("{} become follower at term {} from {}", this->id, term,
-                       to_string(old_state));
+                        to_string(old_state));
   } else {
     this->logger->debug("{} remain follower at term {}", this->id, term);
   }
@@ -189,7 +189,7 @@ void Raft::become_candidate() {
   this->voted_for = this->id;
   this->state = RaftState::CANDIDATE;
   this->logger->debug("{} become candidate at term {}", this->id,
-                     this->current_term);
+                      this->current_term);
 }
 
 void Raft::reset(uint64_t term) {
@@ -254,7 +254,7 @@ void Raft::campaign() {
     return;
   }
   this->logger->debug("{} starts new election at term {}", this->id,
-                     this->current_term);
+                      this->current_term);
   this->become_candidate();
   // auto msg_type = raftpb::MsgVote;
   auto term = this->current_term;
@@ -274,9 +274,12 @@ void Raft::campaign() {
         "{} [logterm: {}, index: {}] sent vote request to {} at term {}",
         this->id, last_id.term, last_id.index, peer_id, term);
 
-    std::thread([this, peer_id, term, last_id] {
+    // std::thread([this, peer_id, term, last_id] {
+    //   this->send_request_vote_rpc(this->id, peer_id, term, last_id);
+    // }).detach();
+    this->tpool.enqueue([this, peer_id, term, last_id = std::move(last_id)]() {
       this->send_request_vote_rpc(this->id, peer_id, term, last_id);
-    }).detach();
+    });
   }
 }
 
@@ -293,7 +296,7 @@ void Raft::send_request_vote_rpc(uint64_t candidate_id, uint64_t target_id,
   raftpb::RequestVoteReply reply;
 
   this->logger->debug("{} [term {}] sending RequestVote to {}", this->id,
-                     sender_term, target_id);
+                      sender_term, target_id);
   auto status = this->peers_[target_id]->RequestVote(&*context, req, &reply);
 
   std::lock_guard<std::mutex> lock(this->mtx);
@@ -309,8 +312,8 @@ void Raft::send_request_vote_rpc(uint64_t candidate_id, uint64_t target_id,
 
   if (req.term() != this->current_term) {
     this->logger->debug("{} term has changed from {} to {} during election, "
-                       "dropping vote response from {}",
-                       this->id, req.term(), this->current_term, id);
+                        "dropping vote response from {}",
+                        this->id, req.term(), this->current_term, id);
     return;
   }
 
@@ -324,19 +327,18 @@ void Raft::send_request_vote_rpc(uint64_t candidate_id, uint64_t target_id,
   auto v_r = tracker::VoteResult();
   if (reply.vote_granted()) {
     this->logger->debug("{} [candidate] received vote from {}", this->id,
-                       target_id);
+                        target_id);
     v_r = this->poll(target_id, true);
   } else {
     if (reply.term() > this->current_term) {
       this->logger->debug("{} [candidate] received higher term from {}, step "
-                         "back to follower immediately",
-                         this->id, id);
-      // TODO: step back to follower
+                          "back to follower immediately",
+                          this->id, id);
       this->become_follower(reply.term(), std::nullopt);
       return;
     }
     this->logger->debug("{} [candidate] received rejection from {}", this->id,
-                       target_id);
+                        target_id);
     v_r = this->poll(target_id, false);
   }
   // this->election_elapsed = 0; // being a bit relaxed here
@@ -353,7 +355,7 @@ void Raft::resolve_vote_result(const tracker::VoteResult &v_r) {
     return;
   case tracker::VoteType::VoteDenied:
     this->logger->debug("{} [candidate] voting FAIL, granted: {}, rejected: {}",
-                       this->id, v_r.granted, v_r.rejected);
+                        this->id, v_r.granted, v_r.rejected);
     this->become_follower(this->current_term, std::nullopt);
     return;
   default:
@@ -372,8 +374,7 @@ void Raft::progress_index(uint64_t index, uint64_t id) {
 
 void Raft::progress_index(uint64_t index, tracker::Progress &pr) {
   if (pr.maybe_update(index) ||
-      (pr.get_match() == index &&
-        pr.get_state() == tracker::StateType::Prob)) {
+      (pr.get_match() == index && pr.get_state() == tracker::StateType::Prob)) {
     if (pr.get_state() == tracker::StateType::Prob) {
       pr.become_replicate();
     }
@@ -426,9 +427,9 @@ void Raft::send_heartbeat(uint64_t to, bool empty_entry) {
       .leader_commit = this->get_committed()};
 
   logger->debug("{} [term {}] sending heartbeat to {} [prev_log_idx: {}, "
-               "prev_log_term: {}, leader_commit: {}]",
-               this->id, sender_term, to, args.prev_log_idx, args.prev_log_term,
-               args.leader_commit);
+                "prev_log_term: {}, leader_commit: {}]",
+                this->id, sender_term, to, args.prev_log_idx,
+                args.prev_log_term, args.leader_commit);
 
   // std::stringstream ss;
   // auto count = 0;
@@ -445,9 +446,12 @@ void Raft::send_heartbeat(uint64_t to, bool empty_entry) {
   // ss1 << "]";
   // logger->debug("sending entries: {}", ss1.str());
 
-  std::thread([this, to, &pr, args = std::move(args)] {
+  // std::thread([this, to, &pr, args = std::move(args)] {
+  //   this->send_append_entries_rpc(to, pr, args);
+  // }).detach();
+  this->tpool.enqueue([this, to, &pr, args = std::move(args)]() {
     this->send_append_entries_rpc(to, pr, args);
-  }).detach();
+  });
 }
 
 void Raft::send_append_entries_rpc(uint64_t target_id, tracker::Progress &pr,
@@ -481,8 +485,8 @@ void Raft::send_append_entries_rpc(uint64_t target_id, tracker::Progress &pr,
 
   if (req.term() != this->current_term) {
     this->logger->debug("{} term has changed from {} to {} during heartbeat, "
-                       "dropping response from {}",
-                       this->id, req.term(), this->current_term, target_id);
+                        "dropping response from {}",
+                        this->id, req.term(), this->current_term, target_id);
     return;
   }
 
@@ -564,18 +568,17 @@ void Raft::commit_to(uint64_t idx) {
     auto old_commit = this->get_committed();
     this->commit_index = idx;
     this->logger->debug("{} update committed index from {} to {}", this->id,
-                       old_commit, this->get_committed());
+                        old_commit, this->get_committed());
 
     auto committed = this->get_committed();
     if (committed > this->last_applied) {
       // notify the caller/tester
       for (auto i = this->last_applied + 1; i <= committed; i++) {
         auto result = ApplyResult{
-            .valid = true, .data = this->logs[i].data(), .index = i
-        };
+            .valid = true, .data = this->logs[i].data(), .index = i};
         this->apply(result);
         this->logger->info("{} applied log at index {} with data: {}", this->id,
-                         i, this->logs[i].data());
+                           i, this->logs[i].data());
         this->last_applied = i;
 
         // lab3
@@ -592,7 +595,7 @@ bool Raft::maybe_commit() {
   auto at = EntryID{.term = this->current_term,
                     .index = this->tracker.get_committed()};
   logger->debug("{} maybe_commit at index {} with term {}", this->id, at.index,
-               at.term);
+                at.term);
   if (at.term != 0 && at.index > this->get_committed() &&
       this->match_term(at)) {
     this->commit_to(at.index);
@@ -621,12 +624,12 @@ EntryID Raft::get_last_entry_id() const {
 tracker::VoteResult Raft::poll(uint64_t id, bool granted) {
   if (granted) {
     this->logger->debug("{} received VoteGrant from {} at term {}, quorum: {}",
-                       this->id, id, this->current_term,
-                       this->tracker.get_quorum());
+                        this->id, id, this->current_term,
+                        this->tracker.get_quorum());
   } else {
     this->logger->debug("{} received VoteReject from {} at term {}, quorum: {}",
-                       this->id, id, this->current_term,
-                       this->tracker.get_quorum());
+                        this->id, id, this->current_term,
+                        this->tracker.get_quorum());
   }
   this->tracker.record_vote(id, granted);
   return this->tracker.tally_votes();
@@ -643,9 +646,9 @@ uint64_t Raft::find_conflict(std::span<const raftpb::Entry> entries) const {
       if (id.index <= this->last_index()) {
         // found conflicts, should print
         this->logger->debug("{} found conflict at index {} [existing term: {}, "
-                           "conflicting term: {}]. entry = {}",
-                           this->id, id.index, this->get_term(id.index),
-                           id.term, entry.DebugString());
+                            "conflicting term: {}]. entry = {}",
+                            this->id, id.index, this->get_term(id.index),
+                            id.term, entry.DebugString());
       }
       return id.index;
     }

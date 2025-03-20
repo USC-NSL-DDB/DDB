@@ -22,7 +22,7 @@
 
 using namespace toolings;
 
-const std::string NODE_APP_PATH = "../app/node";
+const std::string NODE_APP_PATH = "../app/raft_node";
 
 // ABSL_FLAG(bool, verbose, false, "if enable default logging");
 ABSL_FLAG(int, verbosity, 0,

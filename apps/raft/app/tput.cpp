@@ -94,7 +94,7 @@ double compute_p99(std::array<uint64_t, N>& values) {
 }
 
 void run_raft_servers(toolings::RaftTestCtrl &ctrl) {
-  ctrl.register_applier_handler({[](testerpb::ApplyResult _) -> void { /* Do nothing */ }});
+  ctrl.register_applier_handler({[](testerpb::ApplyResult _ [[maybe_unused]]) -> void { /* Do nothing */ }});
   ctrl.run(); 
   std::this_thread::sleep_for(std::chrono::seconds(3));
 }

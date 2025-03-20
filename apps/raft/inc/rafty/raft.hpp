@@ -20,6 +20,7 @@
 #include "rafty/tracker/tracker.hpp"
 
 #include "common/utils/net_intercepter.hpp"
+#include "common/utils/thread_pool.hpp"
 
 #include "toolings/msg_queue.hpp"
 
@@ -102,8 +103,10 @@ public:
   void say_hello();
   void add_ready(const std::string &data);
 
-  // Remove: student implementation
+// Remove: student implementation
 private: // vars
+  utils::ThreadPool tpool; 
+  
   // configuration needed variables
   std::unordered_map<uint64_t, RaftServiceStub> peers_;
   RaftService service_;

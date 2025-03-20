@@ -10,7 +10,7 @@ RaftService::RaftService(Raft *raft) : raft_(raft) {
   this->logger = utils::logger::get_logger(raft_->id);
 }
 
-Status RaftService::AppendEntries(grpc::ServerContext *context,
+Status RaftService::AppendEntries(grpc::ServerContext *context [[maybe_unused]],
                                   const raftpb::AppendEntriesRequest *request,
                                   raftpb::AppendEntriesReply *response) {
   auto r = this->raft_;
@@ -112,7 +112,7 @@ Status RaftService::AppendEntries(grpc::ServerContext *context,
   return Status::OK;
 }
 
-Status RaftService::RequestVote(grpc::ServerContext *context,
+Status RaftService::RequestVote(grpc::ServerContext *context [[maybe_unused]],
                                 const raftpb::RequestVoteRequest *request,
                                 raftpb::RequestVoteReply *response) {
   auto r = this->raft_;
@@ -162,7 +162,7 @@ Status RaftService::RequestVote(grpc::ServerContext *context,
   return grpc::Status::OK;
 }
 
-Status RaftService::SayHello(grpc::ServerContext *context,
+Status RaftService::SayHello(grpc::ServerContext *context [[maybe_unused]],
                              const raftpb::HelloRequest *request,
                              raftpb::HelloReply *response) {
   this->logger->debug("{} received hello from {}", raft_->id, request->name());
