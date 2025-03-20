@@ -1,0 +1,25 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+
+PrerunGdbCommands:
+- name: "enable async mode"
+  command: "set mi-async on"
+- name: "enable non-stop mode"
+  command: "set non-stop off"
+
+Components:
+- mode: remote
+  remote_port: 9898
+  cred:
+    hostname: 10.10.2.2
+    user: ybyan
+  tag: test_server_1 
+  bin: "./bin/multithread_print"
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  args: []

@@ -1,0 +1,41 @@
+---
+Framework: Nu
+PreTasks:
+- name: "Restart runtime"
+  command: "./nu_scripts/start_rt.sh"
+
+PostTasks:
+- name: "Shutdown runtime"
+  command: "./nu_scripts/stop_rt.sh"
+
+PrerunGdbCommands:
+- name: "enable async mode"
+  command: "set mi-async on"
+- name: "enable non-stop mode"
+  command: "set non-stop off"
+
+Components:
+# TODO: Supports for pid (latter attach), remote attach 
+- mode: local 
+  tag: proclet_server_0
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  bin: "./nu_bin/test_migrate"
+  args: [ "-l", "1", "-i", "18.18.1.2" ]
+  sudo: true
+- mode: remote
+  remote_port: 9898
+  cred:
+    hostname: 10.10.2.2
+    user: ybyan
+  tag: proclet_server_1
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  bin: "./nu_bin/test_migrate"
+  args: [ "-l", "1", "-i", "18.18.1.3" ]
+  sudo: true
+- mode: local
+  tag: proclet_server_entry
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  bin: "./nu_bin/test_migrate"
+  args: [ "-l", "1", "-i", "18.18.1.4", "-m"]
+  sudo: true
+  run_delay: 3

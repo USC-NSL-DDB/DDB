@@ -1,0 +1,14 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+
+Components:
+- addr: localhost
+  tag: test_server_1 
+  bin: "./bin/nested_frame"
+  args: []

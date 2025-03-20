@@ -1,0 +1,21 @@
+---
+Framework: Nu
+
+Conf:
+  sudo: true
+  on_exit: "kill"
+
+PrerunGdbCommands:
+- name: "disable CALADAN's custom signal handling"
+  command: "handle SIGUSR1 SIGUSR2 nostop noprint"
+
+PostrunGdbCommands:
+- name: "auto continue attached process"
+  command: "-exec-continue"
+
+#   user: ybyan
+  # port: 22
+
+ServiceDiscovery:
+  Broker:
+    hostname: 10.10.2.12

@@ -1,0 +1,7 @@
+Framework: vanillapid
+PrerunGdbCommands:
+- name: "load extension"
+  command: "source /home/hjz/seoresearch/distributed_debug/distributed-debugger/gdb_ext/runtime-gdb-grpc.py"
+Pids:
+  - 127539
+  - 127626

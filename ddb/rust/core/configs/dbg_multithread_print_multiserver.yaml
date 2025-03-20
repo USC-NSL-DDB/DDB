@@ -1,0 +1,19 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+
+Components:
+- mode: local
+  tag: test_server_1 
+  bin: "./bin/multithread_print"
+  args: []
+- mode: local
+  tag: test_server_2
+  bin: "./bin/multithread_print"
+  args: []
+

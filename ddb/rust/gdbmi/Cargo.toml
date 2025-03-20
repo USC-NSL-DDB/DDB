@@ -1,0 +1,47 @@
+[package]
+name = "gdbmi"
+version = "0.0.2"
+authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
+edition = "2018"
+license = "MIT"
+description = "(WIP) Interact with a GDB session through the GDB machine interface"
+repository = "https://github.com/danielzfranklin/gdbmi"
+keywords = ["gdb", "gdbmi", "debugger", "debug", "debugging"]
+categories = ["development-tools"]
+
+[features]
+# Build tests that require rr
+test_rr = []
+# Build tests that require rd
+test_rd = []
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+nom = "6.1.2"
+regex = "1.4.6"
+lazy_static = "1.4.0"
+thiserror = "1.0.24"
+displaydoc = "0.2.1"
+bytes = "1.0.1"
+tracing = "0.1.25"
+rand = "0.8.3"
+tokio = { version = "1.5.0", features = [
+    "macros",
+    "process",
+    "sync",
+    "io-util",
+    "rt",
+    "time"
+] }
+camino = "1.0.4"
+derivative = "2.2.0"
+serde = { version = "1.0.218", features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = "0.7.2"
+eyre = "0.6.5"
+tokio-test = "0.4.1"
+tracing-subscriber = "0.2.17"
+color-eyre = "0.5.11"
+insta = "1.7.1"
+duct = "0.13.5"

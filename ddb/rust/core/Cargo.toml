@@ -1,0 +1,43 @@
+[package]
+name = "ddb"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = [ "lazy_source_map" ]
+lazy_source_map = []
+
+[[bin]]
+name = "ddb"
+path = "src/main.rs"
+
+[dependencies]
+russh = "0.50.0" # ssh
+gdbmi = { path = "../gdbmi" } # gdbmi
+toml = "0.8.19" # depends on if we want to use toml for config
+rumqttc = "0.24.0" # mqtt client
+tokio = { version = "1", features = ["full"] }
+axum = "0.7.9" # web server
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0" # Optional, for JSON serialization/deserialization
+serde_yml = "0.0.12"
+anyhow = "1.0.95" # error handling
+thiserror = "2.0.11" # error handling
+flume = "0.11.1" # for spmc
+tracing = "0.1" # for logging
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+rust-embed = "8.5.0" # plan to remove
+tempfile = "3.15.0" # plan to remove
+console-subscriber = "0.1" # for debug tokio async tasks
+lazy_static = "1.5.0"
+clap =  { version = "4.5.27", features = ["derive"] }
+async-trait = "0.1.85"
+shellexpand = "3.1.0"
+bytes = "1.9.0"
+dashmap = "=6.1.0"
+futures = "0.3.31"
+papaya = "0.1.8"
+kube = { version = "0.98.0", features = ["runtime", "derive","client","ws"] }
+k8s-openapi = { version = "0.24.0", features = ["latest"] }
+[dev-dependencies]

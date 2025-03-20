@@ -1,0 +1,29 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+
+Components:
+- remote_port: 9898
+  cred: 
+    hostname: localhost
+    user: ybyan 
+  mode: remote 
+  tag: test_server_1 
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  bin: "./bin/multithread_print"
+  args: []
+- remote_port: 9999
+  cred:
+    hostname: localhost
+    user: ybyan
+  mode: remote
+  tag: test_server_2
+  cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+  bin: "./bin/multithread_print"
+  args: []
+
