@@ -28,7 +28,7 @@ BIN_FOLDER := ./bin
 # Directory for include files (ddb)
 INCLUDE_DIR = $(INSTALL_PREFIX)/include
 
-DDB_HDRS_PREFIX = connector
+DDB_HDRS_PREFIX = connector/include
 DDB_CEREAL_HDRS = $(DDB_HDRS_PREFIX)/cereal
 DDB_HDRS = $(DDB_HDRS_PREFIX)/ddb
 
