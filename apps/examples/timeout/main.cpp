@@ -1,7 +1,9 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <future>
+#include <iomanip>
 #include <iostream>
 #include <thread>
 
@@ -9,10 +11,21 @@
 
 using namespace std;
 
+static int DELAY = 0;
+
 int long_running_function() {
   cout << "<<<<<<<<<<<<<<<<<<<<<<" << endl;
   cout << "Long running function started..." << endl;
   cout << "long_running_function() is running..." << endl;
+  auto now = std::chrono::system_clock::now();
+  auto now_time_t = std::chrono::system_clock::to_time_t(now);
+  std::cout << "Current time: " << std::put_time(std::localtime(&now_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
+  if (DELAY > 0) {
+    this_thread::sleep_for(chrono::seconds(DELAY)); // Simulate a long-running task
+  }
+  now = std::chrono::system_clock::now();
+  now_time_t = std::chrono::system_clock::to_time_t(now);
+  std::cout << "Current time: " << std::put_time(std::localtime(&now_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
   cout << "Long running function finished." << endl;
   cout << "<<<<<<<<<<<<<<<<<<<<<<" << endl;
   return 42;
@@ -27,6 +40,7 @@ std::atomic<bool> interrupted(false);
 void signal_handler(int signal) {
   interrupted.store(true);
   cout << "Interrupt signal received!" << endl;
+  exit(0);
 }
 
 bool enable_ddb = false;
@@ -39,6 +53,12 @@ void parse_arguments(int argc, char* argv[]) {
       enable_ddb = true;
     } else if (arg == "--ddb_addr" && i + 1 < argc) {
       ddb_addr = argv[++i];
+    } else if (arg == "--delay" && i + 1 < argc) {
+      DELAY = std::stoi(argv[++i]);
+    } else {
+      std::cerr << "Unknown argument: " << arg << std::endl;
+      std::cerr << "Usage: " << argv[0] << " [--enable_ddb] [--ddb_addr <address>] [--delay <seconds>]" << std::endl;
+      exit(1);
     }
   }
 }
@@ -56,6 +76,13 @@ int main(int argc, char* argv[]) {
     auto connector = DDB::DDBConnector(ddb_config);
     connector.init();
   }
+  
+  cout << "Simulated Delay: " << DELAY << " seconds" << endl;
+  cout << "Enable DDB: " << (enable_ddb ? "true" : "false") << endl;
+  if (enable_ddb) {
+    cout << "DDB Address: " << ddb_addr << endl;
+  }
+  cout << "Timeout duration: 2 seconds" << endl;
 
   chrono::seconds timeout_duration(2);
   std::signal(SIGINT, signal_handler);
@@ -76,7 +103,9 @@ int main(int argc, char* argv[]) {
       cerr << "Exception caught: " << e.what() << endl;
     }
     
+    cout << "Waiting for next iteration..." << endl;
     this_thread::sleep_for(chrono::seconds(1));
+    cout << "Continuing..." << endl;
   }
 
   return 0;
