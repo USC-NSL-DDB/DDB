@@ -95,7 +95,7 @@ static inline void wait_for_signal(int sig) {
   printf("Debugger attached. Resume execution...\n");
 }
 
-static inline void sig_ddb_wait_handler(int signum) { raise(SIGTRAP); }
+static inline void sig_ddb_wait_handler(int) { raise(SIGTRAP); }
 
 static inline void setup_ddb_signal_handler() {
   // ddb will signal SIGDDBWAIT right after attaching in all cases.

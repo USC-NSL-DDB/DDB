@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
-#include <string>
 
 #include "ddb/common.hpp"
 
@@ -106,6 +105,7 @@ template <typename RT = void, class RPCCallable>
 __attribute__((noinline)) static RT extraction(
     std::function<DDBTraceMeta()> extractor, RPCCallable&& rpc_callable) {
   DDBTraceMeta meta;
+  meta.magic = T_META_MATIC;
   asm volatile("" : "+m"(meta));  // Force compiler to assume meta is modified
   if (extractor) {
     meta = extractor();
