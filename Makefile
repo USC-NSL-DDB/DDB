@@ -102,9 +102,7 @@ gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install
 
 install-hdrs:
-	install -d $(INCLUDE_DIR)
-	cp -r $(DDB_CEREAL_HDRS) $(INCLUDE_DIR)
-	cp -r $(DDB_HDRS) $(INCLUDE_DIR)
+	$(MAKE) -C connector install
 
 .PHONY: install-broker
 install-broker:
@@ -125,3 +123,4 @@ rpc-framework-setup: install-broker
 .PHONY: clean
 clean: clean_nu_binaries gdb-clean
 	rm -rf $(TEST_BINARIES_PATH)/*.o bin/*
+	$(MAKE) -C connector uninstall
