@@ -112,7 +112,7 @@ install-broker:
 gdb-config-setup:
 	cd ./scripts && ./setup_gdb.sh
 
-.PHONY: prepare-machine
+.PHONY: setup-machine
 setup-machine:
 	cd ./scripts && ./setup_machine.sh
 
