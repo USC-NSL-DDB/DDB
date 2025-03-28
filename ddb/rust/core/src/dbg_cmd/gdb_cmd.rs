@@ -89,25 +89,25 @@ mod tests {
     #[test]
     fn test_gdb_cmd_generate() {
         let cmd = GdbCmd::SetOption(GdbOption::Logging(true));
-        assert_eq!(cmd.generate(), "-gdb-set logging enabled on");
+        assert_eq!(cmd.generate(), "-gdb-set logging enabled on\n");
 
         let cmd = GdbCmd::ConsoleExec("info registers".to_string());
         assert_eq!(
-            cmd.generate(),
+            cmd.generate().trim(),
             r#"-interpreter-exec console "info registers""#
         );
 
         let cmd = GdbCmd::TargetAttach(1234);
-        assert_eq!(cmd.generate(), "-target-attach 1234");
+        assert_eq!(cmd.generate(), "-target-attach 1234\n");
 
         let cmd = GdbCmd::FileExecAndSym("/path/to/bin".to_string());
-        assert_eq!(cmd.generate(), "-file-exec-and-symbols /path/to/bin");
+        assert_eq!(cmd.generate(), "-file-exec-and-symbols /path/to/bin\n");
 
         let cmd = GdbCmd::ExeArgs("arg1 arg2".to_string());
-        assert_eq!(cmd.generate(), "-exec-arguments arg1 arg2");
+        assert_eq!(cmd.generate(), "-exec-arguments arg1 arg2\n");
 
         let cmd = GdbCmd::Plain("target remote localhost:1234".to_string());
-        assert_eq!(cmd.generate(), "target remote localhost:1234");
+        assert_eq!(cmd.generate(), "target remote localhost:1234\n");
     }
 
     #[test]
@@ -123,12 +123,12 @@ mod tests {
 
         let cmds = cmd_bdr.build();
         assert_eq!(cmds.len(), 7);
-        assert_eq!(cmds[0], "-gdb-set logging enabled on");
-        assert_eq!(cmds[1], "-gdb-set mi-async on");
-        assert_eq!(cmds[2], r#"-interpreter-exec console "info registers""#);
-        assert_eq!(cmds[3], "-target-attach 1234");
-        assert_eq!(cmds[4], "-file-exec-and-symbols /path/to/bin");
-        assert_eq!(cmds[5], "-exec-arguments arg1 arg2");
-        assert_eq!(cmds[6], "target remote localhost:1234");
+        assert_eq!(cmds[0].trim(), "-gdb-set logging enabled on");
+        assert_eq!(cmds[1].trim(), "-gdb-set mi-async on");
+        assert_eq!(cmds[2].trim(), r#"-interpreter-exec console "info registers""#);
+        assert_eq!(cmds[3].trim(), "-target-attach 1234");
+        assert_eq!(cmds[4].trim(), "-file-exec-and-symbols /path/to/bin");
+        assert_eq!(cmds[5].trim(), "-exec-arguments arg1 arg2");
+        assert_eq!(cmds[6].trim(), "target remote localhost:1234");
     }
 }

@@ -170,7 +170,7 @@ impl DbgSession {
         }
 
         for cmd in &self.config.prerun_gdb_cmds {
-            bdr.add(GdbCmd::ConsoleExec(cmd.command.clone()));
+            bdr.add(cmd);
         }
 
         match &self.config.mode {
