@@ -19,7 +19,7 @@ fi
 # export FAKETIME_NO_CACHE=1 
 export FAKETIME="-00000000000000000"
 
-program="$CWD/$1"
+program="$1"
 shift
 args="$@"
 
@@ -28,9 +28,9 @@ if [ -z "$program" ]; then
     exit 1
 fi
 
-if [ ! -f "$program" ]; then
-    echo "Error: Program $program not found."
-    exit 1
-fi
+# if [ ! -f "$program" ]; then
+#     echo "Error: Program $program not found."
+#     exit 1
+# fi
 
-LD_PRELOAD="${LIBFAKETIME} ${LD_PRELOAD}" exec "${program}" $args
+LD_PRELOAD="${LIBFAKETIME} ${LD_PRELOAD}" exec "${program}" ${args}
