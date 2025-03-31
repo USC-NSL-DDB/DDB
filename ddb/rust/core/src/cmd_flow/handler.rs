@@ -704,3 +704,87 @@ impl Handler for DistributeBacktraceHandler {
         }
     }
 }
+
+pub struct ExecNextHandler {
+    router: Arc<Router>,
+}
+
+impl ExecNextHandler {
+    pub fn new(router: Arc<Router>) -> Self {
+        Self { router }
+    }
+}
+
+#[async_trait]
+impl Handler for ExecNextHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        // let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
+        // if !parts.is_empty() {
+        //     let gtid = parts.last().unwrap().parse::<u64>().unwrap();
+        //     // let (sid, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
+        //     // let target = Target::Session(sid);
+        //     let target = Target::Thread(gtid);
+        //     self.router.send_to(target, cmd.to_command(PlainFormatter).1);
+        // } else {
+        //     warn!("exec-next command should specify a thread id");
+        // }
+        // 
+        // 
+        if let Target::Thread(_) = &cmd.target {
+            let target = cmd.target.clone();
+            let cmd: ParsedInputCmd = "-exec-next".try_into().unwrap();
+            let (_, cmd) = cmd.to_command(NullFormatter);
+            self.router.send_to(target, cmd);
+        } else {
+            error!("exec-next command should specify a thread id by --thread <gtid>");
+        }
+    }
+}
+
+pub struct ExecFinishHandler {
+    router: Arc<Router>,
+}
+
+impl ExecFinishHandler {
+    pub fn new(router: Arc<Router>) -> Self {
+        Self { router }
+    }
+}
+
+#[async_trait]
+impl Handler for ExecFinishHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        if let Target::Thread(_) = &cmd.target {
+            let target = cmd.target.clone();
+            let cmd: ParsedInputCmd = "-exec-finish".try_into().unwrap();
+            let (_, cmd) = cmd.to_command(NullFormatter);
+            self.router.send_to(target, cmd);
+        } else {
+            error!("exec-finish command should specify a thread id by --thread <gtid>");
+        }
+    }
+}
+
+pub struct ExecStepHandler {
+    router: Arc<Router>,
+}
+
+impl ExecStepHandler {
+    pub fn new(router: Arc<Router>) -> Self {
+        Self { router }
+    }
+}
+
+#[async_trait]
+impl Handler for ExecStepHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        if let Target::Thread(_) = &cmd.target {
+            let target = cmd.target.clone();
+            let cmd: ParsedInputCmd = "-exec-step".try_into().unwrap();
+            let (_, cmd) = cmd.to_command(NullFormatter);
+            self.router.send_to(target, cmd);
+        } else {
+            error!("exec-step command should specify a thread id by --thread <gtid>");
+        }
+    }
+}

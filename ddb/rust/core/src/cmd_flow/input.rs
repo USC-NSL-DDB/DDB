@@ -285,7 +285,9 @@ impl CmdHandler {
             "-thread-select" => ThreadSelectHandler::new(router.clone()),
             "-bt-remote" => DistributeBacktraceHandler::new(router.clone(), adapter.clone()),
             "-list-thread-groups" => ListGroupsHandler::new(router.clone()),
-            "-exec-next" => DefaultHandler::new(router.clone()),
+            "-exec-next" => ExecNextHandler::new(router.clone()),
+            "-exec-step" => ExecStepHandler::new(router.clone()),
+            "-exec-finish" => ExecFinishHandler::new(router.clone()),
         };
 
         Arc::new(CmdHandler {
