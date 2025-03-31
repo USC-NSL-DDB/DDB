@@ -12,6 +12,7 @@ start_one_redis_bg() {
 		--port 500$IDX --dbfilename raft$IDX.rdb \
 		--loadmodule ../redisraft/redisraft.so \
 		--raft.log-filename raftlog$IDX.db \
+		--raft.id $IDX \
 		--raft.addr localhost:500$IDX --raft.log-max-file-size 1280000 --raft.log-max-cache-size 640000 \
 		--raft.enable-ddb yes > /dev/null 2>&1 &
 }
@@ -23,6 +24,7 @@ start_one_redis_bg_with_faketime() {
 		--port 500$IDX --dbfilename raft$IDX.rdb \
 		--loadmodule ../redisraft/redisraft.so \
 		--raft.log-filename raftlog$IDX.db \
+		--raft.id $IDX \
 		--raft.addr localhost:500$IDX --raft.log-max-file-size 1280000 --raft.log-max-cache-size 640000 \
 		--raft.enable-ddb yes > /dev/null 2>&1 &
 }
@@ -32,13 +34,11 @@ start_redis_cluster() {
 	mkdir -p $RAFTLOGS_DIR
 	pushd $RAFTLOGS_DIR
 	for i in $(seq 1 $SIZE); do
-		set -x
 		if [ "$USE_FAKETIME" = true ]; then
 			start_one_redis_bg_with_faketime $i
 		else
 			start_one_redis_bg $i
 		fi
-		set +x
 	done
 	popd
 }
