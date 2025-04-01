@@ -13,7 +13,7 @@ use gdbmi::{
 };
 use serde::Serialize;
 use tokio::sync::oneshot;
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     dbg_parser::gdb_parser::{GdbParser, MIFormatter},
@@ -22,8 +22,7 @@ use crate::{
 };
 
 use super::{
-    emit, emit_static, DynFormatter, GenericStopAsyncRecordFormatter, RunningAsyncRecordFormatter,
-    StopAsyncRecordFormatter, ThreadCreatedNotifFormatter, ThreadGroupNotifFormatter,
+    emit, emit_static, DynFormatter, GenericStopAsyncRecordFormatter, RunningAsyncRecordFormatter, StopAsyncRecordFormatter, ThreadCreatedNotifFormatter, ThreadExitedNotifFormatter, ThreadGroupNotifFormatter
 };
 
 // OutputSource is used to determine where the output of a command should go.
@@ -393,11 +392,14 @@ impl Tracker {
                 let tgid = payload["group-id"].expect_string_ref().unwrap();
                 let tid = payload["id"].expect_string_repr::<u64>().unwrap();
                 let (gtid, gtgid) = STATES.create_thread(sid, tid, &tgid).await;
+                let service_meta = STATES.get_session_service_meta(sid).await;
+                debug!("service_meta: {:?}", service_meta);
+
                 let resp = ParsedSessionResponse::new(sid, message, Some(payload));
 
                 emit_static(
                     resp.to_finished_cmd(token, sid),
-                    ThreadCreatedNotifFormatter::new(gtid, gtgid, sid),
+                    ThreadCreatedNotifFormatter::new(gtid, gtgid, sid, service_meta),
                 );
             }
             "thread-exited" => {
@@ -418,7 +420,7 @@ impl Tracker {
 
                 emit_static(
                     resp.to_finished_cmd(token, sid),
-                    ThreadCreatedNotifFormatter::new(gtid, gtgid, sid),
+                    ThreadExitedNotifFormatter::new(gtid, gtgid, sid),
                 );
             }
             "running" => {

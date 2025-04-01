@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 pub use dbg_session::*;
 
 use crate::{
-    common::config::{GdbCommand, OnExit}, connection::ssh_client::SSHCred, dbg_ctrl::{DbgControllable, DbgController}, discovery::ServiceInfo
+    common::config::{GdbCommand, OnExit}, connection::ssh_client::SSHCred, dbg_ctrl::{DbgControllable, DbgController}, discovery::{discovery_message_producer::ServiceMeta, ServiceInfo}
 };
 
 #[derive(Debug)]
@@ -25,7 +25,8 @@ pub struct DbgSessionConfig {
     pub postrun_gdb_cmds: Vec<GdbCommand>,
 
     // This should be present if the service discovery is enabled.
-    pub service_info: Option<ServiceInfo>,
+    // pub service_info: Option<ServiceInfo>,
+    pub service_meta: Option<ServiceMeta>,
     
     pub gdb_controller: DbgController,
 }
@@ -41,7 +42,7 @@ pub struct DbgSessionCfgBuilder {
     pub prerun_gdb_cmds: Vec<GdbCommand>,
     pub postrun_gdb_cmds: Vec<GdbCommand>,
 
-    pub service_info: Option<ServiceInfo>,
+    pub service_meta: Option<ServiceMeta>,
     pub gdb_controller: Option<DbgController>,
 }
 
@@ -76,9 +77,8 @@ impl DbgSessionCfgBuilder {
             tag: None,
             prerun_gdb_cmds,
             postrun_gdb_cmds,
-            service_info: None,
+            service_meta: None,
             gdb_controller: None,
-            
         }
     }
 
@@ -135,8 +135,8 @@ impl DbgSessionCfgBuilder {
         self
     }
 
-    pub fn with_service_info(mut self, si: ServiceInfo) -> Self {
-        self.service_info = Some(si);
+    pub fn with_service_meta(mut self, meta: ServiceMeta) -> Self {
+        self.service_meta = Some(meta);
         self
     }
 
@@ -169,7 +169,7 @@ impl DbgSessionCfgBuilder {
             tag: self.tag,
             prerun_gdb_cmds: self.prerun_gdb_cmds,
             postrun_gdb_cmds: self.postrun_gdb_cmds,
-            service_info: self.service_info,
+            service_meta: self.service_meta,
             gdb_controller: self.gdb_controller.unwrap(),
         }
     }

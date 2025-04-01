@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
+use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::{
     common::{self, config::Framework},
     discovery::DiscoveryMessageProducer,
@@ -70,8 +71,7 @@ impl ServiceDiscover {
     /// Handles creation of a new debug session for a discovered service.
     /// Called by the consumer loop that reads from a unified channel of `ServiceInfo<T>`.
     async fn prepare_new_session(sessions: SessionsRef, info: crate::discovery::ServiceInfo) {
-        // Example: build a new debug session config from the `info`.
-        // This is similar to your old `prepare_new_session(...)`.
+        let service_meta = ServiceMeta::from(&info);
         let hostname = info.ip;
         let pid = info.pid;
         let tag_str = info.tag;
@@ -88,6 +88,7 @@ impl ServiceDiscover {
                 crate::dbg_cmd::GdbCmd::SetOption(crate::dbg_cmd::GdbOption::MiAsync(true)).into(),
             )
             .add_gdb_controller(info.ssh_controller)
+            .with_service_meta(service_meta)
             .build();
 
         // Build the session

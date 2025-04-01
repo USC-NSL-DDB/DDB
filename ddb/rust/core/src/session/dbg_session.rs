@@ -76,6 +76,7 @@ impl DbgSession {
                     .clone()
                     .unwrap_or(format!("session-{}", self.sid))
                     .as_str(),
+                self.config.service_meta.clone(),
             )
             .await;
 
@@ -104,8 +105,8 @@ impl DbgSession {
         });
 
         // update the group manager
-        if let Some(si) = &self.config.service_info {
-            get_group_mgr().add_session(si.hash.clone(), si.alias.clone(), self.sid);
+        if let Some(meta) = &self.config.service_meta {
+            get_group_mgr().add_session(meta.hash.clone(), meta.alias.clone(), self.sid);
         }
         self.sync_state().await?;
         // update router with input sender

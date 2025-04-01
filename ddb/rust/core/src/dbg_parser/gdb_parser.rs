@@ -115,6 +115,7 @@ mod tests {
         let msg = GdbParser::parse_multiple(output.trim());
         println!("{:?}", msg);
     }
+
     #[test]
     fn test_parse_result() {
         let output = r#"1234^done"#;

@@ -3,7 +3,7 @@ use std::any::Any;
 use gdbmi::raw::{Dict, Value};
 use tracing::{debug, error};
 
-use crate::{dbg_parser::gdb_parser::MIFormatter, state::STATES};
+use crate::{dbg_parser::gdb_parser::MIFormatter, discovery::discovery_message_producer::ServiceMeta, state::STATES};
 
 use super::{FinishedCmd, ParsedSessionResponse};
 
@@ -278,11 +278,12 @@ pub struct ThreadCreatedNotifFormatter {
     gtid: u64,
     gtgid: u64,
     sid: u64,
+    service_meta: Option<ServiceMeta>,
 }
 
 impl ThreadCreatedNotifFormatter {
-    pub fn new(gtid: u64, gtgid: u64, sid: u64) -> Self {
-        Self { gtid, gtgid, sid }
+    pub fn new(gtid: u64, gtgid: u64, sid: u64, service_meta: Option<ServiceMeta>) -> Self {
+        Self { gtid, gtgid, sid, service_meta }
     }
 }
 
@@ -299,10 +300,12 @@ impl Formatter for ThreadCreatedNotifFormatter {
     fn format(&self, input: &Self::Tranformed) -> String {
         // Example Output
         // =thread-created,id="1",group-id="i1"
+        let alias = self.service_meta.as_ref().map(|meta| meta.alias.clone()).unwrap_or("UNKNOWN".to_string());
         let payload: Dict = vec![
             ("id".to_string(), format!("{}", self.gtid).into()),
             ("group-id".to_string(), format!("i{}", self.gtgid).into()),
             ("session-id".to_string(), format!("{}", self.sid).into()),
+            ("session-alias".to_string(), format!("{}", alias).into()),
         ]
         .into();
         MIFormatter::format("=", "thread-created", Some(&payload), None)

@@ -49,6 +49,71 @@ impl fmt::Debug for ServiceInfo {
             .finish()
     }
 }
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub struct ServiceMeta
+{
+    pub ip: Ipv4Addr,
+    pub tag: String,
+    pub pid: u64,
+    pub hash: String,
+    pub alias: String,
+}
+
+impl ServiceMeta {
+    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String) -> Self {
+        ServiceMeta {
+            ip,
+            tag,
+            pid,
+            hash,
+            alias,
+        }
+    }
+    
+    pub fn from_service_info(info: &ServiceInfo) -> Self {
+        ServiceMeta {
+            ip: info.ip,
+            tag: info.tag.clone(),
+            pid: info.pid,
+            hash: info.hash.clone(),
+            alias: info.alias.clone(),
+        }
+    }
+    
+    pub fn from_service_info_owned(info: ServiceInfo) -> Self {
+        ServiceMeta {
+            ip: info.ip,
+            tag: info.tag,
+            pid: info.pid,
+            hash: info.hash,
+            alias: info.alias,
+        }
+    }
+}
+
+impl From<&ServiceInfo> for ServiceMeta {
+    fn from(info: &ServiceInfo) -> Self {
+        ServiceMeta::from_service_info(info)
+    }
+}
+
+impl From<ServiceInfo> for ServiceMeta {
+    fn from(info: ServiceInfo) -> Self {
+        ServiceMeta::from_service_info_owned(info)
+    }
+}
+
+impl fmt::Display for ServiceMeta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ServiceMeta {{ ip: {}, tag: {}, pid: {}, hash: {}, alias: {} }}",
+            self.ip, self.tag, self.pid, self.hash, self.alias
+        )
+    }
+}
+
 #[async_trait]
 pub trait DiscoveryMessageProducer: Send + Sync
 {

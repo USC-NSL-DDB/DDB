@@ -5,6 +5,8 @@ use std::{
 };
 use tokio::sync::RwLock;
 
+use crate::discovery::discovery_message_producer::ServiceMeta;
+
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum ThreadStatus {
     INIT,
@@ -49,6 +51,8 @@ pub struct SessionMeta {
     pub t_status: HashMap<u64, ThreadStatus>,
     pub curr_ctx: Option<ThreadContext>,
     pub in_custom_ctx: bool,
+    
+    pub service_meta: Option<ServiceMeta>,
 
     // indicate of the session is connected or not
     pub status: SessionStatus,
@@ -75,7 +79,7 @@ pub struct SessionMeta {
 
 impl SessionMeta {
     #[inline]
-    pub fn new(sid: u64, tag: String) -> Self {
+    pub fn new(sid: u64, tag: String, service_meta: Option<ServiceMeta>) -> Self {
         Self {
             tag,
             sid,
@@ -83,6 +87,7 @@ impl SessionMeta {
             t_status: HashMap::new(),
             curr_ctx: None,
             in_custom_ctx: false,
+            service_meta,
             status: SessionStatus::OFF,
             tid_to_per_inferior_tid: HashMap::new(),
             t_to_tg: HashMap::new(),
@@ -224,7 +229,7 @@ impl SessionStateMgr {
     }
 
     #[inline]
-    pub async fn add_session(&self, sid: u64, tag: &str) {
+    pub async fn add_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
         // self.sessions.write().await.insert(
         //     sid,
         //     SessionMeta::new(sid, tag.to_string()),
@@ -234,7 +239,7 @@ impl SessionStateMgr {
         let sessions = self.sessions.pin();
         sessions.insert(
             sid,
-            Arc::new(RwLock::new(SessionMeta::new(sid, tag.to_string()))),
+            Arc::new(RwLock::new(SessionMeta::new(sid, tag.to_string(), service_meta))),
         );
     }
 

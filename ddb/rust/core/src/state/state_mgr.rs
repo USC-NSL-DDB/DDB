@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::common::counter;
+use crate::{common::counter, discovery::discovery_message_producer::ServiceMeta};
 
 use super::{
     session_mgr,
@@ -29,8 +29,8 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn register_session(&self, sid: u64, tag: &str) {
-        self.session_states.add_session(sid, tag).await;
+    pub async fn register_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
+        self.session_states.add_session(sid, tag, service_meta).await;
     }
 
     #[inline]
@@ -211,10 +211,22 @@ impl StateMgr {
     }
 
     /// Get session meta data
-    /// This function get a copy of session meta data
+    /// This function get a shallow copy of session meta data
     #[inline]
     pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
         self.session_states.get_session(sid)
+    }
+    
+    /// Get session service meta
+    /// This function get a deep copy of session service meta data
+    #[inline] 
+    pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
+        if let Some(s_meta) = self.get_session(sid) {
+            let s_meta = s_meta.read().await;
+            return s_meta.service_meta.clone();
+        } else {
+            return None;
+        }
     }
 
     /// Perform a transaction-like operation on a session meta data
