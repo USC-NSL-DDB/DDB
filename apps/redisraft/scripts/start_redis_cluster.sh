@@ -2,19 +2,20 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 source $SCRIPT_DIR/shared.sh
+prep_raft_target
 
-RAFTLOGS_DIR=$SCRIPT_DIR/../raftlogs
+RAFT_MODULE=$REDISRAFT_DIR/redisraft.so
 
 start_one_redis_bg() {
 	IDX=$1
 	echo "Starting Redis server on port 500$IDX"
 	redis-server \
 		--port 500$IDX --dbfilename raft$IDX.rdb \
-		--loadmodule ../redisraft/redisraft.so \
+		--loadmodule $RAFT_MODULE \
 		--raft.log-filename raftlog$IDX.db \
 		--raft.id $IDX \
 		--raft.addr localhost:500$IDX --raft.log-max-file-size 1280000 --raft.log-max-cache-size 640000 \
-		--raft.enable-ddb yes > /dev/null 2>&1 &
+		--raft.enable-ddb yes > "$REDISLOGS_DIR/redis-server-$IDX.log" 2>&1 &
 }
 
 start_one_redis_bg_with_faketime() {
@@ -22,21 +23,24 @@ start_one_redis_bg_with_faketime() {
 	echo "Starting Redis server on port 500$IDX"
 	${APP_RUNNER} redis-server \
 		--port 500$IDX --dbfilename raft$IDX.rdb \
-		--loadmodule ../redisraft/redisraft.so \
+		--loadmodule $RAFT_MODULE \
 		--raft.log-filename raftlog$IDX.db \
 		--raft.id $IDX \
 		--raft.addr localhost:500$IDX --raft.log-max-file-size 1280000 --raft.log-max-cache-size 640000 \
-		--raft.enable-ddb yes > /dev/null 2>&1 &
+		--raft.enable-ddb yes > "$REDISLOGS_DIR/redis-server-$IDX.log" 2>&1 &
 }
 
 start_redis_cluster() {
 	SIZE=$1
 	mkdir -p $RAFTLOGS_DIR
+	mkdir -p $REDISLOGS_DIR
 	pushd $RAFTLOGS_DIR
 	for i in $(seq 1 $SIZE); do
 		if [ "$USE_FAKETIME" = true ]; then
+			echo "FAKETIME enabled"
 			start_one_redis_bg_with_faketime $i
 		else
+			echo "FAKETIME disabled"
 			start_one_redis_bg $i
 		fi
 	done
@@ -51,5 +55,6 @@ if [ "$USE_FAKETIME" = true ] && [ -z "${APP_RUNNER}" ]; then
 		exit 1
 fi
 
+echo "Using raft module: $RAFT_MODULE"
 echo "Starting Redis cluster with $CLUSTER_SIZE nodes"
 start_redis_cluster $CLUSTER_SIZE
