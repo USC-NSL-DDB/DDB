@@ -9,7 +9,7 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-LIBFAKETIME="${PREFIX}/lib/faketime/libfaketime.so.1"
+LIBFAKETIME="${PREFIX}/lib/faketime/libfaketimeMT.so.1"
   
 if [ ! -f "${LIBFAKETIME}" ]; then
     echo "Error: ${LIBFAKETIME} not found. Please install run 'scripts/install.sh' first."
