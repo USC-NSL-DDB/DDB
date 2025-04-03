@@ -680,7 +680,7 @@ class RecordTimeAndContinueMiCommand(gdb.MICommand):
         except Exception as e:
             ret = {"message": "error", "error": str(e)}
         finally:
-            gdb.execute("continue")
+            gdb.execute_mi("-exec-continue")
         return ret
 
 def find_environ_ptr():
