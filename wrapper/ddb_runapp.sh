@@ -16,7 +16,7 @@ if [ ! -f "${LIBFAKETIME}" ]; then
     exit 1
 fi
 
-# export FAKETIME_NO_CACHE=1 
+export FAKETIME_NO_CACHE=1 
 export FAKETIME="-00000000000000000"
 
 program="$1"

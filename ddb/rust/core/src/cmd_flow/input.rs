@@ -280,6 +280,7 @@ impl CmdHandler {
             "-break-insert" => BreakInsertHandler::new(router.clone()),
             "-thread-info" => ThreadInfoHandler::new(router.clone()),
             "-exec-continue" => ContinueHandler::new(router.clone()),
+            "-record-time-and-continue" => ContinueHandler::new(router.clone()),
             "-exec-interrupt" => InterruptHandler::new(router.clone()),
             "-file-list-lines" => ListHandler::new(router.clone()),
             "-thread-select" => ThreadSelectHandler::new(router.clone()),
@@ -288,6 +289,9 @@ impl CmdHandler {
             "-exec-next" => ExecNextHandler::new(router.clone()),
             "-exec-step" => ExecStepHandler::new(router.clone()),
             "-exec-finish" => ExecFinishHandler::new(router.clone()),
+            "-record-time-and-next" => ExecNextHandler::new(router.clone()),
+            "-record-time-and-step" => ExecStepHandler::new(router.clone()),
+            "-record-time-and-finish" => ExecFinishHandler::new(router.clone()),
         };
 
         Arc::new(CmdHandler {

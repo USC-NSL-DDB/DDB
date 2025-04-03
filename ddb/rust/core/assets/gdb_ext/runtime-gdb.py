@@ -1,5 +1,5 @@
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 import socket
 import struct
 import platform
@@ -461,8 +461,9 @@ class GetRemoteBTInfo(gdb.MICommand):
             # print(f"ip: {remote_ip}, pid: {pid}, pc: {parent_pc}, sp: {parent_sp}, fp: {parent_fp}, lr: {parent_lr}")
         except Exception as e:
             pass
-        global get_thrd_ktid_cmd_mi
-        result = get_thrd_ktid_cmd_mi.invoke([])
+        # global get_thrd_ktid_cmd_mi
+        # result = get_thrd_ktid_cmd_mi.invoke([])
+        result = gdb.execute_mi("-get-thread-ktid")
         if "error" in result:
             print(f"Error: {result['error']}")
         ktid = result["ktid"] if ("ktid" in result) and (result["ktid"]) else -1
@@ -600,7 +601,6 @@ class GetThreadKtidMI(gdb.MICommand):
         }
         try:
             if argv and argv[0]:
-                print(f"argv: {argv}, type: {type(argv)}")
                 # If thread number specified, find that thread
                 thread_num = int(argv[0])
                 thread = None
@@ -647,38 +647,82 @@ def cont_handler(event:gdb.ContinueEvent):
 gdb.events.stop.connect(stop_handler)
 gdb.events.cont.connect(cont_handler)
 
+def sync_pause_time(on_finish: Callable[[], None] = None):
+    global pause_start_time, accumulated_time,cont_time
+    ret = None
+    try:
+        print(f"timestamp: {time.perf_counter_ns()}")
+        paused_time_ns=time.perf_counter_ns()
+        start_env_time = time.perf_counter_ns()
+        if pause_start_time > paused_time_ns:
+            raise Exception("pause_start_time is greater than current time")
+        paused_time1=(paused_time_ns-pause_start_time)/ 1e9
+        accumulated_time = round(paused_time1 + accumulated_time, 9)
+        print(f"paused_time_ns:{paused_time1}, accumulated_time:{accumulated_time}")
+        modify_env_variable("FAKETIME", f"-{accumulated_time}")
+        print(f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms")
+        cont_time = time.perf_counter_ns()
+        ret = {"message": "success", "paused_time": accumulated_time} 
+    except Exception as e:
+        ret = {"message": "error", "error": str(e)}
+    finally:
+        on_finish() if on_finish else None
+        # gdb.execute_mi("-exec-continue")
+    return ret
+    
+
 class RecordTimeAndContinueMiCommand(gdb.MICommand):
     def __init__(self):
         super(RecordTimeAndContinueMiCommand, self).__init__(
             "-record-time-and-continue")
 
     def invoke(self, args):
-        global pause_start_time, accumulated_time,cont_time
-        # if len(args) < 2:
-        #     return {"message": "error", "error": "missing arguments"}
-        # pause_start_time=float(args[0])
-        # accumulated_time=float(args[1])
-        # print(f"pause_start_time:{pause_start_time}, accumulated_time:{accumulated_time}")
-        try:
-            print(f"timestamp: {time.perf_counter_ns()}")
-            paused_time_ns=time.perf_counter_ns()
-            start_env_time = time.perf_counter_ns()
-            if pause_start_time > paused_time_ns:
-                raise Exception("pause_start_time is greater than current time")
-            paused_time1=(paused_time_ns-pause_start_time)/ 1e9
-            accumulated_time = round(paused_time1 + accumulated_time, 9)
-            print(f"paused_time_ns:{paused_time1}, accumulated_time:{accumulated_time}")
-            modify_env_variable("FAKETIME", f"-{accumulated_time}")
-            print(f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms")
-            # setenv_command = f'setenv("FAKETIME", "-{accumulated_time}", 1)'
-            # gdb.execute(f'call (int){setenv_command}', to_string=True)
-            # safe_setenv("FAKETIME", f"-{accumulated_time}", 1)
-            # time.sleep(0.5)
-            cont_time = time.perf_counter_ns()
-            gdb.execute("continue")
-        except Exception as e:
-            return {"message": "error", "error": str(e)}
-        return {"message": "success", "paused_time": accumulated_time} 
+        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-continue", *args))
+        # global pause_start_time, accumulated_time,cont_time
+        # ret = None
+        # try:
+        #     print(f"timestamp: {time.perf_counter_ns()}")
+        #     paused_time_ns=time.perf_counter_ns()
+        #     start_env_time = time.perf_counter_ns()
+        #     if pause_start_time > paused_time_ns:
+        #         raise Exception("pause_start_time is greater than current time")
+        #     paused_time1=(paused_time_ns-pause_start_time)/ 1e9
+        #     accumulated_time = round(paused_time1 + accumulated_time, 9)
+        #     print(f"paused_time_ns:{paused_time1}, accumulated_time:{accumulated_time}")
+        #     modify_env_variable("FAKETIME", f"-{accumulated_time}")
+        #     print(f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms")
+        #     cont_time = time.perf_counter_ns()
+        #     ret = {"message": "success", "paused_time": accumulated_time} 
+        # except Exception as e:
+        #     ret = {"message": "error", "error": str(e)}
+        # finally:
+        #     gdb.execute_mi("-exec-continue")
+        # return ret
+    
+class RecordTimeAndNextMiCommand(gdb.MICommand):
+    def __init__(self):
+        super(RecordTimeAndNextMiCommand, self).__init__(
+            "-record-time-and-next")
+        
+    def invoke(self, args):
+        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-next", *args))
+
+class RecordTimeAndStepMiCommand(gdb.MICommand):
+    def __init__(self):
+        super(RecordTimeAndStepMiCommand, self).__init__(
+            "-record-time-and-step")
+        
+    def invoke(self, args):
+        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-step", *args))
+
+class RecordTimeAndFinishMiCommand(gdb.MICommand):
+    def __init__(self):
+        super(RecordTimeAndFinishMiCommand, self).__init__(
+            "-record-time-and-finish")
+        
+    def invoke(self, args):
+        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-finish", *args))
+
 def find_environ_ptr():
     try:
         # Try direct symbol access first
@@ -763,6 +807,13 @@ def modify_env_variable(env_name, new_value):
         return False
 
 GetGlobalVarCommand()
+
+get_lock_state_cmd_mi = GetLockStateMI()
+get_lock_state_cmd =GetLockState()
+
+get_thrd_ktid_cmd_mi = GetThreadKtidMI()
+get_thrd_ktid_cmd = GetThreadKtid()
+
 dbt_mi_cmd = DistributedBacktraceMICmd()
 DistributedBacktraceInContextMICmd()
 dbt_cmd = DistributedBTCmd()
@@ -775,9 +826,6 @@ GetRemoteBTInfo()
 ShowCaladanThreadCmd()
 
 RecordTimeAndContinueMiCommand()
-
-get_lock_state_cmd_mi = GetLockStateMI()
-get_lock_state_cmd =GetLockState()
-
-get_thrd_ktid_cmd_mi = GetThreadKtidMI()
-get_thrd_ktid_cmd = GetThreadKtid()
+RecordTimeAndNextMiCommand()
+RecordTimeAndStepMiCommand()
+RecordTimeAndFinishMiCommand()

@@ -732,7 +732,7 @@ impl Handler for ExecNextHandler {
         // 
         if let Target::Thread(_) = &cmd.target {
             let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = "-exec-next".try_into().unwrap();
+            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
             let (_, cmd) = cmd.to_command(NullFormatter);
             self.router.send_to(target, cmd);
         } else {
@@ -756,7 +756,7 @@ impl Handler for ExecFinishHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
             let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = "-exec-finish".try_into().unwrap();
+            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
             let (_, cmd) = cmd.to_command(NullFormatter);
             self.router.send_to(target, cmd);
         } else {
@@ -780,7 +780,7 @@ impl Handler for ExecStepHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
             let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = "-exec-step".try_into().unwrap();
+            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
             let (_, cmd) = cmd.to_command(NullFormatter);
             self.router.send_to(target, cmd);
         } else {

@@ -22,6 +22,7 @@ void signal_handler(int signal) {
 
 bool enable_ddb = false;
 std::string ddb_addr;
+bool enable_sleep = false;
 
 void parse_arguments(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
@@ -30,9 +31,11 @@ void parse_arguments(int argc, char* argv[]) {
       enable_ddb = true;
     } else if (arg == "--ddb_addr" && i + 1 < argc) {
       ddb_addr = argv[++i];
+    } else if (arg == "--enable_sleep") {
+      enable_sleep = true;
     } else {
       std::cerr << "Unknown argument: " << arg << std::endl;
-      std::cerr << "Usage: " << argv[0] << " [--enable_ddb] [--ddb_addr <address>] [--delay <seconds>]" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " [--enable_ddb] [--ddb_addr <address>] [--enable_sleep] [--delay <seconds>]" << std::endl;
       exit(1);
     }
   }
@@ -83,7 +86,8 @@ int main(int argc, char* argv[]) {
     std::cout << "System clock time: " << timestamp << std::endl;
 
     // Sleep a bit before next iteration
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    if (enable_sleep)
+      std::this_thread::sleep_for(std::chrono::seconds(2));
   }
 
   return 0;

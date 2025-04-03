@@ -9,11 +9,11 @@
 # Framework: serviceweaverkube
 # Framework: nu
 
-# PrerunGdbCommands:
-# - name: "enable script"
-#   command: "source ../gdb_ext/runtime-gdb-grpc.py"
-# - name: "enable non-stop mode"
-#   command: "set non-stop off"
+PrerunGdbCommands:
+- name: "set logfile name"
+  command: "set logging file gdblog.txt"
+- name: "set logfile overwrite"
+  command: "set logging overwrite on"
 
 # SSH:
 #   user: ybyan

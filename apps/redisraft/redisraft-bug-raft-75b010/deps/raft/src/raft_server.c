@@ -703,7 +703,8 @@ int raft_periodic_internal(raft_server_t *me,
     }
     else if (me->election_timeout_rand <= me->timeout_elapsed)
     {
-        int e = raft_election_start(me, 0);
+        // reproduce the bug, disable precandidate.
+        int e = raft_election_start(me, 1);
         if (0 != e)
             return e;
     }

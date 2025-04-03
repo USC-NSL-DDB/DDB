@@ -46,5 +46,26 @@
             "args": [],
             "cwd": "${workspaceFolder}"
         },
+        {
+            "name": "Python: Attach to GDB Extentsion Script",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5800
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/core/assets/gdb_ext",
+                    "remoteRoot": "${workspaceFolder}/core/assets/gdb_ext"
+                }
+            ],
+            "justMyCode": true,
+            "presentation": {
+                "hidden": false,
+                "group": "Python",
+                "order": 1
+            }
+        }
     ]
 }
