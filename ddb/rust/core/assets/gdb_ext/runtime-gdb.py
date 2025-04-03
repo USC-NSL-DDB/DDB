@@ -659,6 +659,7 @@ class RecordTimeAndContinueMiCommand(gdb.MICommand):
         # pause_start_time=float(args[0])
         # accumulated_time=float(args[1])
         # print(f"pause_start_time:{pause_start_time}, accumulated_time:{accumulated_time}")
+        ret = None
         try:
             print(f"timestamp: {time.perf_counter_ns()}")
             paused_time_ns=time.perf_counter_ns()
@@ -675,10 +676,13 @@ class RecordTimeAndContinueMiCommand(gdb.MICommand):
             # safe_setenv("FAKETIME", f"-{accumulated_time}", 1)
             # time.sleep(0.5)
             cont_time = time.perf_counter_ns()
-            gdb.execute("continue")
+            ret = {"message": "success", "paused_time": accumulated_time} 
         except Exception as e:
-            return {"message": "error", "error": str(e)}
-        return {"message": "success", "paused_time": accumulated_time} 
+            ret = {"message": "error", "error": str(e)}
+        finally:
+            gdb.execute("continue")
+        return ret
+
 def find_environ_ptr():
     try:
         # Try direct symbol access first

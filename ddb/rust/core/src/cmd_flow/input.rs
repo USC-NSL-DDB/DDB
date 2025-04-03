@@ -280,6 +280,7 @@ impl CmdHandler {
             "-break-insert" => BreakInsertHandler::new(router.clone()),
             "-thread-info" => ThreadInfoHandler::new(router.clone()),
             "-exec-continue" => ContinueHandler::new(router.clone()),
+            "-record-time-and-continue" => ContinueHandler::new(router.clone()),
             "-exec-interrupt" => InterruptHandler::new(router.clone()),
             "-file-list-lines" => ListHandler::new(router.clone()),
             "-thread-select" => ThreadSelectHandler::new(router.clone()),
