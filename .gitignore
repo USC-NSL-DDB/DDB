@@ -141,3 +141,5 @@ debug-adapter/out
 debug-adapter/dist
 
 # *.txt
+ddb/env
+ddb/iddb
