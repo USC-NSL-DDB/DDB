@@ -1,0 +1,73 @@
+---
+- name: Create RedisRaft module target dir
+  file:
+    path: "{{ install_dir }}/lib"
+    owner: root
+    group: root
+    mode: 0755
+    state: directory
+  become: true
+
+- name: Create user
+  user:
+    name: "{{ runtime_user }}"
+    shell: /bin/bash
+    state: present
+  become: true
+
+- name: Checkout Redis
+  git:
+    repo: "{{ redis_url }}"
+    dest: "{{ redis_build_dir }}"
+    version: "{{ redis_version }}"
+  register: checkout_redis
+
+- name: Build Redis
+  command:
+    chdir: "{{ redis_build_dir }}"
+    cmd: make -j
+    creates: redis_server
+  register: build_redis
+  when: checkout_redis.changed
+
+- name: Install Redis
+  make:
+    chdir: "{{ redis_build_dir }}"
+    target: install
+    params:
+      PREFIX: "{{ install_dir }}"
+  become: true
+  when: build_redis.changed
+
+- name: Checkout RedisRaft
+  git:
+    repo: "{{ redisraft_url }}"
+    dest: "{{ redisraft_build_dir }}"
+    version: "{{ redisraft_version }}"
+    recursive: true
+  register: checkout_redisraft
+
+- name: Create RedisRaft build dir
+  file:
+    path: "{{ redisraft_build_dir }}/build"
+    state: directory
+  register: builddir_redisraft
+  when: checkout_redisraft.changed
+
+- name: Build RedisRaft
+  shell: |
+    cd  {{ redisraft_build_dir }}/build
+    cmake ..
+    make -j
+  register: build_redisraft
+  when: builddir_redisraft.changed
+
+- name: Install RedisRaft module
+  copy:
+    src: "{{ redisraft_build_dir }}/redisraft.so"
+    remote_src: true
+    dest: "{{ install_dir }}/lib/redisraft.so"
+    mode: '0755'
+    owner: 'root'
+  become: true
+  when: build_redisraft.changed

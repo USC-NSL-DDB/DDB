@@ -1,0 +1,69 @@
+-- doesn't work, as command appears as "raft", not "blpop"
+Blocking command accounted only once in commandstats after timeout
+
+-- Streams not supported
+-- See: https://github.com/RedisLabs/redisraft/issues/59
+/.*XREAD.*
+/.*XADD.*
+/.*XRANGE.*
+COPY basic usage for stream
+COPY basic usage for stream-cgroups
+Keyspace notifications: stream events test
+lazy free a stream with all types of metadata
+lazy free a stream with deleted cgroup
+-- depends on streams
+Blocking commands ignores the timeout
+
+-- Timeouts and termination of Lua scripts is not possible when scripts are
+-- replicated and executed by individual nodes.
+/.*SCRIPT KILL.*
+Timedout script does not cause a false dead client
+Timedout script link is still usable after Lua returns
+/function kill
+/script kill
+/test wrong subcommand
+
+-- RAFT command prefix shows up in SLOWLOG.
+SLOWLOG - Rewritten commands are logged as their original command
+SLOWLOG - blocking command is reported only after unblocked
+
+-- RAFT command prefix shows up in MONITOR
+MONITOR can log executed commands
+MONITOR can log commands issued by the scripting engine
+MONITOR can log commands issued by functions
+MONITOR correctly handles multi-exec cases
+MONITOR log blocked command only once
+
+-- TODO: check what's wrong
+UNLINK can reclaim memory in background
+
+-- ACL test fails because we prepend "raft" string to the command
+Script ACL check
+
+-- WATCH (multi/exec) not supported
+/.*MULTI.*
+/.*EXEC.*
+/.*WATCH.*
+SMOVE only notify dstset when the addition is successful
+FLUSHALL is able to touch the watched keys
+FLUSHDB is able to touch the watched keys
+client evicted due to watched key list
+FLUSHALL does not touch non affected keys
+FLUSHDB does not touch non affected keys
+SWAPDB is able to touch the watched keys that exist
+SWAPDB is able to touch the watched keys that do not exist
+
+-- After fixing this: https://github.com/RedisLabs/redisraft/issues/367
+-- We don't need to skip this test as it doesn't actually configure a replica.
+not enough good replicas
+
+-- We can't handle normal plain eval (without flags) the same way as redis aborting oom on demand
+Consistent eval error reporting
+
+
+-- These three tests were introduced by https://github.com/redis/redis/pull/12326
+-- Probably, it needs a fix to make them work when commands are executed via RM_Call()
+-- See related ticket: https://redislabs.atlassian.net/browse/RR-323
+publish to self inside multi
+publish to self inside script
+unsubscribe inside multi, and publish to self

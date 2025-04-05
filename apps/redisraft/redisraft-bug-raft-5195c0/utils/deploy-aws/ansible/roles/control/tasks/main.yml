@@ -1,0 +1,3 @@
+---
+- include: memtier_benchmark.yml
+- include: cluster.yml
