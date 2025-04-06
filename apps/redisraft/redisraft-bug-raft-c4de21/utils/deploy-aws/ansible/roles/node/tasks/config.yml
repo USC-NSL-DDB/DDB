@@ -1,0 +1,43 @@
+---
+- name: Create instance directories
+  file:
+    path: "{{ runtime_dir }}/redisraft-{{ item['port'] }}"
+    owner: "{{ runtime_user }}"
+    group: "{{ runtime_user }}"
+    mode: 0755
+    state: directory
+  with_items: "{{ instances }}"
+  become: true
+
+- name: Create instance config files
+  template:
+    src: redis_conf.j2
+    dest: "{{ runtime_dir }}/redisraft-{{ item['port'] }}/redis.conf"
+    owner: "{{ runtime_user }}"
+    group: "{{ runtime_user }}"
+    mode: 0644
+  with_items: "{{ instances }}"
+  become: true
+
+- name: RedisRaft systemd unit file
+  template:
+    src: systemd_redisraft.j2
+    dest: /lib/systemd/system/redisraft@.service
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+    - reload_systemd
+    - start_redisraft
+  become: true
+
+- name: RedisRaft systemd target file
+  template:
+    src: systemd_redisraft_target.j2
+    dest: /lib/systemd/system/redisraft.target
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+    - reload_systemd
+  become: true

@@ -1,1 +1,4 @@
 raftlogs/
+redislogs/
+
+build/
