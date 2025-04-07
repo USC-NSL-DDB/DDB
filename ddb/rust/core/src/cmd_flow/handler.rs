@@ -788,3 +788,22 @@ impl Handler for ExecStepHandler {
         }
     }
 }
+
+pub struct ExecJumpHandler;
+
+#[async_trait]
+impl Handler for ExecJumpHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        // Note: `exec-jump` should only be used when session is specified at the moment.
+        // otherwise it will be ambiguous which process to jump to.
+        let (target, cmd) = cmd.to_command(PlainFormatter);
+        match target {
+            Target::Session(_) => {
+                get_router().send_to(target, cmd);
+            }
+            _ => {
+                error!("exec-jump command should specify a session");
+            }
+        }
+    }
+}

@@ -210,6 +210,8 @@ impl InputCmdParser {
                     .expect("valid sid when use --session flag");
                 let target = Target::Session(sid);
                 let mut rest = rest.clone();
+                // remove the `--session` and its argument from the rest.
+                // underlying debugger doesn't have session concept.
                 rest.remove(index);
                 rest.remove(index); // the next element is shifted after the first remove
                 return (target, prefix, rest.join(" ").trim().to_string());
@@ -292,6 +294,7 @@ impl CmdHandler {
             "-record-time-and-next" => ExecNextHandler::new(router.clone()),
             "-record-time-and-step" => ExecStepHandler::new(router.clone()),
             "-record-time-and-finish" => ExecFinishHandler::new(router.clone()),
+            "-exec-jump" => ExecJumpHandler,
         };
 
         Arc::new(CmdHandler {
