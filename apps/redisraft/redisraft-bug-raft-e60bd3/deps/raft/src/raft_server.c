@@ -1066,17 +1066,17 @@ int raft_recv_requestvote(raft_server_t *me,
         // me->leader_id = RAFT_NODE_ID_NONE;
         me->timeout_elapsed = 0;
     }
-    
-    // reproduce the bug.
-    /* voted for someone, therefore must be in an election */
-    if (0 <= me->voted_for)
-        me->leader_id = RAFT_NODE_ID_NONE;
 
 done:
     if (resp->vote_granted) {
         resp->prevote ? me->stats.requestvote_prevote_req_granted++ :
                         me->stats.requestvote_req_granted++;
     }
+
+    // reproduce the bug.
+    /* voted for someone, therefore must be in an election */
+    if (0 <= me->voted_for)
+        me->leader_id = RAFT_NODE_ID_NONE;
 
     resp->term = me->current_term;
 

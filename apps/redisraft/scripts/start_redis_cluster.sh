@@ -30,7 +30,27 @@ start_one_redis_bg_with_faketime() {
 		--raft.enable-ddb yes > "$REDISLOGS_DIR/redis-server-$IDX.log" 2>&1 &
 }
 
+build_redisraft_module() {
+	CLEAN_FIRST=${1:-false}
+	# Ensure the RedisRaft module is built
+	echo "Building RedisRaft module..."
+	pushd $REDISRAFT_DIR
+	mkdir -p build
+	cd build
+	if [ "$CLEAN_FIRST" = true ]; then
+		rm -rf *
+	fi
+	cmake -DCMAKE_BUILD_TYPE=Debug ..
+	make -j$(nproc)
+	if [ $? -ne 0 ]; then
+		echo "Failed to build RedisRaft module"
+		exit 1
+	fi
+	popd
+}
+
 start_redis_cluster() {
+	build_redisraft_module
 	SIZE=$1
 	mkdir -p $RAFTLOGS_DIR
 	mkdir -p $REDISLOGS_DIR
