@@ -46,6 +46,13 @@ pub struct MIFormatter;
 
 impl MIFormatter {
     #[inline]
+    fn escape_str(input: &str) -> String {
+        input
+            .replace(r#"\"#, r#"\\"#)
+            .replace(r#"""#, r#"\""#)
+    }
+
+    #[inline]
     pub fn format_dict(payload: &Dict) -> String {
         let payload = &payload.0;
 
@@ -54,6 +61,7 @@ impl MIFormatter {
             .fold(format!(""), |acc, (k, v)| {
                 let out = match v {
                     gdbmi::raw::Value::String(s) => {
+                        let s = MIFormatter::escape_str(s);
                         format!("\"{}\"", s)
                     }
                     gdbmi::raw::Value::List(l) => {
@@ -330,5 +338,28 @@ mod tests {
         let expected = GdbParser::parse(test_str).unwrap();
 
         assert_eq!(output, expected);
+    }
+    
+    #[test]
+    fn test_mi_parse_inner_string_escape() {
+        let output = r#"*stopped,reason="end-stepping-range",frame={addr="0x000075e25f7082a5",func="clusterInit",args=[{name="cluster_id",value="0x7ffedc6a85d0 \"cd6fab923d16922ebae3ade229880640\\300\\210j\\334\\376\\177\""}],file="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",fullname="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",line="1087",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="21""#;
+        let msg = GdbParser::parse(output.trim()).unwrap(); 
+        // println!("{:?}", msg);
+        
+        match msg.clone() {
+            Message::Response(Response::Notify {
+                token,
+                message,
+                payload,
+            }) => {
+                assert_eq!(token, None);
+                assert_eq!(message, "stopped");
+                assert_eq!(payload.0.is_empty(), false);
+                let formatted_out = MIFormatter::format("*", "stopped", Some(&payload), None);
+                let reparse = GdbParser::parse(&formatted_out).unwrap();
+                assert_eq!(msg, reparse);
+            }
+            _ => panic!("unexpected message type"),
+        }
     }
 }
