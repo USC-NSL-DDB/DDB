@@ -154,7 +154,7 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     ip_str.to_string(),
                                     pid as u64,
                                     "hash".to_string(),
-                                    "alias".to_string(),
+                                    pod_name.to_string(),
                                     Box::new(SSHAttachController::new(ssh_cred, tunnel)),
                                 );
                                 tx.send_async(info).await.ok();
