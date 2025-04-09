@@ -1,0 +1,53 @@
+---
+Framework: "serviceweaverkube"
+SSH:
+  user: root
+  port: 22
+ServiceWeaverConf:
+  service_name: "server.out"
+  jump_clinet_host: "10.43.196.54"
+  jump_client_port: 2222
+  jump_client_user: "root"
+  jump_client_password: "password123"
+  jump_client_key_path: "/home/junzhouh/.ssh/id_rsa"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+
+PrerunGdbCommands:
+  # - name: "enable async mode"
+  #   command: "set mi-async on"
+  # - name: "enable non-stop mode"
+  #   command: "set non-stop off"
+  - name: "load extension"
+    command: "source /workspace/extension.py"
+Conf:
+  log_dir: "/home/junzhouh/ddb-rust/tmp/logs"
+  base_dir: "/home/junzhouh/ddb-rust/tmp"
+  api_server_port: 5004
+# Components:
+# # TODO: Supports for pid (latter attach), remote attach
+# - mode: local
+#   tag: proclet_server_0
+#   cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+#   bin: "./nu_bin/test_migrate"
+#   args: [ "-l", "1", "-i", "18.18.1.2" ]
+#   sudo: true
+# - mode: remote
+#   remote_port: 9898
+#   cred:
+#     hostname: 10.10.2.2
+#     user: ybyan
+#   tag: proclet_server_1
+#   cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+#   bin: "./nu_bin/test_migrate"
+#   args: [ "-l", "1", "-i", "18.18.1.3" ]
+#   sudo: true
+# - mode: local
+#   tag: proclet_server_entry
+#   cwd: "/proj/flashburst-PG0/code/distributed-debugger"
+#   bin: "./nu_bin/test_migrate"
+#   args: [ "-l", "1", "-i", "18.18.1.4", "-m"]
+#   sudo: true
+#   run_delay: 3

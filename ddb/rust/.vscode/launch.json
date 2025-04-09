@@ -20,8 +20,8 @@
                 }
             },
             "args": [
-                "${workspaceFolder}/core/configs/dbg_auto_discovery.yaml",
-                "--console-log", 
+                "/home/junzhouh/distributed_debugger/distributed-debugger/apps/.ddb/serviceweaver_dis.yml",
+                "--console-log",
                 "--console-level",
                 "debug"
             ],
