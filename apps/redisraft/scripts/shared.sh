@@ -4,6 +4,12 @@ CLUSTER_SIZE=3
 USE_FAKETIME=true
 # USE_FAKETIME=false
 
+REDIS_SOURCE_DIR=$SCRIPT_DIR/../redis
+REDIS_BIN_INSTALL_DIR=${HOME}/.local
+mkdir -p $REDIS_BIN_INSTALL_DIR
+
+export PATH=$REDIS_BIN_INSTALL_DIR/bin:$PATH
+
 RAFTLOGS_DIR=$SCRIPT_DIR/../raftlogs
 REDISLOGS_DIR=$SCRIPT_DIR/../redislogs
 APP_RUNNER=${HOME}/.local/bin/ddb_runapp
@@ -12,7 +18,7 @@ prep_raft_target() {
 	mkdir -p $RAFTLOGS_DIR
 	mkdir -p $REDISLOGS_DIR
 	
-	VALID_BUG_TYPES=("none" "75b010" "07796f" "e60bd3" "c4de21")
+	VALID_BUG_TYPES=("none" "75b010" "e60bd3" "c4de21")
 	if [[ -z "$BUG_TYPE" ]]; then
 		echo "Please set BUG_TYPE to one of: ${VALID_BUG_TYPES[*]}"
 		read -p "Enter BUG_TYPE: " BUG_TYPE
@@ -22,7 +28,7 @@ prep_raft_target() {
 	if [[ ! " ${VALID_BUG_TYPES[@]} " =~ " ${BUG_TYPE} " ]]; then
 		echo "Invalid BUG_TYPE: $BUG_TYPE"
 		echo "Please set BUG_TYPE to one of: ${VALID_BUG_TYPES[*]}"
-		echo "Example: BUG_TYPE=75b010 ./<the-script>.sh"
+		echo "Example: BUG_TYPE=e60bd3 ./<the-script>.sh"
 		return 1
 	fi
 	
