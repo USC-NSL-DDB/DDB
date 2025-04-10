@@ -7,7 +7,30 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'ddb'",
+            "name": "[DEFAULT] Debug executable 'ddb'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=ddb",
+                    "--package=ddb"
+                ],
+                "filter": {
+                    "name": "ddb",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "${workspaceFolder}/core/configs/dbg_auto_discovery.yaml",
+                "--console-log",
+                "--console-level",
+                "debug"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "[SW] Debug executable 'ddb'",
             "cargo": {
                 "args": [
                     "build",
