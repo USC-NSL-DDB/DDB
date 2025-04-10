@@ -6,3 +6,11 @@
 	path = rpc_frameworks/grpc
 	url = https://github.com/totoroyyb/grpc-ddb.git
 	branch = main
+[submodule "rpc_frameworks/weaver"]
+	path = rpc_frameworks/weaver
+	url = https://github.com/hjzccc/weaver.git
+	branch = weaver-exp
+[submodule "rpc_frameworks/socialnetwork"]
+	path = rpc_frameworks/socialnetwork
+	url = https://github.com/USC-NSL/SocialNetwork-serviceweaver.git
+	branch = main
