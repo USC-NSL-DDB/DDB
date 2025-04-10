@@ -1,25 +1,20 @@
 // A launch configuration that compiles the extension and then opens it inside a new window
 {
 	"version": "0.2.0",
-	"configurations": [
+	"inputs": [
 		{
-			"type": "ddb",
-			"request": "launch",
-			"name": "Attach DDB",
-			"ddbpath": "/home/junzhouh/distributed_debugger/distributed-debugger/ddb/rust/target/release/ddb",
-			"configFilePath": "${workspaceFolder}/.ddb/serviceweaver_dis.yml",
-			// "debugger_args": [ "--console-log", "--console-level", "debug" ],
-			// "debugger_args": [ "--console-log", "--console-level", "info" ],
-			"debugger_args": [
-				"--console-log",
-				"--console-level",
-				"info",
-				"--file-level",
-				"trace"
+			"id": "debugServerPort",
+			"type": "pickString",
+			"description": "Debug server port",
+			"options": [
+				"4711",
+				"4712",
+				"4713",
 			],
-			"debugServer": 4712,
-			"valuesFormatting": "prettyPrinters",
-		},
+			"default": "4711"
+		}
+	],
+	"configurations": [
 		{
 			"type": "ddb",
 			"request": "launch",
@@ -32,7 +27,39 @@
 				"--console-level",
 				"info"
 			],
-			"debugServer": 4711,
+			"debugServer": "${input:debugServerPort}",
+			"valuesFormatting": "prettyPrinters",
+		},
+		{
+			"type": "ddb",
+			"request": "launch",
+			"name": "[ServiceWeaver] Attach DDB",
+			"ddbpath": "/home/junzhouh/distributed_debugger/distributed-debugger/ddb/rust/target/release/ddb",
+			"configFilePath": "${workspaceFolder}/.ddb/serviceweaver_dis.yml",
+			"debugger_args": [
+				"--console-log",
+				"--console-level",
+				"info",
+				"--file-level",
+				"trace"
+			],
+			"debugServer": "${input:debugServerPort}",
+			"valuesFormatting": "prettyPrinters",
+		},
+		{
+			"type": "ddb",
+			"request": "launch",
+			"name": "Attach DDB",
+			"ddbpath": "${env:HOME}/.cargo/bin/ddb",
+			"configFilePath": "${workspaceFolder}/.ddb/dbg_auto_discovery.yaml",
+			"debugger_args": [
+				"--console-log",
+				"--console-level",
+				"info",
+				"--file-level",
+				"debug"
+			],
+			"debugServer": "${input:debugServerPort}",
 			"valuesFormatting": "prettyPrinters",
 		},
 	],
