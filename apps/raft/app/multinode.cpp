@@ -15,7 +15,7 @@ constexpr std::string_view node_path = "./raft_node";
 constexpr std::string_view ctrl_addr = "0.0.0.0:55000";
 
 ABSL_FLAG(uint64_t, num, 3, "number of nodes to spawn (>= 3)");
-ABSL_FLAG(std::string, bin, "./node", "the binary of node app");
+ABSL_FLAG(std::string, bin, std::string(node_path), "the binary of node app");
 ABSL_FLAG(int, verbosity, 1,
           "Verbosity level: 0 (silent), 1 (raft message (file sink only))");
 ABSL_FLAG(int, fail_type, 0, "Failure Type: 0 (disonnection), 1 (partition)");
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
   }
 
   toolings::RaftTestCtrl ctrl(configs, node_tester_ports,
-                              std::string(node_path), std::string(ctrl_addr), fail_type,
+                              binary_path, std::string(ctrl_addr), fail_type,
                               verbosity, logger, additional_flags);
 
   ctrl.register_applier_handler({

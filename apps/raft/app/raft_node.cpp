@@ -205,13 +205,17 @@ int main(int argc, char **argv) {
   absl::ParseCommandLine(argc, argv);
 
   if (absl::GetFlag(FLAGS_enable_ddb)) {
+    // Use the node ID as part of the alias to make it unique
+    auto node_id = absl::GetFlag(FLAGS_id);
+    std::string alias = "raft_node_" + std::to_string(node_id);
+
     auto ip_addr = absl::GetFlag(FLAGS_ddb_addr);
     if (ip_addr.empty()) {
       std::cerr << "Error: --ddb_addr flag is required when ddb is enabled" << std::endl;
       return 1;
     }
     auto ddb_config = DDB::Config::get_default(ip_addr)
-      .with_alias("raft_node");
+      .with_alias(alias);
     auto connector = DDB::DDBConnector(ddb_config);
     connector.init();
   }

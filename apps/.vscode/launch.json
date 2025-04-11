@@ -20,6 +20,21 @@
 		{
 			"type": "ddb",
 			"request": "launch",
+			"name": "[RAFT] Attach DDB",
+			"ddbpath": "${env:HOME}/.cargo/bin/ddb",
+			"configFilePath": "${workspaceFolder}/.ddb/dbg_auto_discovery.yaml",
+			// "debugger_args": [ "--console-log", "--console-level", "debug" ],
+			"debugger_args": [
+				"--console-log",
+				"--console-level",
+				"info"
+			],
+			"debugServer": 4711,
+			"valuesFormatting": "prettyPrinters",
+		},
+		{
+			"type": "ddb",
+			"request": "launch",
 			"name": "[ServiceWeaver] Attach DDB",
 			"ddbpath": "/home/junzhouh/distributed_debugger/distributed-debugger/ddb/rust/target/release/ddb",
 			"configFilePath": "${workspaceFolder}/.ddb/serviceweaver_dis.yml",
