@@ -1,19 +1,6 @@
 // A launch configuration that compiles the extension and then opens it inside a new window
 {
 	"version": "0.2.0",
-	"inputs": [
-		{
-			"id": "debugServerPort",
-			"type": "pickString",
-			"description": "Debug server port",
-			"options": [
-				"4711",
-				"4712",
-				"4713",
-			],
-			"default": "4711"
-		}
-	],
 	"configurations": [
 		{
 			"type": "ddb",
@@ -27,7 +14,7 @@
 				"--console-level",
 				"info"
 			],
-			"debugServer": "${input:debugServerPort}",
+			"debugServer": 4711,
 			"valuesFormatting": "prettyPrinters",
 		},
 		{
@@ -43,7 +30,7 @@
 				"--file-level",
 				"trace"
 			],
-			"debugServer": "${input:debugServerPort}",
+			"debugServer": 4712,
 			"valuesFormatting": "prettyPrinters",
 		},
 		{
@@ -59,7 +46,7 @@
 				"--file-level",
 				"debug"
 			],
-			"debugServer": "${input:debugServerPort}",
+			"debugServer": 4711,
 			"valuesFormatting": "prettyPrinters",
 		},
 	],
