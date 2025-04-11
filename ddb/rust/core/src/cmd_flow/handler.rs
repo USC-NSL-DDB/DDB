@@ -7,7 +7,7 @@ use tokio::{
     sync::{RwLock, RwLockWriteGuard},
     task::JoinHandle,
 };
-use tracing::{error, warn, debug};
+use tracing::{debug, error, warn};
 
 use crate::state::{get_bkpt_mgr, BkptMeta, SessionMeta, ThreadContext, ThreadStatus, STATES};
 
@@ -158,7 +158,7 @@ impl ContinueHandler {
         regs.ctx
             .iter()
             .fold(format!(""), |acc, (reg, val)| {
-                format!("{} {}={};", acc, reg, val)
+                format!("{} {}={}", acc, reg, val)
             })
             .trim()
             .to_string()
@@ -430,6 +430,7 @@ impl DistributeBacktraceHandler {
         // e.g. the thread status is changed to STOPPED
         loop {
             let write_guard = s.write().await;
+            debug!("check thread status for {}", write_guard.tag);
             if write_guard
                 .t_status
                 .iter()
@@ -606,6 +607,7 @@ impl Handler for DistributeBacktraceHandler {
 
                     // ------------ [BEGIN] interrupt the parent thread ------------
                     if !parent_in_custom_ctx {
+                        debug!("try to swap context for {}", parent_sid);
                         // interrupt, switch context, get backtrace
                         let intr_cmd: ParsedInputCmd =
                             format!("-exec-interrupt --session {}", parent_sid)
@@ -625,55 +627,54 @@ impl Handler for DistributeBacktraceHandler {
                             );
                             break;
                         }
-                    }
-                    // ------------ [END] interrupt the parent thread ------------
+                        // ------------ [END] interrupt the parent thread ------------
 
-                    // ------------ [BEGIN] switch the context for the parent thread ------------
-                    let mut w_guard = Self::check_thread_status(&parent_s).await.unwrap();
+                        // ------------ [BEGIN] switch the context for the parent thread ------------
+                        let mut w_guard = Self::check_thread_status(&parent_s).await.unwrap();
 
-                    // start to switch context, hold the write lock to create critical section.
-                    // to this point, all threads in this sessions are considered as stopped.
-                    let ctx_switch_args = Self::prepare_ctx_switch_args(
-                        &parent_meta
-                            .get("caller_ctx")
-                            .unwrap()
-                            .expect_dict_ref()
-                            .unwrap(),
-                    );
-                    let switch_cmd: ParsedInputCmd =
-                        format!("-switch-context-custom {}", ctx_switch_args)
-                            .try_into()
+                        // start to switch context, hold the write lock to create critical section.
+                        // to this point, all threads in this sessions are considered as stopped.
+                        let ctx_switch_args = Self::prepare_ctx_switch_args(
+                            &parent_meta
+                                .get("caller_ctx")
+                                .unwrap()
+                                .expect_dict_ref()
+                                .unwrap(),
+                        );
+                        let switch_cmd: ParsedInputCmd =
+                            format!("-switch-context-custom {}", ctx_switch_args)
+                                .try_into()
+                                .unwrap();
+                        let (_, switch_cmd) = switch_cmd.to_command(NullFormatter);
+                        let switch_resp = self
+                            .router
+                            .send_to_ret(Target::Thread(inspect_gtid), switch_cmd)
+                            .await
                             .unwrap();
-                    let (_, switch_cmd) = switch_cmd.to_command(NullFormatter);
-                    let switch_resp = self
-                        .router
-                        .send_to_ret(Target::Thread(inspect_gtid), switch_cmd)
-                        .await
-                        .unwrap();
-                    let switch_resp = switch_resp
-                        .get_responses()
-                        .first()
-                        .unwrap()
-                        .get_payload()
-                        .unwrap();
+                        let switch_resp = switch_resp
+                            .get_responses()
+                            .first()
+                            .unwrap()
+                            .get_payload()
+                            .unwrap();
 
-                    if switch_resp["message"].expect_string_ref().unwrap() != "success" {
-                        error!(
+                        if switch_resp["message"].expect_string_ref().unwrap() != "success" {
+                            error!(
                                 "Failed to switch context for session {}, breaks here. The call stack might be corrupted.",
                                 parent_sid
                             );
+                        }
+
+                        let ctx_to_save =
+                            Self::extract_ctx_from_payload(&switch_resp, inspect_gtid).unwrap();
+
+                        w_guard.curr_ctx = Some(ctx_to_save);
+                        w_guard.in_custom_ctx = true;
                     }
-
-                    let ctx_to_save =
-                        Self::extract_ctx_from_payload(&switch_resp, inspect_gtid).unwrap();
-
-                    w_guard.curr_ctx = Some(ctx_to_save);
-                    w_guard.in_custom_ctx = true;
-
                     // ------------ [BEGIN] get backtrace for the parent thread ------------
                     let bt_data = self.get_bt_and_caller_meta(inspect_gtid).await;
                     // drop the write guard at this point to hold the critical section when getting the backtrace
-                    drop(w_guard);
+                    // drop(w_guard);
                     parent_meta = match bt_data {
                         Ok(data) => {
                             // move the backtrace to the output payload
@@ -728,8 +729,8 @@ impl Handler for ExecNextHandler {
         // } else {
         //     warn!("exec-next command should specify a thread id");
         // }
-        // 
-        // 
+        //
+        //
         if let Target::Thread(_) = &cmd.target {
             let target = cmd.target.clone();
             let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
