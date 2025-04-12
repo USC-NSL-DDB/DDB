@@ -17,3 +17,5 @@ src/faketime
 
 compile_commands.json
 .cache/
+
+!*.map
