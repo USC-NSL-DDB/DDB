@@ -14,3 +14,6 @@
 	path = rpc_frameworks/socialnetwork
 	url = https://github.com/USC-NSL/SocialNetwork-serviceweaver.git
 	branch = main
+[submodule "rpc_frameworks/quicksand"]
+	path = rpc_frameworks/quicksand
+	url = https://github.com/totoroyyb/quicksand-ddb.git
