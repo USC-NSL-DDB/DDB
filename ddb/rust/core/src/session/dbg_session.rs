@@ -23,8 +23,7 @@ use crate::{
 // If we need to support more controller types in the future,
 // we can consider using dynamic dispatch.
 #[derive(Debug)]
-pub struct DbgSession
-{
+pub struct DbgSession {
     pub sid: u64,
     pub config: DbgSessionConfig,
     pub poll_handle: Option<tokio::task::JoinHandle<()>>,
@@ -150,7 +149,9 @@ impl DbgSession {
 
     pub async fn remote_attach(&mut self) -> Result<InputSender> {
         use crate::common::config::{Config, Framework};
-        let full_args = crate::common::utils::gdb::gdb_start_cmd(false);
+        use crate::common::utils::gdb::gdb_start_cmd;
+
+        let full_args = gdb_start_cmd(Config::global().conf.sudo);
         let ctrl = &mut self.config.gdb_controller;
         let ssh_io = ctrl.start(&full_args).await?;
         self.input_tx = Some(ssh_io.in_tx.clone());
@@ -166,7 +167,7 @@ impl DbgSession {
                     r#"source {}"#,
                     gdb_ext_path.to_str().unwrap()
                 )));
-            },
+            }
             _ => {}
         }
 
@@ -281,8 +282,7 @@ impl DbgSession {
     }
 }
 
-impl DbgSession
-{
+impl DbgSession {
     // Note: keep this API private and available,
     // as it has a nice interface for writing commands.
     // It is intended to be used internally.
