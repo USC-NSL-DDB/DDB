@@ -6,6 +6,9 @@ touch ~/.gdbinit
 echo "handle SIGUSR1 SIGUSR2 nostop noprint" >> ~/.gdbinit
 echo "set auto-load safe-path /" >> ~/.gdbinit
 
+sudo touch /root/.gdbinit
+echo "handle SIGUSR1 SIGUSR2 nostop noprint" | sudo tee -a /root/.gdbinit > /dev/null
+echo "set auto-load safe-path /" | sudo tee -a /root/.gdbinit > /dev/null
 
 GDB_CFG_PATH="$HOME/.config/gdb"
 mkdir -p $GDB_CFG_PATH
