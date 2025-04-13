@@ -1,19 +1,19 @@
-[submodule "rpc_frameworks/Nu"]
-	path = rpc_frameworks/Nu
+[submodule "fwks/Nu"]
+	path = fwks/Nu
 	url = https://github.com/totoroyyb/Nu.git
 	branch = dev
-[submodule "rpc_frameworks/grpc"]
-	path = rpc_frameworks/grpc
+[submodule "fwks/grpc"]
+	path = fwks/grpc
 	url = https://github.com/totoroyyb/grpc-ddb.git
 	branch = main
-[submodule "rpc_frameworks/weaver"]
-	path = rpc_frameworks/weaver
+[submodule "fwks/weaver"]
+	path = fwks/weaver
 	url = https://github.com/hjzccc/weaver.git
 	branch = weaver-exp
-[submodule "rpc_frameworks/socialnetwork"]
-	path = rpc_frameworks/socialnetwork
+[submodule "fwks/socialnetwork"]
+	path = fwks/socialnetwork
 	url = https://github.com/USC-NSL/SocialNetwork-serviceweaver.git
 	branch = main
-[submodule "rpc_frameworks/quicksand"]
-	path = rpc_frameworks/quicksand
+[submodule "fwks/quicksand"]
+	path = fwks/quicksand
 	url = https://github.com/totoroyyb/quicksand-ddb.git
