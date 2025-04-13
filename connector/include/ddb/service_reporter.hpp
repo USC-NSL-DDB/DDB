@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "ddb/common.hpp"
-#include "ddb/picosha2.h"
+#include "ddb/picosha2.hpp"
 
 namespace DDB {
 constexpr static char CLIENTID[] = "s_";

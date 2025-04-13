@@ -19,9 +19,11 @@ make -j$(nproc)
 PREFIX=$PREFIX make install 
 popd
 
-echo "[Installing] [Util] ddb_runapp.sh"
+echo "[Installing] [Util] DDB wrappers"
 WRAPPER="$ROOT/wrapper"
 pushd $WRAPPER
 install -Dm0755 ddb_runapp.sh "$PREFIX/bin/ddb_runapp"
+install -Dm0755 ddb_on_sudo.sh "$PREFIX/bin/ddb_on_sudo"
+install -Dm0755 ddb_runapp_on_sudo.sh "$PREFIX/bin/ddb_runapp_on_sudo"
 popd
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Init gdb experience
-sudo chmod a+rw ~/.gdbinit
+sudo chmod a+rw ~/.gdbinit > /dev/null 2>&1
 touch ~/.gdbinit
 echo "handle SIGUSR1 SIGUSR2 nostop noprint" >> ~/.gdbinit
 echo "set auto-load safe-path /" >> ~/.gdbinit

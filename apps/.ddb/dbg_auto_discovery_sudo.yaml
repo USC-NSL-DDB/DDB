@@ -1,0 +1,30 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+# Framework: serviceweaverkube
+# Framework: nu
+
+PrerunGdbCommands:
+- name: "set logfile name"
+  command: "set logging file gdblog.txt"
+- name: "set logfile overwrite"
+  command: "set logging overwrite on"
+
+# SSH:
+#   user: ybyan
+  # port: 22
+
+ServiceDiscovery:
+  Broker:
+    hostname: 127.0.0.1
+    managed:
+      type: emqx
+
+Conf:
+  on_exit: kill
+  sudo: true
