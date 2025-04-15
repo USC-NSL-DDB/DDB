@@ -43,8 +43,33 @@ struct DDBTraceMeta {
   DDBCallerContext ctx;
   // DDBLocalMeta local_meta;
 
-  inline bool valid() { return this->magic == T_META_MATIC; }
+  inline bool valid() { 
+    return this->magic == static_cast<uint64_t>(T_META_MATIC); 
+  }
 };
+
+inline std::ostream& operator<<(std::ostream& os, const DDBCallerMeta& meta) {
+  os << "DDBCallerMeta { caller_comm_ip: " << meta.caller_comm_ip
+     << ", pid: " << meta.pid << ", tid: " << meta.tid << " }";
+  return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const DDBCallerContext& ctx) {
+  os << "DDBCallerContext { pc: 0x" << std::hex << ctx.pc << ", sp: 0x"
+     << ctx.sp << ", fp: 0x" << ctx.fp;
+#ifdef __aarch64__
+  os << ", lr: 0x" << ctx.lr;
+#endif
+  os << std::dec << " }"; // Reset to decimal formatting
+  return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os,
+                                const DDBTraceMeta& trace_meta) {
+  os << "DDBTraceMeta { magic: " << trace_meta.magic
+     << ", meta: " << trace_meta.meta << ", ctx: " << trace_meta.ctx << " }";
+  return os;
+}
 
 static __attribute__((noinline)) uintptr_t get_pc() {
   // essentially return the return address of this function
