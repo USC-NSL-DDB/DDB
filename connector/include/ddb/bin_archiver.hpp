@@ -11,6 +11,7 @@ namespace cereal {
         ar(data.caller_comm_ip);
         ar(data.pid);
         ar(data.tid);
+        ar(data.proclet_id);
     }
 
     template <class Archive>

@@ -19,6 +19,7 @@ struct DDBCallerMeta {
   uint32_t caller_comm_ip = 0;
   pid_t pid = 0;
   pid_t tid = 0;
+  uint64_t proclet_id = 0;
 };
 
 struct DDBLocalMeta {

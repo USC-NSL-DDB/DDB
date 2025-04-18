@@ -13,6 +13,7 @@ namespace cereal {
         ar(cereal::make_nvp("caller_comm_ip", data.caller_comm_ip));
         ar(cereal::make_nvp("pid", data.pid));
         ar(cereal::make_nvp("tid", data.tid));
+        ar(cereal::make_nvp("proclet_id", data.proclet_id));
     }
 
     template <class Archive>

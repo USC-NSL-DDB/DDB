@@ -14,6 +14,7 @@ namespace DDB {
             << data.meta.caller_comm_ip << ','
             << data.meta.pid << ','
             << data.meta.tid << ','
+            << data.meta.proclet_id << ','
             << data.ctx.pc << ','
             << data.ctx.sp << ','
             << data.ctx.fp;
@@ -33,6 +34,7 @@ namespace DDB {
             >> trace.meta.caller_comm_ip >> comma
             >> trace.meta.pid >> comma
             >> trace.meta.tid >> comma
+            >> trace.meta.proclet_id >> comma
             >> trace.ctx.pc >> comma
             >> trace.ctx.sp >> comma
             >> trace.ctx.fp)
