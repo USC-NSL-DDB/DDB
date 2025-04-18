@@ -62,10 +62,37 @@ impl DbgCmdGenerator for GdbCmd {
     }
 }
 
+// https://sourceware.org/gdb/current/onlinedocs/gdb.html/All_002dStop-Mode.html
+#[derive(Debug, Clone)]
+pub enum GdbSchedulerLock {
+    On,
+    Off,
+    Step,
+    Replay,
+}
+
+impl DbgCmdGenerator for GdbSchedulerLock {
+    fn generate(&self) -> String {
+        match self {
+            GdbSchedulerLock::On => "on".to_string(),
+            GdbSchedulerLock::Off => "off".to_string(),
+            GdbSchedulerLock::Step => "step".to_string(),
+            GdbSchedulerLock::Replay => "replay".to_string(),
+        }
+    }
+}
+
+impl Default for GdbSchedulerLock {
+    fn default() -> Self {
+        GdbSchedulerLock::Replay
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GdbOption {
     Logging(bool),
     MiAsync(bool),
+    SchedulerLock(GdbSchedulerLock),
 }
 
 impl DbgCmdGenerator for GdbOption {
@@ -76,6 +103,9 @@ impl DbgCmdGenerator for GdbOption {
             }
             GdbOption::MiAsync(enable) => {
                 format!("mi-async {}", if *enable { "on" } else { "off" })
+            }
+            GdbOption::SchedulerLock(lock) => {
+                format!("scheduler-locking {}", lock.generate())
             }
         }
     }
