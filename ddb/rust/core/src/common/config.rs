@@ -92,6 +92,7 @@ impl Default for OnExit {
 #[serde(rename_all = "lowercase")]
 pub enum Framework {
     Nu,
+    Quicksand,
     ServiceWeaverKube,
     GRPC,
     #[serde(other)]

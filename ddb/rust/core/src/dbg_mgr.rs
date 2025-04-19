@@ -4,12 +4,13 @@ use flume::Receiver;
 use futures::future::join_all;
 use russh::client::Config;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
+use crate::feature::proclet_ctrl::{self, ProcletCtrlClient, ProcletCtrlCmdResp};
 use crate::{
     common::{self, config::Framework},
     discovery::DiscoveryMessageProducer,
@@ -143,6 +144,9 @@ pub struct DbgManager {
 
     // ServiceDiscover, which receives the discovered services information.
     sd: Mutex<Option<ServiceDiscover>>,
+
+    // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
+    proclet_ctrl: Option<ProcletCtrlClient>,
 }
 
 impl DbgManager {
@@ -255,9 +259,24 @@ impl DbgManager {
 impl DbgManagable for DbgManager {
     async fn new_with_config(config: &crate::common::config::Config) -> Self {
         let sessions: SessionsRef = Arc::new(DashMap::new());
+
+        let proclet_ctrl = match config.framework {
+            Framework::Nu | Framework::Quicksand => {
+                // Initialize the proclet controller if needed
+                debug!("Proclet controller is enabled.");
+                if config.conf.support_migration {
+                    Some(ProcletCtrlClient::try_connect_default().await.unwrap())
+                } else {
+                    None
+                }
+            }
+            _ => None
+        };
+
         let mut dbg_mgr = DbgManager {
             sessions: sessions.clone(),
             sd: Mutex::new(None),
+            proclet_ctrl,
         };
         dbg_mgr.init_sd(config).await;
         return dbg_mgr;
@@ -293,5 +312,14 @@ impl DbgManagable for DbgManager {
         join_all(tasks).await;
 
         debug!("GdbManager cleanup complete.");
+    }
+}
+
+impl DbgManager {
+    pub async fn query_proclet(&self, proclet_id: u64) -> Option<ProcletCtrlCmdResp> {
+        if let Some(ctrl) = &self.proclet_ctrl {
+            ctrl.query_proclet(proclet_id).await.ok();
+        } 
+        None
     }
 }

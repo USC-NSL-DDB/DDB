@@ -11,8 +11,7 @@ use super::{
     DynFormatter, FinishedCmd, OutputSource, PlainFormatter, Tracker,
 };
 use crate::{
-    dbg_ctrl::InputSender,
-    state::{get_bkpt_mgr, get_group_mgr, get_source_mgr, GroupId, LocalThreadId, STATES},
+    dbg_ctrl::InputSender, get_dbg_mgr, state::{get_bkpt_mgr, get_group_mgr, get_source_mgr, GroupId, LocalThreadId, STATES}
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -361,5 +360,7 @@ impl Router {
                 warn!("Failed to parse command: {:?}", cmd);
             }
         }
+        
+        let dbg_mgr = get_dbg_mgr();
     }
 }
