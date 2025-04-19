@@ -58,6 +58,8 @@ pub struct Conf {
     pub log_dir: String,
     #[serde(default = "default_base_dir")]
     pub base_dir: String,
+    #[serde(default)]
+    pub support_migration: bool,
 }
 
 impl Default for Conf {
@@ -68,6 +70,7 @@ impl Default for Conf {
             api_server_port: default_vals::DEFAULT_API_SVR_PORT,
             log_dir: default_vals::DEFAULT_LOG_DIR.to_string(),
             base_dir: default_vals::DEFAULT_BASE_DIR.to_string(),
+            support_migration: false, // TODO: default to true when testing is done.
         }
     }
 }

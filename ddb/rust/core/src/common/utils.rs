@@ -29,7 +29,7 @@ pub mod gdb {
     use std::path::{Path, PathBuf};
 
     use crate::common::default_vals::{
-        DEFAULT_EMBEDED_GDB_EXT_PATH, DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME, DEFAULT_MI_VERSION,
+        DEFAULT_EMBEDED_GDB_EXT_PATH, DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME, DEFAULT_MI_VERSION, EMBEDED_PROCLET_GDB_EXT_PATH, PROCLET_GDB_EXT_NAME,
     };
     use crate::Asset;
     use anyhow::{Context, Result};
@@ -90,25 +90,35 @@ pub mod gdb {
             )
         }
     }
-
-    pub fn setup_gdb_ext_script() -> Result<PathBuf> {
-        let script_content = Asset::get(DEFAULT_EMBEDED_GDB_EXT_PATH)
-            .context("Failed to get gdb extension script")?;
-        let path = Path::new(DEFAULT_GDB_EXT_DIR);
-
-        let file_path = path.join(DEFAULT_GDB_EXT_NAME);
-
+    
+    fn write_gdb_ext_script(file_path: &PathBuf, content: &[u8]) -> Result<PathBuf> {
         // Write the content to the script file
         // NOTE: this file should be shared across
         // all nodes in the cluster and be mounted
         // to the same path on each node
-        fs::write(&file_path, script_content.data)
+        fs::write(&file_path, content)
             .context("Failed to create gdb extension script")?;
 
         // Return the absolute file path
         Ok(file_path
             .canonicalize()
             .context("Failed to canonicalize file path")?)
+    }
+
+    pub fn setup_gdb_ext_script() -> Result<PathBuf> {
+        let script_content = Asset::get(DEFAULT_EMBEDED_GDB_EXT_PATH)
+            .context("Failed to get gdb extension script")?;
+        let path = Path::new(DEFAULT_GDB_EXT_DIR);
+        let file_path = path.join(DEFAULT_GDB_EXT_NAME);
+        Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
+    }
+    
+    pub fn setup_proclet_ext_script() -> Result<PathBuf> {
+        let script_content = Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH)
+            .context("Failed to get embeded proclet.py")?;
+        let path = Path::new(DEFAULT_GDB_EXT_DIR);
+        let file_path = path.join(PROCLET_GDB_EXT_NAME);
+        Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
     }
 
     #[cfg(test)]

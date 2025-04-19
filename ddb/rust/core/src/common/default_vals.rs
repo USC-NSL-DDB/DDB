@@ -12,6 +12,9 @@ pub const DEFAULT_EMBEDED_GDB_EXT_PATH: &str = "gdb_ext/runtime-gdb.py";
 pub const DEFAULT_GDB_EXT_DIR: &str = "/tmp/ddb/gdb_ext";
 pub const DEFAULT_GDB_EXT_NAME: &str = "runtime-gdb.py";
 
+pub const EMBEDED_PROCLET_GDB_EXT_PATH: &str = "gdb_ext/proclet.py";
+pub const PROCLET_GDB_EXT_NAME: &str = "proclet.py";
+
 pub const DEFAULT_MI_VERSION: &str = "mi3";
 
 pub const DEFAULT_FRAMEWORK: Framework = Framework::Nu;

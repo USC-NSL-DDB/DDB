@@ -6,6 +6,7 @@ use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{get_router, SessionResponse};
+use crate::common::default_vals::PROCLET_GDB_EXT_NAME;
 use crate::dbg_cmd::{GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
 use crate::state::{get_group_mgr, STATES};
@@ -157,7 +158,7 @@ impl DbgSession {
         self.input_tx = Some(ssh_io.in_tx.clone());
         self.output_rx = Some(ssh_io.out_rx.clone());
         let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
-        bdr.add(GdbCmd::SetOption(GdbOption::Logging(true)));
+        bdr.add(GdbCmd::SetOption(GdbOption::Logging(false)));
         bdr.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
 
         match Config::global().framework {
@@ -169,6 +170,14 @@ impl DbgSession {
                 )));
             }
             _ => {}
+        }
+        
+        if Config::global().conf.support_migration {
+            let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(PROCLET_GDB_EXT_NAME);
+            bdr.add(GdbCmd::ConsoleExec(format!(
+                r#"source {}"#,
+                gdb_ext_path.to_str().unwrap()
+            )));
         }
 
         for cmd in &self.config.prerun_gdb_cmds {

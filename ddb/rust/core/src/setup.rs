@@ -1,7 +1,6 @@
 use crate::{
-    common::{default_vals, utils},
+    common::{self, config::Config, default_vals, utils},
     logging,
-    common::config::Config,
 };
 
 use anyhow::{Context, Result};
@@ -182,6 +181,13 @@ impl SetupProcedure {
         // However, the return value is currently not used
         // For now, we assume the script is written to the default location
         utils::gdb::setup_gdb_ext_script()?;
+        
+        if common::Config::global().conf.support_migration {
+            let path = utils::gdb::setup_proclet_ext_script()?; 
+            info!("feature: [ENABLED] proclet migration. Proclet gdb ext script written to: {}", path.display());
+        } else {
+            info!("feature: [DISALED] proclet migration.");
+        }
 
         // Setup logging
         let guard = logging::setup_logging(
@@ -197,7 +203,6 @@ impl SetupProcedure {
         info!("feature: [ENABLED] lazy source map");
         #[cfg(not(feature = "lazy_source_map"))]
         info!("feature: [DISABLED] lazy source map");
-
 
         Ok(guard)
     }
