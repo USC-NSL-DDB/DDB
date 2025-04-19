@@ -23,7 +23,7 @@ import gdb
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
 
-print("Loading distributed backtrace support.",)
+print("Loading DDB support.",)
 
 class Arch(Enum):
     X86_64 = "x86_64"

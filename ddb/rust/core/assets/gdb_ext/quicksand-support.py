@@ -1,0 +1,305 @@
+from typing import Optional
+import gdb  # type: ignore
+import traceback  # For detailed error reporting
+
+_THREAD_NAME = "DDB_AUX_THREAD"
+_FRAME_NAME = "DDB::ddb_aux_thread_main_func"
+_PROCLET_TYPE = "nu::ProcletHeader"
+# _ABSENT_STATUS_NAME = "nu::kAbsent"
+
+# try:
+#     import debugpy
+# except ImportError:
+#     print("Failed to import debugpy")
+
+# try:
+#     # import random
+#     # port = random.randint(5700, 5800)
+#     port = 5800
+#     debugpy.listen(("localhost", port))
+#     print(f"Waiting for debugger attach: {port}")
+#     debugpy.wait_for_client()
+# except Exception as e:
+#     print(f"Failed to attach debugger: {e}")
+
+class ThreadInfo:
+    def __init__(self, thread: gdb.InferiorThread, frame: gdb.Frame):
+        self.thread = thread
+        self.frame = frame
+
+    def __str__(self):
+        return f"ThreadInfo(thread={self.thread}, frame={self.frame})"
+
+    def switch(self) -> bool:
+        # switch thread
+        if self.thread.is_valid():
+            try:
+                if gdb.selected_thread() != self.thread:
+                    self.thread.switch()
+            except gdb.error as e:
+                print("Restore Thread", "Failure", f"Error switching: {e}")
+                return False
+        else:
+            print("Restore Thread", "Skipped", "The thread is invalid.")
+            return False
+
+        # switch frame (if valid and thread is correct)
+        # Note: Frame selection might implicitly switch threads if not careful.
+        if self.thread.is_valid() and gdb.selected_thread() == self.thread:
+            try:
+                if (
+                    gdb.selected_frame().level != self.frame.level
+                ):  # Avoid unnecessary select
+                    self.frame.select()
+            except gdb.error as e:
+                print(
+                    "Restore Frame", "Failure", f"Error selecting original frame: {e}"
+                )
+                return False
+        else:
+            print(
+                "Restore Frame",
+                "Error",
+                "Thread is either invalid or not correctly restored when restoring the frame.",
+            )
+            return False
+
+
+def _switch_to_thread(
+    thread_name: str, frame_name: Optional[str]
+) -> Optional[ThreadInfo]:
+    original_thread = gdb.selected_thread()
+    original_frame = gdb.selected_frame()
+
+    # --- Checkout to the target thread ---
+    target_thread: gdb.InferiorThread = None
+    try:
+        if not gdb.selected_inferior() or not gdb.selected_inferior().threads():
+            return None
+
+        for thread in gdb.selected_inferior().threads():
+            if thread.name == thread_name:
+                target_thread = thread
+                break
+
+        if target_thread:
+            target_thread.switch()
+        else:
+            msg = f"Thread '{thread_name}' not found."
+            print(msg)
+            return None
+    except gdb.error as e:
+        msg = f"Error finding/switching thread: {e}"
+        print(msg)
+        return None
+
+    if not frame_name:
+        return ThreadInfo(original_thread, original_frame)
+
+    # --- Checkout to the target frame ---
+    target_frame = None
+    try:
+        current_frame = gdb.newest_frame()
+        if not current_frame:
+            raise gdb.error("Current thread has no frames.")
+
+        while current_frame:
+            if current_frame.name() == frame_name:
+                target_frame = current_frame
+                break
+            try:
+                current_frame = current_frame.older()
+            except gdb.error:
+                current_frame = None
+                break
+
+        if target_frame:
+            target_frame.select()
+        else:
+            msg = f"Frame '{frame_name}' not found in thread {target_thread.num}."
+            print(msg)
+            return None
+    except gdb.error as e:
+        msg = f"Error finding/selecting frame: {e}"
+        print(msg)
+        return None
+
+    return ThreadInfo(target_thread, target_frame)
+
+
+def _check_proclet(proclet_id_str: str):
+    """
+    Checking proclet status whether if it is local.
+
+    Args:
+        proclet_id_str: The proclet ID as a string.
+
+    Returns:
+        A dictionary containing:
+        - success (bool): Overall success of the operation leading to a check result.
+        - message (str): A summary message.
+        - proclet_info (dict): Information specific to the proclet checks.
+                           Contains 'is_local', 'status',
+    """
+    result = {
+        "success": False,
+        "message": "Check did not complete.",
+        "proclet_info": {
+            "is_local": None,
+            "status": None,
+        },
+    }
+    proclet_info = result["proclet_info"]
+
+    # --- Validate Input ---
+    try:
+        # Check if it looks like a number or hex address
+        # parse_and_eval will handle the actual conversion later
+        int(proclet_id_str, 0)
+    except ValueError:
+        msg = f"Invalid proclet_id '{proclet_id_str}'. Expected numerical value."
+        result["message"] = msg
+        result["success"] = False
+        return result
+
+    # --- Store Original State ---
+    original_scheduler_lock = None
+    original_thread: ThreadInfo = None
+    hdr_val = None
+
+    try:
+        original_scheduler_lock = gdb.parameter("scheduler-locking")
+        # Checkout to the aux thread.
+        original_thread = _switch_to_thread(_THREAD_NAME, _FRAME_NAME)
+
+        # --- Get the ProcletHeader pointer ---
+        hdr_expr = f"({_PROCLET_TYPE}*) {proclet_id_str}"
+        try:
+            hdr_val = gdb.parse_and_eval(hdr_expr)
+            # Set convenience variable $hdr for debugging/user inspection
+            gdb.execute(f"set $proclet_hdr = {hdr_expr}", to_string=True)
+
+            if str(hdr_val) == "0x0" or str(hdr_val).endswith(
+                "<void>"
+            ):  # Check for null or potentially bad cast
+                result["message"] = (
+                    f"Proclet header pointer {proclet_id_str} is NULL or invalid."
+                )
+                result["success"] = False
+                return result
+        except gdb.error as e:
+            result["message"] = f"Error evaluating proclet header: {e}"
+            result["success"] = False
+            return result
+        
+        # --- Check is_local() ---
+        try:
+            is_local_raw = gdb.parse_and_eval("(bool) $proclet_hdr->is_local()")
+            proclet_info["is_local"] = bool(is_local_raw)
+
+            status_val = gdb.parse_and_eval("(uint8_t) $proclet_hdr->status()")
+            proclet_info["status"] = int(status_val)
+
+            if proclet_info["is_local"]:
+                result["message"] = "Found a local proclet."
+                result["success"] = True
+            else:
+                result["message"] = "Not found a local proclet."
+                result["success"] = True
+        except gdb.error as e:
+            result["message"] = f"Error calling is_local(): {e}"
+            result["success"] = False
+            return result
+    except Exception as e:
+        err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
+        result["message"] = f"{err_msg}"
+        result["success"] = False
+    finally:
+        # --- Restore Original State ---
+        # Switch back to original thread and frame
+        original_thread.switch()
+        # Restore scheduler locking
+        if original_scheduler_lock is not None:
+            try:
+                gdb.execute(
+                    f"set scheduler-locking {original_scheduler_lock}", to_string=True
+                )
+            except gdb.error as e:
+                print("Restore Scheduler Lock", "Failure", f"Error: {e}")
+    return result
+
+
+# --------------------------------------------------------------------
+# 2. GDB MI Command (-check-proclet)
+# --------------------------------------------------------------------
+class CheckProcletMiCommand(gdb.MICommand):
+    """GDB MI command to check proclet status."""
+
+    def __init__(self, name):
+        super(CheckProcletMiCommand, self).__init__(name)
+
+    # Use invoke_mi for MI commands
+    def invoke(self, argv):
+        if len(argv) != 1:
+            return {
+                "success": False,
+                "message": "Usage: -check-proclet proclet-id",
+            }
+
+        proclet_id_str = argv[0]
+        check_result = _check_proclet(proclet_id_str)
+        mi_result = {
+            "success": str(check_result["success"]).lower(),
+            "message": check_result["message"],
+            "is_local": str(check_result["proclet_info"]["is_local"]).lower()
+            if check_result["proclet_info"]["is_local"] is not None
+            else "none",
+            "status": str(check_result["proclet_info"]["status"])
+            if check_result["proclet_info"]["status"] is not None
+            else "none",
+        }
+        return mi_result
+
+CheckProcletMiCommand("-check-proclet")
+
+# --------------------------------------------------------------------
+# 3. Regular GDB Command (check-proclet)
+# --------------------------------------------------------------------
+class CheckProcletCommand(gdb.Command):
+    """Checks the status of a nu::ProcletHeader based on its ID. (User Command)
+
+    Usage: check-proclet <proclet_id>
+
+    Provides human-readable output of the proclet check process.
+    """
+
+    def __init__(self):
+        super(CheckProcletCommand, self).__init__("check-proclet", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        args = gdb.string_to_argv(arg)
+        if len(args) != 1:
+            print("Usage: check-proclet <proclet_id>")
+            return
+
+        proclet_id_str = args[0]
+        print(f"--- Checking Proclet ID: {proclet_id_str} ---")
+
+        # Call the core logic function
+        check_result = _check_proclet(proclet_id_str)
+
+        success = bool(check_result["success"])
+        if success:
+            print("Proclet check completed successfully.")
+            pi = check_result["proclet_info"]
+            if pi["is_local"] is not None:
+                print(f"  Proclet Is Local: {pi['is_local']}")
+            if pi["status"] is not None:
+                print(f"  Proclet Status: {pi['status']}")
+        else:
+            print("Proclet check failed.")
+            print(f"  Error Message: {check_result['message']}")
+
+CheckProcletCommand()
+
+print("Proclet checker commands ('check-proclet', '-check-proclet') loaded.")
