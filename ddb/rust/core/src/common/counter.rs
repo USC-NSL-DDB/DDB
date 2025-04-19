@@ -20,6 +20,8 @@ lazy_static! {
     static ref G_THREAD_ID_COUNTER: SimpleCounter = SimpleCounter::new();
     static ref TOKEN_COUNTER: SimpleCounter = SimpleCounter::new();
     static ref GROUP_COUNTER: SimpleCounter = SimpleCounter::new();
+    
+    static ref RPC_REQ_COUNTER: SimpleCounter = SimpleCounter::new();
 }
 
 pub fn next_session_id() -> u64 {
@@ -40,4 +42,8 @@ pub fn next_token() -> u64 {
 
 pub fn next_group_id() -> u64 {
     GROUP_COUNTER.next()
+}
+
+pub fn next_rpc_req_id() -> u64 {
+    RPC_REQ_COUNTER.next()
 }

@@ -15,6 +15,7 @@ mod session;
 mod setup;
 mod state;
 mod status;
+mod feature;
 
 use std::sync::Arc;
 use std::sync::OnceLock;
