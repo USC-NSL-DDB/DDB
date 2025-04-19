@@ -5,7 +5,10 @@ use std::net::Ipv4Addr;
 pub use dbg_session::*;
 
 use crate::{
-    common::config::{GdbCommand, OnExit}, connection::ssh_client::SSHCred, dbg_ctrl::{DbgControllable, DbgController}, discovery::{discovery_message_producer::ServiceMeta, ServiceInfo}
+    common::config::{GdbCommand, OnExit},
+    connection::ssh_client::SSHCred,
+    dbg_ctrl::DbgController,
+    discovery::discovery_message_producer::ServiceMeta,
 };
 
 #[derive(Debug)]
@@ -27,7 +30,7 @@ pub struct DbgSessionConfig {
     // This should be present if the service discovery is enabled.
     // pub service_info: Option<ServiceInfo>,
     pub service_meta: Option<ServiceMeta>,
-    
+
     pub gdb_controller: DbgController,
 }
 
