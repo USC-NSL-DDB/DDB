@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <fstream>
 #include <iostream>
@@ -31,6 +32,7 @@ struct ServiceInfo {
     pid_t pid;          // process ID
     std::string hash;   // hash value of the binary
     std::string alias;  // alias name for the binary
+    std::map<std::string, std::string> user_data; // User-defined key-value pairs
 };
 
 struct DDBServiceReporter {
@@ -123,8 +125,18 @@ static inline int report_service(
     std::stringstream ss;
 
     // payload format:
-    // ip:tag:pid:hash=alias
+    // ip:tag:pid:hash=alias:{<key>=<value>,...}
     ss << service_info->ip << ":" << service_info->tag << ":" << service_info->pid << ":" << service_info->hash << "=" << service_info->alias;
+    if (!service_info->user_data.empty()) {
+        ss << ":{";
+        for (const auto& kv : service_info->user_data) {
+            ss << kv.first << "=" << kv.second << ",";
+        }
+        std::string user_data = ss.str();
+        user_data.pop_back(); // Remove the last comma
+        ss.str(user_data);
+        ss << "}";
+    }
     std::string payload = ss.str();
 
     std::cout << "send payload: " << payload << std::endl;

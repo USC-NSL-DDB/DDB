@@ -24,12 +24,19 @@ extern "C" {
 
 #define DDB_HASH_LEN 65 // SHA-256 hash length in hex (64 chars + null terminator)
 
+// typedef struct UserData {
+//     char key[DDB_MAX_STRING_LEN];       // key name
+//     char value[DDB_MAX_STRING_LEN];     // value name
+//     struct UserData* next; // pointer to the next key-value pair
+// } UserDataMap;
+
 typedef struct {
     uint32_t ip;            // ip address
     char tag[DDB_MAX_STRING_LEN];       // tag name
     pid_t pid;              // process ID
     char hash[DDB_MAX_STRING_LEN];      // hash value of the binary
     char alias[DDB_MAX_STRING_LEN];     // alias name for the binary
+    // struct UserDataMap* user_data; // User-defined key-value pairs 
 } DDBServiceInfo;
 
 typedef struct {
@@ -160,7 +167,7 @@ static inline int ddb_report_service(DDBServiceReporter* reporter, const DDBServ
     MQTTClient_message pubmsg = MQTTClient_message_initializer;
     char payload[DDB_PAYLOAD_MAX_LEN];
     
-    // payload format: ip:tag:pid:hash=alias
+    // payload format: ip:tag:pid:hash=alias[:{<key>=<value>,...}]
     snprintf(payload, DDB_PAYLOAD_MAX_LEN, "%u:%s:%d:%s=%s", 
              service_info->ip, 
              service_info->tag, 

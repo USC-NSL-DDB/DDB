@@ -2,6 +2,8 @@
 
 #include <csignal>
 #include <iostream>
+#include <map>
+#include <sstream>
 #include <string>
 #include <unistd.h>
 
@@ -21,6 +23,7 @@ struct Config {
   std::string tag;
   std::string alias;
   std::string ini_filepath;
+  std::map<std::string, std::string> user_data;
 
   static Config get_default(const std::string &ipv4) {
     return Config{.ipv4 = ipv4,
@@ -55,12 +58,26 @@ struct Config {
     return *this;
   }
 
+  inline Config
+  with_user_data(const std::map<std::string, std::string> &user_data) {
+    this->user_data = user_data;
+    return *this;
+  }
+
   inline std::string to_string() {
-    return "Config { ipv4 = " + this->ipv4 +
+    std::stringstream ss;
+    for (const auto &kv : this->user_data) {
+      ss << kv.first << "=" << kv.second << ",";
+    }
+    ss.str(ss.str().substr(0, ss.str().size() - 1)); // remove last comma
+    return "Config { \nipv4 = " + this->ipv4 +
            ", auto_discovery = " + std::to_string(this->auto_discovery) +
            ", wait_for_attach = " + std::to_string(this->wait_for_attach) +
            ", tag = " + this->tag + ", alias = " + this->alias +
-           ", ini_filepath = " + this->ini_filepath + " }";
+           ", ini_filepath = " + this->ini_filepath + ", user_data = {" +
+           ss.str() +
+           "}"
+           "\n}";
   }
 };
 
@@ -176,7 +193,8 @@ private:
                                .tag = this->config.tag,
                                .pid = DDB::ddb_meta.pid,
                                .hash = hash,
-                               .alias = this->config.alias};
+                               .alias = this->config.alias,
+                               .user_data = this->config.user_data};
 
     this->config.auto_discovery = false;
     bool failure = false;
