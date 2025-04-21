@@ -1,4 +1,5 @@
 from typing import Optional
+import binascii
 import gdb  # type: ignore
 import traceback  # For detailed error reporting
 
@@ -21,6 +22,7 @@ _PROCLET_TYPE = "nu::ProcletHeader"
 #     debugpy.wait_for_client()
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
+
 
 class ThreadInfo:
     def __init__(self, thread: gdb.InferiorThread, frame: gdb.Frame):
@@ -126,6 +128,7 @@ def _switch_to_thread(
 
     return ThreadInfo(original_thread, original_frame)
 
+
 def _switch_to_aux_thread() -> Optional[ThreadInfo]:
     """Switch to the auxiliary thread and frame."""
     return _switch_to_thread(_THREAD_NAME, _FRAME_NAME)
@@ -195,7 +198,7 @@ def _check_proclet(proclet_id_str: str):
             result["message"] = f"Error evaluating proclet header: {e}"
             result["success"] = False
             return result
-        
+
         # --- Check is_local() ---
         try:
             is_local_raw = gdb.parse_and_eval("(bool) $proclet_hdr->is_local()")
@@ -232,6 +235,7 @@ def _check_proclet(proclet_id_str: str):
                 print("Restore Scheduler Lock", "Failure", f"Error: {e}")
     return result
 
+
 def _get_proclet_heap(proclet_id_str: str):
     result = _check_proclet(proclet_id_str)
 
@@ -240,7 +244,7 @@ def _get_proclet_heap(proclet_id_str: str):
     proclet_info["copy_end"] = 0
     proclet_info["copy_len"] = 0
     proclet_info["full_heap_size"] = 0
-    
+
     is_success = bool(result["success"])
     is_local = bool(result["proclet_info"]["is_local"])
     if not is_success:
@@ -256,7 +260,7 @@ def _get_proclet_heap(proclet_id_str: str):
     original_scheduler_lock = None
     original_thread: ThreadInfo = None
     hdr_val = None
-    
+
     try:
         original_scheduler_lock = gdb.parameter("scheduler-locking")
         original_thread = _switch_to_aux_thread()
@@ -268,14 +272,18 @@ def _get_proclet_heap(proclet_id_str: str):
         gdb.execute(f"set $proclet_hdr = {hdr_expr}", to_string=True)
         copy_start = int(gdb.parse_and_eval("(uint64_t) $proclet_hdr->copy_start"))
         slab_base = int(gdb.parse_and_eval("(uint64_t) $proclet_hdr->slab.get_base()"))
-        slab_usage = int(gdb.parse_and_eval("(uint64_t) $proclet_hdr->slab.get_usage()"))
+        slab_usage = int(
+            gdb.parse_and_eval("(uint64_t) $proclet_hdr->slab.get_usage()")
+        )
         copy_len = slab_base - copy_start + slab_usage
         copy_end = copy_start + copy_len
-        
+
         gdb.execute("set $hp_size = $proclet_hdr->heap_size()", to_string=True)
-        heap_size_expr = "(uint64_t) ((($hp_size - 1) / (nu::kPageSize + 1)) * nu::kPageSize)"
+        heap_size_expr = (
+            "(uint64_t) ((($hp_size - 1) / (nu::kPageSize + 1)) * nu::kPageSize)"
+        )
         full_heap_size = int(gdb.parse_and_eval(heap_size_expr))
-        
+
         proclet_info["copy_start"] = copy_start
         proclet_info["copy_end"] = copy_end
         proclet_info["copy_len"] = copy_len
@@ -288,7 +296,8 @@ def _get_proclet_heap(proclet_id_str: str):
             raise gdb.error("Inferior process is not valid.")
 
         mem_view = inferior.read_memory(copy_start, copy_len)
-        proclet_info["heap_content"] = bytes(mem_view)
+        hex_string = binascii.hexlify(mem_view).decode("ascii")
+        proclet_info["heap_content"] = hex_string
     except Exception as e:
         err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
         result["message"] = f"{err_msg}"
@@ -306,6 +315,51 @@ def _get_proclet_heap(proclet_id_str: str):
             except gdb.error as e:
                 print("Restore Scheduler Lock", "Failure", f"Error: {e}")
     return result
+
+
+def _restore_proclet_heap(start_addr: int, data_len: int, data: str):
+    result = {
+        "success": False,
+        "message": "",
+    }
+
+    # --- Store Original State ---
+    original_scheduler_lock = None
+    original_thread: ThreadInfo = None
+
+    try:
+        original_scheduler_lock = gdb.parameter("scheduler-locking")
+        original_thread = _switch_to_aux_thread()
+
+        # --- Restore Memory ---
+        inferior = gdb.selected_inferior()
+        if not inferior:
+            raise gdb.error("No inferior process selected.")
+        if not inferior.is_valid():
+            raise gdb.error("Inferior process is not valid.")
+
+        data_bytes = binascii.unhexlify(data)
+        inferior.write_memory(start_addr, data_bytes, data_len)
+
+        result["success"] = True
+        result["message"] = "Proclet heap is restored successfully."
+    except Exception as e:
+        err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
+        result["message"] = f"{err_msg}"
+        result
+    finally:
+        # --- Restore Original State ---
+        # Switch back to original thread and frame
+        original_thread.switch()
+        # Restore scheduler locking
+        if original_scheduler_lock is not None:
+            try:
+                gdb.execute(
+                    f"set scheduler-locking {original_scheduler_lock}", to_string=True
+                )
+            except gdb.error as e:
+                print("Restore Scheduler Lock", "Failure", f"Error: {e}")
+
 
 # --------------------------------------------------------------------
 # GDB MI Command (-check-proclet)
@@ -338,11 +392,12 @@ class CheckProcletMiCommand(gdb.MICommand):
         }
         return mi_result
 
+
 class GetProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
         self.cmd_name = name
         super(GetProcletHeapMiCommand, self).__init__(name)
-        
+
     def invoke(self, argv):
         if len(argv) != 1:
             return {
@@ -352,6 +407,26 @@ class GetProcletHeapMiCommand(gdb.MICommand):
 
         proclet_id_str = argv[0]
         return _get_proclet_heap(proclet_id_str)
+
+
+class RestoreProcletHeapMiCommand(gdb.MICommand):
+    def __init__(self, name):
+        self.cmd_name = name
+        super(RestoreProcletHeapMiCommand, self).__init__(name)
+
+    def invoke(self, argv):
+        if len(argv) != 4:
+            return {
+                "success": False,
+                "message": f"Usage: {self.cmd_name} <start-addr> <data-len> <data>",
+            }
+
+        start_addr = int(argv[1])
+        data_len = int(argv[2])
+        data = str(argv[3])
+
+        return _restore_proclet_heap(start_addr, data_len, data)
+
 
 # --------------------------------------------------------------------
 # Regular GDB Command (check-proclet)
@@ -391,7 +466,8 @@ class CheckProcletCommand(gdb.Command):
         else:
             print("Proclet check failed.")
             print(f"  Error Message: {check_result['message']}")
-            
+
+
 class GetProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -426,10 +502,41 @@ class GetProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
+
+class RestoreProcletHeapCommand(gdb.Command):
+    def __init__(self, name: str):
+        self.cmd_name = name
+        super(RestoreProcletHeapCommand, self).__init__(name, gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        args = gdb.string_to_argv(arg)
+        if len(args) != 3:
+            print(f"Usage: {self.cmd_name} <start-addr> <data-len> <data>")
+            return
+
+        start_addr = int(args[0])
+        data_len = int(args[1])
+        data = str(args[2])
+
+        result = _restore_proclet_heap(start_addr, data_len, data)
+        success = bool(result["success"])
+        if success:
+            print("Proclet heap restored successfully.")
+        else:
+            print("Proclet heap restoration failed.")
+            print(f"  Error Message: {result['message']}")
+            return
+
+
 CheckProcletMiCommand("-check-proclet")
 CheckProcletCommand("check-proclet")
 
 GetProcletHeapMiCommand("-get-proclet-heap")
 GetProcletHeapCommand("get-proclet-heap")
 
-print("Proclet commands ('check-proclet', '-check-proclet', 'get-proclet-heap', '-get-proclet-heap') loaded.")
+RestoreProcletHeapMiCommand("-restore-proclet-heap")
+RestoreProcletHeapCommand("restore-proclet-heap")
+
+print(
+    "Proclet commands ('check-proclet', '-check-proclet', 'get-proclet-heap', '-get-proclet-heap', 'restore-proclet-heap', '-restore-proclet-heap') loaded."
+)
