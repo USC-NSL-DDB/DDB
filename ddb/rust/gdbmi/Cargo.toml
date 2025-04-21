@@ -17,7 +17,7 @@ test_rd = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-nom = "6.1.2"
+nom = "8"
 regex = "1.4.6"
 lazy_static = "1.4.0"
 thiserror = "1.0.24"
