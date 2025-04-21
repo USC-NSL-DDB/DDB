@@ -346,7 +346,6 @@ def _restore_proclet_heap(start_addr: int, data_len: int, data: str):
     except Exception as e:
         err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
         result["message"] = f"{err_msg}"
-        result
     finally:
         # --- Restore Original State ---
         # Switch back to original thread and frame
@@ -359,7 +358,54 @@ def _restore_proclet_heap(start_addr: int, data_len: int, data: str):
                 )
             except gdb.error as e:
                 print("Restore Scheduler Lock", "Failure", f"Error: {e}")
+    return result
 
+
+def _cleanup_proclet_heap(proclet_id_str: str, full_heap_size: int):
+    result = {
+        "success": False,
+        "message": "",
+    }
+
+    # --- Store Original State ---
+    original_scheduler_lock = None
+    original_thread: ThreadInfo = None
+
+    try:
+        original_scheduler_lock = gdb.parameter("scheduler-locking")
+        original_thread = _switch_to_aux_thread()
+
+        gdb.execute(f"set $base = (void*) {proclet_id_str}", to_string=True)
+        gdb.execute(f"set $hp_size = (size_t) {full_heap_size}", to_string=True)
+        gdb.execute(
+            "set $cleanup_ret = call (void*) mmap((void*) $base, (size_t) $hp_size, (int) 3, (int) 0x4032, (int) -1, (long) 0)",
+            to_string=True,
+        )
+        safe = bool(gdb.parse_and_eval("$cleanup_ret == $base"))
+        if safe:
+            result["success"] = True
+            result["message"] = "Proclet heap is cleaned up successfully."
+        else:
+            result["success"] = False
+            expected = int(gdb.parse_and_eval("(uint64_t) $base"))
+            real = int(gdb.parse_and_eval("(uint64_t) $cleanup_ret"))
+            result["message"] = f"mmap returned a different address than expected. expected: {expected}, real: {real}"
+    except Exception as e:
+        err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
+        result["message"] = f"{err_msg}"
+    finally:
+        # --- Restore Original State ---
+        # Switch back to original thread and frame
+        original_thread.switch()
+        # Restore scheduler locking
+        if original_scheduler_lock is not None:
+            try:
+                gdb.execute(
+                    f"set scheduler-locking {original_scheduler_lock}", to_string=True
+                )
+            except gdb.error as e:
+                print("Restore Scheduler Lock", "Failure", f"Error: {e}")
+    return result
 
 # --------------------------------------------------------------------
 # GDB MI Command (-check-proclet)
@@ -424,9 +470,23 @@ class RestoreProcletHeapMiCommand(gdb.MICommand):
         start_addr = int(argv[1])
         data_len = int(argv[2])
         data = str(argv[3])
-
         return _restore_proclet_heap(start_addr, data_len, data)
 
+class CleanProcletHeapMiCommand(gdb.MICommand):
+    def __init__(self, name):
+        self.cmd_name = name
+        super(CleanProcletHeapMiCommand, self).__init__(name)
+
+    def invoke(self, argv):
+        if len(argv) != 2:
+            return {
+                "success": False,
+                "message": f"Usage: {self.cmd_name} <proclet-id> <full-heap-size>",
+            }
+
+        proclet_id_str = str(argv[0])
+        full_heap_size = int(argv[1])
+        return _cleanup_proclet_heap(proclet_id_str, full_heap_size)
 
 # --------------------------------------------------------------------
 # Regular GDB Command (check-proclet)
@@ -502,7 +562,6 @@ class GetProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
-
 class RestoreProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -527,6 +586,29 @@ class RestoreProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
+class CleanProcletHeapCommand(gdb.Command):
+    def __init__(self, name: str):
+        self.cmd_name = name
+        super(CleanProcletHeapCommand, self).__init__(name, gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        args = gdb.string_to_argv(arg)
+        if len(args) != 2:
+            print(f"Usage: {self.cmd_name} <proclet-id> <full-heap-size>")
+            return
+
+        proclet_id = str(args[0])
+        full_heap_size = int(args[1])
+
+        result = _cleanup_proclet_heap(proclet_id, full_heap_size)
+        success = bool(result["success"])
+        if success:
+            print("Proclet heap cleanup successfully.")
+        else:
+            print("Proclet heap cleanup failed.")
+            print(f"  Error Message: {result['message']}")
+            return
+
 
 CheckProcletMiCommand("-check-proclet")
 CheckProcletCommand("check-proclet")
@@ -536,6 +618,9 @@ GetProcletHeapCommand("get-proclet-heap")
 
 RestoreProcletHeapMiCommand("-restore-proclet-heap")
 RestoreProcletHeapCommand("restore-proclet-heap")
+
+CleanProcletHeapMiCommand("-clean-proclet-heap")
+CleanProcletHeapCommand("clean-proclet-heap")
 
 print(
     "Proclet commands ('check-proclet', '-check-proclet', 'get-proclet-heap', '-get-proclet-heap', 'restore-proclet-heap', '-restore-proclet-heap') loaded."
