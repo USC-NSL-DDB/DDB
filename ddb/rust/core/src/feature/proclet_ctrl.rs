@@ -61,10 +61,10 @@ impl ProcletCtrlHdr {
         let mut start = 0;
         let mut end = cmd_size;
         let cmd = u32::from_be_bytes(bytes[0..end].try_into().unwrap());
-        start += end;
+        start = end;
         end += len_size;
         let len = u32::from_be_bytes(bytes[start..end].try_into().unwrap());
-        start += end;
+        start = end;
         end += token_size;
         let token = u64::from_be_bytes(bytes[start..end].try_into().unwrap());
 
@@ -170,7 +170,7 @@ impl ProcletCtrlClient {
     ) -> Result<ProcletCtrlCmdResp> {
         let payload_len = hdr.len as usize;
         if payload_len > 0 {
-            let mut payload_buf = BytesMut::with_capacity(payload_len);
+            let mut payload_buf = BytesMut::zeroed(payload_len);
             match stream_reader.read_exact(&mut payload_buf).await {
                 Ok(len) => {
                     assert_eq!(len, payload_len);

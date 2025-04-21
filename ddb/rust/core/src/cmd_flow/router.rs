@@ -361,6 +361,24 @@ impl Router {
             }
         }
         
-        let dbg_mgr = get_dbg_mgr();
+        if cmd.contains("q-proclet") {
+            let parts = cmd.split_whitespace().collect::<Vec<&str>>();
+            if parts.len() < 2 {
+                info!("Usage: q-proclet <proclet_id>");
+                return;
+            }
+            let proclet_id = parts[1].parse::<u64>().unwrap();
+            
+            tokio::spawn(async move {
+                match get_dbg_mgr().query_proclet(proclet_id).await {
+                    Ok(proclet) => {
+                        info!("Proclet: {:?}", proclet);
+                    }
+                    Err(e) => {
+                        error!("Failed to query proclet: {:?}", e);
+                    }
+                }
+            });
+        }
     }
 }

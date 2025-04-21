@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flume::Receiver;
@@ -10,7 +11,7 @@ use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
-use crate::feature::proclet_ctrl::{self, ProcletCtrlClient, ProcletCtrlCmdResp};
+use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp};
 use crate::{
     common::{self, config::Framework},
     discovery::DiscoveryMessageProducer,
@@ -316,10 +317,10 @@ impl DbgManagable for DbgManager {
 }
 
 impl DbgManager {
-    pub async fn query_proclet(&self, proclet_id: u64) -> Option<ProcletCtrlCmdResp> {
+    pub async fn query_proclet(&self, proclet_id: u64) -> Result<ProcletCtrlCmdResp> {
         if let Some(ctrl) = &self.proclet_ctrl {
-            ctrl.query_proclet(proclet_id).await.ok();
+            return ctrl.query_proclet(proclet_id).await;
         } 
-        None
+        bail!("Proclet controller not available.")
     }
 }
