@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use flume::Sender;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::fmt;
 
 use crate::dbg_ctrl::DbgController;
+
+type UserDataMap = Option<HashMap<String, String>>;
 
 pub struct ServiceInfo
 {
@@ -13,11 +16,12 @@ pub struct ServiceInfo
     pub hash: String,
     pub alias: String,
     pub ssh_controller: DbgController,
+    pub user_data: UserDataMap,
 }
 
 impl ServiceInfo
 {
-    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String, ssh_controller: DbgController) -> Self {
+    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String, ssh_controller: DbgController, user_data: UserDataMap) -> Self {
         ServiceInfo {
             ip,
             tag,
@@ -25,6 +29,7 @@ impl ServiceInfo
             hash,
             alias,
             ssh_controller,
+            user_data
         }
     }
 }
@@ -32,8 +37,8 @@ impl fmt::Display for ServiceInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ServiceInfo {{ ip: {}, tag: {}, pid: {}, hash: {}, alias: {} }}",
-            self.ip, self.tag, self.pid, self.hash, self.alias
+            "ServiceInfo {{ ip: {}, tag: {}, pid: {}, hash: {}, alias: {}, user_data: {:?} }}",
+            self.ip, self.tag, self.pid, self.hash, self.alias, self.user_data
         )
     }
 }
@@ -45,6 +50,7 @@ impl fmt::Debug for ServiceInfo {
             .field("pid", &self.pid)
             .field("hash", &self.hash)
             .field("alias", &self.alias)
+            .field("user_data", &self.user_data)
             // Note: ssh_controller is omitted as it might not implement Debug
             .finish()
     }

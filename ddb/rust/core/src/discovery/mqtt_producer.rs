@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::{collections::HashMap, net::Ipv4Addr};
 
 use anyhow::{Context, Result};
 use flume::Sender;
@@ -41,7 +41,7 @@ impl MqttProducer {
         let (sig_stop, _) = watch::channel(false);
         Self {
             managed_broker,
-            sig_stop: sig_stop,
+            sig_stop,
             handles: Vec::new(),
             config,
         }
@@ -78,6 +78,7 @@ pub struct MqttPayload {
     pub pid: u64,
     pub hash: String,
     pub alias: String,
+    pub user_data: Option<HashMap<String, String>>,
 }
 impl From<&str> for MqttPayload {
     fn from(s: &str) -> Self {
@@ -99,6 +100,21 @@ impl From<&str> for MqttPayload {
                 (hash.to_string(), alias)
             })
             .unwrap_or((String::new(), String::new()));
+        
+        let user_data = parts.last().map(|&user_data| {
+            // if doesn't start with "{", meaning it is not a user_data field, then ignore it.
+            // we assume the user_data field is the last one in the payload if it exists.
+            user_data.starts_with("{").then(|| {
+                // example payload:
+                // {key1=value1,key2=value2}
+                user_data.split(",").map(|kv| {
+                    let kv_parts: Vec<_> = kv.trim().split('=').collect();
+                    let key = kv_parts[0].trim().to_string();
+                    let value = kv_parts.get(1).unwrap_or(&"").trim().to_string();
+                    (key, value)
+                }).collect::<HashMap<String, String>>()                
+            })
+        }).flatten();
 
         MqttPayload {
             ip,
@@ -106,6 +122,7 @@ impl From<&str> for MqttPayload {
             pid,
             hash,
             alias,
+            user_data
         }
     }
 }
@@ -122,9 +139,7 @@ impl DiscoveryMessageProducer for MqttProducer {
         &mut self,
         tx: Sender<ServiceInfo>,
     ) -> Result<()> {
-        //
         // 1. Start the broker if we manage it
-        //
         if let Some(broker) = &self.managed_broker {
             info!("Starting managed broker...");
             let broker_info = BrokerInfo {
@@ -136,9 +151,7 @@ impl DiscoveryMessageProducer for MqttProducer {
                 .context("Failed to start managed broker")?;
         }
 
-        //
-        // 3. Create an AsyncDiscoverClient and subscribe
-        //
+        // 2. Create an AsyncDiscoverClient and subscribe
         let mut client = AsyncDiscoverClient::new(
             sd_defaults::CLIENT_ID,
             sd_defaults::DEFAULT_BROKER_HOSTNAME,
@@ -150,10 +163,8 @@ impl DiscoveryMessageProducer for MqttProducer {
         info!("Successfully connected to broker");
         let (event_sender, event_receiver) = flume::bounded(1024);
         self.monitor(client, event_sender.clone());
-        //
-        // 4. Spawn consumer tasks that read from event_receiver and forward to `tx`.
-        //    You can tune this concurrency as you wish (e.g. 3).
-        //
+
+        // 3. Spawn consumer tasks that read from event_receiver and forward to `tx`.
         let concurrency = 3;
         for _ in 0..concurrency {
             let event_rx = event_receiver.clone();
@@ -179,7 +190,8 @@ impl DiscoveryMessageProducer for MqttProducer {
                                 mqtt_payload.pid,
                                 mqtt_payload.hash,
                                 mqtt_payload.alias,
-                                Box::new(SSHAttachController::new(ssh_cred))
+                                Box::new(SSHAttachController::new(ssh_cred)),
+                                mqtt_payload.user_data,
                             );
 
                             if let Err(e) = tx_clone.send_async(info).await {
