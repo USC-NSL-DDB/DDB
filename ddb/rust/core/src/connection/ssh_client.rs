@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use russh::{
@@ -111,7 +111,13 @@ impl SSHConnection {
             (self.cred.hostname.clone(), self.cred.port),
             SSHClientHandler(self.exited_sender.clone()),
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to connect to {}:{} with user {}.",
+                self.cred.hostname, self.cred.port, self.cred.username
+            )
+        })?;
         let key_pair = load_secret_key(self.cred.private_key_path.clone(), None)?;
         session
             .authenticate_publickey(
@@ -121,7 +127,13 @@ impl SSHConnection {
                     session.best_supported_rsa_hash().await.unwrap().flatten(),
                 ),
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to authenticate with public key: {}",
+                    self.cred.private_key_path.display()
+                )
+            })?;
         self.session = Some(session);
         Ok(())
     }
@@ -162,8 +174,6 @@ impl SSHConnection {
         }
     }
 }
-
-
 
 #[async_trait]
 impl RemoteConnectable for SSHConnection {

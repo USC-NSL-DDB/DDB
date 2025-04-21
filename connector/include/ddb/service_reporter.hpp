@@ -134,8 +134,8 @@ static inline int report_service(
         }
         std::string user_data = ss.str();
         user_data.pop_back(); // Remove the last comma
+        user_data += "}";
         ss.str(user_data);
-        ss << "}";
     }
     std::string payload = ss.str();
 

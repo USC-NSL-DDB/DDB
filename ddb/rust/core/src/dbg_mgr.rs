@@ -266,12 +266,16 @@ impl DbgManagable for DbgManager {
                 // Initialize the proclet controller if needed
                 debug!("Proclet controller is enabled.");
                 if config.conf.support_migration {
-                    Some(ProcletCtrlClient::try_connect_default().await.unwrap())
+                    Some(
+                        ProcletCtrlClient::try_connect_default()
+                            .await
+                            .expect("Failed to connect to proclet controller"),
+                    )
                 } else {
                     None
                 }
             }
-            _ => None
+            _ => None,
         };
 
         let mut dbg_mgr = DbgManager {
@@ -320,7 +324,7 @@ impl DbgManager {
     pub async fn query_proclet(&self, proclet_id: u64) -> Result<ProcletCtrlCmdResp> {
         if let Some(ctrl) = &self.proclet_ctrl {
             return ctrl.query_proclet(proclet_id).await;
-        } 
+        }
         bail!("Proclet controller not available.")
     }
 }
