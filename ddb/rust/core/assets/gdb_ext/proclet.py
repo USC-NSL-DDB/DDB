@@ -389,7 +389,9 @@ def _cleanup_proclet_heap(proclet_id_str: str, full_heap_size: int):
             result["success"] = False
             expected = int(gdb.parse_and_eval("(uint64_t) $base"))
             real = int(gdb.parse_and_eval("(uint64_t) $cleanup_ret"))
-            result["message"] = f"mmap returned a different address than expected. expected: {expected}, real: {real}"
+            result["message"] = (
+                f"mmap returned a different address than expected. expected: {expected}, real: {real}"
+            )
     except Exception as e:
         err_msg = f"Unexpected Python error: {e}\n{traceback.format_exc()}"
         result["message"] = f"{err_msg}"
@@ -406,6 +408,7 @@ def _cleanup_proclet_heap(proclet_id_str: str, full_heap_size: int):
             except gdb.error as e:
                 print("Restore Scheduler Lock", "Failure", f"Error: {e}")
     return result
+
 
 # --------------------------------------------------------------------
 # GDB MI Command (-check-proclet)
@@ -472,6 +475,7 @@ class RestoreProcletHeapMiCommand(gdb.MICommand):
         data = str(argv[3])
         return _restore_proclet_heap(start_addr, data_len, data)
 
+
 class CleanProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
         self.cmd_name = name
@@ -487,6 +491,7 @@ class CleanProcletHeapMiCommand(gdb.MICommand):
         proclet_id_str = str(argv[0])
         full_heap_size = int(argv[1])
         return _cleanup_proclet_heap(proclet_id_str, full_heap_size)
+
 
 # --------------------------------------------------------------------
 # Regular GDB Command (check-proclet)
@@ -562,6 +567,7 @@ class GetProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
+
 class RestoreProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -585,6 +591,7 @@ class RestoreProcletHeapCommand(gdb.Command):
             print("Proclet heap restoration failed.")
             print(f"  Error Message: {result['message']}")
             return
+
 
 class CleanProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
@@ -623,5 +630,5 @@ CleanProcletHeapMiCommand("-clean-proclet-heap")
 CleanProcletHeapCommand("clean-proclet-heap")
 
 print(
-    "Proclet commands ('check-proclet', '-check-proclet', 'get-proclet-heap', '-get-proclet-heap', 'restore-proclet-heap', '-restore-proclet-heap') loaded."
+    "Proclet commands ('check-proclet', '-check-proclet', 'get-proclet-heap', '-get-proclet-heap', 'restore-proclet-heap', '-restore-proclet-heap', 'clean-proclet-heap', '-clean-proclet-heap') loaded."
 )
