@@ -105,6 +105,7 @@ impl From<&str> for MqttPayload {
             // if doesn't start with "{", meaning it is not a user_data field, then ignore it.
             // we assume the user_data field is the last one in the payload if it exists.
             user_data.starts_with("{").then(|| {
+                let user_data = user_data.trim_start_matches('{').trim_end_matches('}');
                 // example payload:
                 // {key1=value1,key2=value2}
                 user_data.split(",").map(|kv| {
