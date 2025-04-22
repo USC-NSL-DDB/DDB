@@ -175,6 +175,9 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let ss = STATES.get_all_sessions();
+        
+        // reset all proclet cache and clean up restored proclet heap.
+        get_proclet_restore_mgr().reset().await;
 
         let cmd_to_send = cmd.clone().to_command(PlainFormatter);
         let tasks = match &cmd.target {

@@ -387,9 +387,10 @@ impl ProcletRestorationMgr {
         Ok(())
     }
 
-    pub fn reset(&self) {
+    pub async fn reset(&self) {
         self.proclet_is_local_cache.clear();
         self.proclet_loc_cache.clear();
+        self.cleanup_heap().await;
         self.proclet_restored_heap_meta.clear();
     }
 
