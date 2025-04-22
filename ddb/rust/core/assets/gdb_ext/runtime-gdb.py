@@ -154,9 +154,8 @@ class DistributedBacktraceMICmd(gdb.MICommand):
             frame = frame.older()
 
         remote_ip: Optional[int] = None
-        # remote_port: Optional[int] = None
         local_ip: Optional[int] = None
-        # local_port: Optional[int] = None
+        proclet_id: Optional[int] = None
         parent_rip: Optional[int] = None
         parent_rsp: Optional[int] = None
         parent_rbp: Optional[int] = None
@@ -405,6 +404,7 @@ class GetRemoteBTInfo(gdb.MICommand):
 
     def invoke(self, argv):
         remote_ip: Optional[int] = -1
+        proclet_id: Optional[int] = 0
         regs: Dict[str, int] = {}
         pid: Optional[int] = -1
         tid: Optional[int] = -1
@@ -423,14 +423,13 @@ class GetRemoteBTInfo(gdb.MICommand):
                 if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
                     for sym in get_local_variables(cur_frame):
                         if sym.name == "meta":
-                            # print("found meta")
                             val = sym.value(cur_frame)
-                            # print("found val")
-                            remote_ip = int(val['meta']['caller_comm_ip'])
-                            # print("found ip")
-                            pid = int(val['meta']['pid'])
-                            tid = int(val['meta']['tid'])
-                            # print("found pid")
+                            meta = val['meta']
+                            remote_ip = int(meta['caller_comm_ip'])
+                            if "proclet_id" in meta:
+                                proclet_id = int(meta['proclet_id'])
+                            pid = int(meta['pid'])
+                            tid = int(meta['tid'])
                             ctx_obj = val['ctx']
                             if ctx_obj.type.code == gdb.TYPE_CODE_STRUCT:
                                 for field in ctx_obj.type.fields():
@@ -440,17 +439,10 @@ class GetRemoteBTInfo(gdb.MICommand):
                                         regs[fname] = int(fval)
                                     except Exception as e:
                                         print(f"failed to convert {fname} (val = {fval}) to int")
-
                             else:
                                 # ERROR
                                 print(f"ctx is not a struct, but {ctx_obj.type}")
                                 break
-                                    
-                            # regs = { str(reg): int(val) for (reg, val) in val['ctx'].items() }
-                            # ddb_meta = get_global_variable(
-                            #     "ddb_meta", to_print=False, check_is_var=False)
-                            # if ddb_meta:
-                            #     local_ip = int(ddb_meta["comm_ip"])
                             message = "success"
                             found = True
                             break
@@ -474,7 +466,8 @@ class GetRemoteBTInfo(gdb.MICommand):
                 "caller_meta": {
                     "pid": pid,
                     "tid": tid,
-                    "ip": remote_ip
+                    "ip": remote_ip,
+                    "proclet_id": proclet_id if proclet_id else 0
                 },
                 "local_meta": {
                     "tid": ktid

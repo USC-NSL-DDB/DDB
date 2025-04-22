@@ -37,6 +37,16 @@ pub struct Config {
     #[serde(rename = "ServiceWeaverConf", default)]
     pub service_weaver_conf: Option<ServiceWeaverConf>,
 }
+
+impl Config {
+    pub fn handle_migration(&self) -> bool {
+        match self.framework {
+            Framework::Nu | Framework::Quicksand => self.conf.support_migration,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServiceWeaverConf {
     pub service_name: String,

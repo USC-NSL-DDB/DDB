@@ -9,7 +9,13 @@ use tokio::{
 };
 use tracing::{debug, error, warn};
 
-use crate::state::{get_bkpt_mgr, BkptMeta, SessionMeta, ThreadContext, ThreadStatus, STATES};
+use crate::{
+    common::{config::Framework, Config},
+    feature::get_proclet_restore_mgr,
+    state::{
+        get_bkpt_mgr, BkptMeta, LocalThreadId, SessionMeta, ThreadContext, ThreadStatus, STATES,
+    },
+};
 
 use super::{
     emit_static,
@@ -373,6 +379,12 @@ impl DistributeBacktraceHandler {
             .and_then(|v| v.expect_string_repr::<u64>().ok())
             .unwrap_or(0);
 
+        let proclet_id = caller_meta
+            .get_dict_entry("proclet_id")
+            .ok()
+            .and_then(|v| v.clone().expect_string().ok())
+            .unwrap_or("".to_string());
+
         let id = self.adapter.extract_id_from_metadata(caller_meta)?;
 
         let out_data: Dict = Dict(
@@ -381,6 +393,7 @@ impl DistributeBacktraceHandler {
                 ("caller_ctx".into(), caller_ctx.clone()),
                 ("id".into(), id.into()),
                 ("pid".into(), pid.to_string().into()),
+                ("proclet_id".into(), proclet_id.into()),
             ]
             .into_iter()
             .collect(),
@@ -513,6 +526,42 @@ impl DistributeBacktraceHandler {
             bt: stack_resp,
             parent_meta: remote_bt_parent_meta,
         })
+    }
+    
+    async fn handle_migration_if_enabled(
+        &self,
+        inspect_gtid: u64,
+        parent_meta: &Dict,
+    ) {
+        if Config::global().handle_migration() {
+            if let Some(LocalThreadId(sid, _)) = STATES.get_ltid_by_gtid(inspect_gtid) {
+                let proclet_id = parent_meta
+                    .get("proclet_id")
+                    .unwrap()
+                    .expect_string_ref()
+                    .unwrap()
+                    .to_string();
+                match get_proclet_restore_mgr()
+                    .handle_proclet_restoration(sid, &proclet_id)
+                    .await
+                {
+                    Ok(_) => {
+                        debug!("proclet heap restoration done for session {}", sid);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to handle proclet heap restoration: {:?}",
+                            e
+                        );
+                    }
+                }
+            } else {
+                error!(
+                    "Failed to handle proclet heap restoration: unable to resolve sid for gtid={}.",
+                    inspect_gtid
+                );
+            }
+        }
     }
 
     // helper functions
@@ -670,6 +719,8 @@ impl Handler for DistributeBacktraceHandler {
 
                         w_guard.curr_ctx = Some(ctx_to_save);
                         w_guard.in_custom_ctx = true;
+
+                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta).await;
                     }
                     // ------------ [BEGIN] get backtrace for the parent thread ------------
                     let bt_data = self.get_bt_and_caller_meta(inspect_gtid).await;

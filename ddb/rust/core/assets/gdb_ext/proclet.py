@@ -244,6 +244,7 @@ def _get_proclet_heap(proclet_id_str: str):
     proclet_info["copy_end"] = 0
     proclet_info["copy_len"] = 0
     proclet_info["full_heap_size"] = 0
+    proclet_info["heap_content"] = ""
 
     is_success = bool(result["success"])
     is_local = bool(result["proclet_info"]["is_local"])
@@ -441,7 +442,6 @@ class CheckProcletMiCommand(gdb.MICommand):
         }
         return mi_result
 
-
 class GetProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
         self.cmd_name = name
@@ -455,8 +455,16 @@ class GetProcletHeapMiCommand(gdb.MICommand):
             }
 
         proclet_id_str = argv[0]
-        return _get_proclet_heap(proclet_id_str)
-
+        result = _get_proclet_heap(proclet_id_str)
+        return {
+            "success": str(result["success"]).lower(),
+            "message": result["message"],
+            "start": str(result["proclet_info"]["copy_start"]),
+            "end": str(result["proclet_info"]["copy_end"]),
+            "len": str(result["proclet_info"]["copy_len"]),
+            "full_heap_size": str(result["proclet_info"]["full_heap_size"]),
+            "heap_content": str(result["proclet_info"]["heap_content"]),
+        }
 
 class RestoreProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
@@ -474,7 +482,6 @@ class RestoreProcletHeapMiCommand(gdb.MICommand):
         data_len = int(argv[2])
         data = str(argv[3])
         return _restore_proclet_heap(start_addr, data_len, data)
-
 
 class CleanProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
@@ -532,7 +539,6 @@ class CheckProcletCommand(gdb.Command):
             print("Proclet check failed.")
             print(f"  Error Message: {check_result['message']}")
 
-
 class GetProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -567,7 +573,6 @@ class GetProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
-
 class RestoreProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -592,7 +597,6 @@ class RestoreProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
-
 class CleanProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -615,7 +619,6 @@ class CleanProcletHeapCommand(gdb.Command):
             print("Proclet heap cleanup failed.")
             print(f"  Error Message: {result['message']}")
             return
-
 
 CheckProcletMiCommand("-check-proclet")
 CheckProcletCommand("check-proclet")

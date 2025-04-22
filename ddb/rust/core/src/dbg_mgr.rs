@@ -11,7 +11,7 @@ use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
-use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp};
+use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp, QueryProcletResp};
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
     common::{self, config::Framework},
@@ -339,7 +339,7 @@ impl DbgManagable for DbgManager {
 }
 
 impl DbgManager {
-    pub async fn query_proclet(&self, proclet_id: u64) -> Result<ProcletCtrlCmdResp> {
+    pub async fn query_proclet(&self, proclet_id: u64) -> Result<QueryProcletResp> {
         if let Some(ctrl) = &self.proclet_ctrl {
             return ctrl.query_proclet(proclet_id).await;
         }

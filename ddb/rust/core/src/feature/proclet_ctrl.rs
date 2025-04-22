@@ -111,6 +111,12 @@ impl ProcletCtrlCmd {
     }
 }
 
+#[derive(Debug)]
+pub struct QueryProcletResp {
+    pub proclet_id: u64,
+    pub caladan_ip: u32,
+}
+
 pub struct ProcletCtrlClient {
     to_send: flume::Sender<Bytes>,
     sender_handle: tokio::task::JoinHandle<()>,
@@ -244,8 +250,26 @@ impl ProcletCtrlClient {
         Ok(receiver.await?)
     }
 
-    pub async fn query_proclet(&self, proclet_id: u64) -> Result<ProcletCtrlCmdResp> {
+    pub async fn query_proclet(&self, proclet_id: u64) -> Result<QueryProcletResp> {
         let cmd = ProcletCtrlCmd::Query(proclet_id);
-        self.send_command(cmd).await
+        let resp = self.send_command(cmd).await?;
+        match resp {
+            ProcletCtrlCmdResp::QueryResp(proc_id, caladan_ip) => {
+                debug!("Proclet ID: {}, Caladan IP: {}", proc_id, caladan_ip);
+                // some sanity checks...
+                assert_eq!(
+                    proclet_id,
+                    proc_id,
+                    "Proclet ID mismatch: expected {}, got {}",
+                    proclet_id,
+                    proc_id
+                );
+                Ok(QueryProcletResp { proclet_id, caladan_ip })
+            }
+            _ => {
+                error!("Unexpected response type");
+                Err(anyhow::anyhow!("Unexpected response type"))
+            }
+        }
     }
 }

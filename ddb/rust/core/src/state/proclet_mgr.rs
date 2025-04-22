@@ -1,10 +1,20 @@
+
+use std::fmt::{Debug, Display};
+
 use dashmap::DashMap;
 use tracing::debug;
 
 use crate::discovery::discovery_message_producer::UserDataMap;
 
+#[derive(Debug)]
 pub struct ProcletMgr {
     caladan_ip_to_sid: DashMap<u32, u64>,
+}
+
+impl Display for ProcletMgr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ProcletMgr {{ caladan_ip_to_sid: {:?} }}", self.caladan_ip_to_sid)
+    }
 }
 
 impl ProcletMgr {
