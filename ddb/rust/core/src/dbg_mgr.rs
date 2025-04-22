@@ -12,6 +12,7 @@ use tracing::{debug, error};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp};
+use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
     common::{self, config::Framework},
     discovery::DiscoveryMessageProducer,
@@ -77,6 +78,9 @@ impl ServiceDiscover {
         let hostname = info.ip;
         let pid = info.pid;
         let tag_str = info.tag;
+        // if no such field is provided, it will be None.
+        // so it is ok to leave it here.
+        let caladan_ip = get_caladan_ip_from_user_data(&service_meta.user_data);
 
         let s_cfg = crate::session::DbgSessionCfgBuilder::new()
             .tag(tag_str)
@@ -102,6 +106,20 @@ impl ServiceDiscover {
             Ok(input_tx) => {
                 // Register with your command router or anywhere else
                 crate::cmd_flow::get_router().add_session(new_sid, input_tx);
+
+                // Register with proclet manager if needed.
+                // so that we have the mapping between caladan ip and session id.
+                let g_cfg = crate::common::config::Config::global();
+                match g_cfg.framework {
+                    Framework::Nu | Framework::Quicksand => {
+                        if g_cfg.conf.support_migration {
+                            if let Some(caladan_ip) = caladan_ip {
+                                get_proclet_mgr().register_caladan_ip(caladan_ip, new_sid);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
 
                 // Put it in the manager's DashMap
                 sessions.insert(new_sid, dbg_session);

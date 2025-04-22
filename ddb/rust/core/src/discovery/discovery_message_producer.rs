@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::dbg_ctrl::DbgController;
 
-type UserDataMap = Option<HashMap<String, String>>;
+pub type UserDataMap = Option<HashMap<String, String>>;
 
 pub struct ServiceInfo
 {
@@ -64,16 +64,18 @@ pub struct ServiceMeta
     pub pid: u64,
     pub hash: String,
     pub alias: String,
+    pub user_data: UserDataMap,
 }
 
 impl ServiceMeta {
-    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String) -> Self {
+    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String, user_data: UserDataMap) -> Self {
         ServiceMeta {
             ip,
             tag,
             pid,
             hash,
             alias,
+            user_data
         }
     }
     
@@ -84,6 +86,7 @@ impl ServiceMeta {
             pid: info.pid,
             hash: info.hash.clone(),
             alias: info.alias.clone(),
+            user_data: info.user_data.clone(),
         }
     }
     
@@ -94,6 +97,7 @@ impl ServiceMeta {
             pid: info.pid,
             hash: info.hash,
             alias: info.alias,
+            user_data: info.user_data,
         }
     }
 }
