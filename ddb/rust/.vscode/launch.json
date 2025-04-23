@@ -30,6 +30,29 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "[QUICKSAND] Debug executable 'ddb'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=ddb",
+                    "--package=ddb"
+                ],
+                "filter": {
+                    "name": "ddb",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "${workspaceFolder}/core/configs/dbg_quicksand.yaml",
+                "--console-log",
+                "--console-level",
+                "debug"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "[SW] Debug executable 'ddb'",
             "cargo": {
                 "args": [
