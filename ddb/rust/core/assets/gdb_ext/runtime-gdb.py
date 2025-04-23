@@ -398,6 +398,13 @@ def pc_to_int(pc):
         pc = int(str(pc).split(None, 1)[0], 16)
     return pc
 
+def check_field_exists(obj: gdb.Value, field_name: str) -> bool:
+    """Check if a field exists in a gdb.Value object."""
+    for field in obj.type.fields():
+        if field.name == field_name:
+            return True
+    return False
+
 class GetRemoteBTInfo(gdb.MICommand):
     def __init__(self):
         super().__init__("-get-remote-bt")
@@ -423,10 +430,10 @@ class GetRemoteBTInfo(gdb.MICommand):
                 if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
                     for sym in get_local_variables(cur_frame):
                         if sym.name == "meta":
-                            val = sym.value(cur_frame)
-                            meta = val['meta']
+                            val: gdb.Value = sym.value(cur_frame)
+                            meta: gdb.Value = val['meta']
                             remote_ip = int(meta['caller_comm_ip'])
-                            if "proclet_id" in meta:
+                            if check_field_exists(meta, "proclet_id"):
                                 proclet_id = int(meta['proclet_id'])
                             pid = int(meta['pid'])
                             tid = int(meta['tid'])
@@ -452,7 +459,7 @@ class GetRemoteBTInfo(gdb.MICommand):
             print(f"extracted meta: {str_to_print}")
             # print(f"ip: {remote_ip}, pid: {pid}, pc: {parent_pc}, sp: {parent_sp}, fp: {parent_fp}, lr: {parent_lr}")
         except Exception as e:
-            pass
+            print(f"Error: {e}")
         # global get_thrd_ktid_cmd_mi
         # result = get_thrd_ktid_cmd_mi.invoke([])
         result = gdb.execute_mi("-get-thread-ktid")
