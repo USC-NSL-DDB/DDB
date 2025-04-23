@@ -72,6 +72,7 @@ def _switch_to_thread(
 ) -> Optional[ThreadInfo]:
     original_thread = gdb.selected_thread()
     original_frame = gdb.selected_frame()
+    ret = ThreadInfo(original_thread, original_frame)
 
     # --- Checkout to the target thread ---
     target_thread: gdb.InferiorThread = None
@@ -80,6 +81,7 @@ def _switch_to_thread(
             return None
 
         for thread in gdb.selected_inferior().threads():
+            print(f"Thread: {thread.name}")
             if thread.name == thread_name:
                 target_thread = thread
                 break
@@ -89,11 +91,11 @@ def _switch_to_thread(
         else:
             msg = f"Thread '{thread_name}' not found."
             print(msg)
-            return None
+            return ret
     except gdb.error as e:
         msg = f"Error finding/switching thread: {e}"
         print(msg)
-        return None
+        return ret
 
     if not frame_name:
         return ThreadInfo(original_thread, original_frame)
@@ -106,6 +108,7 @@ def _switch_to_thread(
             raise gdb.error("Current thread has no frames.")
 
         while current_frame:
+            print(f"Frame: {current_frame.name()}")
             if current_frame.name() == frame_name:
                 target_frame = current_frame
                 break
@@ -120,13 +123,12 @@ def _switch_to_thread(
         else:
             msg = f"Frame '{frame_name}' not found in thread {target_thread.num}."
             print(msg)
-            return None
+            return ret
     except gdb.error as e:
         msg = f"Error finding/selecting frame: {e}"
         print(msg)
-        return None
-
-    return ThreadInfo(original_thread, original_frame)
+        return ret
+    return ret
 
 
 def _switch_to_aux_thread() -> Optional[ThreadInfo]:
@@ -176,6 +178,7 @@ def _check_proclet(proclet_id_str: str):
 
     try:
         original_scheduler_lock = gdb.parameter("scheduler-locking")
+        gdb.execute("set scheduler-locking on", to_string=True)
         # Checkout to the aux thread.
         original_thread = _switch_to_aux_thread()
 
@@ -264,6 +267,7 @@ def _get_proclet_heap(proclet_id_str: str):
 
     try:
         original_scheduler_lock = gdb.parameter("scheduler-locking")
+        gdb.execute("set scheduler-locking on", to_string=True)
         original_thread = _switch_to_aux_thread()
 
         # --- Get the ProcletHeader pointer ---
@@ -330,6 +334,7 @@ def _restore_proclet_heap(start_addr: int, data_len: int, data: str):
 
     try:
         original_scheduler_lock = gdb.parameter("scheduler-locking")
+        gdb.execute("set scheduler-locking on", to_string=True)
         original_thread = _switch_to_aux_thread()
 
         # --- Restore Memory ---
@@ -374,15 +379,15 @@ def _cleanup_proclet_heap(proclet_id_str: str, full_heap_size: int):
 
     try:
         original_scheduler_lock = gdb.parameter("scheduler-locking")
+        gdb.execute("set scheduler-locking on", to_string=True)
         original_thread = _switch_to_aux_thread()
 
         gdb.execute(f"set $base = (void*) {proclet_id_str}", to_string=True)
+        base = int(gdb.parse_and_eval("(uint64_t) $base"))
         gdb.execute(f"set $hp_size = (size_t) {full_heap_size}", to_string=True)
-        gdb.execute(
-            "set $cleanup_ret = call (void*) mmap((void*) $base, (size_t) $hp_size, (int) 3, (int) 0x4032, (int) -1, (long) 0)",
-            to_string=True,
-        )
-        safe = bool(gdb.parse_and_eval("$cleanup_ret == $base"))
+        ret_val = gdb.parse_and_eval("mmap((void*) $base, (size_t) $hp_size, (int) 3, (int) 0x4032, (int) -1, (long) 0)")
+        ret_val = int(ret_val.cast(gdb.lookup_type("uint64_t")))
+        safe = (ret_val == base)
         if safe:
             result["success"] = True
             result["message"] = "Proclet heap is cleaned up successfully."
@@ -424,7 +429,7 @@ class CheckProcletMiCommand(gdb.MICommand):
     def invoke(self, argv):
         if len(argv) != 1:
             return {
-                "success": False,
+                "success": str(False).lower(),
                 "message": f"Usage: {self.cmd_name} <proclet-id>",
             }
 
@@ -442,6 +447,7 @@ class CheckProcletMiCommand(gdb.MICommand):
         }
         return mi_result
 
+
 class GetProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
         self.cmd_name = name
@@ -450,7 +456,7 @@ class GetProcletHeapMiCommand(gdb.MICommand):
     def invoke(self, argv):
         if len(argv) != 1:
             return {
-                "success": False,
+                "success": str(False).lower(),
                 "message": f"Usage: {self.cmd_name} <proclet-id>",
             }
 
@@ -466,22 +472,28 @@ class GetProcletHeapMiCommand(gdb.MICommand):
             "heap_content": str(result["proclet_info"]["heap_content"]),
         }
 
+
 class RestoreProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
         self.cmd_name = name
         super(RestoreProcletHeapMiCommand, self).__init__(name)
 
     def invoke(self, argv):
-        if len(argv) != 4:
+        if len(argv) != 3:
             return {
-                "success": False,
+                "success": str(False).lower(),
                 "message": f"Usage: {self.cmd_name} <start-addr> <data-len> <data>",
             }
 
-        start_addr = int(argv[1])
-        data_len = int(argv[2])
-        data = str(argv[3])
-        return _restore_proclet_heap(start_addr, data_len, data)
+        start_addr = int(argv[0])
+        data_len = int(argv[1])
+        data = str(argv[2])
+        result = _restore_proclet_heap(start_addr, data_len, data)
+        return {
+            "success": str(result["success"]).lower(),
+            "message": result["message"],
+        }
+
 
 class CleanProcletHeapMiCommand(gdb.MICommand):
     def __init__(self, name):
@@ -497,7 +509,11 @@ class CleanProcletHeapMiCommand(gdb.MICommand):
 
         proclet_id_str = str(argv[0])
         full_heap_size = int(argv[1])
-        return _cleanup_proclet_heap(proclet_id_str, full_heap_size)
+        result = _cleanup_proclet_heap(proclet_id_str, full_heap_size)
+        return {
+            "success": str(result["success"]).lower(),
+            "message": result["message"],
+        }
 
 
 # --------------------------------------------------------------------
@@ -539,6 +555,7 @@ class CheckProcletCommand(gdb.Command):
             print("Proclet check failed.")
             print(f"  Error Message: {check_result['message']}")
 
+
 class GetProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -573,6 +590,7 @@ class GetProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
+
 class RestoreProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -597,6 +615,7 @@ class RestoreProcletHeapCommand(gdb.Command):
             print(f"  Error Message: {result['message']}")
             return
 
+
 class CleanProcletHeapCommand(gdb.Command):
     def __init__(self, name: str):
         self.cmd_name = name
@@ -619,6 +638,7 @@ class CleanProcletHeapCommand(gdb.Command):
             print("Proclet heap cleanup failed.")
             print(f"  Error Message: {result['message']}")
             return
+
 
 CheckProcletMiCommand("-check-proclet")
 CheckProcletCommand("check-proclet")

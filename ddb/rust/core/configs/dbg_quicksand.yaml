@@ -28,4 +28,5 @@ ServiceDiscovery:
 
 Conf:
   on_exit: kill
-  support_migration: true
+  sudo: true
+  support_migration: true 
