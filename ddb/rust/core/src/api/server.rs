@@ -218,6 +218,7 @@ async fn get_sessions() -> impl IntoResponse {
             "tag": tag,
             "alias": service_meta.map(|x| x.alias.clone()).unwrap_or("UNKNOWN".to_string()),
             "status": status,
+            "groupId": crate::state::get_group_mgr().get_group_id(sid).unwrap_or("UNKNOWN".to_string()),
         });
         results.push(session);
     }
