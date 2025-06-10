@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use axum::{
     extract::Query,
     http::StatusCode,
@@ -13,7 +15,7 @@ use tracing::{debug, info};
 
 use crate::{
     cmd_flow::{input::ParsedInputCmd, router::Target, FinishedCmd, NullFormatter},
-    state::GroupMeta,
+    state::{GroupId, GroupMeta, SessionId},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -73,7 +75,8 @@ impl ApiServer {
             .route("/pcommands", get(get_pending_commands))
             .route("/src_to_grp_ids", get(resolve_src_to_group_ids))
             .route("/src_to_grps", get(resolve_src_to_groups))
-            .route("/send", post(send_cmd));
+            .route("/send", post(send_cmd))
+            .route("/groups", get(get_groups));
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone())
             .await
@@ -136,7 +139,10 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
         let (target, cmd) = cmd.to_command(NullFormatter);
         // if the user specifies a target, it overrides the one in the command
         let target = send_cmd.target.unwrap_or(target);
-        debug!("Sending command: {:?} to {:?}. query: {:?}", cmd, target, query);
+        debug!(
+            "Sending command: {:?} to {:?}. query: {:?}",
+            cmd, target, query
+        );
         if send_cmd.wait {
             match crate::cmd_flow::get_router().send_to_ret(target, cmd).await {
                 Ok(r) => {
@@ -235,7 +241,23 @@ async fn get_pending_commands() -> impl IntoResponse {
     }
     (StatusCode::OK, Json(json!(results)))
 }
+async fn get_groups() -> impl IntoResponse {
+    // This assumes you have a function to get the global GroupMgr instance,
+    // similar to `get_source_mgr()` or `get_cmd_tracker()` in your code.
+    // You might need to adjust this line to match your actual state management.
+    let group_mgr = crate::state::get_group_mgr();
 
+    // Retrieve all groups from the GroupMgr.
+    let all_groups = group_mgr.get_all_groups_if(|_id, _meta| true);
+
+    // Transform the data into the desired format: { group_id: sessions }
+    let result: HashMap<GroupId, HashSet<SessionId>> = all_groups
+        .into_iter()
+        .map(|(id, meta)| (id, meta.get_sids().clone()))
+        .collect();
+
+    (StatusCode::OK, Json(result))
+}
 // async fn get_finished_commands() -> impl IntoResponse {
 
 // }
