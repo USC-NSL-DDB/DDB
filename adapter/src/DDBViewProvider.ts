@@ -186,7 +186,7 @@ class BreakPointItem extends vscode.TreeItem {
 
 let periodicRefreshIntervalId: NodeJS.Timeout | undefined;
 export function activate(context: vscode.ExtensionContext, breakpointSessionsMap: Map<string, string[]>) {
-	const apiBaseUrl = process.env.SESSIONS_COMMANDS_API_URL || 'http://localhost:5000';
+	const apiBaseUrl = process.env.DDB_API_URL || 'http://localhost:5000';
 	const sessionsCommandsProvider = new SessionsCommandsProvider(apiBaseUrl, breakpointSessionsMap);
 	// vscode.window.registerTreeDataProvider('sessionsCommandsExplorer', sessionsCommandsProvider);
 	const treeView = vscode.window.createTreeView('sessionsCommandsExplorer', {

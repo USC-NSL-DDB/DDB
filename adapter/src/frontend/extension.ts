@@ -69,7 +69,7 @@ function associateBreakpointWithSessions(bp: vscode.Breakpoint, sessionIds: stri
 }
 
 async function getAvailableSessions(): Promise<any[]> {
-	const apiBaseUrl = process.env.SESSIONS_COMMANDS_API_URL || 'http://localhost:5000';
+	const apiBaseUrl = process.env.DDB_API_URL || 'http://localhost:5000';
 	try {
 		const response = await axios.get(`${apiBaseUrl}/sessions`);
 		return response.data; // Adjust according to your API's response format

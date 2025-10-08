@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ssh-gateway
+  labels:
+    app: ssh-gateway
+spec:
+  containers:
+    - name: gateway
+      image: ubuntu:22.04
+      ports:
+        - containerPort: 2222
+      command:
+        - /bin/bash
+        - -c
+        - |
+          apt-get update && \
+          apt-get install -y openssh-server && \
+          mkdir /run/sshd && \
+          echo 'AllowTcpForwarding yes' >> /etc/ssh/sshd_config && \
+          echo 'GatewayPorts yes' >> /etc/ssh/sshd_config && \
+          echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
+          echo 'Port 2222' >> /etc/ssh/sshd_config && \
+          echo 'root:password123' | chpasswd && \
+          /usr/sbin/sshd -D
+      resources:
+        requests:
+          cpu: "1"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "256Mi"
+      securityContext:
+        privileged: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ssh-gateway
+spec:
+  type: NodePort
+  ports:
+    - port: 2222
+      targetPort: 2222
+      nodePort: 30024 # or any other available port
+  selector:
+    app: ssh-gateway
