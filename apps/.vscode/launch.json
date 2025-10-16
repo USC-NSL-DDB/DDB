@@ -3,6 +3,13 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			"type": "midas-rr",
+			"request": "attach",
+			"name": "Start RR replay",
+			"cwd": "${workspaceFolder}",
+			"setupCommands": [ "set sysroot /", "set debuginfod enabled off", "set auto-load safe-path /" ]
+		},
+		{
 			"type": "ddb",
 			"request": "launch",
 			"name": "[REDISRAFT] Attach DDB",
