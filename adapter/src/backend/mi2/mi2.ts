@@ -139,7 +139,7 @@ export class MI2 extends EventEmitter implements IBackend {
 			this.process.on("error", err => this.emit("launcherror", err));
 			// const promises = this.initCommands(target, cwd);
 			const promises = []
-			const apiBaseUrl = process.env.SESSIONS_COMMANDS_API_URL || 'http://localhost:5000';
+			const apiBaseUrl = process.env.DDB_API_URL || 'http://localhost:5000';
 			promises.push(pollServiceUntilReady(`${apiBaseUrl}/status`));
 			Promise.all(promises).then(() => {
 				this.emit("debug-ready");

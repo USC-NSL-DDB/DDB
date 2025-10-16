@@ -69,7 +69,7 @@ function associateBreakpointWithSessions(bp: vscode.Breakpoint, sessionIds: stri
 }
 
 async function getAvailableSessions(): Promise<any[]> {
-	const apiBaseUrl = process.env.SESSIONS_COMMANDS_API_URL || 'http://localhost:5000';
+	const apiBaseUrl = process.env.DDB_API_URL || 'http://localhost:5000';
 	try {
 		const response = await axios.get(`${apiBaseUrl}/sessions`);
 		return response.data; // Adjust according to your API's response format
@@ -78,21 +78,87 @@ async function getAvailableSessions(): Promise<any[]> {
 		return [];
 	}
 }
-async function promptForSessions(): Promise<Array<{ sessionId: string }>> {
-	const sessions = await getAvailableSessions(); // Implement this function
-	return await vscode.window.showQuickPick(
-		sessions.map(session => ({
-			label: `[${session.alias}] sid=${session.sid}, tag=${session.tag}`,
-			description: session.status,
-			sessionId: session.sid
-		})),
+// async function promptForSessions(): Promise<Array<{ sessionId: string }>> {
+// 	const sessions = await getAvailableSessions(); // Implement this function
+// 	return await vscode.window.showQuickPick(
+// 		sessions.map(session => ({
+// 			label: `[${session.alias}] sid=${session.sid}, tag=${session.tag}`,
+// 			description: session.status,
+// 			sessionId: session.sid
+// 		})),
+// 		{
+// 			canPickMany: true,
+// 			placeHolder: 'Select sessions to apply the breakpoint to'
+// 		}
+// 	);
+// }
+// Define a custom QuickPickItem type that can hold our session data
+interface SessionQuickPickItem extends vscode.QuickPickItem {
+	sessionId?: string; // Make it optional for separators
+}
+async function promptForSessions(): Promise<Array<{ sessionId: string }> | undefined> {
+	const sessions = await getAvailableSessions();
+
+	if (!sessions || sessions.length === 0) {
+		vscode.window.showInformationMessage("No debug sessions available.");
+		return [];
+	}
+
+	// 1. Group sessions by their groupId
+	const groupedSessions: Map<string, any[]> = new Map();
+	const UNGROUPED_KEY = "Ungrouped";
+
+	for (const session of sessions) {
+		// Use 'group_id' from your Rust backend
+		const groupId = session.groupId || UNGROUPED_KEY;
+		if (!groupedSessions.has(groupId)) {
+			groupedSessions.set(groupId, []);
+		}
+		groupedSessions.get(groupId)!.push(session);
+	}
+
+	// 2. Build the list for the Quick Pick UI, with group headers
+	const quickPickItems: SessionQuickPickItem[] = [];
+	const sortedGroupIds = Array.from(groupedSessions.keys()).sort();
+
+	for (const groupId of sortedGroupIds) {
+		const sessionGroup = groupedSessions.get(groupId)!;
+
+		// Add a visually distinct HEADER item for the group. It won't have a sessionId.
+		quickPickItems.push({
+			label: `$(folder) ${groupId.toUpperCase()}`, // Use a VS Code icon
+			description: `(${sessionGroup.length} sessions)`,
+			// This item is "selectable" in the UI, but we'll filter it out later.
+		});
+
+		// Add the actual selectable session items for this group
+		for (const session of sessionGroup) {
+			quickPickItems.push({
+				label: `   ${session.alias || 'UNKNOWN'}`, // Indent under the header
+				description: `sid=${session.sid}`,
+				sessionId: session.sid // This makes it a real, selectable item
+			});
+		}
+	}
+
+	// 3. Show the Quick Pick to the user
+	const selectedItems = await vscode.window.showQuickPick<SessionQuickPickItem>(
+		quickPickItems,
 		{
 			canPickMany: true,
 			placeHolder: 'Select sessions to apply the breakpoint to'
 		}
 	);
-}
 
+	// 4. Filter out the header items from the final result
+	if (selectedItems) {
+		return selectedItems
+			.filter(item => item.sessionId !== undefined) // This is the key trick
+			.map(item => ({ sessionId: item.sessionId! }));
+	}
+
+	return undefined; // User cancelled
+}
 function convertToVSCodeBreakpoint(bp: any, source: any): vscode.Breakpoint {
 	const uri = vscode.Uri.parse(source.path);
 	const location = new vscode.Location(uri, new vscode.Position(bp.line - 1, bp.column ? bp.column - 1 : 0));

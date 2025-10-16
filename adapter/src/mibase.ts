@@ -32,6 +32,12 @@ class VariableScope {
 
 export enum RunCommand { CONTINUE, RUN, NONE }
 
+type M_Thread = {
+	id: number;
+	name: string;
+	groupId: string;
+}
+let fakeThreadId = -1;
 export class MI2DebugSession extends DebugSession {
 	protected variableHandles = new Handles<VariableScope | string | VariableObject | ExtendedVariable>();
 	protected variableHandlesReverse: { [id: string]: number } = {};
@@ -49,7 +55,7 @@ export class MI2DebugSession extends DebugSession {
 	protected miDebugger: MI2;
 	protected commandServer: net.Server;
 	protected serverPath: string;
-	protected m_threads: Map<number, Thread> = new Map();
+	protected m_threads: Map<number, M_Thread> = new Map();
 	protected goToTargets: Map<number, DebugProtocol.GotoTarget & { path: string }> = new Map();
 
 	public constructor(debuggerLinesStartAt1: boolean, isServer: boolean = false) {
@@ -240,10 +246,11 @@ export class MI2DebugSession extends DebugSession {
 		var threadId = parseInt(info.record("id"));
 		this.m_threads.set(
 			threadId,
-			new Thread(
-				threadId,
-				`[${info.record("session-alias")}]: Thread ${info.record("id")}, sid = ${info.record("session-id")}`
-			)
+			{
+				id: threadId,
+				name: `[${info.record("session-alias")}]: Thread ${info.record("id")}, sid = ${info.record("session-id")}`,
+				groupId: info.record("group-id"),
+			}
 		);
 		this.threadIdToSessionId.set(
 			threadId,
@@ -518,8 +525,32 @@ export class MI2DebugSession extends DebugSession {
 			this.sendResponse(response);
 			return;
 		}
+		let groupedThreads = new Map<string, M_Thread[]>();
+		for (const [key, value] of this.m_threads) {
+			if (!groupedThreads.has(value.groupId)) {
+				groupedThreads.set(value.groupId, []);
+			}
+			groupedThreads.get(value.groupId)?.push(value);
+		}
+		const threads: DebugProtocol.Thread[] = [];
+		for (const [groupId, groupThreads] of groupedThreads) {
+			threads.push(
+				{
+					id: fakeThreadId--,
+					name: `📦 ${groupId}`,
+				}
+			)
+			for (const thread of groupThreads) {
+				threads.push(
+					{
+						id: thread.id,
+						name: thread.name,
+					}
+				)
+			}
+		}
 		response.body = {
-			threads: Array.from(this.m_threads, ([key, value]) => value)
+			threads: threads
 		};
 		this.sendResponse(response);
 		// this.miDebugger.getThreads().then(threads => {
