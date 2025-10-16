@@ -17,3 +17,6 @@
 [submodule "fwks/quicksand"]
 	path = fwks/quicksand
 	url = https://github.com/totoroyyb/quicksand-ddb.git
+[submodule "fwks/gotosocial"]
+	path = fwks/gotosocial
+	url = https://github.com/USC-NSL-DDB/gotosocial

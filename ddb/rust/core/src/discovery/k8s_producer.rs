@@ -14,6 +14,7 @@ use kube::{Api, Client, Config};
 use russh::client::Handle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tracing::info;
 
 /// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
 /// `ServiceInfo` events and send them through a channel.
@@ -153,7 +154,7 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     ip,
                                     ip_str.to_string(),
                                     pid as u64,
-                                    "hash".to_string(),
+                                    "weaver".to_string(),
                                     pod_name.to_string(),
                                     Box::new(SSHAttachController::new(ssh_cred, tunnel)),
                                     None,

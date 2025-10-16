@@ -3,7 +3,11 @@ use std::any::Any;
 use gdbmi::raw::{Dict, Value};
 use tracing::{debug, error};
 
-use crate::{dbg_parser::gdb_parser::MIFormatter, discovery::discovery_message_producer::ServiceMeta, state::STATES};
+use crate::{
+    dbg_parser::gdb_parser::MIFormatter,
+    discovery::discovery_message_producer::ServiceMeta,
+    state::{get_group_mgr, GroupId, STATES},
+};
 
 use super::{FinishedCmd, ParsedSessionResponse};
 
@@ -91,14 +95,18 @@ impl Formatter for UnitFormatter {
 
     #[inline]
     fn format(&self, input: &Self::Tranformed) -> String {
-        let formatted = input.get_responses().iter().map(|r| {
-            MIFormatter::format(
-                "^",
-                r.get_message(),
-                r.get_payload(),
-                input.get_external_token(),
-            )
-        }).collect::<Vec<_>>();
+        let formatted = input
+            .get_responses()
+            .iter()
+            .map(|r| {
+                MIFormatter::format(
+                    "^",
+                    r.get_message(),
+                    r.get_payload(),
+                    input.get_external_token(),
+                )
+            })
+            .collect::<Vec<_>>();
         formatted.join("\n")
     }
 }
@@ -283,7 +291,12 @@ pub struct ThreadCreatedNotifFormatter {
 
 impl ThreadCreatedNotifFormatter {
     pub fn new(gtid: u64, gtgid: u64, sid: u64, service_meta: Option<ServiceMeta>) -> Self {
-        Self { gtid, gtgid, sid, service_meta }
+        Self {
+            gtid,
+            gtgid,
+            sid,
+            service_meta,
+        }
     }
 }
 
@@ -300,12 +313,20 @@ impl Formatter for ThreadCreatedNotifFormatter {
     fn format(&self, input: &Self::Tranformed) -> String {
         // Example Output
         // =thread-created,id="1",group-id="i1"
-        let alias = self.service_meta.as_ref().map(|meta| meta.alias.clone()).unwrap_or("UNKNOWN".to_string());
+        let alias = self
+            .service_meta
+            .as_ref()
+            .map(|meta| meta.alias.clone())
+            .unwrap_or("UNKNOWN".to_string());
+        let group_id = get_group_mgr()
+            .get_group_id(self.sid)
+            .unwrap_or("UNKNOWN".to_string());
         let payload: Dict = vec![
             ("id".to_string(), format!("{}", self.gtid).into()),
             ("group-id".to_string(), format!("i{}", self.gtgid).into()),
             ("session-id".to_string(), format!("{}", self.sid).into()),
             ("session-alias".to_string(), format!("{}", alias).into()),
+            ("group-id".to_string(), format!("{}", group_id).into()),
         ]
         .into();
         MIFormatter::format("=", "thread-created", Some(&payload), None)
