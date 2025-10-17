@@ -101,7 +101,8 @@ gdb: gdb-clean
 gdb-install: gdb
 	pushd gdb-14.2/build && sudo make install
 
-install-hdrs:
+.PHONY: install-connector
+install-connector:
 	$(MAKE) -C connector install
 
 .PHONY: install-broker
