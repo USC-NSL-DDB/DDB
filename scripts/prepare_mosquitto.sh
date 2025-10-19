@@ -19,7 +19,7 @@ TMP_FOLDER="/opt/mqtt"
 
 sudo rm -rf $TMP_FOLDER
 sudo mkdir -p $TMP_FOLDER
-sudo chmod 777 $TMP_FOLDER
+sudo chmod 755 $TMP_FOLDER
 
 check_status() {
     if [ $? -ne 0 ]; then
