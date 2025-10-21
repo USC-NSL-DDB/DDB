@@ -56,6 +56,21 @@ pub struct ServiceWeaverConf {
     pub jump_client_password: String,
     pub jump_client_key_path: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GdbConf {
+    #[serde(default)]
+    pub logging: bool,
+}
+
+impl Default for GdbConf {
+    fn default() -> Self {
+        Self {
+            logging: false,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Conf {
     #[serde(default)]
@@ -70,6 +85,8 @@ pub struct Conf {
     pub base_dir: String,
     #[serde(default)]
     pub support_migration: bool,
+    #[serde(default)]
+    pub gdb: GdbConf,
 }
 
 impl Default for Conf {
@@ -81,6 +98,7 @@ impl Default for Conf {
             log_dir: default_vals::DEFAULT_LOG_DIR.to_string(),
             base_dir: default_vals::DEFAULT_BASE_DIR.to_string(),
             support_migration: false, // TODO: default to true when testing is done.
+            gdb: GdbConf::default(),
         }
     }
 }
