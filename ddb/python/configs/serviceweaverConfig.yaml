@@ -1,8 +1,0 @@
-Framework: serviceweaver_kube
-PrerunGdbCommands:
-- name: "load extension"
-  command: "source /workspace/extension.py"
-
-Components:
-  kube_namespace: default
-  binary_name: "server.out"
