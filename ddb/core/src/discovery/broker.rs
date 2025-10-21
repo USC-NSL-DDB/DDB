@@ -22,8 +22,14 @@ pub enum BrokerError {
     StopError(String),
 }
 
-fn write_config(broker: &BrokerInfo) -> Result<()> {
-    let path = Path::new(sd_defaults::SERVICE_DISCOVERY_INI_FILEPATH);
+fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
+    let path = Path::new(config_path);
+
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let mut file = File::create(path)?;
 
     writeln!(
@@ -45,7 +51,7 @@ pub struct BrokerInfo {
 }
 
 pub trait MessageBroker: Send + Sync {
-    fn start(&self, broker_info: &BrokerInfo) -> Result<()>;
+    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()>;
     fn stop(&self) -> Result<()>;
 }
 
@@ -61,9 +67,9 @@ impl MosquittoBroker {
 }
 
 impl MessageBroker for MosquittoBroker {
-    fn start(&self, broker_info: &BrokerInfo) -> Result<()> {
+    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
         // Write configuration
-        write_config(broker_info)?;
+        write_config(broker_info, config_path)?;
 
         // Start broker
         match Command::new("mosquitto")
@@ -141,11 +147,11 @@ fn extract_embedded_file_content(content: &[u8]) -> Result<NamedTempFile> {
 }
 
 impl MessageBroker for EMQXBroker {
-    fn start(&self, broker_info: &BrokerInfo) -> Result<()> {
+    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
         use crate::common::utils::run_command;
 
         // Write configuration
-        write_config(broker_info)?;
+        write_config(broker_info, config_path)?;
 
         let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
         let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
