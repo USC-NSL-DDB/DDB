@@ -22,6 +22,7 @@ typedef struct {
   bool wait_for_attach;
   char *tag;
   char *alias;
+  char *hash;
   char *ini_filepath;
 } DDBConfig;
 
@@ -37,6 +38,7 @@ static inline DDBConfig ddb_config_get_default(const char *ipv4) {
   config.wait_for_attach = true;
   config.tag = strdup("proc");
   config.alias = strdup("bin");
+  config.hash = strdup("");
   config.ini_filepath = strdup(ddb_default_ini_filepath());
   return config;
 }
@@ -81,15 +83,28 @@ static inline DDBConfig ddb_config_with_ini_filepath(DDBConfig *config,
   return new_config;
 }
 
+static inline DDBConfig ddb_config_with_hash(DDBConfig *config,
+                                        const char *hash) {
+  DDBConfig new_config = *config;
+
+  if (new_config.hash) {
+    free(new_config.hash);
+  }
+  new_config.hash = strdup(hash);
+
+  return new_config;
+}
+
 static inline char *ddb_config_to_string(DDBConfig *config) {
   char buffer[1024];
   snprintf(buffer, sizeof(buffer),
            "Config { ipv4 = %s, auto_discovery = %s, wait_for_attach = %s, "
-           "tag = %s, alias = %s, ini_filepath = %s }",
+           "tag = %s, hash = %s, alias = %s, ini_filepath = %s }",
            config->ipv4 ? config->ipv4 : "NULL",
            config->auto_discovery ? "true" : "false",
            config->wait_for_attach ? "true" : "false",
            config->tag ? config->tag : "NULL",
+           config->hash ? config->hash : "NULL",
            config->alias ? config->alias : "NULL",
            config->ini_filepath ? config->ini_filepath : "NULL");
 
@@ -166,22 +181,25 @@ static inline DDBConnector *ddb_connector_create_with_config(DDBConfig config) {
 
 static inline void ddb_init_discovery(DDBConnector *connector) {
   char hash[DDB_HASH_LEN];
-  if (ddb_compute_self_hash(hash) != 0) {
-    fprintf(stderr, "failed to compute self hash\n");
-    return;
+  if (connector->config.hash == NULL ||
+      strlen(connector->config.hash) == 0) {
+    if (ddb_compute_self_hash(hash) != 0) {
+      fprintf(stderr, "failed to compute self hash\n");
+      return;
+    }
+  } else {
+    strncpy(hash, connector->config.hash, DDB_HASH_LEN - 1);
+    hash[DDB_HASH_LEN - 1] = '\0';
   }
 
   DDBServiceInfo service = {.ip = ddb_meta.comm_ip, .pid = ddb_meta.pid};
 
-  // Copy tag
   strncpy(service.tag, connector->config.tag, sizeof(service.tag) - 1);
   service.tag[sizeof(service.tag) - 1] = '\0';
 
-  // Copy hash
   strncpy(service.hash, hash, sizeof(service.hash) - 1);
   service.hash[sizeof(service.hash) - 1] = '\0';
 
-  // Copy alias
   strncpy(service.alias, connector->config.alias, sizeof(service.alias) - 1);
   service.alias[sizeof(service.alias) - 1] = '\0';
 
