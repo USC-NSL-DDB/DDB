@@ -83,6 +83,41 @@ static inline uint32_t ddb_get_ipv4_from_local(void) {
     return 0;
 }
 
+// Get the binary name (without path and extension) as a string
+// Caller is responsible for freeing the returned string
+static inline char* ddb_get_binary_name(void) {
+    char path[1024];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len == -1) {
+        fprintf(stderr, "Error reading binary path\n");
+        return NULL;
+    }
+    path[len] = '\0';
+    
+    // Find the last '/' to get just the filename
+    char* filename = strrchr(path, '/');
+    if (filename == NULL) {
+        filename = path;
+    } else {
+        filename++; // Move past the '/'
+    }
+    
+    // Make a copy of the filename
+    char* result = strdup(filename);
+    if (result == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return NULL;
+    }
+    
+    // Remove extension if present
+    char* last_dot = strrchr(result, '.');
+    if (last_dot != NULL) {
+        *last_dot = '\0';
+    }
+    
+    return result;
+}
+
 #ifdef __cplusplus
 }
 #endif

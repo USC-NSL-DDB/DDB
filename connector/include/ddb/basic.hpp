@@ -69,4 +69,29 @@ static inline uint32_t get_ipv4_from_local() {
     freeifaddrs(ifaddr);
     return 0;
 }
+
+// Get the binary name (without path and extension) as a string
+static inline std::string get_binary_name() {
+    char path[1024];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len == -1) {
+        std::cerr << "Error reading binary path" << std::endl;
+        return "";
+    }
+    path[len] = '\0';
+    
+    // Find the last '/' to get just the filename
+    std::string full_path(path);
+    size_t last_slash = full_path.find_last_of('/');
+    std::string filename = (last_slash != std::string::npos) ? 
+                           full_path.substr(last_slash + 1) : full_path;
+    
+    // Remove extension if present
+    size_t last_dot = filename.find_last_of('.');
+    if (last_dot != std::string::npos) {
+        return filename.substr(0, last_dot);
+    }
+    
+    return filename;
+}
 }

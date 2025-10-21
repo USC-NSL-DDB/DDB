@@ -22,43 +22,57 @@ struct Config {
   bool wait_for_attach;
   std::string tag;
   std::string alias;
+  std::string hash;
   std::string ini_filepath;
   std::map<std::string, std::string> user_data;
 
   static Config get_default(const std::string &ipv4) {
-    return Config{.ipv4 = ipv4,
-                  .auto_discovery = true,
-                  .wait_for_attach = true,
-                  .tag = "proc",
-                  .alias = "bin",
-                  .ini_filepath = default_ini_filepath()};
+    return Config{
+      .ipv4 = ipv4,
+      .auto_discovery = true,
+      .wait_for_attach = true,
+      .tag = "proc",
+      .alias = "bin",
+      .hash = "",
+      .ini_filepath = default_ini_filepath(),
+      .user_data = {}
+    };
   }
 
   static Config get_default() {
-    return Config{.ipv4 = DDB::uint32_to_ipv4(DDB::get_ipv4_from_local()),
-                  .auto_discovery = true,
-                  .wait_for_attach = true,
-                  .tag = "proc",
-                  .alias = "bin",
-                  .ini_filepath = default_ini_filepath()};
+    return Config{
+      .ipv4 = DDB::uint32_to_ipv4(DDB::get_ipv4_from_local()),
+      .auto_discovery = true,
+      .wait_for_attach = true,
+      .tag = "proc",
+      .alias = "bin",
+      .hash = "",
+      .ini_filepath = default_ini_filepath(),
+      .user_data = {}
+    };
   }
 
-  inline Config with_tag(const std::string &tag) {
+  inline __attribute__ ((__always_inline__)) Config with_tag(const std::string &tag) {
     this->tag = tag;
     return *this;
   }
 
-  inline Config with_alias(const std::string &alias) {
+  inline __attribute__ ((__always_inline__)) Config with_alias(const std::string &alias) {
     this->alias = alias;
     return *this;
   }
 
-  inline Config with_ini_filepath(const std::string &ini_filepath) {
+  inline __attribute__ ((__always_inline__)) Config with_ini_filepath(const std::string &ini_filepath) {
     this->ini_filepath = ini_filepath;
     return *this;
   }
+  
+  inline __attribute__ ((__always_inline__)) Config with_hash(const std::string &hash) {
+    this->hash = hash;
+    return *this;
+  }
 
-  inline Config
+  inline __attribute__ ((__always_inline__)) Config
   with_user_data(const std::map<std::string, std::string> &user_data) {
     this->user_data = user_data;
     return *this;
@@ -74,6 +88,7 @@ struct Config {
            ", auto_discovery = " + std::to_string(this->auto_discovery) +
            ", wait_for_attach = " + std::to_string(this->wait_for_attach) +
            ", tag = " + this->tag + ", alias = " + this->alias +
+           ", hash = " + this->hash +
            ", ini_filepath = " + this->ini_filepath + ", user_data = {" +
            ss.str() +
            "}"
@@ -187,12 +202,14 @@ private:
   }
 
   inline void init_discovery() {
-    auto hash = compute_self_hash();
+    if (this->config.hash.empty()) {
+      this->config.hash = compute_self_hash();
+    }
 
     auto service = ServiceInfo{.ip = DDB::ddb_meta.comm_ip,
                                .tag = this->config.tag,
                                .pid = DDB::ddb_meta.pid,
-                               .hash = hash,
+                               .hash = this->config.hash,
                                .alias = this->config.alias,
                                .user_data = this->config.user_data};
 
