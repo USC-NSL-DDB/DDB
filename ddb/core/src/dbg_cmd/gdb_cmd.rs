@@ -90,6 +90,7 @@ impl Default for GdbSchedulerLock {
 
 #[derive(Debug, Clone)]
 pub enum GdbOption {
+    LoggingFile(String),
     Logging(bool),
     MiAsync(bool),
     SchedulerLock(GdbSchedulerLock),
@@ -98,6 +99,9 @@ pub enum GdbOption {
 impl DbgCmdGenerator for GdbOption {
     fn generate(&self) -> String {
         match self {
+            GdbOption::LoggingFile(file_path) => {
+                format!("logging file {}", file_path)
+            }
             GdbOption::Logging(enable) => {
                 format!("logging enabled {}", if *enable { "on" } else { "off" })
             }
