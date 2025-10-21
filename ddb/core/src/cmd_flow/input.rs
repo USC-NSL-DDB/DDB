@@ -182,23 +182,24 @@ impl InputCmdParser {
         if let Some(index) = rest.iter().position(|s| *s == "--thread") {
             // --thread for targeting a specific thread
             if index < rest.len() - 1 {
-                let gtid = rest[index + 1]
-                    .parse::<u64>()
-                    .expect("valid gtid when use --thread flag");
-                let (_, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-                let target = Target::Thread(gtid);
-                return (
-                    target,
-                    prefix,
-                    format!(
-                        "{} {} {}",
-                        rest[..=index].join(" "),
-                        tid,
-                        rest[index + 2..].join(" ")
-                    )
-                    .trim()
-                    .to_string(),
-                );
+                if let Ok(gtid) = rest[index + 1].parse::<u64>() {
+                    let (_, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
+                    let target = Target::Thread(gtid);
+                    return (
+                        target,
+                        prefix,
+                        format!(
+                            "{} {} {}",
+                            rest[..=index].join(" "),
+                            tid,
+                            rest[index + 2..].join(" ")
+                        )
+                        .trim()
+                        .to_string(),
+                    );
+                } else {
+                    error!("Invalid gtid {} provided for --thread flag", rest[index + 1]);
+                }
             }
         }
 
