@@ -147,8 +147,17 @@ impl DiscoveryMessageProducer for MqttProducer {
                 hostname: sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string(),
                 port: sd_defaults::BROKER_PORT,
             };
+
+            // Get the config path from the configuration
+            let config_path = self
+                .config
+                .service_discovery
+                .as_ref()
+                .map(|sd| sd.config_path.as_str())
+                .unwrap_or(sd_defaults::SERVICE_DISCOVERY_INI_FILEPATH);
+
             broker
-                .start(&broker_info)
+                .start(&broker_info, config_path)
                 .context("Failed to start managed broker")?;
         }
 

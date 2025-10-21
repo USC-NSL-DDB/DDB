@@ -21,10 +21,13 @@ mod tests {
 
         let broker = MosquittoBroker::new(config_path.into_os_string().into_string().unwrap());
         broker
-            .start(&BrokerInfo {
-                hostname: "localhost".to_string(),
-                port: 10101,
-            })
+            .start(
+                &BrokerInfo {
+                    hostname: "localhost".to_string(),
+                    port: 10101,
+                },
+                "/tmp/ddb/service_discovery/config",
+            )
             .expect("Failed to start broker");
 
         let output = Command::new("pgrep")

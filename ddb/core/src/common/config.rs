@@ -143,6 +143,8 @@ pub struct SshConfig {
 pub struct ServiceDiscovery {
     #[serde(rename = "Broker", default)]
     pub broker: BrokerConfig,
+    #[serde(rename = "ConfigPath", default = "default_sd_config_path")]
+    pub config_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -197,6 +199,11 @@ fn default_base_dir() -> String {
 fn default_broker_hostname() -> String {
     use super::sd_defaults;
     sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string()
+}
+
+fn default_sd_config_path() -> String {
+    use super::sd_defaults;
+    sd_defaults::SERVICE_DISCOVERY_INI_FILEPATH.to_string()
 }
 
 impl Default for SshConfig {
