@@ -211,6 +211,25 @@ pub fn expand_path(path: &str) -> PathBuf {
     fs::canonicalize(&*expanded).unwrap_or_else(|_| PathBuf::from(&*expanded)) // Fallback if the path doesn't exist
 }
 
+/// Get the hostname of the current machine.
+///
+/// Returns the hostname as a `String`. If the hostname cannot be determined,
+/// returns an error with context information.
+///
+/// # Examples
+///
+/// ```
+/// use ddb::common::utils::get_hostname;
+///
+/// let hostname = get_hostname().expect("Failed to get hostname");
+/// println!("Current hostname: {}", hostname);
+/// ```
+pub fn get_hostname() -> Result<String> {
+    gethostname::gethostname()
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("Failed to convert hostname to valid UTF-8 string"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +252,16 @@ mod tests {
         let home_dir = PathBuf::from(home_dir);
         let expected_path = home_dir.join("test");
         assert_eq!(expanded, expected_path);
+    }
+
+    #[test]
+    fn test_get_hostname() {
+        let hostname = get_hostname().expect("Failed to get hostname");
+        assert!(!hostname.is_empty(), "Hostname should not be empty");
+        // Hostname should be valid UTF-8 and contain only valid characters
+        assert!(hostname.chars().all(|c| c.is_ascii_alphanumeric()
+            || c == '-'
+            || c == '.'
+            || c == '_'));
     }
 }

@@ -30,3 +30,5 @@ Conf:
   on_exit: kill
   sudo: true
   support_migration: true 
+  gdb:
+    logging: false

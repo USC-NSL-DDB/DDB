@@ -148,6 +148,43 @@ impl DbgSession {
         Ok(())
     }
 
+    /// Setup GDB logging configuration
+    /// Creates log directory if it doesn't exist and configures GDB to log to
+    /// /tmp/ddb/gdb_logs/<hostname>_<pid>_gdb.txt
+    async fn setup_gdb_logging(&self, bdr: &mut DbgCmdListBuilder<GdbCmd>) -> Result<()> {
+        use crate::common::utils::get_hostname;
+        use std::fs;
+
+        // Get the PID from the session config
+        let pid = match &self.config.mode {
+            DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => *pid,
+            _ => return Err(anyhow::anyhow!("Cannot setup logging for non-attach mode")),
+        };
+
+        // Get hostname
+        let hostname = get_hostname().context("Failed to get hostname for GDB logging")?;
+
+        // Create log directory
+        let log_dir = Path::new("/tmp/ddb/gdb_logs");
+        fs::create_dir_all(log_dir)
+            .context("Failed to create GDB log directory")?;
+
+        // Create log file path: /tmp/ddb/gdb_logs/<hostname>_<pid>_gdb.txt
+        let log_file = log_dir.join(format!("{}_{}_gdb.txt", hostname, pid));
+
+        debug!("Setting up GDB logging to: {:?}", log_file);
+
+        // Set the logging file
+        bdr.add(GdbCmd::SetOption(GdbOption::LoggingFile(
+            log_file.to_string_lossy().to_string(),
+        )));
+
+        // Enable logging
+        bdr.add(GdbCmd::SetOption(GdbOption::Logging(true)));
+
+        Ok(())
+    }
+
     pub async fn remote_attach(&mut self) -> Result<InputSender> {
         use crate::common::config::{Config, Framework};
         use crate::common::utils::gdb::gdb_start_cmd;
@@ -158,7 +195,14 @@ impl DbgSession {
         self.input_tx = Some(ssh_io.in_tx.clone());
         self.output_rx = Some(ssh_io.out_rx.clone());
         let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
-        bdr.add(GdbCmd::SetOption(GdbOption::Logging(false)));
+
+        // Configure GDB logging if enabled in config
+        if Config::global().conf.gdb.logging {
+            self.setup_gdb_logging(&mut bdr).await?;
+        } else {
+            bdr.add(GdbCmd::SetOption(GdbOption::Logging(false)));
+        }
+
         bdr.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
 
         match Config::global().framework {

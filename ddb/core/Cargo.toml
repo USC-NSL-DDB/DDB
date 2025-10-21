@@ -40,4 +40,5 @@ futures = "0.3.31"
 papaya = "0.1.8"
 kube = { version = "0.98.0", features = ["runtime", "derive","client","ws"] }
 k8s-openapi = { version = "0.24.0", features = ["latest"] }
+gethostname = "0.5"
 [dev-dependencies]
