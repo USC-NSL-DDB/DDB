@@ -199,6 +199,7 @@ impl InputCmdParser {
                     );
                 } else {
                     error!("Invalid gtid {} provided for --thread flag", rest[index + 1]);
+                    return (Target::default(), "".to_string(), "".to_string()); 
                 }
             }
         }
