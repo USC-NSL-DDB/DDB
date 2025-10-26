@@ -1,3 +1,51 @@
+//! # Command Flow Module
+//!
+//! This module manages the lifecycle of GDB commands in the distributed debugging system.
+//!
+//! ## Module Boundaries
+//!
+//! ### Public API (`api`)
+//! The primary entry point for external callers. Provides ergonomic builders:
+//! - `send()` - Fire-and-forget commands (output to STDOUT)
+//! - `send_and_return()` - Commands that await responses
+//! - `intercept()` - Commands with custom formatters
+//!
+//! ### Internal Components
+//! - **`input`**: Parses command tokens, extracts target information, builds `Command<F>` types
+//! - **`handler`**: Per-command handlers that implement special routing or processing logic
+//! - **`router`**: Routes commands to specific sessions/threads, manages broadcast operations
+//! - **`output`**: Formatters that transform GDB/MI responses for different consumers
+//! - **`tracker`**: Tracks outstanding commands and manages response aggregation
+//! - **`framework_adapter`**: Framework-specific command adaptations
+//!
+//! ## Data Flow
+//! ```text
+//! External Caller
+//!   ↓
+//! api::send/send_and_return/intercept (parse prefix/args, inject tokens)
+//!   ↓
+//! Command<F> (with formatter and tokens)
+//!   ↓
+//! Router::send_to/send_to_ret (resolve target → sessions)
+//!   ↓
+//! Session channels (flume) → GDB instances
+//!   ↓
+//! Response aggregation (Tracker)
+//!   ↓
+//! Formatter (transform & format)
+//!   ↓
+//! STDOUT or returned FinishedCmd
+//! ```
+//!
+//! ## Responsibilities
+//! - **Parse**: Extract tokens, prefix, args from input
+//! - **Build**: Construct internal Command types with formatters
+//! - **Execute**: Route to appropriate GDB sessions via Router
+//! - **Transform**: Apply formatters to responses
+//! - **Track**: Manage command/response correlation via tokens
+//!
+
+pub mod api;
 pub mod framework_adapter;
 pub mod handler;
 pub mod input;
@@ -10,6 +58,9 @@ use thiserror::Error;
 
 pub use output::*;
 pub use tracker::*;
+
+// Re-export facade API for convenient access
+pub use api::{send, send_and_return, intercept, Target, Error as ApiError};
 
 use input::CmdHandler;
 use router::Router;

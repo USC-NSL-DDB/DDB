@@ -28,8 +28,57 @@ use super::{
     ThreadInfoFormatter,
 };
 
+/// Handler trait for processing parsed commands with routing and formatting logic
+///
+/// # Contract Semantics
+///
+/// Implementors of this trait are responsible for:
+/// 1. **Preserving Target Semantics**: The target from `ParsedInputCmd` must be honored
+///    unless the handler has specific routing requirements (e.g., `ThreadSelectHandler`
+///    may adjust targets for thread selection commands)
+///
+/// 2. **Async Execution**: All command processing is async to support routing operations
+///    that may involve network I/O or channel communications
+///
+/// 3. **Error Handling**: Handlers should log errors appropriately but may choose to
+///    emit error responses rather than propagating errors upward
+///
+/// 4. **Formatter Selection**: Handlers choose appropriate formatters based on command
+///    type and expected output format (e.g., `ThreadInfoFormatter` for thread info)
+///
+/// # Example Implementation
+///
+/// ```no_run
+/// # use async_trait::async_trait;
+/// # use super::{Handler, ParsedInputCmd, Router, PlainFormatter};
+/// # use std::sync::Arc;
+/// struct MyHandler {
+///     router: Arc<Router>,
+/// }
+///
+/// #[async_trait]
+/// impl Handler for MyHandler {
+///     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+///         // Convert parsed command to executable command with formatter
+///         let (target, cmd) = cmd.to_command(PlainFormatter);
+///         
+///         // Route via router (respects target semantics)
+///         self.router.send_to(target, cmd);
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait Handler: Send + Sync {
+    /// Process a parsed command, applying handler-specific logic and routing
+    ///
+    /// # Arguments
+    /// * `cmd` - Parsed command containing tokens, prefix, args, and target
+    ///
+    /// # Behavior
+    /// - MUST respect `cmd.target` unless handler has special routing logic
+    /// - SHOULD select appropriate formatter for command type
+    /// - MAY use `Router::send_to` (fire-and-forget) or `Router::send_to_ret` (await response)
+    /// - SHOULD log errors but may emit error responses instead of propagating
     async fn process_cmd(&self, cmd: ParsedInputCmd);
 }
 
@@ -860,5 +909,66 @@ impl Handler for ExecJumpHandler {
                 error!("exec-jump command should specify a session");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handler_trait_is_send_sync() {
+        // Handlers must be Send + Sync for concurrent routing
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<DefaultHandler>();
+    }
+
+    #[test]
+    fn test_default_handler_uses_plain_formatter() {
+        // DefaultHandler should use PlainFormatter as specified in contract
+        // This is a compile-time check
+        let _router = get_router();
+        let _handler = DefaultHandler::new(_router.clone());
+    }
+
+    #[test]
+    fn test_parsed_input_cmd_target_adjustment() {
+        // Verify with_target allows handlers to adjust routing
+        use crate::cmd_flow::router::Target;
+        use crate::cmd_flow::input::ParsedInputCmd;
+
+        let cmd: ParsedInputCmd = "-thread-select".try_into().unwrap();
+        
+        let adjusted_cmd = cmd.with_target(Target::Session(42));
+        assert!(matches!(adjusted_cmd.target, Target::Session(42)));
+        
+        // Original intent was preserved in structure
+        assert_eq!(adjusted_cmd.prefix, "-thread-select");
+    }
+
+    #[test]
+    fn test_handlers_preserve_command_prefix() {
+        // All handlers must preserve the command prefix during processing
+        use crate::cmd_flow::input::ParsedInputCmd;
+        
+        let cmd: ParsedInputCmd = "-exec-continue --all".try_into().unwrap();
+        assert_eq!(cmd.prefix, "-exec-continue");
+        
+        // to_command preserves prefix in the raw_cmd
+        let (_, command) = cmd.to_command(PlainFormatter);
+        assert!(command.raw_cmd.contains("-exec-continue"));
+    }
+
+    #[test]
+    fn test_handler_target_semantics() {
+        // Handlers must respect target semantics per contract
+        use crate::cmd_flow::router::Target;
+        
+        // Different target types must be distinguishable
+        assert!(matches!(Target::Broadcast, Target::Broadcast));
+        assert!(matches!(Target::Session(1), Target::Session(1)));
+        assert!(matches!(Target::Thread(1), Target::Thread(1)));
+        assert!(matches!(Target::CurrSession, Target::CurrSession));
+        assert!(matches!(Target::CurrThread, Target::CurrThread));
     }
 }

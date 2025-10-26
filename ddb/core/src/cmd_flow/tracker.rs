@@ -25,10 +25,12 @@ use super::{
     emit, emit_static, DynFormatter, GenericStopAsyncRecordFormatter, RunningAsyncRecordFormatter, StopAsyncRecordFormatter, ThreadCreatedNotifFormatter, ThreadExitedNotifFormatter, ThreadGroupNotifFormatter
 };
 
-// OutputSource is used to determine where the output of a command should go.
-// - STDOUT: output to stdout (pass to the output processor)
-// - RETURN: return to the caller (pass to the caller by using the oneshot channel)
-// - DISCARD: discard the output
+/// Determines the destination for command output
+///
+/// # Variants
+/// - `STDOUT`: Output routed to standard output (default CLI behavior)
+/// - `RETURN`: Output collected and returned via oneshot channel (for API calls awaiting results)
+/// - `DISCARD`: Output discarded (used for internal commands)
 #[derive(Debug)]
 pub enum OutputSource {
     STDOUT,
@@ -36,8 +38,10 @@ pub enum OutputSource {
     DISCARD,
 }
 
-// Wrapper for the parsed gdb message and sid
-// here we assume only notify and result messages are relevant
+/// Parsed response from a single GDB session
+///
+/// Contains the session ID, response message, and optional payload data.
+/// This is the basic unit of response tracking before aggregation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ParsedSessionResponse {
     sid: u64,
@@ -75,6 +79,7 @@ impl ParsedSessionResponse {
     }
 }
 
+/// Response wrapper containing session ID and raw response bytes
 #[derive(Clone)]
 pub struct SessionResponse {
     sid: u64,
@@ -97,6 +102,12 @@ impl Debug for SessionResponse {
     }
 }
 
+/// Aggregated command completion containing all responses from target sessions
+///
+/// # Stability Contract
+/// - Public accessor methods (`get_*`) are stable and will not change
+/// - Internal representation may change but is hidden behind accessors
+/// - Used as return value for `Router::send_to_ret` operations
 #[derive(Debug, Serialize)]
 pub struct FinishedCmd {
     external_token: Option<u64>,
