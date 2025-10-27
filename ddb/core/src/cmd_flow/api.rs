@@ -29,7 +29,7 @@
 //! ```no_run
 //! # use core::cmd_flow::api;
 //! # async fn example() -> Result<(), api::Error> {
-//! api::intercept("-thread-info", "")
+//! api::intercept("-thread-info")
 //!     .with(api::ThreadInfoFormatter)
 //!     .to(api::Target::Broadcast)
 //!     .await?;
