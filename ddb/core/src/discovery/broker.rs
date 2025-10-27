@@ -24,6 +24,7 @@ pub enum BrokerError {
 
 fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
     let path = Path::new(config_path);
+    debug!("Writing broker config to {:?}", path);
 
     // Create parent directory if it doesn't exist
     if let Some(parent) = path.parent() {

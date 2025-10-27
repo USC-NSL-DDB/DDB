@@ -169,6 +169,8 @@ pub struct ServiceDiscovery {
 pub struct BrokerConfig {
     #[serde(default = "default_broker_hostname")]
     pub hostname: String,
+    #[serde(default = "default_broker_port")]
+    pub port: u16,
     #[serde(default)]
     pub managed: Option<ManagedBrokerConfig>,
 }
@@ -217,6 +219,11 @@ fn default_base_dir() -> String {
 fn default_broker_hostname() -> String {
     use super::sd_defaults;
     sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string()
+}
+
+fn default_broker_port() -> u16 {
+    use super::sd_defaults;
+    sd_defaults::BROKER_PORT
 }
 
 fn default_sd_config_path() -> String {

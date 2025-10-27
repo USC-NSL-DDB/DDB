@@ -18,10 +18,8 @@ use crate::{
     discovery::DiscoveryMessageProducer,
 };
 
-/// Trait for something that can be started/stopped (like your old `DbgManagable`).
 #[async_trait]
 pub trait DbgManagable {
-    /// Create a new manager using the global config.
     async fn new() -> Self
     where
         Self: Sized,
@@ -30,17 +28,11 @@ pub trait DbgManagable {
         Self::new_with_config(gconf).await
     }
 
-    /// Create a new manager with a specific config reference.
-    async fn new_with_config(config: &crate::common::config::Config) -> Self;
-
-    /// Start the manager (start producers, spawn consumer tasks, etc.).
+    async fn new_with_config(config: &'static crate::common::config::Config) -> Self;
     async fn start(&self);
-
-    /// Clean up everything (producers + sessions).
     async fn cleanup(&self);
 }
 
-/// A reference to one debug session with a particular `DbgControllable`.
 pub type GdbSessionRef = crate::session::DbgSession;
 
 /// For convenience, a type alias to store sessions in a DashMap (sid -> session).
@@ -59,7 +51,6 @@ pub struct ServiceDiscover {
 }
 
 impl ServiceDiscover {
-    /// Create a new `ServiceDiscover` instance with a producer and receiver.
     pub fn new(
         producer: Box<dyn DiscoveryMessageProducer>,
         rx: Receiver<crate::discovery::ServiceInfo>,
@@ -181,16 +172,17 @@ impl DbgManager {
         }
     }
 
-    async fn init_sd(&mut self, config: &crate::common::config::Config) {
+    async fn init_sd(&mut self, config: &'static crate::common::config::Config) {
         let (producer_tx, producer_rx) = flume::unbounded::<crate::discovery::ServiceInfo>();
         match config.framework {
             Framework::Nu | Framework::GRPC => {
                 let sd = config
                     .service_discovery
                     .as_ref()
-                    .expect("Service discovery config missing for mqtt broker.");
-                if let Some(broker_conf) = sd.broker.managed.as_ref() {
-                    let b: Box<dyn MessageBroker> = match broker_conf.broker_type {
+                    .expect("ERROR: broker is not specified when it is needed.");
+
+                if let Some(managed_broker_conf) = sd.broker.managed.as_ref() {
+                    let b: Box<dyn MessageBroker> = match managed_broker_conf.broker_type {
                         common::config::BrokerType::Mosquitto => {
                             // TODO: need some refactoring here to make sure Mosquitto works here.
                             Box::new(MosquittoBroker::new("".to_string()))
@@ -201,7 +193,7 @@ impl DbgManager {
                         }
                     };
                     let mut mqtt_producer =
-                        crate::discovery::mqtt_producer::MqttProducer::new(Some(b), config.clone());
+                        crate::discovery::mqtt_producer::MqttProducer::new(Some(b), &config);
                     let producer_tx_clone = producer_tx.clone();
 
                     mqtt_producer
@@ -276,20 +268,20 @@ impl DbgManager {
 
 #[async_trait]
 impl DbgManagable for DbgManager {
-    async fn new_with_config(config: &crate::common::config::Config) -> Self {
+    async fn new_with_config(config: &'static crate::common::config::Config) -> Self {
         let sessions: SessionsRef = Arc::new(DashMap::new());
 
         let proclet_ctrl = match config.framework {
             Framework::Nu | Framework::Quicksand => {
-                // Initialize the proclet controller if needed
-                debug!("Proclet controller is enabled.");
                 if config.conf.support_migration {
+                    debug!("Migration support is ENABLED, initializing proxy proclet controller.");
                     Some(
                         ProcletCtrlClient::try_connect_default()
                             .await
                             .expect("Failed to connect to proclet controller"),
                     )
                 } else {
+                    debug!("Migration support is DISABLED, SKIP initializing proxy proclet controller.");
                     None
                 }
             }
