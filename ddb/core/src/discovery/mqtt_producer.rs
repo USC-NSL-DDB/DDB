@@ -18,7 +18,7 @@ use crate::{
 
 /// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
 /// `ServiceInfo` events and send them through a channel.
-pub struct MqttProducer {
+pub struct MqttProducer<'a> {
     /// If you want this producer to also own and manage the broker lifecycle,
     /// store it here. If `None`, we assume the broker is managed externally.
     managed_broker: Option<Box<dyn MessageBroker>>,
@@ -29,14 +29,14 @@ pub struct MqttProducer {
     /// Keep track of spawned tasks for `start_producing`. We’ll abort them in `stop_producing`.
     handles: Vec<JoinHandle<()>>,
 
-    config: crate::common::config::Config,
+    config: &'a crate::common::config::Config,
 }
 
-impl MqttProducer {
+impl<'a> MqttProducer<'a> {
     /// Create a new MqttProducer, optionally with an owned broker.
     pub fn new(
         managed_broker: Option<Box<dyn MessageBroker>>,
-        config: crate::common::config::Config,
+        config: &'a crate::common::config::Config,
     ) -> Self {
         let (sig_stop, _) = watch::channel(false);
         Self {
@@ -72,6 +72,7 @@ impl MqttProducer {
         })
     }
 }
+
 pub struct MqttPayload {
     pub ip: Ipv4Addr,
     pub tag: String,
@@ -80,6 +81,7 @@ pub struct MqttPayload {
     pub alias: String,
     pub user_data: Option<HashMap<String, String>>,
 }
+
 impl From<&str> for MqttPayload {
     fn from(s: &str) -> Self {
         let parts: Vec<&str> = s.split(':').collect();
@@ -129,7 +131,7 @@ impl From<&str> for MqttPayload {
 }
 
 #[axum::async_trait]
-impl DiscoveryMessageProducer for MqttProducer {
+impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// Start “producing” by:
     /// 1. Optionally starting our broker,
     /// 2. Creating an AsyncDiscoverClient,
@@ -143,21 +145,19 @@ impl DiscoveryMessageProducer for MqttProducer {
         // 1. Start the broker if we manage it
         if let Some(broker) = &self.managed_broker {
             info!("Starting managed broker...");
-            let broker_info = BrokerInfo {
-                hostname: sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string(),
-                port: sd_defaults::BROKER_PORT,
-            };
-
-            // Get the config path from the configuration
-            let config_path = self
+            let sd_config = &self
                 .config
                 .service_discovery
                 .as_ref()
-                .map(|sd| sd.config_path.as_str())
-                .unwrap_or(sd_defaults::SERVICE_DISCOVERY_INI_FILEPATH);
+                .expect("ERROR: broker is not specified.");
+            let broker_config = &sd_config.broker;
+            let broker_info = BrokerInfo {
+                hostname: broker_config.hostname.clone(),
+                port: broker_config.port,
+            };
 
             broker
-                .start(&broker_info, config_path)
+                .start(&broker_info, &sd_config.config_path)
                 .context("Failed to start managed broker")?;
         }
 
