@@ -37,7 +37,7 @@
 //! # }
 //! ```
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::cmd_flow::input::ParsedInputCmd;
 
@@ -45,10 +45,7 @@ use super::{get_router, input::Command, DynFormatter, FinishedCmd, PlainFormatte
 
 // Re-export common types for convenience
 #[allow(unused_imports)]
-pub use super::output::{
-    NullFormatter, PlainFormatter as DefaultFormatter,
-    ThreadInfoFormatter,
-};
+pub use super::output::{NullFormatter, PlainFormatter as DefaultFormatter, ThreadInfoFormatter};
 pub use super::router::Target;
 
 /// Facade-level error type for command flow operations
@@ -173,11 +170,11 @@ impl InterceptFormatterBuilder {
 ///
 /// # Returns
 /// A builder that requires calling `.to(target)` to execute
-pub fn send(command: &str) -> SendBuilder {
+pub fn send(command: &str) -> Result<SendBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
-        .expect(&format!("Failed to parse command: {}", command));
-    SendBuilder { parsed_cmd }
+        .context(format!("Failed to parse command: {}", command))?;
+    Ok(SendBuilder { parsed_cmd })
 }
 
 /// Send a command and wait for results.
@@ -189,11 +186,11 @@ pub fn send(command: &str) -> SendBuilder {
 ///
 /// # Returns
 /// A builder that requires calling `.to(target)` to execute and await results
-pub fn send_and_return(command: &str) -> SendAndReturnBuilder {
+pub fn send_and_return(command: &str) -> Result<SendAndReturnBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
-        .expect(&format!("Failed to parse command: {}", command));
-    SendAndReturnBuilder { parsed_cmd }
+        .context(format!("Failed to parse command: {}", command))?;
+    Ok(SendAndReturnBuilder { parsed_cmd })
 }
 
 /// Intercept command output with custom formatting
@@ -203,11 +200,11 @@ pub fn send_and_return(command: &str) -> SendAndReturnBuilder {
 ///
 /// # Returns
 /// A builder that requires calling `.with(formatter).to(target)` to execute
-pub fn intercept(command: &str) -> InterceptFormatterBuilder {
+pub fn intercept(command: &str) -> Result<InterceptFormatterBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
-        .expect(&format!("Failed to parse command: {}", command));
-    InterceptFormatterBuilder { parsed_cmd }
+        .context(format!("Failed to parse command: {}", command))?;
+    Ok(InterceptFormatterBuilder { parsed_cmd })
 }
 
 #[cfg(test)]
@@ -225,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_send_builder_construction() {
-        let builder = send("-exec-continue --all");
+        let builder = send("-exec-continue --all").unwrap();
         assert_eq!(builder.parsed_cmd.prefix, "-exec-continue");
         // "--all" will be stripped out and converted to "BROADCAST" target.
         assert_eq!(builder.parsed_cmd.args, "");
@@ -235,25 +232,18 @@ mod tests {
 
     #[test]
     fn test_send_and_return_builder_construction() {
-        let builder = send_and_return("-thread-info");
+        let builder = send_and_return("-thread-info").unwrap();
         assert_eq!(builder.parsed_cmd.prefix, "-thread-info");
         assert_eq!(builder.parsed_cmd.args, "");
         assert_eq!(builder.parsed_cmd.external_token, None);
         assert_eq!(builder.parsed_cmd.target, Target::default());
     }
 
-    // #[test]
-    // fn test_intercept_builder_construction() {
-    //     let builder = intercept("-thread-select --thread 1");
-    //     assert_eq!(builder.parsed_cmd.prefix, "-thread-select");
-    //     assert_eq!(builder.parsed_cmd.args, "--thread 1");
-    //     assert_eq!(builder.parsed_cmd.external_token, None);
-    // }
-
     #[test]
-    #[should_panic]
     fn test_error_on_empty_prefix() {
         let _builder = send("args");
+        // invalid command
+        assert_eq!(_builder.is_err(), true);
     }
 
     #[test]
@@ -276,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_parse_ext_token() {
-        let builder = send("42-exec-continue --all");
+        let builder = send("42-exec-continue --all").unwrap();
         assert_eq!(builder.parsed_cmd.prefix, "-exec-continue");
         // "--all" will be stripped out and converted to "BROADCAST" target.
         assert_eq!(builder.parsed_cmd.args, "");
