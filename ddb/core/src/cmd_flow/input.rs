@@ -66,6 +66,18 @@ where
         }
     }
 
+    pub fn new_with_parsed_cmd(parsed_cmd: ParsedInputCmd, formatter: F) -> (Self, Target) {
+        (
+            Command {
+                external_token: parsed_cmd.external_token,
+                internal_token: parsed_cmd.internal_token,
+                raw_cmd: parsed_cmd.full_cmd(),
+                formatter,
+            },
+            parsed_cmd.target,
+        )
+    }
+
     pub fn internal_cmd(&self) -> String {
         let cmd = format!("{}{}", self.internal_token, self.raw_cmd);
         if cmd.ends_with('\n') {
@@ -196,7 +208,7 @@ impl InputCmdParser {
             // --all for broadcast
             return (Target::Broadcast, prefix, rest[..rest.len() - 1].join(" "));
         }
-        
+
         if let Some(index) = rest.iter().position(|s| *s == "--thread") {
             // --thread for targeting a specific thread
             if index < rest.len() - 1 {
@@ -216,8 +228,11 @@ impl InputCmdParser {
                         .to_string(),
                     );
                 } else {
-                    error!("Invalid gtid {} provided for --thread flag", rest[index + 1]);
-                    return (Target::default(), "".to_string(), "".to_string()); 
+                    error!(
+                        "Invalid gtid {} provided for --thread flag",
+                        rest[index + 1]
+                    );
+                    return (Target::default(), "".to_string(), "".to_string());
                 }
             }
         }
@@ -371,7 +386,7 @@ impl CmdHandler {
         let cmd = cmd.trim();
         if cmd.starts_with(&":") {
             get_router().handle_internal_cmd(&cmd[1..]);
-            return
+            return;
         }
 
         let parsed: Result<ParsedInputCmd> = cmd.try_into();
@@ -436,7 +451,8 @@ mod tests {
 
     #[test]
     pub fn test_input_parser_var() {
-        let cmd: ParsedInputCmd = r#"-var-create --frame 1 var_1008_epfd @ "epfd""#.try_into().unwrap();
+        let cmd: ParsedInputCmd =
+            r#"-var-create --frame 1 var_1008_epfd @ "epfd""#.try_into().unwrap();
         println!("cmd: {:?}", cmd);
         // assert_eq!(cmd.external_token, Some(567));
         // assert_ne!(cmd.internal_token, 0);
@@ -444,13 +460,12 @@ mod tests {
         // assert_eq!(cmd.args, "reg1=1 reg2=2");
     }
 
-    // Token propagation tests for User Story 1
     #[test]
     fn test_token_injection_preserves_external_token() {
         // When an external token is provided, it must be preserved
         let cmd: ParsedInputCmd = "999-thread-info".try_into().unwrap();
         assert_eq!(cmd.external_token, Some(999));
-        
+
         // Internal token must be different and non-zero
         assert_ne!(cmd.internal_token, 0);
         assert_ne!(cmd.internal_token, 999);
@@ -469,7 +484,7 @@ mod tests {
         // Internal tokens should increment across calls
         let cmd1: ParsedInputCmd = "-thread-info".try_into().unwrap();
         let cmd2: ParsedInputCmd = "-thread-info".try_into().unwrap();
-        
+
         // Internal tokens should be different (incrementing)
         assert_ne!(cmd1.internal_token, cmd2.internal_token);
     }
@@ -477,30 +492,33 @@ mod tests {
     #[test]
     fn test_command_to_command_preserves_tokens() {
         // Verify that ParsedInputCmd -> Command preserves both tokens
-        use crate::cmd_flow::PlainFormatter;
         use super::Command;
-        
+        use crate::cmd_flow::PlainFormatter;
+
         let parsed: ParsedInputCmd = "777-exec-continue".try_into().unwrap();
         let external_token = parsed.external_token;
         let internal_token = parsed.internal_token;
-        
-        let (target, cmd): (super::Target, Command<PlainFormatter>) = 
+
+        let (target, cmd): (super::Target, Command<PlainFormatter>) =
             parsed.to_command(PlainFormatter);
-        
+
         // Tokens must be preserved through conversion
         assert_eq!(cmd.external_token, external_token);
         assert_eq!(cmd.internal_token, internal_token);
-        assert!(matches!(target, super::Target::Broadcast | super::Target::CurrThread | super::Target::CurrSession));
+        assert!(matches!(
+            target,
+            super::Target::Broadcast | super::Target::CurrThread | super::Target::CurrSession
+        ));
     }
 
     #[test]
     fn test_internal_cmd_formatting_includes_internal_token() {
-        use crate::cmd_flow::PlainFormatter;
         use super::Command;
-        
+        use crate::cmd_flow::PlainFormatter;
+
         let cmd = Command::new(Some(100), 200, "-thread-info".to_string(), PlainFormatter);
         let internal_cmd = cmd.internal_cmd();
-        
+
         // Internal command should have internal token prepended
         assert!(internal_cmd.starts_with("200"));
         assert!(internal_cmd.contains("-thread-info"));
@@ -508,12 +526,12 @@ mod tests {
 
     #[test]
     fn test_external_cmd_formatting_includes_external_token() {
-        use crate::cmd_flow::PlainFormatter;
         use super::Command;
-        
+        use crate::cmd_flow::PlainFormatter;
+
         let cmd = Command::new(Some(100), 200, "-thread-info".to_string(), PlainFormatter);
         let external_cmd = cmd.external_cmd();
-        
+
         // External command should have external token prepended
         assert!(external_cmd.starts_with("100"));
         assert!(external_cmd.contains("-thread-info"));
@@ -521,15 +539,14 @@ mod tests {
 
     #[test]
     fn test_external_cmd_formatting_without_external_token() {
-        use crate::cmd_flow::PlainFormatter;
         use super::Command;
-        
+        use crate::cmd_flow::PlainFormatter;
+
         let cmd = Command::new(None, 200, "-thread-info".to_string(), PlainFormatter);
         let external_cmd = cmd.external_cmd();
-        
+
         // Without external token, should just have the command
         assert!(external_cmd.starts_with("-thread-info"));
         assert!(!external_cmd.starts_with("200"));
     }
 }
-

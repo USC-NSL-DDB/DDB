@@ -3,21 +3,6 @@
 //! The main entrypoints are [`Gdb`] and [`GdbBuilder`].
 //!
 //! This crate requires a tokio runtime.
-//!
-//! # Parsing Contracts (for DDB cmd_flow refactor)
-//!
-//! **Token Handling**: All MI responses include tokens that must be preserved
-//! through the parsing pipeline. The `parser` module extracts these tokens
-//! and they are used by the `Tracker` in `core/cmd_flow` for response correlation.
-//!
-//! **Response Types**: The parser distinguishes between:
-//! - Result records (^done, ^error, etc.) - synchronous command responses
-//! - Async records (*running, *stopped, etc.) - asynchronous notifications
-//! - Stream records (~, @, &) - console/log output
-//!
-//! **Stability**: The parsing API is stable. Changes to MI format handling
-//! must maintain backward compatibility with existing `Formatter` implementations
-//! in `core/cmd_flow/output.rs`.
 #![warn(clippy::all, clippy::pedantic, clippy::cargo)]
 #![allow(clippy::missing_errors_doc)]
 use std::{

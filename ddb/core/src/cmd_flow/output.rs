@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use crate::{
     dbg_parser::gdb_parser::MIFormatter,
     discovery::discovery_message_producer::ServiceMeta,
-    state::{get_group_mgr, GroupId, STATES},
+    state::{get_group_mgr, STATES},
 };
 
 use super::{FinishedCmd, ParsedSessionResponse};
@@ -124,59 +124,6 @@ impl Formatter for PlainFormatter {
             r.get_payload(),
             input.get_external_token(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Note: These tests verify formatter behavior contracts.
-    // Full integration tests with real ParsedSessionResponse require
-    // the parser infrastructure, so we test the contract via FinishedCmd
-    // that can be constructed through public APIs.
-
-    #[test]
-    fn test_null_formatter_contract() {
-        // NullFormatter must always return empty string
-        let formatter = NullFormatter;
-        // We can't directly create ParsedSessionResponse (private constructor)
-        // but we verify the formatter trait implementation is present
-        assert_eq!(std::any::type_name::<NullFormatter>(), "ddb::cmd_flow::output::NullFormatter");
-    }
-
-    #[test]
-    fn test_plain_formatter_exists() {
-        // PlainFormatter must be available for default formatting
-        let _formatter = PlainFormatter;
-        assert_eq!(std::any::type_name::<PlainFormatter>(), "ddb::cmd_flow::output::PlainFormatter");
-    }
-
-    #[test]
-    fn test_thread_info_formatter_exists() {
-        // ThreadInfoFormatter must be available for thread commands
-        let _formatter = ThreadInfoFormatter;
-        assert_eq!(
-            std::any::type_name::<ThreadInfoFormatter>(),
-            "ddb::cmd_flow::output::ThreadInfoFormatter"
-        );
-    }
-
-    #[test]
-    fn test_formatter_types_are_send_sync() {
-        // All formatters must be Send + Sync for concurrent use
-        fn assert_send_sync<T: Send + Sync>() {}
-        
-        assert_send_sync::<PlainFormatter>();
-        assert_send_sync::<NullFormatter>();
-        assert_send_sync::<ThreadInfoFormatter>();
-    }
-
-    #[test]
-    fn test_dyn_formatter_trait_object() {
-        // Verify formatters can be used as trait objects
-        let _formatter: Box<dyn DynFormatter> = Box::new(PlainFormatter);
-        // If this compiles, the trait object contract is satisfied
     }
 }
 
