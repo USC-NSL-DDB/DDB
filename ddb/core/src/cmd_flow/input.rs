@@ -187,26 +187,25 @@ impl InputCmdParser {
     // Returns:
     //   - Target, Command Prefix, Rest of the Command (stripped/swapped out of custom args)
     #[inline]
-    fn prepare_cmd(&self, raw_cmd: String) -> (Target, String, String) {
+    fn prepare_cmd(&self, raw_cmd: String) -> Result<(Target, String, String)> {
         let parts = raw_cmd.splitn(2, char::is_whitespace).collect::<Vec<_>>();
         let prefix = {
             let _prefix = *parts.first().expect("command prefix is present");
             if _prefix.is_empty() {
-                panic!("Empty command prefix");
+                bail!("Empty command prefix");
             }
             _prefix.to_string()
         };
 
         if parts.len() == 1 {
             // no arguments following the command prefix
-            return (Target::default(), prefix, "".to_string());
+            return Ok((Target::default(), prefix, "".to_string()));
         }
 
         let rest = parts[1].split_whitespace().collect::<Vec<_>>();
-        // println!("rest: {:?}", rest);
         if rest.last().is_some_and(|s| *s == "--all") {
             // --all for broadcast
-            return (Target::Broadcast, prefix, rest[..rest.len() - 1].join(" "));
+            return Ok((Target::Broadcast, prefix, rest[..rest.len() - 1].join(" ")));
         }
 
         if let Some(index) = rest.iter().position(|s| *s == "--thread") {
@@ -215,7 +214,7 @@ impl InputCmdParser {
                 if let Ok(gtid) = rest[index + 1].parse::<u64>() {
                     let (_, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
                     let target = Target::Thread(gtid);
-                    return (
+                    return Ok((
                         target,
                         prefix,
                         format!(
@@ -226,13 +225,13 @@ impl InputCmdParser {
                         )
                         .trim()
                         .to_string(),
-                    );
+                    ));
                 } else {
                     error!(
                         "Invalid gtid {} provided for --thread flag",
                         rest[index + 1]
                     );
-                    return (Target::default(), "".to_string(), "".to_string());
+                    return Ok((Target::default(), "".to_string(), "".to_string()));
                 }
             }
         }
@@ -249,22 +248,22 @@ impl InputCmdParser {
                 // underlying debugger doesn't have session concept.
                 rest.remove(index);
                 rest.remove(index); // the next element is shifted after the first remove
-                return (target, prefix, rest.join(" ").trim().to_string());
+                return Ok((target, prefix, rest.join(" ").trim().to_string()));
             }
         }
 
         if let Some(gtid) = STATES.get_curr_gtid() {
             // if there is a current global thread selected, use it as the target
-            return (Target::Thread(gtid), prefix, rest.join(" "));
+            return Ok((Target::Thread(gtid), prefix, rest.join(" ")));
         }
 
-        (Target::default(), prefix, rest.join(" "))
+        Ok((Target::default(), prefix, rest.join(" ")))
     }
 
     #[inline]
     pub fn parse(&self) -> Result<ParsedInputCmd> {
         let (ext_token, internal_token, raw_cmd) = self.prepare_token()?;
-        let (target, prefix, args) = self.prepare_cmd(raw_cmd);
+        let (target, prefix, args) = self.prepare_cmd(raw_cmd)?;
         // println!("target: {:?}, prefix: {:?}, args: {:?}", target, prefix, args);
         Ok(ParsedInputCmd {
             external_token: ext_token,
