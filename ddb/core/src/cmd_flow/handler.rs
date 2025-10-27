@@ -28,6 +28,45 @@ use super::{
     ThreadInfoFormatter,
 };
 
+/// Handler trait for processing parsed commands with routing and formatting logic
+///
+/// # Contract Semantics
+///
+/// Implementors of this trait are responsible for:
+/// 1. **Preserving Target Semantics**: The target from `ParsedInputCmd` must be honored
+///    unless the handler has specific routing requirements (e.g., `ThreadSelectHandler`
+///    may adjust targets for thread selection commands)
+///
+/// 2. **Async Execution**: All command processing is async to support routing operations
+///    that may involve network I/O to distributed debuggee processes.
+///
+/// 3. **Error Handling**: Handlers should log errors appropriately but may choose to
+///    emit error responses rather than propagating errors upward
+///
+/// 4. **Formatter Selection**: Handlers choose appropriate formatters based on command
+///    type and expected output format (e.g., `ThreadInfoFormatter` for thread info)
+///
+/// # Example Implementation
+///
+/// ```no_run
+/// # use async_trait::async_trait;
+/// # use super::{Handler, ParsedInputCmd, Router, PlainFormatter};
+/// # use std::sync::Arc;
+/// struct MyHandler {
+///     router: Arc<Router>,
+/// }
+///
+/// #[async_trait]
+/// impl Handler for MyHandler {
+///     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+///         // Convert parsed command to executable command with formatter
+///         let (target, cmd) = cmd.to_command(PlainFormatter);
+///         
+///         // Route via router (respects target semantics)
+///         self.router.send_to(target, cmd);
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait Handler: Send + Sync {
     async fn process_cmd(&self, cmd: ParsedInputCmd);
@@ -175,7 +214,7 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let ss = STATES.get_all_sessions();
-        
+
         // reset all proclet cache and clean up restored proclet heap.
         get_proclet_restore_mgr().reset().await;
 
@@ -530,12 +569,8 @@ impl DistributeBacktraceHandler {
             parent_meta: remote_bt_parent_meta,
         })
     }
-    
-    async fn handle_migration_if_enabled(
-        &self,
-        inspect_gtid: u64,
-        parent_meta: &Dict,
-    ) {
+
+    async fn handle_migration_if_enabled(&self, inspect_gtid: u64, parent_meta: &Dict) {
         if Config::global().handle_migration() {
             if let Some(LocalThreadId(sid, _)) = STATES.get_ltid_by_gtid(inspect_gtid) {
                 let proclet_id = parent_meta
@@ -552,10 +587,7 @@ impl DistributeBacktraceHandler {
                         debug!("proclet heap restoration done for session {}", sid);
                     }
                     Err(e) => {
-                        error!(
-                            "Failed to handle proclet heap restoration: {:?}",
-                            e
-                        );
+                        error!("Failed to handle proclet heap restoration: {:?}", e);
                     }
                 }
             } else {
@@ -723,7 +755,8 @@ impl Handler for DistributeBacktraceHandler {
                         w_guard.curr_ctx = Some(ctx_to_save);
                         w_guard.in_custom_ctx = true;
 
-                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta).await;
+                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta)
+                            .await;
                     }
                     // ------------ [BEGIN] get backtrace for the parent thread ------------
                     let bt_data = self.get_bt_and_caller_meta(inspect_gtid).await;
