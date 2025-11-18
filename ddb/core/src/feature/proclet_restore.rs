@@ -89,6 +89,7 @@ impl ProcletRestorationMgr {
     async fn check_proclet_local(&self, sid: u64, proclet_id: &String) -> Result<bool> {
         let check_proclet_cmd = Self::gen_cmd(&format!("-check-proclet {}", proclet_id));
 
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let resp = get_router()
             .send_to_session_ret(sid, check_proclet_cmd)
             .await
@@ -179,6 +180,7 @@ impl ProcletRestorationMgr {
         proclet_id: &String,
     ) -> Result<ProcletHeapInfo> {
         let get_proclet_heap_cmd = Self::gen_cmd(&format!("-get-proclet-heap {}", proclet_id));
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(target_sid)).await
         let resp = get_router()
             .send_to_session_ret(target_sid, get_proclet_heap_cmd)
             .await
@@ -279,6 +281,7 @@ impl ProcletRestorationMgr {
             "-restore-proclet-heap {} {} {}",
             heap_info.start_addr, heap_info.data_len, heap_info.data
         ));
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let resp = get_router()
             .send_to_session_ret(sid, restore_proclet_heap_cmd)
             .await
@@ -414,6 +417,7 @@ impl ProcletRestorationMgr {
             "-clean-proclet-heap {} {}",
             h.proclet_id, h.full_heap_size
         ));
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let resp = get_router()
             .send_to_session_ret(sid, clean_cmd)
             .await

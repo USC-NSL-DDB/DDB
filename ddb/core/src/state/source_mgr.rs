@@ -100,6 +100,7 @@ impl SourceMgr {
             debug!("Resolving sources for session: {}", sid);
             // Source is not ready for this session
             // Prepare to retrieve source files
+            // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
             let cmd: ParsedInputCmd = "-file-list-exec-source-files".try_into().unwrap();
             let (_, cmd) = cmd.to_command(NullFormatter);
             let result = get_router().send_to_ret(Target::Session(sid), cmd).await?;
@@ -145,6 +146,7 @@ impl SourceMgr {
             .to_str()
             .ok_or(anyhow!("Path cannot be parsed into str representation."))?;
 
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let cmd: ParsedInputCmd = format!("-file-list-exec-source-files --dirname {}", dirname)
             .try_into()
             .unwrap();

@@ -136,6 +136,7 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     debug!("Received command: {:?}", send_cmd);
     let query = send_cmd.clone();
     if let Ok(cmd) = send_cmd.cmd.try_into() as Result<ParsedInputCmd> {
+        // TODO: Migrate to new facade API (send_and_return() or send())
         let (target, cmd) = cmd.to_command(NullFormatter);
         // if the user specifies a target, it overrides the one in the command
         let target = send_cmd.target.unwrap_or(target);
@@ -144,6 +145,7 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
             cmd, target, query
         );
         if send_cmd.wait {
+            // TODO: Migrate to new facade API - use send_and_return().to(target).await
             match crate::cmd_flow::get_router().send_to_ret(target, cmd).await {
                 Ok(r) => {
                     return (
@@ -167,6 +169,7 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
                 }
             }
         } else {
+            // TODO: Migrate to new facade API - use send().to(target).await
             crate::cmd_flow::get_router().send_to(target, cmd);
             return (
                 StatusCode::OK,
