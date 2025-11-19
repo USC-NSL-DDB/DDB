@@ -26,6 +26,7 @@ use super::{
     router::{Router, Target},
     FinishedCmd, Formatter, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
     ThreadInfoFormatter,
+    api,
 };
 
 /// Handler trait for processing parsed commands with routing and formatting logic
@@ -85,8 +86,7 @@ impl DefaultHandler {
 #[async_trait]
 impl Handler for DefaultHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let (target, cmd) = cmd.to_command(PlainFormatter);
-        self.router.send_to(target, cmd);
+        cmd.send().with(PlainFormatter).to_default_target();
     }
 }
 
@@ -159,17 +159,16 @@ impl ContinueHandler {
 }
 
 impl ContinueHandler {
-    async fn switch_context_and_cont<F: Formatter + Send + Sync>(
-        router: Arc<Router>,
-        cont_cmd: Command<F>,
+    async fn switch_context_and_cont(
+        cont_cmd: ParsedInputCmd,
         mut session: RwLockWriteGuard<'_, SessionMeta>,
     ) -> Result<()> {
         if let Some(ctx) = &session.curr_ctx {
             let target = Target::Thread(ctx.tid);
             let ctx = Self::prepare_ctx_switch_args(&ctx);
-            let cmd: ParsedInputCmd = format!("-switch-context-custom {}", ctx).try_into()?;
-            let r = router
-                .send_to_ret(target, cmd.to_command(NullFormatter).1)
+            let r = api::send_and_return(&format!("-switch-context-custom {}", ctx))
+                .unwrap()
+                .to(target)
                 .await?;
             let responses = r.get_responses();
             let sid = session.sid;
@@ -190,7 +189,7 @@ impl ContinueHandler {
                 // early drop to release the lock, we don't need it to lock the session anymore
                 // for waiting for the continue response.
                 drop(session);
-                Self::cont(router, Target::Session(sid), cont_cmd);
+                Self::cont(Target::Session(sid), cont_cmd);
                 return Ok(());
             }
         }
@@ -199,10 +198,11 @@ impl ContinueHandler {
     }
 
     #[inline]
-    fn cont<F: Formatter + Send + Sync>(router: Arc<Router>, target: Target, cont_cmd: Command<F>) {
-        router.send_to(target, cont_cmd);
+    fn cont(target: Target, cont_cmd: ParsedInputCmd) {
+        cont_cmd.send().with(PlainFormatter).to(target);
     }
 
+    #[inline]
     fn prepare_ctx_switch_args(regs: &ThreadContext) -> String {
         regs.ctx
             .iter()
@@ -221,8 +221,7 @@ impl Handler for ContinueHandler {
 
         // reset all proclet cache and clean up restored proclet heap.
         get_proclet_restore_mgr().reset().await;
-
-        let cmd_to_send = cmd.clone().to_command(PlainFormatter);
+        
         let tasks = match &cmd.target {
             Target::Session(sid) => {
                 // Note: need to first check if the session is in custom context.
@@ -230,21 +229,18 @@ impl Handler for ContinueHandler {
                 let tasks: Vec<_> = ss
                     .iter()
                     .map(|s| -> JoinHandle<Result<()>> {
-                        let r = self.router.clone();
                         let s = s.clone();
                         let sid = sid.clone();
-                        let cmd_to_send = cmd_to_send.clone();
+                        let cmd = cmd.clone();
                         tokio::spawn(async move {
                             let s = s.write().await;
                             if s.sid == sid {
                                 if s.in_custom_ctx {
                                     // need to restore context before continue
-                                    let router = r.clone();
-                                    Self::switch_context_and_cont(router, cmd_to_send.1, s).await?
+                                    Self::switch_context_and_cont(cmd, s).await?
                                 } else {
                                     // no need to restore context, just continue
-                                    let router = r.clone();
-                                    Self::cont(router, Target::Session(sid), cmd_to_send.1);
+                                    Self::cont(Target::Session(sid), cmd);
                                 }
                             }
                             Ok(())
@@ -260,19 +256,16 @@ impl Handler for ContinueHandler {
                 let tasks: Vec<_> = ss
                     .iter()
                     .map(|s| {
-                        let r = self.router.clone();
                         let s = s.clone();
-                        let cmd_to_send = cmd_to_send.clone();
+                        let cmd = cmd.clone();
                         tokio::spawn(async move {
                             let s = s.write().await;
                             if s.in_custom_ctx {
                                 // need to restore context before continue
-                                let router = r.clone();
-                                Self::switch_context_and_cont(router, cmd_to_send.1, s).await?
+                                Self::switch_context_and_cont(cmd, s).await?
                             } else {
                                 // no need to restore context, just continue
-                                let router = r.clone();
-                                Self::cont(router, Target::Session(s.sid), cmd_to_send.1);
+                                Self::cont(Target::Session(s.sid), cmd);
                             }
                             Ok(())
                         })
@@ -303,20 +296,21 @@ impl InterruptHandler {
 #[async_trait]
 impl Handler for InterruptHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        match &cmd.target {
+        match cmd.target {
             Target::Session(sid) => {
-                let ss = STATES.get_session(*sid);
+                let ss = STATES.get_session(sid);
                 if ss.is_some() {
                     // Note: send interrupt to running process. Ignore thread granularity.
                     // skips checking if the thread is running or not.
-                    let (target, cmd) = cmd.to_command(PlainFormatter);
-                    self.router.send_to(target, cmd);
+                    let _ = cmd.send().with(PlainFormatter).to_default_target();
                 }
             }
             _ => {
                 // broadcast to all sessions
-                self.router
-                    .send_to(Target::Broadcast, cmd.to_command(PlainFormatter).1);
+                let _ = cmd
+                    .send()
+                    .with(PlainFormatter)
+                    .to(Target::Broadcast);
             }
         }
     }
