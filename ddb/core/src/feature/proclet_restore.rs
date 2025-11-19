@@ -83,7 +83,6 @@ impl ProcletRestorationMgr {
     }
 
     async fn check_proclet_local(&self, sid: u64, proclet_id: &String) -> Result<bool> {
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let resp = api::intercept(&format!("-check-proclet {}", proclet_id))
             .unwrap()
             .with(NullFormatter)
@@ -175,7 +174,6 @@ impl ProcletRestorationMgr {
         target_sid: u64,
         proclet_id: &String,
     ) -> Result<ProcletHeapInfo> {
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
         let resp = api::intercept(&format!("-get-proclet-heap {}", proclet_id))
             .unwrap()
             .with(NullFormatter)
@@ -356,7 +354,6 @@ impl ProcletRestorationMgr {
             return Ok(());
         }
 
-        // TODO:
         // 1. check if the proclet is local on the parent session (get proclet_id)
         // 2. send `-check-proclet` to the parent session. input: proclet_id
         // 3. if not, need to restore the heap.
