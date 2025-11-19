@@ -519,6 +519,7 @@ impl DistributeBacktraceHandler {
             .unwrap();
         let (target, bt_cmd) = bt_cmd.to_command(PlainFormatter);
 
+        // TODO: Migrate to command flow facade APIs.
         let mut stack_resp = self.router.send_to_ret(target, bt_cmd).await?;
         let payload = stack_resp
             .get_responses_mut()
