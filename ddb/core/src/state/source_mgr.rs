@@ -9,9 +9,8 @@ use futures::future::join_all;
 use tracing::debug;
 use tracing::error;
 
-use crate::cmd_flow::input::ParsedInputCmd;
-use crate::cmd_flow::router::Target;
-use crate::cmd_flow::{get_router, NullFormatter};
+use crate::cmd_flow::api;
+use crate::cmd_flow::NullFormatter;
 
 use super::group_mgr::GroupId;
 use super::{get_group_mgr, get_source_mgr, GroupMeta};
@@ -100,10 +99,11 @@ impl SourceMgr {
             debug!("Resolving sources for session: {}", sid);
             // Source is not ready for this session
             // Prepare to retrieve source files
-            // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
-            let cmd: ParsedInputCmd = "-file-list-exec-source-files".try_into().unwrap();
-            let (_, cmd) = cmd.to_command(NullFormatter);
-            let result = get_router().send_to_ret(Target::Session(sid), cmd).await?;
+            let result = api::intercept("-file-list-exec-source-files")
+                .unwrap()
+                .with(NullFormatter)
+                .to(api::Target::Session(sid))
+                .await?;
 
             let sources = result
                 .get_responses()
@@ -146,12 +146,14 @@ impl SourceMgr {
             .to_str()
             .ok_or(anyhow!("Path cannot be parsed into str representation."))?;
 
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
-        let cmd: ParsedInputCmd = format!("-file-list-exec-source-files --dirname {}", dirname)
-            .try_into()
-            .unwrap();
-        let (_, cmd) = cmd.to_command(NullFormatter);
-        let result = get_router().send_to_ret(Target::Session(sid), cmd).await?;
+        let result = api::intercept(&format!(
+            "-file-list-exec-source-files --dirname {}",
+            dirname
+        ))
+        .unwrap()
+        .with(NullFormatter)
+        .to(api::Target::Session(sid))
+        .await?;
 
         let sources = result
             .get_responses()

@@ -9,11 +9,7 @@ use dashmap::DashMap;
 use tracing::{debug, trace};
 
 use crate::{
-    cmd_flow::{
-        get_router,
-        input::{Command, ParsedInputCmd},
-        NullFormatter,
-    },
+    cmd_flow::{api, NullFormatter},
     get_dbg_mgr,
     state::get_proclet_mgr,
 };
@@ -87,11 +83,11 @@ impl ProcletRestorationMgr {
     }
 
     async fn check_proclet_local(&self, sid: u64, proclet_id: &String) -> Result<bool> {
-        let check_proclet_cmd = Self::gen_cmd(&format!("-check-proclet {}", proclet_id));
-
         // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
-        let resp = get_router()
-            .send_to_session_ret(sid, check_proclet_cmd)
+        let resp = api::intercept(&format!("-check-proclet {}", proclet_id))
+            .unwrap()
+            .with(NullFormatter)
+            .to(api::Target::Session(sid))
             .await
             .with_context(|| format!("Failed to send -check-proclet command to session {}", sid))?;
         let payload = resp
@@ -179,10 +175,11 @@ impl ProcletRestorationMgr {
         target_sid: u64,
         proclet_id: &String,
     ) -> Result<ProcletHeapInfo> {
-        let get_proclet_heap_cmd = Self::gen_cmd(&format!("-get-proclet-heap {}", proclet_id));
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(target_sid)).await
-        let resp = get_router()
-            .send_to_session_ret(target_sid, get_proclet_heap_cmd)
+        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
+        let resp = api::intercept(&format!("-get-proclet-heap {}", proclet_id))
+            .unwrap()
+            .with(NullFormatter)
+            .to(api::Target::Session(target_sid))
             .await
             .with_context(|| {
                 format!(
@@ -277,20 +274,20 @@ impl ProcletRestorationMgr {
     }
 
     async fn restore_proclet_heap(&self, sid: u64, heap_info: &ProcletHeapInfo) -> Result<()> {
-        let restore_proclet_heap_cmd = Self::gen_cmd(&format!(
+        let resp = api::intercept(&format!(
             "-restore-proclet-heap {} {} {}",
             heap_info.start_addr, heap_info.data_len, heap_info.data
-        ));
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
-        let resp = get_router()
-            .send_to_session_ret(sid, restore_proclet_heap_cmd)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to send -get-proclet-heap command to session {}",
-                    sid
-                )
-            })?;
+        ))
+        .unwrap()
+        .with(NullFormatter)
+        .to(api::Target::Session(sid))
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to send -get-proclet-heap command to session {}",
+                sid
+            )
+        })?;
         let payload = resp
             .get_responses()
             .get(0)
@@ -404,29 +401,32 @@ impl ProcletRestorationMgr {
             .iter()
             .map(|entry| (*entry.key(), entry.value().clone()))
             .collect();
-        
-        let futs = cloned_heap_meta.iter().map(|(sid, heap_set)| async move {
-            self.cleanup_heap_for(*sid, &heap_set).await;
-        }).collect::<Vec<_>>();
-        
+
+        let futs = cloned_heap_meta
+            .iter()
+            .map(|(sid, heap_set)| async move {
+                self.cleanup_heap_for(*sid, &heap_set).await;
+            })
+            .collect::<Vec<_>>();
+
         futures::future::join_all(futs).await;
     }
 
     async fn _cleanup_heap_for(&self, sid: u64, h: &ProcletHeapMeta) -> Result<()> {
-        let clean_cmd = Self::gen_cmd(&format!(
+        let resp = api::intercept(&format!(
             "-clean-proclet-heap {} {}",
             h.proclet_id, h.full_heap_size
-        ));
-        // TODO: Migrate to new facade API - use send_and_return().to(Target::Session(sid)).await
-        let resp = get_router()
-            .send_to_session_ret(sid, clean_cmd)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to send -cleanup-proclet-heap command to session {}",
-                    sid
-                )
-            })?;
+        ))
+        .unwrap()
+        .with(NullFormatter)
+        .to(api::Target::Session(sid))
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to send -cleanup-proclet-heap command to session {}",
+                sid
+            )
+        })?;
         let payload = resp
             .get_responses()
             .get(0)
@@ -469,7 +469,8 @@ impl ProcletRestorationMgr {
                 Ok(_) => {
                     trace!(
                         "Proclet heap {} cleaned up on session {}",
-                        h.proclet_id, sid
+                        h.proclet_id,
+                        sid
                     );
                 }
                 Err(e) => {
@@ -480,12 +481,5 @@ impl ProcletRestorationMgr {
                 }
             }
         }
-    }
-
-    fn gen_cmd(cmd: &str) -> Command<NullFormatter> {
-        TryInto::<ParsedInputCmd>::try_into(cmd)
-            .unwrap()
-            .to_command(NullFormatter)
-            .1
     }
 }
