@@ -80,23 +80,47 @@ fn prepare_to_send<F: DynFormatter + 'static>(
 }
 
 /// Builder for sending a command without waiting for results (STDOUT path)
-pub struct SendBuilder {
+pub struct SendBuilder<const SUPPRESS_OUTPUT: bool> {
     parsed_cmd: ParsedInputCmd,
 }
 
-impl SendBuilder {
+impl<const SUPPRESS_OUTPUT: bool> SendBuilder<SUPPRESS_OUTPUT> {
     /// Route the command to the specified target
     pub async fn to(self, target: Target) -> Result<(), Error> {
-        let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-        get_router().send_to(target, cmd_to_send);
+        match SUPPRESS_OUTPUT {
+            true => {
+                let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+                get_router().send_to(target, cmd_to_send);
+            }
+            false => {
+                let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
+                get_router().send_to(target, cmd_to_send);
+            }
+        }
         Ok(())
+    }
+
+    /// Route the command to the specified target and await results
+    /// If the target is not specified, it defaults to the target
+    /// specified in the original command.
+    pub async fn to_or_default(self, target: Option<Target>) -> Result<(), Error> {
+        if let Some(target) = target {
+            self.to(target).await
+        } else {
+            self.to_default_target().await
+        }
     }
 
     /// Route the command to the target specified in the command itself.
     /// If the command does not specify a target, it defaults to the default target.
     pub async fn to_default_target(self) -> Result<(), Error> {
-        let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-        get_router().send_to(target, cmd_to_send);
+        if SUPPRESS_OUTPUT {
+            let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+            get_router().send_to(target, cmd_to_send);
+        } else {
+            let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
+            get_router().send_to(target, cmd_to_send);
+        }
         Ok(())
     }
 }
@@ -113,6 +137,17 @@ impl SendAndReturnBuilder {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
         Ok(result)
+    }
+
+    /// Route the command to the specified target and await results
+    /// If the target is not specified, it defaults to the target
+    /// specified in the original command.
+    pub async fn to_or_default(self, target: Option<Target>) -> Result<FinishedCmd, Error> {
+        if let Some(target) = target {
+            self.to(target).await
+        } else {
+            self.to_default_target().await
+        }
     }
 
     /// Route the command to the target specified in the command itself.
@@ -137,6 +172,17 @@ impl<F: DynFormatter + 'static> InterceptBuilder<F> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, self.formatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
         Ok(result)
+    }
+
+    /// Route the command to the specified target and await results
+    /// If the target is not specified, it defaults to the target
+    /// specified in the original command.
+    pub async fn to_or_default(self, target: Option<Target>) -> Result<FinishedCmd, Error> {
+        if let Some(target) = target {
+            return self.to(target).await;
+        } else {
+            return self.to_default_target().await;
+        }
     }
 
     /// Route the command to the target specified in the command itself.
@@ -170,7 +216,21 @@ impl InterceptFormatterBuilder {
 ///
 /// # Returns
 /// A builder that requires calling `.to(target)` to execute
-pub fn send(command: &str) -> Result<SendBuilder> {
+pub fn send(command: &str) -> Result<SendBuilder<false>> {
+    let parsed_cmd: ParsedInputCmd = command
+        .try_into()
+        .context(format!("Failed to parse command: {}", command))?;
+    Ok(SendBuilder { parsed_cmd })
+}
+
+/// Send a command without waiting for results (output is suppressed)
+///
+/// # Arguments
+/// * `command` - The GDB/MI command (e.g., "-exec-continue" or "-thread-info --thread 1" or "38-thread-info")
+///
+/// # Returns
+/// A builder that requires calling `.to(target)` to execute
+pub fn send_no_output(command: &str) -> Result<SendBuilder<true>> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
