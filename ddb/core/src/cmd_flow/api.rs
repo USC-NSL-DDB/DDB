@@ -209,6 +209,30 @@ impl InterceptFormatterBuilder {
     }
 }
 
+impl Into<SendBuilder<false>> for ParsedInputCmd {
+    fn into(self) -> SendBuilder<false> {
+        SendBuilder { parsed_cmd: self }
+    }
+}
+
+impl Into<SendBuilder<true>> for ParsedInputCmd {
+    fn into(self) -> SendBuilder<true> {
+        SendBuilder { parsed_cmd: self }
+    }
+}
+
+impl Into<SendAndReturnBuilder> for ParsedInputCmd {
+    fn into(self) -> SendAndReturnBuilder {
+        SendAndReturnBuilder { parsed_cmd: self }
+    }
+}
+
+impl Into<InterceptFormatterBuilder> for ParsedInputCmd {
+    fn into(self) -> InterceptFormatterBuilder {
+        InterceptFormatterBuilder { parsed_cmd: self }
+    }
+}
+
 /// Send a command without waiting for results (output to STDOUT directly)
 ///
 /// # Arguments
@@ -220,13 +244,7 @@ pub fn send(command: &str) -> Result<SendBuilder<false>> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(SendBuilder { parsed_cmd })
-}
-
-impl Into<SendBuilder<false>> for ParsedInputCmd {
-    fn into(self) -> SendBuilder<false> {
-        SendBuilder { parsed_cmd: self }
-    }
+    Ok(parsed_cmd.into())
 }
 
 /// Send a command without waiting for results (output is suppressed)
@@ -240,13 +258,7 @@ pub fn send_no_output(command: &str) -> Result<SendBuilder<true>> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(SendBuilder { parsed_cmd })
-}
-
-impl Into<SendBuilder<true>> for ParsedInputCmd {
-    fn into(self) -> SendBuilder<true> {
-        SendBuilder { parsed_cmd: self }
-    }
+    Ok(parsed_cmd.into())
 }
 
 /// Send a command and wait for results.
@@ -262,13 +274,7 @@ pub fn send_and_return(command: &str) -> Result<SendAndReturnBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(SendAndReturnBuilder { parsed_cmd })
-}
-
-impl Into<SendAndReturnBuilder> for ParsedInputCmd {
-    fn into(self) -> SendAndReturnBuilder {
-        SendAndReturnBuilder { parsed_cmd: self }
-    }
+    Ok(parsed_cmd.into())
 }
 
 /// Intercept command output with custom formatting
@@ -282,13 +288,7 @@ pub fn intercept(command: &str) -> Result<InterceptFormatterBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(InterceptFormatterBuilder { parsed_cmd })
-}
-
-impl Into<InterceptFormatterBuilder> for ParsedInputCmd {
-    fn into(self) -> InterceptFormatterBuilder {
-        InterceptFormatterBuilder { parsed_cmd: self }
-    }
+    Ok(parsed_cmd.into())
 }
 
 #[cfg(test)]
