@@ -14,7 +14,9 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{input::ParsedInputCmd, router::Target, FinishedCmd, NullFormatter},
+    cmd_flow::{
+        api as cmd_flow_api, input::ParsedInputCmd, router::Target, FinishedCmd, NullFormatter,
+    },
     state::{GroupId, GroupMeta, SessionId},
 };
 
@@ -134,61 +136,39 @@ async fn resolve_src_to_groups(Query(src): Query<SourceResolver>) -> impl IntoRe
 
 async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     debug!("Received command: {:?}", send_cmd);
-    let query = send_cmd.clone();
-    if let Ok(cmd) = send_cmd.cmd.try_into() as Result<ParsedInputCmd> {
-        // TODO: Migrate to new facade API (send_and_return() or send())
-        let (target, cmd) = cmd.to_command(NullFormatter);
-        // if the user specifies a target, it overrides the one in the command
-        let target = send_cmd.target.unwrap_or(target);
-        debug!(
-            "Sending command: {:?} to {:?}. query: {:?}",
-            cmd, target, query
-        );
-        if send_cmd.wait {
-            // TODO: Migrate to new facade API - use send_and_return().to(target).await
-            match crate::cmd_flow::get_router().send_to_ret(target, cmd).await {
-                Ok(r) => {
-                    return (
-                        StatusCode::OK,
-                        Json(SendCommandResponse {
-                            message: "success".to_string(),
-                            success: true,
-                            payload: Some(r),
-                        }),
-                    );
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(SendCommandResponse {
-                            message: format!("Failed to send command: {}", e),
-                            success: false,
-                            payload: None,
-                        }),
-                    );
-                }
+    match cmd_flow_api::send_and_return(&send_cmd.cmd) {
+        Ok(builder) => match builder.to_or_default(send_cmd.target).await {
+            Ok(r) => {
+                return (
+                    StatusCode::OK,
+                    Json(SendCommandResponse {
+                        message: "success".to_string(),
+                        success: true,
+                        payload: Some(r),
+                    }),
+                );
             }
-        } else {
-            // TODO: Migrate to new facade API - use send().to(target).await
-            crate::cmd_flow::get_router().send_to(target, cmd);
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(SendCommandResponse {
+                        message: format!("Failed to process command: {}", e),
+                        success: false,
+                        payload: None,
+                    }),
+                );
+            }
+        },
+        Err(e) => {
             return (
-                StatusCode::OK,
+                StatusCode::BAD_REQUEST,
                 Json(SendCommandResponse {
-                    message: "success".to_string(),
-                    success: true,
+                    message: format!("Failed to send command: {}", e),
+                    success: false,
                     payload: None,
                 }),
             );
         }
-    } else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(SendCommandResponse {
-                message: "Invalid command".to_string(),
-                success: false,
-                payload: None,
-            }),
-        );
     }
 }
 
@@ -262,6 +242,3 @@ async fn get_groups() -> impl IntoResponse {
 
     (StatusCode::OK, Json(result))
 }
-// async fn get_finished_commands() -> impl IntoResponse {
-
-// }
