@@ -87,6 +87,7 @@ pub fn get_cmd_handler() -> &'static Arc<CmdHandler> {
 }
 
 #[inline]
+// FIXME: make this private
 pub fn get_router() -> &'static Arc<Router> {
     CMD_ROUTER.get_or_init(|| Arc::new(Router::new()))
 }
