@@ -10,7 +10,6 @@ use tracing::debug;
 use tracing::error;
 
 use crate::cmd_flow::api;
-use crate::cmd_flow::NullFormatter;
 
 use super::group_mgr::GroupId;
 use super::{get_group_mgr, get_source_mgr, GroupMeta};
@@ -99,9 +98,8 @@ impl SourceMgr {
             debug!("Resolving sources for session: {}", sid);
             // Source is not ready for this session
             // Prepare to retrieve source files
-            let result = api::intercept("-file-list-exec-source-files")
+            let result = api::send_and_return("-file-list-exec-source-files")
                 .unwrap()
-                .with(NullFormatter)
                 .to(api::Target::Session(sid))
                 .await?;
 
@@ -146,12 +144,11 @@ impl SourceMgr {
             .to_str()
             .ok_or(anyhow!("Path cannot be parsed into str representation."))?;
 
-        let result = api::intercept(&format!(
+        let result = api::send_and_return(&format!(
             "-file-list-exec-source-files --dirname {}",
             dirname
         ))
         .unwrap()
-        .with(NullFormatter)
         .to(api::Target::Session(sid))
         .await?;
 

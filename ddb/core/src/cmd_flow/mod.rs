@@ -6,9 +6,8 @@
 //!
 //! ### Public API (`api`)
 //! The primary entry point for external callers. Provides ergonomic builders:
-//! - `send()` - Fire-and-forget commands (output to STDOUT)
-//! - `send_and_return()` - Commands that await responses
-//! - `intercept()` - Commands with custom formatters
+//! - `send()` - Fire-and-forget commands (optionally with custom formatters via `.with()`)
+//! - `send_and_return()` - Commands that await responses (returns raw `FinishedCmd` data)
 //!
 //! ### Internal Components
 //! - **`input`**: Parses command tokens, extracts target information, builds `Command<F>` types
@@ -22,7 +21,7 @@
 //! ```text
 //! External Caller
 //!   ↓
-//! api::send/send_and_return/intercept (parse prefix/args, inject tokens)
+//! api::send/send_and_return (parse prefix/args, inject tokens)
 //!   ↓
 //! Command<F> (with formatter and tokens)
 //!   ↓
@@ -60,7 +59,7 @@ pub use output::*;
 pub use tracker::*;
 
 // Re-export facade API for convenient access
-pub use api::{send, send_and_return, intercept, Target, Error as ApiError};
+pub use api::{send, send_and_return, Target, Error as ApiError};
 
 use input::CmdHandler;
 use router::Router;

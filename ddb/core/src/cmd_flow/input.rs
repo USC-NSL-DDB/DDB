@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     cmd_flow::{
-        api::{InterceptFormatterBuilder, SendAndReturnBuilder, SendBuilder},
+        api::{SendAndReturnBuilder, SendBuilder},
         get_router,
     },
     handlers_map,
@@ -147,11 +147,6 @@ impl ParsedInputCmd {
     #[inline]
     pub fn send_and_return(self) -> SendAndReturnBuilder {
         Into::<SendAndReturnBuilder>::into(self)
-    }
-
-    #[inline]
-    pub fn intercept(self) -> InterceptFormatterBuilder {
-        Into::<InterceptFormatterBuilder>::into(self)
     }
 }
 
