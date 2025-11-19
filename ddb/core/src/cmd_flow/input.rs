@@ -140,13 +140,8 @@ impl ParsedInputCmd {
     }
 
     #[inline]
-    pub fn send(self) -> SendBuilder<false> {
-        Into::<SendBuilder<false>>::into(self)
-    }
-
-    #[inline]
-    pub fn send_no_output(self) -> SendBuilder<true> {
-        Into::<SendBuilder<true>>::into(self)
+    pub fn send(self) -> SendBuilder {
+        Into::<SendBuilder>::into(self)
     }
 
     #[inline]

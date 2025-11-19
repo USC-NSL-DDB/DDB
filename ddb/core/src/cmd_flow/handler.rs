@@ -10,6 +10,7 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
+    cmd_flow::api::{InterceptBuilder, InterceptFormatterBuilder},
     common::{config::Framework, Config},
     feature::get_proclet_restore_mgr,
     state::{
@@ -109,8 +110,11 @@ impl BreakInsertHandler {
 impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let full_cmd = cmd.full_cmd();
-        let (target, cmd) = cmd.to_command(NullFormatter);
-        let results = get_router().send_to_ret(target, cmd).await;
+        let results = cmd
+            .intercept()
+            .with(NullFormatter)
+            .to_default_target()
+            .await;
         if let Ok(results) = results {
             for resp in results.get_responses() {
                 if resp.get_message() == "done" {
@@ -139,8 +143,10 @@ impl ThreadInfoHandler {
 #[async_trait]
 impl Handler for ThreadInfoHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let (_, cmd) = cmd.to_command(ThreadInfoFormatter);
-        self.router.send_to(Target::Broadcast, cmd);
+        let _ = cmd
+            .send()
+            .with(ThreadInfoFormatter)
+            .to(Target::Broadcast);
     }
 }
 
