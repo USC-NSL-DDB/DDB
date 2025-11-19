@@ -227,20 +227,6 @@ pub fn send(command: &str) -> Result<SendBuilder> {
     Ok(parsed_cmd.into())
 }
 
-/// Send a command without waiting for results (output is suppressed)
-///
-/// # Arguments
-/// * `command` - The GDB/MI command (e.g., "-exec-continue" or "-thread-info --thread 1" or "38-thread-info")
-///
-/// # Returns
-/// A builder that requires calling `.to(target)` to execute
-pub fn send_no_output(command: &str) -> Result<SendBuilder> {
-    let parsed_cmd: ParsedInputCmd = command
-        .try_into()
-        .context(format!("Failed to parse command: {}", command))?;
-    Ok(parsed_cmd.into())
-}
-
 /// Send a command and wait for results.
 ///
 /// **Note:** caller should decide how to handle output.
