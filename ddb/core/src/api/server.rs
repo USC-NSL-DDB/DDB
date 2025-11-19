@@ -15,7 +15,7 @@ use tracing::{debug, info};
 
 use crate::{
     cmd_flow::{
-        api as cmd_flow_api, input::ParsedInputCmd, router::Target, FinishedCmd, NullFormatter,
+        api as cmd_flow_api, router::Target, FinishedCmd,
     },
     state::{GroupId, GroupMeta, SessionId},
 };

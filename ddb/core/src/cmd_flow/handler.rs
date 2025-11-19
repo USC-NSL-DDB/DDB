@@ -10,8 +10,7 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::api::{InterceptBuilder, InterceptFormatterBuilder},
-    common::{config::Framework, Config},
+    common::Config,
     feature::get_proclet_restore_mgr,
     state::{
         get_bkpt_mgr, BkptMeta, LocalThreadId, SessionMeta, ThreadContext, ThreadStatus, STATES,
@@ -111,8 +110,7 @@ impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let full_cmd = cmd.full_cmd();
         let results = cmd
-            .intercept()
-            .with(NullFormatter)
+            .send_and_return()
             .to_default_target()
             .await;
         if let Ok(results) = results {

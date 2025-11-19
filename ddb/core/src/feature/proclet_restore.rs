@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tracing::{debug, trace};
 
 use crate::{
-    cmd_flow::{api, NullFormatter},
+    cmd_flow::api,
     get_dbg_mgr,
     state::get_proclet_mgr,
 };
@@ -83,9 +83,8 @@ impl ProcletRestorationMgr {
     }
 
     async fn check_proclet_local(&self, sid: u64, proclet_id: &String) -> Result<bool> {
-        let resp = api::intercept(&format!("-check-proclet {}", proclet_id))
+        let resp = api::send_and_return(&format!("-check-proclet {}", proclet_id))
             .unwrap()
-            .with(NullFormatter)
             .to(api::Target::Session(sid))
             .await
             .with_context(|| format!("Failed to send -check-proclet command to session {}", sid))?;
@@ -174,9 +173,8 @@ impl ProcletRestorationMgr {
         target_sid: u64,
         proclet_id: &String,
     ) -> Result<ProcletHeapInfo> {
-        let resp = api::intercept(&format!("-get-proclet-heap {}", proclet_id))
+        let resp = api::send_and_return(&format!("-get-proclet-heap {}", proclet_id))
             .unwrap()
-            .with(NullFormatter)
             .to(api::Target::Session(target_sid))
             .await
             .with_context(|| {
@@ -272,12 +270,11 @@ impl ProcletRestorationMgr {
     }
 
     async fn restore_proclet_heap(&self, sid: u64, heap_info: &ProcletHeapInfo) -> Result<()> {
-        let resp = api::intercept(&format!(
+        let resp = api::send_and_return(&format!(
             "-restore-proclet-heap {} {} {}",
             heap_info.start_addr, heap_info.data_len, heap_info.data
         ))
         .unwrap()
-        .with(NullFormatter)
         .to(api::Target::Session(sid))
         .await
         .with_context(|| {
@@ -410,12 +407,11 @@ impl ProcletRestorationMgr {
     }
 
     async fn _cleanup_heap_for(&self, sid: u64, h: &ProcletHeapMeta) -> Result<()> {
-        let resp = api::intercept(&format!(
+        let resp = api::send_and_return(&format!(
             "-clean-proclet-heap {} {}",
             h.proclet_id, h.full_heap_size
         ))
         .unwrap()
-        .with(NullFormatter)
         .to(api::Target::Session(sid))
         .await
         .with_context(|| {
