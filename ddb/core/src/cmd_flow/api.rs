@@ -63,9 +63,9 @@ pub enum Error {
 }
 
 #[inline]
-fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<(), Error> {
+fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<()> {
     if parsed_cmd.prefix.is_empty() {
-        return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()));
+        return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()).into());
     }
     Ok(())
 }
@@ -74,7 +74,7 @@ fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<(), Error> {
 fn prepare_to_send<F: DynFormatter + 'static>(
     parsed_cmd: ParsedInputCmd,
     formatter: F,
-) -> Result<(Command<F>, Target), Error> {
+) -> Result<(Command<F>, Target)> {
     check_prefix(&parsed_cmd)?;
     let (cmd_to_send, target) = Command::new_with_parsed_cmd(parsed_cmd, formatter);
     Ok((cmd_to_send, target))
@@ -95,7 +95,7 @@ impl SendBuilder {
     }
 
     /// Route the command to the specified target
-    pub fn to<const SUPPRESS_OUTPUT: bool>(self, target: Target) -> Result<(), Error> {
+    pub fn to<const SUPPRESS_OUTPUT: bool>(self, target: Target) -> Result<()> {
         match SUPPRESS_OUTPUT {
             true => {
                 let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
@@ -111,7 +111,7 @@ impl SendBuilder {
 
     /// Route the command to the target specified in the command itself.
     /// If the command does not specify a target, it defaults to the default target.
-    pub fn to_default_target<const SUPPRESS_OUTPUT: bool>(self) -> Result<(), Error> {
+    pub fn to_default_target<const SUPPRESS_OUTPUT: bool>(self) -> Result<()> {
         if SUPPRESS_OUTPUT {
             let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
             get_router().send_to(target, cmd_to_send);
@@ -125,7 +125,7 @@ impl SendBuilder {
     /// Route the command to the specified target or, if not specified, to the target
     /// in the original command (fire-and-forget).
     /// Does not await or return results.
-    pub fn to_or_default<const SUPPRESS_OUTPUT: bool>(self, target: Option<Target>) -> Result<(), Error> {
+    pub fn to_or_default<const SUPPRESS_OUTPUT: bool>(self, target: Option<Target>) -> Result<()> {
         if let Some(target) = target {
             self.to::<SUPPRESS_OUTPUT>(target)
         } else {
@@ -141,7 +141,7 @@ pub struct SendAndReturnBuilder {
 
 impl SendAndReturnBuilder {
     /// Route the command to the specified target and await results
-    pub async fn to(self, target: Target) -> Result<FinishedCmd, Error> {
+    pub async fn to(self, target: Target) -> Result<FinishedCmd> {
         // ignore command specified target, as caller specified one.
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
@@ -151,7 +151,7 @@ impl SendAndReturnBuilder {
     /// Route the command to the specified target and await results
     /// If the target is not specified, it defaults to the target
     /// specified in the original command.
-    pub async fn to_or_default(self, target: Option<Target>) -> Result<FinishedCmd, Error> {
+    pub async fn to_or_default(self, target: Option<Target>) -> Result<FinishedCmd> {
         if let Some(target) = target {
             self.to(target).await
         } else {
@@ -161,7 +161,7 @@ impl SendAndReturnBuilder {
 
     /// Route the command to the target specified in the command itself.
     /// If the command does not specify a target, it defaults to the default target.
-    pub async fn to_default_target(self) -> Result<FinishedCmd, Error> {
+    pub async fn to_default_target(self) -> Result<FinishedCmd> {
         let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
         Ok(result)
@@ -176,7 +176,7 @@ pub struct SendWithFormatterBuilder<F: DynFormatter + 'static> {
 
 impl<F: DynFormatter + 'static> SendWithFormatterBuilder<F> {
     /// Route the command to the specified target with custom formatter (fire-and-forget)
-    pub fn to(self, target: Target) -> Result<(), Error> {
+    pub fn to(self, target: Target) -> Result<()> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, self.formatter)?;
         get_router().send_to(target, cmd_to_send);
         Ok(())
@@ -184,7 +184,7 @@ impl<F: DynFormatter + 'static> SendWithFormatterBuilder<F> {
 
     /// Route the command to the specified target or default target (fire-and-forget)
     /// If the target is not specified, it defaults to the target specified in the original command.
-    pub fn to_or_default(self, target: Option<Target>) -> Result<(), Error> {
+    pub fn to_or_default(self, target: Option<Target>) -> Result<()> {
         if let Some(target) = target {
             self.to(target)
         } else {
@@ -194,7 +194,7 @@ impl<F: DynFormatter + 'static> SendWithFormatterBuilder<F> {
 
     /// Route the command to the target specified in the command itself (fire-and-forget)
     /// If the command does not specify a target, it defaults to the default target.
-    pub fn to_default_target(self) -> Result<(), Error> {
+    pub fn to_default_target(self) -> Result<()> {
         let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, self.formatter)?;
         get_router().send_to(target, cmd_to_send);
         Ok(())
