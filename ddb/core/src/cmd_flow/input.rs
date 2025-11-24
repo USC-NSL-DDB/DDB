@@ -467,13 +467,8 @@ mod tests {
 
     #[test]
     pub fn test_input_parser_var() {
-        let cmd: ParsedInputCmd =
+        let _: ParsedInputCmd =
             r#"-var-create --frame 1 var_1008_epfd @ "epfd""#.try_into().unwrap();
-        println!("cmd: {:?}", cmd);
-        // assert_eq!(cmd.external_token, Some(567));
-        // assert_ne!(cmd.internal_token, 0);
-        // assert_eq!(cmd.prefix, "-switch-context");
-        // assert_eq!(cmd.args, "reg1=1 reg2=2");
     }
 
     #[test]
