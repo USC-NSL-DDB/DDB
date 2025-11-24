@@ -25,17 +25,18 @@
 //! # }
 //! ```
 //!
-//! ### Command with custom formatter
+//! ### Command with custom formatter (fire-and-forget)
 //! ```no_run
 //! # use core::cmd_flow::api;
-//! # async fn example() -> Result<(), api::Error> {
-//! api::intercept("-thread-info")
+//! # fn example() -> Result<(), api::Error> {
+//! api::send("-thread-info")?
 //!     .with(api::ThreadInfoFormatter)
-//!     .to(api::Target::Broadcast)
-//!     .await?;
+//!     .to(api::Target::Broadcast)?;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//!
 
 use anyhow::{Context, Result};
 
@@ -62,9 +63,9 @@ pub enum Error {
 }
 
 #[inline]
-fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<(), Error> {
+fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<()> {
     if parsed_cmd.prefix.is_empty() {
-        return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()));
+        return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()).into());
     }
     Ok(())
 }
@@ -73,7 +74,7 @@ fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<(), Error> {
 fn prepare_to_send<F: DynFormatter + 'static>(
     parsed_cmd: ParsedInputCmd,
     formatter: F,
-) -> Result<(Command<F>, Target), Error> {
+) -> Result<(Command<F>, Target)> {
     check_prefix(&parsed_cmd)?;
     let (cmd_to_send, target) = Command::new_with_parsed_cmd(parsed_cmd, formatter);
     Ok((cmd_to_send, target))
@@ -85,19 +86,51 @@ pub struct SendBuilder {
 }
 
 impl SendBuilder {
+    /// Specify a custom formatter for this command
+    pub fn with<F: DynFormatter + 'static>(self, formatter: F) -> SendWithFormatterBuilder<F> {
+        SendWithFormatterBuilder {
+            parsed_cmd: self.parsed_cmd,
+            formatter,
+        }
+    }
+
     /// Route the command to the specified target
-    pub async fn to(self, target: Target) -> Result<(), Error> {
-        let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-        get_router().send_to(target, cmd_to_send);
+    pub fn to<const SUPPRESS_OUTPUT: bool>(self, target: Target) -> Result<()> {
+        match SUPPRESS_OUTPUT {
+            true => {
+                let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+                get_router().send_to(target, cmd_to_send);
+            }
+            false => {
+                let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
+                get_router().send_to(target, cmd_to_send);
+            }
+        }
         Ok(())
     }
 
     /// Route the command to the target specified in the command itself.
     /// If the command does not specify a target, it defaults to the default target.
-    pub async fn to_default_target(self) -> Result<(), Error> {
-        let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-        get_router().send_to(target, cmd_to_send);
+    pub fn to_default_target<const SUPPRESS_OUTPUT: bool>(self) -> Result<()> {
+        if SUPPRESS_OUTPUT {
+            let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+            get_router().send_to(target, cmd_to_send);
+        } else {
+            let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
+            get_router().send_to(target, cmd_to_send);
+        }
         Ok(())
+    }
+
+    /// Route the command to the specified target or, if not specified, to the target
+    /// in the original command (fire-and-forget).
+    /// Does not await or return results.
+    pub fn to_or_default<const SUPPRESS_OUTPUT: bool>(self, target: Option<Target>) -> Result<()> {
+        if let Some(target) = target {
+            self.to::<SUPPRESS_OUTPUT>(target)
+        } else {
+            self.to_default_target::<SUPPRESS_OUTPUT>()
+        }
     }
 }
 
@@ -108,58 +141,75 @@ pub struct SendAndReturnBuilder {
 
 impl SendAndReturnBuilder {
     /// Route the command to the specified target and await results
-    pub async fn to(self, target: Target) -> Result<FinishedCmd, Error> {
+    pub async fn to(self, target: Target) -> Result<FinishedCmd> {
         // ignore command specified target, as caller specified one.
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
         Ok(result)
     }
 
+    /// Route the command to the specified target and await results
+    /// If the target is not specified, it defaults to the target
+    /// specified in the original command.
+    pub async fn to_or_default(self, target: Option<Target>) -> Result<FinishedCmd> {
+        if let Some(target) = target {
+            self.to(target).await
+        } else {
+            self.to_default_target().await
+        }
+    }
+
     /// Route the command to the target specified in the command itself.
     /// If the command does not specify a target, it defaults to the default target.
-    pub async fn to_default_target(self) -> Result<FinishedCmd, Error> {
+    pub async fn to_default_target(self) -> Result<FinishedCmd> {
         let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
         let result = get_router().send_to_ret(target, cmd_to_send).await?;
         Ok(result)
     }
 }
 
-/// Builder for intercepting command output with custom formatters
-pub struct InterceptBuilder<F: DynFormatter + 'static> {
+/// Builder for sending a command with custom formatter without waiting for result
+pub struct SendWithFormatterBuilder<F: DynFormatter + 'static> {
     parsed_cmd: ParsedInputCmd,
     formatter: F,
 }
 
-impl<F: DynFormatter + 'static> InterceptBuilder<F> {
-    /// Route the command to the specified target with custom formatter
-    pub async fn to(self, target: Target) -> Result<FinishedCmd, Error> {
-        // ignore command specified target, as caller specified one.
+impl<F: DynFormatter + 'static> SendWithFormatterBuilder<F> {
+    /// Route the command to the specified target with custom formatter (fire-and-forget)
+    pub fn to(self, target: Target) -> Result<()> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, self.formatter)?;
-        let result = get_router().send_to_ret(target, cmd_to_send).await?;
-        Ok(result)
+        get_router().send_to(target, cmd_to_send);
+        Ok(())
     }
 
-    /// Route the command to the target specified in the command itself.
-    /// If the command does not specify a target, it defaults to the default target.
-    pub async fn to_default_target(self) -> Result<FinishedCmd, Error> {
-        let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, self.formatter)?;
-        let result = get_router().send_to_ret(target, cmd_to_send).await?;
-        Ok(result)
-    }
-}
-
-/// Builder that allows setting a custom formatter
-pub struct InterceptFormatterBuilder {
-    parsed_cmd: ParsedInputCmd,
-}
-
-impl InterceptFormatterBuilder {
-    /// Specify the formatter to use for this command
-    pub fn with<F: DynFormatter + 'static>(self, formatter: F) -> InterceptBuilder<F> {
-        InterceptBuilder {
-            parsed_cmd: self.parsed_cmd,
-            formatter,
+    /// Route the command to the specified target or default target (fire-and-forget)
+    /// If the target is not specified, it defaults to the target specified in the original command.
+    pub fn to_or_default(self, target: Option<Target>) -> Result<()> {
+        if let Some(target) = target {
+            self.to(target)
+        } else {
+            self.to_default_target()
         }
+    }
+
+    /// Route the command to the target specified in the command itself (fire-and-forget)
+    /// If the command does not specify a target, it defaults to the default target.
+    pub fn to_default_target(self) -> Result<()> {
+        let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, self.formatter)?;
+        get_router().send_to(target, cmd_to_send);
+        Ok(())
+    }
+}
+
+impl Into<SendBuilder> for ParsedInputCmd {
+    fn into(self) -> SendBuilder {
+        SendBuilder { parsed_cmd: self }
+    }
+}
+
+impl Into<SendAndReturnBuilder> for ParsedInputCmd {
+    fn into(self) -> SendAndReturnBuilder {
+        SendAndReturnBuilder { parsed_cmd: self }
     }
 }
 
@@ -174,7 +224,7 @@ pub fn send(command: &str) -> Result<SendBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(SendBuilder { parsed_cmd })
+    Ok(parsed_cmd.into())
 }
 
 /// Send a command and wait for results.
@@ -190,21 +240,7 @@ pub fn send_and_return(command: &str) -> Result<SendAndReturnBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;
-    Ok(SendAndReturnBuilder { parsed_cmd })
-}
-
-/// Intercept command output with custom formatting
-///
-/// # Arguments
-/// * `command` - The GDB/MI command (e.g., "-exec-continue" or "-thread-info --thread 1" or "38-thread-info")
-///
-/// # Returns
-/// A builder that requires calling `.with(formatter).to(target)` to execute
-pub fn intercept(command: &str) -> Result<InterceptFormatterBuilder> {
-    let parsed_cmd: ParsedInputCmd = command
-        .try_into()
-        .context(format!("Failed to parse command: {}", command))?;
-    Ok(InterceptFormatterBuilder { parsed_cmd })
+    Ok(parsed_cmd.into())
 }
 
 #[cfg(test)]
@@ -272,5 +308,28 @@ mod tests {
         assert_eq!(builder.parsed_cmd.args, "");
         assert_eq!(builder.parsed_cmd.external_token, Some(42));
         assert_eq!(builder.parsed_cmd.target, Target::Broadcast);
+    }
+
+    #[test]
+    fn test_send_with_custom_formatter() {
+        // Test that send().with() can be constructed with a custom formatter
+        let builder = send("-thread-info")
+            .unwrap()
+            .with(ThreadInfoFormatter);
+
+        assert_eq!(builder.parsed_cmd.prefix, "-thread-info");
+        assert_eq!(builder.parsed_cmd.args, "");
+        assert_eq!(builder.parsed_cmd.external_token, None);
+    }
+
+    #[test]
+    fn test_send_with_formatter_preserves_external_token() {
+        // Test that send().with() preserves external token
+        let builder = send("42-thread-info")
+            .unwrap()
+            .with(NullFormatter);
+
+        assert_eq!(builder.parsed_cmd.prefix, "-thread-info");
+        assert_eq!(builder.parsed_cmd.external_token, Some(42));
     }
 }
