@@ -10,7 +10,14 @@ use super::{
     router::{Router, Target},
     DynFormatter, OutgoingCmd, OutputSource,
 };
-use crate::{cmd_flow::get_router, handlers_map, state::STATES};
+use crate::{
+    cmd_flow::{
+        api::{SendAndReturnBuilder, SendBuilder},
+        get_router,
+    },
+    handlers_map,
+    state::STATES,
+};
 
 #[derive(Debug, Clone)]
 pub struct Command<F: DynFormatter + 'static> {
@@ -130,6 +137,16 @@ impl ParsedInputCmd {
             self.target,
             Command::new(self.external_token, self.internal_token, raw_cmd, formatter),
         )
+    }
+
+    #[inline]
+    pub fn send(self) -> SendBuilder {
+        Into::<SendBuilder>::into(self)
+    }
+
+    #[inline]
+    pub fn send_and_return(self) -> SendAndReturnBuilder {
+        Into::<SendAndReturnBuilder>::into(self)
     }
 }
 
