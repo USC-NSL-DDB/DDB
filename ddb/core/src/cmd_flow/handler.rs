@@ -51,9 +51,7 @@ use super::{
 /// # use async_trait::async_trait;
 /// # use super::{Handler, ParsedInputCmd, Router, PlainFormatter};
 /// # use std::sync::Arc;
-/// struct MyHandler {
-///     router: Arc<Router>,
-/// }
+/// struct MyHandler {}
 ///
 /// #[async_trait]
 /// impl Handler for MyHandler {
@@ -74,7 +72,7 @@ pub trait Handler: Send + Sync {
 pub struct DefaultHandler;
 
 impl DefaultHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         DefaultHandler
     }
 }
@@ -91,9 +89,9 @@ pub struct BreakInsertHandler {
 }
 
 impl BreakInsertHandler {
-    pub fn new(router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         BreakInsertHandler {
-            base: DefaultHandler::new(router),
+            base: DefaultHandler::new(),
         }
     }
 }
@@ -121,7 +119,7 @@ impl Handler for BreakInsertHandler {
 pub struct ThreadInfoHandler;
 
 impl ThreadInfoHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         ThreadInfoHandler
     }
 }
@@ -136,7 +134,7 @@ impl Handler for ThreadInfoHandler {
 pub struct ContinueHandler;
 
 impl ContinueHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         ContinueHandler
     }
 }
@@ -269,7 +267,7 @@ impl Handler for ContinueHandler {
 pub struct InterruptHandler;
 
 impl InterruptHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         InterruptHandler
     }
 }
@@ -297,7 +295,7 @@ impl Handler for InterruptHandler {
 pub struct ListHandler;
 
 impl ListHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         ListHandler
     }
 }
@@ -315,7 +313,7 @@ impl Handler for ListHandler {
 pub struct ThreadSelectHandler;
 
 impl ThreadSelectHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         ThreadSelectHandler
     }
 }
@@ -342,7 +340,7 @@ impl Handler for ThreadSelectHandler {
 pub struct ListGroupsHandler;
 
 impl ListGroupsHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         ListGroupsHandler
     }
 }
@@ -367,7 +365,7 @@ pub struct DistributeBacktraceHandler {
 }
 
 impl DistributeBacktraceHandler {
-    pub fn new(_router: Arc<Router>, adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
+    pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
         DistributeBacktraceHandler { adapter }
     }
 
@@ -759,7 +757,7 @@ impl Handler for DistributeBacktraceHandler {
 pub struct ExecNextHandler;
 
 impl ExecNextHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         Self
     }
 }
@@ -790,7 +788,7 @@ impl Handler for ExecNextHandler {
 pub struct ExecFinishHandler;
 
 impl ExecFinishHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         Self
     }
 }
@@ -809,7 +807,7 @@ impl Handler for ExecFinishHandler {
 pub struct ExecStepHandler;
 
 impl ExecStepHandler {
-    pub fn new(_router: Arc<Router>) -> Self {
+    pub fn new() -> Self {
         Self
     }
 }
