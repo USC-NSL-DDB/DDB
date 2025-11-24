@@ -14,9 +14,7 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{
-        api as cmd_flow_api, router::Target, FinishedCmd,
-    },
+    cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
     state::{GroupId, GroupMeta, SessionId},
 };
 
@@ -136,39 +134,46 @@ async fn resolve_src_to_groups(Query(src): Query<SourceResolver>) -> impl IntoRe
 
 async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     debug!("Received command: {:?}", send_cmd);
-    match cmd_flow_api::send_and_return(&send_cmd.cmd) {
-        Ok(builder) => match builder.to_or_default(send_cmd.target).await {
-            Ok(r) => {
-                return (
-                    StatusCode::OK,
-                    Json(SendCommandResponse {
-                        message: "success".to_string(),
-                        success: true,
-                        payload: Some(r),
-                    }),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(SendCommandResponse {
-                        message: format!("Failed to process command: {}", e),
-                        success: false,
-                        payload: None,
-                    }),
-                );
-            }
-        },
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(SendCommandResponse {
-                    message: format!("Failed to send command: {}", e),
-                    success: false,
-                    payload: None,
-                }),
-            );
+
+    let result: Result<Option<FinishedCmd>> = async {
+        if send_cmd.wait {
+            Ok(Some(
+                cmd_flow_api::send_and_return(&send_cmd.cmd)?
+                    .to_or_default(send_cmd.target)
+                    .await?,
+            ))
+        } else {
+            cmd_flow_api::send(&send_cmd.cmd)?.to_or_default::<true>(send_cmd.target)?;
+            Ok(None)
         }
+    }
+    .await;
+
+    match result {
+        Ok(Some(finished_cmd)) => (
+            StatusCode::OK,
+            Json(SendCommandResponse {
+                message: "success".to_string(),
+                success: true,
+                payload: Some(finished_cmd),
+            }),
+        ),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(SendCommandResponse {
+                message: "success".to_string(),
+                success: true,
+                payload: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(SendCommandResponse {
+                message: format!("Failed to process command: {}", e),
+                success: false,
+                payload: None,
+            }),
+        ),
     }
 }
 
