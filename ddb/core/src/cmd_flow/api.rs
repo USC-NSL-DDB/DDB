@@ -122,9 +122,9 @@ impl SendBuilder {
         Ok(())
     }
 
-    /// Route the command to the specified target and await results
-    /// If the target is not specified, it defaults to the target
-    /// specified in the original command.
+    /// Route the command to the specified target or, if not specified, to the target
+    /// in the original command (fire-and-forget).
+    /// Does not await or return results.
     pub fn to_or_default<const SUPPRESS_OUTPUT: bool>(self, target: Option<Target>) -> Result<(), Error> {
         if let Some(target) = target {
             self.to::<SUPPRESS_OUTPUT>(target)
