@@ -20,7 +20,6 @@ use crate::{
 use super::{
     api, emit_static,
     framework_adapter::FrameworkCommandAdapter,
-    get_router,
     input::ParsedInputCmd,
     output,
     router::{Router, Target},
