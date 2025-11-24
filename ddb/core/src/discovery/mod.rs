@@ -14,6 +14,7 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    #[ignore] // this is not runnable unless the broker is installed.
     fn test_broker_starter() {
         let config_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/conf/mosquitto.conf");
