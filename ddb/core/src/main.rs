@@ -24,7 +24,6 @@ use app::App;
 use clap::Parser;
 use cmd_flow::framework_adapter::*;
 use cmd_flow::get_cmd_handler;
-use cmd_flow::get_router;
 use cmd_flow::init_cmd_handler;
 use cmd_flow::input::CmdHandler;
 use common::config::Config;
@@ -157,7 +156,7 @@ fn main() -> Result<()> {
                 panic!("Unsupported framework adapter for now.");
             }
         };
-        CmdHandler::new(get_router().clone(), adapter)
+        CmdHandler::new(adapter)
     });
 
     let cmd_flow_handle = std::thread::spawn(|| {
