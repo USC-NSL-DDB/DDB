@@ -326,25 +326,25 @@ pub struct CmdHandler {
 }
 
 impl CmdHandler {
-    pub fn new(router: Arc<Router>, adapter: Arc<dyn FrameworkCommandAdapter>) -> Arc<Self> {
+    pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>) -> Arc<Self> {
         let (tx, rx) = flume::unbounded::<String>();
 
         let handlers = handlers_map! {
-            "-break-insert" => BreakInsertHandler::new(router.clone()),
-            "-thread-info" => ThreadInfoHandler::new(router.clone()),
-            "-exec-continue" => ContinueHandler::new(router.clone()),
-            "-record-time-and-continue" => ContinueHandler::new(router.clone()),
-            "-exec-interrupt" => InterruptHandler::new(router.clone()),
-            "-file-list-lines" => ListHandler::new(router.clone()),
-            "-thread-select" => ThreadSelectHandler::new(router.clone()),
-            "-bt-remote" => DistributeBacktraceHandler::new(router.clone(), adapter.clone()),
-            "-list-thread-groups" => ListGroupsHandler::new(router.clone()),
-            "-exec-next" => ExecNextHandler::new(router.clone()),
-            "-exec-step" => ExecStepHandler::new(router.clone()),
-            "-exec-finish" => ExecFinishHandler::new(router.clone()),
-            "-record-time-and-next" => ExecNextHandler::new(router.clone()),
-            "-record-time-and-step" => ExecStepHandler::new(router.clone()),
-            "-record-time-and-finish" => ExecFinishHandler::new(router.clone()),
+            "-break-insert" => BreakInsertHandler::new(),
+            "-thread-info" => ThreadInfoHandler::new(),
+            "-exec-continue" => ContinueHandler::new(),
+            "-record-time-and-continue" => ContinueHandler::new(),
+            "-exec-interrupt" => InterruptHandler::new(),
+            "-file-list-lines" => ListHandler::new(),
+            "-thread-select" => ThreadSelectHandler::new(),
+            "-bt-remote" => DistributeBacktraceHandler::new(adapter.clone()),
+            "-list-thread-groups" => ListGroupsHandler::new(),
+            "-exec-next" => ExecNextHandler::new(),
+            "-exec-step" => ExecStepHandler::new(),
+            "-exec-finish" => ExecFinishHandler::new(),
+            "-record-time-and-next" => ExecNextHandler::new(),
+            "-record-time-and-step" => ExecStepHandler::new(),
+            "-record-time-and-finish" => ExecFinishHandler::new(),
             "-exec-jump" => ExecJumpHandler,
         };
 
@@ -352,7 +352,7 @@ impl CmdHandler {
             tx,
             rx,
             handlers,
-            default_handler: DefaultHandler::new(router.clone()),
+            default_handler: DefaultHandler::new(),
             adapter,
             worker_join_handles: Mutex::new(Vec::new()),
         })
@@ -367,6 +367,12 @@ impl CmdHandler {
 
     #[allow(unused)]
     pub fn register_handler<H: Handler + 'static>(&self, prefix: &str, handler: H) {
+        self.handlers.insert(prefix.to_string(), Box::new(handler));
+    }
+    
+    #[allow(unused)]
+    pub fn register_handler_with_initializer<H: Handler + 'static, F: FnOnce(Arc<dyn FrameworkCommandAdapter>) -> H>(&self, prefix: &str, initializer: F) {
+        let handler = initializer(self.adapter.clone());
         self.handlers.insert(prefix.to_string(), Box::new(handler));
     }
 
