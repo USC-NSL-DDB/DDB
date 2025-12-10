@@ -95,7 +95,7 @@ impl DiscoveryMessageProducer for K8sProducer {
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         let kubeconfig_path =
-            Path::new("/home/junzhouh/distributed_debugger/SocialNetwork-serviceweaver/kubeconfig");
+            Path::new(self.config.service_weaver_conf.as_ref().unwrap().kubectl_config_path.as_str());
         let kubeconfig = Kubeconfig::read_from(kubeconfig_path)?;
         let mut config =
             Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;

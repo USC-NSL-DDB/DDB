@@ -50,11 +50,12 @@ impl Config {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServiceWeaverConf {
     pub service_name: String,
+    pub kubectl_config_path: String,
     pub jump_clinet_host: String,
     pub jump_client_port: u16,
     pub jump_client_user: String,
     pub jump_client_password: String,
-    pub jump_client_key_path: String,
+    pub jump_client_key_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
