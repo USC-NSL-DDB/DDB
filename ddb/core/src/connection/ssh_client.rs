@@ -7,6 +7,7 @@ use russh::{
     Channel, ChannelId, ChannelMsg, Disconnect,
 };
 use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
+use thiserror::Error;
 use tokio::{sync::watch, time};
 use tracing::debug;
 
@@ -15,6 +16,28 @@ use crate::{
     common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH,
     dbg_ctrl::{InputReceiver, OutputSender},
 };
+
+#[derive(Debug, Error)]
+pub enum SSHConnectionError {
+    /// Retryable errors (network issues, temporary failures)
+    #[error(transparent)]
+    Retryable(anyhow::Error),
+    /// Non-retryable errors (authentication failures)
+    #[error(transparent)]
+    NonRetryable(anyhow::Error),
+}
+
+impl SSHConnectionError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, SSHConnectionError::Retryable(_))
+    }
+
+    fn into_inner(self) -> anyhow::Error {
+        match self {
+            SSHConnectionError::Retryable(e) | SSHConnectionError::NonRetryable(e) => e,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SSHCred {
@@ -104,7 +127,7 @@ impl SSHConnection {
 }
 
 impl SSHConnection {
-    async fn try_connect(&mut self) -> Result<()> {
+    async fn try_connect(&mut self) -> Result<(), SSHConnectionError> {
         // TODO: use more sophisticated authentication handling...
         let mut session = client::connect(
             self.config.clone(),
@@ -112,14 +135,17 @@ impl SSHConnection {
             SSHClientHandler(self.exited_sender.clone()),
         )
         .await
-        .with_context(|| {
-            format!(
+        .map_err(|e| {
+            SSHConnectionError::Retryable(anyhow::Error::new(e).context(format!(
                 "Failed to connect to {}:{} with user {}.",
                 self.cred.hostname, self.cred.port, self.cred.username
-            )
+            )))
         })?;
-        let key_pair = load_secret_key(self.cred.private_key_path.clone(), None)?;
-        session
+
+        let key_pair = load_secret_key(self.cred.private_key_path.clone(), None)
+            .map_err(|e| SSHConnectionError::NonRetryable(e.into()))?;
+
+        let auth_result = session
             .authenticate_publickey(
                 self.cred.username.clone(),
                 PrivateKeyWithHashAlg::new(
@@ -128,12 +154,22 @@ impl SSHConnection {
                 ),
             )
             .await
-            .with_context(|| {
-                format!(
+            .map_err(|e| {
+                SSHConnectionError::NonRetryable(anyhow::Error::new(e).context(format!(
                     "Failed to authenticate with public key: {}",
                     self.cred.private_key_path.display()
-                )
+                )))
             })?;
+        match auth_result {
+            russh::client::AuthResult::Success => {
+                debug!("SSH authentication accepted.");
+            }
+            _ => {
+                return Err(SSHConnectionError::NonRetryable(anyhow::anyhow!(
+                    "SSH authentication failed. Auth result: {:?}", auth_result
+                )));
+            }
+        }
         self.session = Some(session);
         Ok(())
     }
@@ -185,8 +221,11 @@ impl RemoteConnectable for SSHConnection {
             }
             match self.try_connect().await {
                 Ok(_) => break,
-                Err(e) => {
-                    debug!("Failed to connect: {}. Retrying...", e);
+                Err(SSHConnectionError::NonRetryable(e)) => {
+                    return Err(e);
+                }
+                Err(SSHConnectionError::Retryable(e)) => {
+                    debug!("Failed to connect. Err: {}. Retrying...", e);
                 }
             }
             time::sleep(Duration::from_millis(500)).await;
