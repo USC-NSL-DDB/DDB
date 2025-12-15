@@ -107,7 +107,7 @@ install-connector:
 
 .PHONY: install-broker
 install-broker:
-	cd ./scripts && ./prepare_mosquitto.sh
+	cd ./scripts && ./setup_mqtt.sh
 
 .PHONY: gdb-config-setup
 gdb-config-setup:
