@@ -6,11 +6,15 @@ use tracing::{debug, error};
 use crate::{
     dbg_parser::gdb_parser::MIFormatter,
     discovery::discovery_message_producer::ServiceMeta,
-    state::{get_group_mgr, GroupId, STATES},
+    state::{get_group_mgr, STATES},
 };
 
 use super::{FinishedCmd, ParsedSessionResponse};
 
+/// Dynamic formatter trait for type-erased formatting operations
+///
+/// This trait enables formatters to be stored in containers and passed through
+/// channels while maintaining type safety via downcasting.
 pub trait DynFormatter: Send + Sync {
     fn transform_dyn(&self, responses: FinishedCmd) -> Box<dyn Any>;
     fn format_dyn(&self, input: &Box<dyn Any>) -> String;
@@ -19,7 +23,7 @@ pub trait DynFormatter: Send + Sync {
 impl<T: Formatter> DynFormatter for T
 where
     T: Send + Sync,
-    T::Tranformed: 'static + Any, // Ensures type erasure compatibility
+    T::Transformed: 'static + Any, // Ensures type erasure compatibility
 {
     fn transform_dyn(&self, responses: FinishedCmd) -> Box<dyn Any> {
         Box::new(self.transform(responses)) // Convert to Box<dyn Any>
@@ -27,35 +31,76 @@ where
 
     fn format_dyn(&self, input: &Box<dyn Any>) -> String {
         input
-            .downcast_ref::<T::Tranformed>() // Attempt to cast back
+            .downcast_ref::<T::Transformed>() // Attempt to cast back
             .map(|t| self.format(t))
             .ok_or("Failed to downcast")
             .expect(format!("Formatter type {}", std::any::type_name::<T>()).as_str())
     }
 }
 
+/// Formatter trait for transforming and formatting GDB responses
+///
+/// # Formatter Responsibilities
+///
+/// 1. **Transform**: Convert raw `FinishedCmd` responses into a structured representation
+///    - May swap local thread IDs with global thread IDs
+///    - May enrich responses with additional context
+///    - May filter or aggregate responses
+///
+/// 2. **Format**: Convert the transformed representation into output strings
+///    - Plain text for CLI
+///    - JSON for IDE integrations
+///    - Human-readable formats for debugging
+///
+/// # Default Implementations
+///
+/// - **`PlainFormatter`** (default): Returns first response in MI format, no transformation
+/// - **`NullFormatter`**: Discards all output (returns empty string)
+/// - **`ThreadInfoFormatter`**: Swaps local thread IDs → global IDs, formats as JSON
+/// - **`UnitFormatter`**: Returns all responses in original form (multi-response)
+///
+/// # Example
+///
+/// ```no_run
+/// # use super::{Formatter, FinishedCmd};
+/// struct MyFormatter;
+/// impl Formatter for MyFormatter {
+///     type Transformed = String;
+///     
+///     fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
+///         // Extract relevant data
+///         responses.get_responses().first()
+///             .map(|r| r.get_message().clone())
+///             .unwrap_or_default()
+///     }
+///     
+///     fn format(&self, input: &Self::Transformed) -> String {
+///         format!("Result: {}", input)
+///     }
+/// }
+/// ```
 pub trait Formatter {
-    type Tranformed;
+    type Transformed;
 
     // transform the responses, e.g. swap thread id with our own tracked global id
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed;
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed;
     // format the responses into a string. (ready to be printed)
-    fn format(&self, input: &Self::Tranformed) -> String;
+    fn format(&self, input: &Self::Transformed) -> String;
 }
 
 #[derive(Clone, Debug)]
 pub struct NullFormatter;
 impl Formatter for NullFormatter {
-    type Tranformed = FinishedCmd;
+    type Transformed = FinishedCmd;
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         responses
     }
 
     #[inline]
     #[allow(unused_variables)]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         "".to_string()
     }
 }
@@ -63,15 +108,15 @@ impl Formatter for NullFormatter {
 #[derive(Clone)]
 pub struct PlainFormatter;
 impl Formatter for PlainFormatter {
-    type Tranformed = FinishedCmd;
+    type Transformed = FinishedCmd;
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         responses
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         let r = input.get_responses().first().unwrap();
         MIFormatter::format(
             "^",
@@ -86,15 +131,15 @@ impl Formatter for PlainFormatter {
 #[derive(Clone)]
 pub struct UnitFormatter;
 impl Formatter for UnitFormatter {
-    type Tranformed = FinishedCmd;
+    type Transformed = FinishedCmd;
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         responses
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         let formatted = input
             .get_responses()
             .iter()
@@ -115,10 +160,10 @@ impl Formatter for UnitFormatter {
 pub struct ThreadInfoFormatter;
 impl Formatter for ThreadInfoFormatter {
     // (token, transformed responses)
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         let mut all_thread_info = Vec::<Value>::new();
 
         for resp in responses.get_responses() {
@@ -157,7 +202,7 @@ impl Formatter for ThreadInfoFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         MIFormatter::format("^", "done", Some(&input.1), input.0)
     }
 }
@@ -165,10 +210,10 @@ impl Formatter for ThreadInfoFormatter {
 /// handle `-list-thread-groups` command response
 pub struct ProcessInfoFormatter;
 impl Formatter for ProcessInfoFormatter {
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         let mut all_process_info = Vec::<Value>::new();
 
         for resp in responses.get_responses() {
@@ -196,7 +241,7 @@ impl Formatter for ProcessInfoFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         MIFormatter::format("^", "done", Some(&input.1), input.0)
     }
 }
@@ -204,10 +249,10 @@ impl Formatter for ProcessInfoFormatter {
 /// handle `info inferiors` command response
 pub struct ProcessReadableFormatter;
 impl Formatter for ProcessReadableFormatter {
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         let (token, pinfo) = ProcessInfoFormatter.transform(responses);
         let grps = pinfo["groups"].expect_list_ref().unwrap();
         let readable_pinfo: Vec<Value> = grps
@@ -240,7 +285,7 @@ impl Formatter for ProcessReadableFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         MIFormatter::format("^", "done", Some(&input.1), input.0)
     }
 }
@@ -251,10 +296,10 @@ impl Formatter for ProcessReadableFormatter {
 /// handle `thread-group-*` related async record
 pub struct ThreadGroupNotifFormatter(u64); // gtgid
 impl Formatter for ThreadGroupNotifFormatter {
-    type Tranformed = (ParsedSessionResponse, Dict, Option<u64>);
+    type Transformed = (ParsedSessionResponse, Dict, Option<u64>);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         assert!(responses.get_responses().len() == 1);
         let resp = responses.get_responses().first().unwrap();
         let mut payload = resp.get_payload().unwrap().clone();
@@ -263,7 +308,7 @@ impl Formatter for ThreadGroupNotifFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         // Example Output
         // =thread-group-added,id="i1"
         // =thread-group-removed,id="id"
@@ -302,15 +347,15 @@ impl ThreadCreatedNotifFormatter {
 
 #[allow(unused_variables)]
 impl Formatter for ThreadCreatedNotifFormatter {
-    type Tranformed = ();
+    type Transformed = ();
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         ()
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         // Example Output
         // =thread-created,id="1",group-id="i1"
         let alias = self
@@ -349,15 +394,15 @@ impl ThreadExitedNotifFormatter {
 
 #[allow(unused_variables)]
 impl Formatter for ThreadExitedNotifFormatter {
-    type Tranformed = ();
+    type Transformed = ();
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         ()
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         // Example Output
         // =thread-exited,id="1",group-id="i1",session-id="1"
         let payload: Dict = vec![
@@ -395,15 +440,15 @@ impl RunningAsyncRecordFormatter {
 }
 
 impl Formatter for RunningAsyncRecordFormatter {
-    type Tranformed = FinishedCmd;
+    type Transformed = FinishedCmd;
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         responses
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         let payload = input
             .get_responses()
             .first()
@@ -434,10 +479,10 @@ impl Formatter for RunningAsyncRecordFormatter {
 pub struct StopAsyncRecordFormatter;
 
 impl Formatter for StopAsyncRecordFormatter {
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         assert!(responses.get_responses().len() == 1);
         let resp = responses.get_responses().first().unwrap();
         let mut payload = resp.get_payload().unwrap().clone();
@@ -477,7 +522,7 @@ impl Formatter for StopAsyncRecordFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         // Example Output
         // https://github.com/USC-NSL/distributed-debugger/issues/24#issuecomment-1938140846
         MIFormatter::format("*", "stopped", Some(&input.1), input.0)
@@ -487,10 +532,10 @@ impl Formatter for StopAsyncRecordFormatter {
 /// handle generic `stopped` async record (not thread-related)
 pub struct GenericStopAsyncRecordFormatter;
 impl Formatter for GenericStopAsyncRecordFormatter {
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         assert!(responses.get_responses().len() == 1);
         let resp = responses.get_responses().first().unwrap();
         let payload = resp.get_payload().unwrap().clone();
@@ -498,7 +543,7 @@ impl Formatter for GenericStopAsyncRecordFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         MIFormatter::format("*", "stopped", Some(&input.1), input.0)
     }
 }
@@ -516,10 +561,10 @@ impl ThreadSelectFormatter {
 }
 
 impl Formatter for ThreadSelectFormatter {
-    type Tranformed = (Option<u64>, Dict);
+    type Transformed = (Option<u64>, Dict);
 
     #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Tranformed {
+    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         let mut payload = responses
             .get_responses()
             .first()
@@ -532,7 +577,7 @@ impl Formatter for ThreadSelectFormatter {
     }
 
     #[inline]
-    fn format(&self, input: &Self::Tranformed) -> String {
+    fn format(&self, input: &Self::Transformed) -> String {
         MIFormatter::format("^", "done", Some(&input.1), input.0)
     }
 }

@@ -3,7 +3,10 @@
 SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 sudo apt-get update
-sudo apt-get install -y build-essential gcc autoconf libtool pkg-config make cmake cmake-gui cmake-curses-gui git
+sudo apt-get install -y \
+    build-essential gcc autoconf libtool  \
+    pkg-config make cmake cmake-curses-gui git \
+    python3 python3-pip libssl-dev libc-ares-dev
 
 # sudo apt-add-repository -y ppa:mosquitto-dev/mosquitto-ppa
 # sudo apt-get update
@@ -15,23 +18,16 @@ sudo apt-get install -y build-essential gcc autoconf libtool pkg-config make cma
 # # hack cleanup if any instance is running
 # sudo pkill -9 mosquitto
 
-TMP_FOLDER="/opt/mqtt"
+TMP_FOLDER="/tmp/mqtt"
 
-sudo rm -rf $TMP_FOLDER
-sudo mkdir -p $TMP_FOLDER
-sudo chmod 755 $TMP_FOLDER
+rm -rf $TMP_FOLDER
+mkdir -p $TMP_FOLDER
+chmod 755 $TMP_FOLDER
 
-check_status() {
-    if [ $? -ne 0 ]; then
-        echo "Error: Previous command failed. Exiting."
-        exit 1
-    fi
-}
-
-cd $TMP_FOLDER
-check_status
+set -e
 git clone https://github.com/eclipse/paho.mqtt.c.git
 cd paho.mqtt.c
 make -j$(nproc)
+set +e
 sudo make uninstall # clean up first
 sudo make install   # install mosquitto c lib

@@ -1,5 +1,13 @@
 #!/bin/bash
 
+VERSION="0.1.0"
+
+# Handle version flag
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "ddb_runapp v${VERSION}"
+    exit 0
+fi
+
 PREFIX=${HOME}/.local
 
 CWD=$(pwd)
@@ -27,10 +35,5 @@ if [ -z "$program" ]; then
     echo "Error: No program specified."
     exit 1
 fi
-
-# if [ ! -f "$program" ]; then
-#     echo "Error: Program $program not found."
-#     exit 1
-# fi
 
 LD_PRELOAD="${LIBFAKETIME} ${LD_PRELOAD}" exec "${program}" ${args}

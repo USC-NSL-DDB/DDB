@@ -10,7 +10,7 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    common::{config::Framework, Config},
+    common::Config,
     feature::get_proclet_restore_mgr,
     state::{
         get_bkpt_mgr, BkptMeta, LocalThreadId, SessionMeta, ThreadContext, ThreadStatus, STATES,
@@ -18,50 +18,80 @@ use crate::{
 };
 
 use super::{
-    emit_static,
+    api, emit_static,
     framework_adapter::FrameworkCommandAdapter,
-    get_router,
-    input::{Command, ParsedInputCmd},
+    input::ParsedInputCmd,
     output,
     router::{Router, Target},
-    FinishedCmd, Formatter, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
+    FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
     ThreadInfoFormatter,
 };
 
+/// Handler trait for processing parsed commands with routing and formatting logic
+///
+/// # Contract Semantics
+///
+/// Implementors of this trait are responsible for:
+/// 1. **Preserving Target Semantics**: The target from `ParsedInputCmd` must be honored
+///    unless the handler has specific routing requirements (e.g., `ThreadSelectHandler`
+///    may adjust targets for thread selection commands)
+///
+/// 2. **Async Execution**: All command processing is async to support routing operations
+///    that may involve network I/O to distributed debuggee processes.
+///
+/// 3. **Error Handling**: Handlers should log errors appropriately but may choose to
+///    emit error responses rather than propagating errors upward
+///
+/// 4. **Formatter Selection**: Handlers choose appropriate formatters based on command
+///    type and expected output format (e.g., `ThreadInfoFormatter` for thread info)
+///
+/// # Example Implementation
+///
+/// ```no_run
+/// # use async_trait::async_trait;
+/// # use super::{Handler, ParsedInputCmd, Router, PlainFormatter};
+/// # use std::sync::Arc;
+/// struct MyHandler {}
+///
+/// #[async_trait]
+/// impl Handler for MyHandler {
+///     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+///         // Convert parsed command to executable command with formatter
+///         let (target, cmd) = cmd.to_command(PlainFormatter);
+///         
+///         // Route via router (respects target semantics)
+///         self.router.send_to(target, cmd);
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait Handler: Send + Sync {
     async fn process_cmd(&self, cmd: ParsedInputCmd);
 }
 
-pub struct DefaultHandler {
-    router: Arc<Router>,
-}
+pub struct DefaultHandler;
 
 impl DefaultHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        DefaultHandler { router }
+    pub fn new() -> Self {
+        DefaultHandler
     }
 }
 
 #[async_trait]
 impl Handler for DefaultHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let (target, cmd) = cmd.to_command(PlainFormatter);
-        self.router.send_to(target, cmd);
+        let _ = cmd.send().with(PlainFormatter).to_default_target();
     }
 }
 
 pub struct BreakInsertHandler {
-    router: Arc<Router>,
     base: DefaultHandler,
 }
 
 impl BreakInsertHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        let _router = router.clone();
+    pub fn new() -> Self {
         BreakInsertHandler {
-            router,
-            base: DefaultHandler::new(_router.clone()),
+            base: DefaultHandler::new(),
         }
     }
 }
@@ -70,8 +100,7 @@ impl BreakInsertHandler {
 impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let full_cmd = cmd.full_cmd();
-        let (target, cmd) = cmd.to_command(NullFormatter);
-        let results = get_router().send_to_ret(target, cmd).await;
+        let results = cmd.send_and_return().to_default_target().await;
         if let Ok(results) = results {
             for resp in results.get_responses() {
                 if resp.get_message() == "done" {
@@ -87,46 +116,40 @@ impl Handler for BreakInsertHandler {
     }
 }
 
-pub struct ThreadInfoHandler {
-    router: Arc<Router>,
-}
+pub struct ThreadInfoHandler;
 
 impl ThreadInfoHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        ThreadInfoHandler { router }
+    pub fn new() -> Self {
+        ThreadInfoHandler
     }
 }
 
 #[async_trait]
 impl Handler for ThreadInfoHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let (_, cmd) = cmd.to_command(ThreadInfoFormatter);
-        self.router.send_to(Target::Broadcast, cmd);
+        let _ = cmd.send().with(ThreadInfoFormatter).to(Target::Broadcast);
     }
 }
 
-pub struct ContinueHandler {
-    router: Arc<Router>,
-}
+pub struct ContinueHandler;
 
 impl ContinueHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        ContinueHandler { router }
+    pub fn new() -> Self {
+        ContinueHandler
     }
 }
 
 impl ContinueHandler {
-    async fn switch_context_and_cont<F: Formatter + Send + Sync>(
-        router: Arc<Router>,
-        cont_cmd: Command<F>,
+    async fn switch_context_and_cont(
+        cont_cmd: ParsedInputCmd,
         mut session: RwLockWriteGuard<'_, SessionMeta>,
     ) -> Result<()> {
         if let Some(ctx) = &session.curr_ctx {
             let target = Target::Thread(ctx.tid);
             let ctx = Self::prepare_ctx_switch_args(&ctx);
-            let cmd: ParsedInputCmd = format!("-switch-context-custom {}", ctx).try_into()?;
-            let r = router
-                .send_to_ret(target, cmd.to_command(NullFormatter).1)
+            let r = api::send_and_return(&format!("-switch-context-custom {}", ctx))
+                .unwrap()
+                .to(target)
                 .await?;
             let responses = r.get_responses();
             let sid = session.sid;
@@ -147,7 +170,7 @@ impl ContinueHandler {
                 // early drop to release the lock, we don't need it to lock the session anymore
                 // for waiting for the continue response.
                 drop(session);
-                Self::cont(router, Target::Session(sid), cont_cmd);
+                Self::cont(Target::Session(sid), cont_cmd);
                 return Ok(());
             }
         }
@@ -156,10 +179,11 @@ impl ContinueHandler {
     }
 
     #[inline]
-    fn cont<F: Formatter + Send + Sync>(router: Arc<Router>, target: Target, cont_cmd: Command<F>) {
-        router.send_to(target, cont_cmd);
+    fn cont(target: Target, cont_cmd: ParsedInputCmd) {
+        let _ = cont_cmd.send().with(PlainFormatter).to(target);
     }
 
+    #[inline]
     fn prepare_ctx_switch_args(regs: &ThreadContext) -> String {
         regs.ctx
             .iter()
@@ -175,11 +199,10 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let ss = STATES.get_all_sessions();
-        
+
         // reset all proclet cache and clean up restored proclet heap.
         get_proclet_restore_mgr().reset().await;
 
-        let cmd_to_send = cmd.clone().to_command(PlainFormatter);
         let tasks = match &cmd.target {
             Target::Session(sid) => {
                 // Note: need to first check if the session is in custom context.
@@ -187,21 +210,18 @@ impl Handler for ContinueHandler {
                 let tasks: Vec<_> = ss
                     .iter()
                     .map(|s| -> JoinHandle<Result<()>> {
-                        let r = self.router.clone();
                         let s = s.clone();
                         let sid = sid.clone();
-                        let cmd_to_send = cmd_to_send.clone();
+                        let cmd = cmd.clone();
                         tokio::spawn(async move {
                             let s = s.write().await;
                             if s.sid == sid {
                                 if s.in_custom_ctx {
                                     // need to restore context before continue
-                                    let router = r.clone();
-                                    Self::switch_context_and_cont(router, cmd_to_send.1, s).await?
+                                    Self::switch_context_and_cont(cmd, s).await?
                                 } else {
                                     // no need to restore context, just continue
-                                    let router = r.clone();
-                                    Self::cont(router, Target::Session(sid), cmd_to_send.1);
+                                    Self::cont(Target::Session(sid), cmd);
                                 }
                             }
                             Ok(())
@@ -217,19 +237,16 @@ impl Handler for ContinueHandler {
                 let tasks: Vec<_> = ss
                     .iter()
                     .map(|s| {
-                        let r = self.router.clone();
                         let s = s.clone();
-                        let cmd_to_send = cmd_to_send.clone();
+                        let cmd = cmd.clone();
                         tokio::spawn(async move {
                             let s = s.write().await;
                             if s.in_custom_ctx {
                                 // need to restore context before continue
-                                let router = r.clone();
-                                Self::switch_context_and_cont(router, cmd_to_send.1, s).await?
+                                Self::switch_context_and_cont(cmd, s).await?
                             } else {
                                 // no need to restore context, just continue
-                                let router = r.clone();
-                                Self::cont(router, Target::Session(s.sid), cmd_to_send.1);
+                                Self::cont(Target::Session(s.sid), cmd);
                             }
                             Ok(())
                         })
@@ -247,45 +264,39 @@ impl Handler for ContinueHandler {
     }
 }
 
-pub struct InterruptHandler {
-    router: Arc<Router>,
-}
+pub struct InterruptHandler;
 
 impl InterruptHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        InterruptHandler { router }
+    pub fn new() -> Self {
+        InterruptHandler
     }
 }
 
 #[async_trait]
 impl Handler for InterruptHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        match &cmd.target {
+        match cmd.target {
             Target::Session(sid) => {
-                let ss = STATES.get_session(*sid);
+                let ss = STATES.get_session(sid);
                 if ss.is_some() {
                     // Note: send interrupt to running process. Ignore thread granularity.
                     // skips checking if the thread is running or not.
-                    let (target, cmd) = cmd.to_command(PlainFormatter);
-                    self.router.send_to(target, cmd);
+                    let _ = cmd.send().with(PlainFormatter).to_default_target();
                 }
             }
             _ => {
                 // broadcast to all sessions
-                self.router
-                    .send_to(Target::Broadcast, cmd.to_command(PlainFormatter).1);
+                let _ = cmd.send().with(PlainFormatter).to(Target::Broadcast);
             }
         }
     }
 }
 
-pub struct ListHandler {
-    router: Arc<Router>,
-}
+pub struct ListHandler;
 
 impl ListHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        ListHandler { router }
+    pub fn new() -> Self {
+        ListHandler
     }
 }
 
@@ -295,18 +306,15 @@ impl Handler for ListHandler {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
         STATES.set_curr_session(1);
-        self.router
-            .send_to(Target::CurrSession, cmd.to_command(PlainFormatter).1);
+        let _ = cmd.send().with(PlainFormatter).to(Target::CurrSession);
     }
 }
 
-pub struct ThreadSelectHandler {
-    router: Arc<Router>,
-}
+pub struct ThreadSelectHandler;
 
 impl ThreadSelectHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        ThreadSelectHandler { router }
+    pub fn new() -> Self {
+        ThreadSelectHandler
     }
 }
 
@@ -318,33 +326,32 @@ impl Handler for ThreadSelectHandler {
             let gtid = parts.last().unwrap().parse::<u64>().unwrap();
             let (sid, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
             let target = Target::Session(sid);
-            let cmd: ParsedInputCmd = format!("-thread-select {}", tid).try_into().unwrap();
-            self.router
-                .send_to(target, cmd.to_command(PlainFormatter).1);
+            let _ = api::send(&format!("-thread-select {}", tid))
+                .unwrap()
+                .with(PlainFormatter)
+                .to(target);
+
         } else {
-            self.router
-                .send_to(cmd.target.clone(), cmd.to_command(PlainFormatter).1);
+            let _ = cmd.send().with(PlainFormatter).to_default_target();
         }
     }
 }
 
-pub struct ListGroupsHandler {
-    router: Arc<Router>,
-}
+pub struct ListGroupsHandler;
 
 impl ListGroupsHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        ListGroupsHandler { router }
+    pub fn new() -> Self {
+        ListGroupsHandler
     }
 }
 
 #[async_trait]
 impl Handler for ListGroupsHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        self.router.send_to(
-            Target::Broadcast,
-            cmd.to_command(ProcessReadableFormatter).1,
-        );
+        let _ = cmd
+            .send()
+            .with(ProcessReadableFormatter)
+            .to(Target::Broadcast);
     }
 }
 
@@ -354,13 +361,12 @@ struct BacktraceData {
 }
 
 pub struct DistributeBacktraceHandler {
-    router: Arc<Router>,
     adapter: Arc<dyn FrameworkCommandAdapter>,
 }
 
 impl DistributeBacktraceHandler {
-    pub fn new(router: Arc<Router>, adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
-        DistributeBacktraceHandler { router, adapter }
+    pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
+        DistributeBacktraceHandler { adapter }
     }
 
     fn extract_remote_metadata(&self, payload: &Dict) -> Result<Dict> {
@@ -475,12 +481,11 @@ impl DistributeBacktraceHandler {
     async fn get_bt_and_caller_meta(&self, gtid: u64) -> Result<BacktraceData> {
         // ------------ [BEGIN] get backtrace for the current thread ------------
         // `ParsedInputCmd` already swapped the gtid with local tid.
-        let bt_cmd: ParsedInputCmd = format!("-stack-list-frames --thread {}", gtid)
-            .try_into()
-            .unwrap();
-        let (target, bt_cmd) = bt_cmd.to_command(PlainFormatter);
+        let mut stack_resp = api::send_and_return(&format!("-stack-list-frames --thread {}", gtid))
+            .unwrap()
+            .to_default_target()
+            .await?;
 
-        let mut stack_resp = self.router.send_to_ret(target, bt_cmd).await?;
         let payload = stack_resp
             .get_responses_mut()
             .first_mut()
@@ -503,14 +508,12 @@ impl DistributeBacktraceHandler {
         }
         // ------------ [END] get backtrace for the current thread ------------
 
-        let dbt_cmd_raw = self.adapter.get_bt_command_name();
+        let dbt_cmd = self.adapter.get_bt_command_name();
 
         // ------------ [BEGIN] get caller metadata for the current threads ------------
-        let dbt_cmd: ParsedInputCmd = dbt_cmd_raw.try_into().unwrap();
-        let (_, dbt_cmd) = dbt_cmd.to_command(NullFormatter);
-        let resp = self
-            .router
-            .send_to_ret(Target::Thread(gtid), dbt_cmd)
+        let resp = api::send_and_return(&dbt_cmd)
+            .unwrap()
+            .to(Target::Thread(gtid))
             .await
             .unwrap(); // TODO: better error handling.
 
@@ -530,12 +533,8 @@ impl DistributeBacktraceHandler {
             parent_meta: remote_bt_parent_meta,
         })
     }
-    
-    async fn handle_migration_if_enabled(
-        &self,
-        inspect_gtid: u64,
-        parent_meta: &Dict,
-    ) {
+
+    async fn handle_migration_if_enabled(&self, inspect_gtid: u64, parent_meta: &Dict) {
         if Config::global().handle_migration() {
             if let Some(LocalThreadId(sid, _)) = STATES.get_ltid_by_gtid(inspect_gtid) {
                 let proclet_id = parent_meta
@@ -552,10 +551,7 @@ impl DistributeBacktraceHandler {
                         debug!("proclet heap restoration done for session {}", sid);
                     }
                     Err(e) => {
-                        error!(
-                            "Failed to handle proclet heap restoration: {:?}",
-                            e
-                        );
+                        error!("Failed to handle proclet heap restoration: {:?}", e);
                     }
                 }
             } else {
@@ -661,16 +657,14 @@ impl Handler for DistributeBacktraceHandler {
                     if !parent_in_custom_ctx {
                         debug!("try to swap context for {}", parent_sid);
                         // interrupt, switch context, get backtrace
-                        let intr_cmd: ParsedInputCmd =
-                            format!("-exec-interrupt --session {}", parent_sid)
-                                .try_into()
-                                .unwrap();
-                        let (_, intr_cmd) = intr_cmd.to_command(NullFormatter);
+                        let intr_resp = api::send_and_return(&format!(
+                            "-exec-interrupt --session {}",
+                            parent_sid
+                        ))
+                        .unwrap()
+                        .to_default_target()
+                        .await;
 
-                        let intr_resp = self
-                            .router
-                            .send_to_ret(Target::Session(parent_sid), intr_cmd)
-                            .await;
                         if intr_resp.is_err() {
                             // TODO: maybe auto-retry?
                             error!(
@@ -693,16 +687,15 @@ impl Handler for DistributeBacktraceHandler {
                                 .expect_dict_ref()
                                 .unwrap(),
                         );
-                        let switch_cmd: ParsedInputCmd =
-                            format!("-switch-context-custom {}", ctx_switch_args)
-                                .try_into()
-                                .unwrap();
-                        let (_, switch_cmd) = switch_cmd.to_command(NullFormatter);
-                        let switch_resp = self
-                            .router
-                            .send_to_ret(Target::Thread(inspect_gtid), switch_cmd)
-                            .await
-                            .unwrap();
+                        let switch_resp = api::send_and_return(&format!(
+                            "-switch-context-custom {}",
+                            ctx_switch_args
+                        ))
+                        .unwrap()
+                        .to(Target::Thread(inspect_gtid))
+                        .await
+                        .unwrap();
+
                         let switch_resp = switch_resp
                             .get_responses()
                             .first()
@@ -723,7 +716,8 @@ impl Handler for DistributeBacktraceHandler {
                         w_guard.curr_ctx = Some(ctx_to_save);
                         w_guard.in_custom_ctx = true;
 
-                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta).await;
+                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta)
+                            .await;
                     }
                     // ------------ [BEGIN] get backtrace for the parent thread ------------
                     let bt_data = self.get_bt_and_caller_meta(inspect_gtid).await;
@@ -760,13 +754,11 @@ impl Handler for DistributeBacktraceHandler {
     }
 }
 
-pub struct ExecNextHandler {
-    router: Arc<Router>,
-}
+pub struct ExecNextHandler;
 
 impl ExecNextHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        Self { router }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -786,23 +778,18 @@ impl Handler for ExecNextHandler {
         //
         //
         if let Target::Thread(_) = &cmd.target {
-            let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
-            let (_, cmd) = cmd.to_command(NullFormatter);
-            self.router.send_to(target, cmd);
+            let _ = cmd.send().with(NullFormatter).to_default_target();
         } else {
             error!("exec-next command should specify a thread id by --thread <gtid>");
         }
     }
 }
 
-pub struct ExecFinishHandler {
-    router: Arc<Router>,
-}
+pub struct ExecFinishHandler;
 
 impl ExecFinishHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        Self { router }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -810,23 +797,18 @@ impl ExecFinishHandler {
 impl Handler for ExecFinishHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
-            let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
-            let (_, cmd) = cmd.to_command(NullFormatter);
-            self.router.send_to(target, cmd);
+            let _ = cmd.send().with(NullFormatter).to_default_target();
         } else {
             error!("exec-finish command should specify a thread id by --thread <gtid>");
         }
     }
 }
 
-pub struct ExecStepHandler {
-    router: Arc<Router>,
-}
+pub struct ExecStepHandler;
 
 impl ExecStepHandler {
-    pub fn new(router: Arc<Router>) -> Self {
-        Self { router }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -834,10 +816,7 @@ impl ExecStepHandler {
 impl Handler for ExecStepHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
-            let target = cmd.target.clone();
-            let cmd: ParsedInputCmd = cmd.prefix.try_into().unwrap();
-            let (_, cmd) = cmd.to_command(NullFormatter);
-            self.router.send_to(target, cmd);
+            let _ = cmd.send().with(NullFormatter).to_default_target();
         } else {
             error!("exec-step command should specify a thread id by --thread <gtid>");
         }
@@ -851,10 +830,10 @@ impl Handler for ExecJumpHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         // Note: `exec-jump` should only be used when session is specified at the moment.
         // otherwise it will be ambiguous which process to jump to.
-        let (target, cmd) = cmd.to_command(PlainFormatter);
-        match target {
+        // let (target, cmd) = cmd.to_command(PlainFormatter);
+        match cmd.target {
             Target::Session(_) => {
-                get_router().send_to(target, cmd);
+                let _ = cmd.send().with(PlainFormatter).to_default_target();
             }
             _ => {
                 error!("exec-jump command should specify a session");
