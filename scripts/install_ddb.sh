@@ -8,10 +8,10 @@ sudo apt-get install -y \
     cmake make
 
 set -e
-
 mkdir $HOME/.ddb_src
 pushd $HOME/.ddb_src
 git clone https://github.com/USC-NSL-DDB/DDB.git
 cd DDB/scripts
 ./install.sh
+./setup.sh
 popd
