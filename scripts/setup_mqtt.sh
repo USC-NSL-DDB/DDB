@@ -6,7 +6,7 @@ sudo apt-get update
 sudo apt-get install -y \
     build-essential gcc autoconf libtool  \
     pkg-config make cmake cmake-curses-gui git \
-    python3 python3-pip
+    python3 python3-pip libssl-dev libc-ares-dev
 
 # sudo apt-add-repository -y ppa:mosquitto-dev/mosquitto-ppa
 # sudo apt-get update
