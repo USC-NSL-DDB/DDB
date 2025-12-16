@@ -7,7 +7,7 @@ ROOT="$SCRIPT_DIR/.."
 pushd $ROOT
 
 echo "[Installing] DDB Core"
-DDB_CORE="$ROOT/ddb/rust"
+DDB_CORE="$ROOT/ddb"
 pushd $DDB_CORE
 ./scripts/install.sh
 popd
