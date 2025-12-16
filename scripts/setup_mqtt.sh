@@ -18,23 +18,16 @@ sudo apt-get install -y \
 # # hack cleanup if any instance is running
 # sudo pkill -9 mosquitto
 
-TMP_FOLDER="/opt/mqtt"
+TMP_FOLDER="/tmp/mqtt"
 
-sudo rm -rf $TMP_FOLDER
-sudo mkdir -p $TMP_FOLDER
-sudo chmod 755 $TMP_FOLDER
+rm -rf $TMP_FOLDER
+mkdir -p $TMP_FOLDER
+chmod 755 $TMP_FOLDER
 
-check_status() {
-    if [ $? -ne 0 ]; then
-        echo "Error: Previous command failed. Exiting."
-        exit 1
-    fi
-}
-
-cd $TMP_FOLDER
-check_status
+set -e
 git clone https://github.com/eclipse/paho.mqtt.c.git
 cd paho.mqtt.c
 make -j$(nproc)
+set +e
 sudo make uninstall # clean up first
 sudo make install   # install mosquitto c lib
