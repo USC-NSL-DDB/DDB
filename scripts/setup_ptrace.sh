@@ -2,7 +2,7 @@
 
 # --- Script to set kernel.yama.ptrace_scope permanently to 0 ---
 
-SYSCTL_CONF_FILE="/etc/sysctl.d/10-disable-ptrace-restrictions.conf"
+SYSCTL_CONF_FILE="/etc/sysctl.d/11-disable-ptrace-restrictions.conf"
 CONFIG_LINE="kernel.yama.ptrace_scope = 0"
 
 echo "Setting $CONFIG_LINE for persistent configuration..."
