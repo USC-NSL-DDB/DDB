@@ -12,6 +12,12 @@ pushd $DDB_CORE
 ./scripts/install.sh
 popd
 
+echo "[Installing] DDB Connector"
+DDB_CONNECTOR="$ROOT/connector"
+pushd $DDB_CONNECTOR
+PREFIX=$PREFIX make install
+popd
+
 echo "[Installing] [Deps] libfaketime"
 LIBFAKETIME="$ROOT/libfaketime"
 pushd $LIBFAKETIME
