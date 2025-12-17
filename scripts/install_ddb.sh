@@ -10,7 +10,7 @@ sudo apt-get install -y \
 set -e
 mkdir $HOME/.ddb_src
 pushd $HOME/.ddb_src
-git clone https://github.com/USC-NSL-DDB/DDB.git
+git clone --branch main https://github.com/USC-NSL-DDB/DDB.git
 cd DDB/scripts
 ./install.sh
 ./setup.sh
