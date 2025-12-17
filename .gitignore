@@ -8,7 +8,6 @@ cpptools.log
 webfrek.log
 Dockerfile
 .swp
-# .vscode/
 settings.json
 
 # gdb files

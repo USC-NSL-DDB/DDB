@@ -94,6 +94,15 @@ static inline __attribute__((always_inline)) void ddb_get_context(
   asm volatile("mov %0, x30" : "=r"(lr));
   ctx->lr = (uintptr_t)lr;
 #endif
+
+#ifdef DEBUG
+  printf("[DDB Connector] Context: PC=0x%lx SP=0x%lx FP=0x%lx", 
+       (unsigned long)ctx->pc, (unsigned long)ctx->sp, (unsigned long)ctx->fp);
+  #ifdef __aarch64__
+    printf(" LR=0x%lx", (unsigned long)ctx->lr);
+  #endif
+    printf("\n");
+#endif
 }
 
 /* Get caller metadata */
@@ -112,7 +121,6 @@ static inline __attribute__((always_inline)) void ddb_get_trace_meta(
   ddb_get_context(&trace_meta->ctx);
 }
 
-/* Backtrace extraction function - simple version without templates */
 __attribute__((noinline)) static void __attribute__((unused)) ddb_backtrace_extraction(
     DDBTraceMeta* (*extractor)(void), void (*callback)(void)) {
   DDBTraceMeta meta = {0};
@@ -123,14 +131,17 @@ __attribute__((noinline)) static void __attribute__((unused)) ddb_backtrace_extr
   }
   
   if (!ddb_trace_meta_valid(&meta)) {
-    printf("WARN: Magic doesn't match\n");
+    printf("[DDB Connector] WARN: Magic doesn't match\n");
   }
 
   callback();
 }
 
-/* Version that returns a value through a void* parameter */
-__attribute__((noinline)) static void __attribute__((unused)) ddb_backtrace_extraction_with_return(
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-attributes"
+__attribute__((noinline)) 
+__attribute__((no_omit_frame_pointer)) 
+static void __attribute__((unused)) ddb_backtrace_extraction_with_return(
     DDBTraceMeta* (*extractor)(void), void* (*callback)(void), void* result) {
   DDBTraceMeta meta = { .magic = T_META_MATIC, .meta = {0}, .ctx = {0} };
   asm volatile("" : "+m"(meta));  /* Force compiler to assume meta is modified */
@@ -140,13 +151,14 @@ __attribute__((noinline)) static void __attribute__((unused)) ddb_backtrace_extr
   }
   
   if (!ddb_trace_meta_valid(&meta)) {
-    printf("WARN: Magic doesn't match\n");
+    printf("[DDB Connector] WARN: Magic doesn't match\n");
   }
 
   if (result) {
     *(void**)result = callback();
   }
 }
+#pragma clang diagnostic pop
 
 #ifdef __cplusplus
 }

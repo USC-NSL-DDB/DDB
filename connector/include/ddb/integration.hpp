@@ -72,6 +72,11 @@ struct Config {
     return *this;
   }
 
+  // logical group is just an alias to hash
+  inline __attribute__ ((__always_inline__)) Config with_logical_group(const std::string &logical_group) {
+    return this->with_hash(logical_group);
+  }
+
   inline __attribute__ ((__always_inline__)) Config
   with_user_data(const std::map<std::string, std::string> &user_data) {
     this->user_data = user_data;
@@ -88,7 +93,7 @@ struct Config {
            ", auto_discovery = " + std::to_string(this->auto_discovery) +
            ", wait_for_attach = " + std::to_string(this->wait_for_attach) +
            ", tag = " + this->tag + ", alias = " + this->alias +
-           ", hash = " + this->hash +
+           ", hash (logical group) = " + this->hash +
            ", ini_filepath = " + this->ini_filepath + ", user_data = {" +
            ss.str() +
            "}"
@@ -117,14 +122,17 @@ static inline void wait_for_signal(int sig) {
   sigemptyset(&set);
   sigaddset(&set, sig);
 
+#ifdef DEBUG
   printf("Process PID: %d. Waiting for signal %d to continue...\n", getpid(),
          sig);
+#endif
 
   // Wait for the signal
   sigwait(&set, &received_sig);
 
-  // printf("Received signal %d. Resuming execution.\n", received_sig);
+#ifdef DEBUG
   printf("Debugger attached. Resume execution...\n");
+#endif
 }
 
 static inline void sig_ddb_wait_handler(int) { raise(SIGTRAP); }
@@ -153,9 +161,11 @@ public:
     } else {
       setup_ddb_signal_handler();
     }
-    std::cout << "ddb connector initialized. meta = { pid = "
+#ifdef DEBUG
+    std::cout << "[DDB Connector] DDB connector initialized. meta = { pid = "
               << DDB::ddb_meta.pid << ", comm_ip = " << DDB::ddb_meta.comm_ip
               << ", ipv4_str =" << DDB::ddb_meta.ipv4_str << " }" << std::endl;
+#endif
   }
 
   DDBConnector() { this->config = Config::get_default(); }

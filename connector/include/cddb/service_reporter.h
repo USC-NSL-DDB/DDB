@@ -54,7 +54,7 @@ static inline const char* ddb_default_ini_filepath() {
 static inline int ddb_read_config_data(DDBServiceReporter* reporter, const char* ini_filepath) {
     FILE* file = fopen(ini_filepath, "r");
     if (!file) {
-        fprintf(stderr, "Failed to open service discovery config file\n");
+        fprintf(stderr, "[DDB Connector] Failed to open service discovery config file\n");
         return -1;
     }
 
@@ -72,7 +72,9 @@ static inline int ddb_read_config_data(DDBServiceReporter* reporter, const char*
     // Remove newline character
     reporter->topic[strcspn(reporter->topic, "\n")] = 0;
 
-    printf("read from config: address = %s, topic = %s\n", reporter->address, reporter->topic);
+#ifdef DEBUG
+    printf("[DDB Connector] DDB read from config: address = %s, topic = %s\n", reporter->address, reporter->topic);
+#endif
 
     fclose(file);
     return 0;
@@ -101,7 +103,7 @@ static inline int ddb_service_reporter_init(DDBServiceReporter* reporter, const 
     conn_opts.cleansession = 1;
 
     if ((rc = MQTTClient_connect(reporter->client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
-        printf("Failed to connect, return code %d\n", rc);
+        printf("[DDB Connector] Failed to connect MQTT broker, return code %d\n", rc);
         return rc;
     }
     return 0;
@@ -121,7 +123,7 @@ static inline int ddb_compute_sha256(const char* filename, char* hash_out) {
     
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
-        fprintf(stderr, "Failed to open file %s for hashing\n", filename);
+        fprintf(stderr, "[DDB Connector] Failed to open file %s for hashing\n", filename);
         return -1;
     }
 
@@ -155,7 +157,7 @@ static inline int ddb_compute_partial_sha256(const char* filename, char* hash_ou
     
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
-        fprintf(stderr, "Failed to open file %s for hashing\n", filename);
+        fprintf(stderr, "[DDB Connector] Failed to open file %s for hashing\n", filename);
         return -1;
     }
 
@@ -398,7 +400,7 @@ static inline int ddb_get_self_exe_path(char* path_out, size_t path_out_size) {
 static inline int ddb_compute_self_hash(char* hash_out) {
     char exe_path[PATH_MAX];
     if (ddb_get_self_exe_path(exe_path, PATH_MAX) != 0) {
-        fprintf(stderr, "Failed to get self executable path\n");
+        fprintf(stderr, "[DDB Connector] Failed to get self executable path\n");
         return -1;
     }
     
@@ -413,7 +415,7 @@ static inline int ddb_compute_self_hash(char* hash_out) {
     // Fallback: use partial hash (cross-platform)
     int result = ddb_compute_partial_sha256(exe_path, hash_out);
     if (result != 0) {
-        fprintf(stderr, "Failed to compute hash for: %s\n", exe_path);
+        fprintf(stderr, "[DDB Connector] Failed to compute hash for: %s\n", exe_path);
     }
     return result;
 }
@@ -430,7 +432,9 @@ static inline int ddb_report_service(DDBServiceReporter* reporter, const DDBServ
              service_info->hash, 
              service_info->alias);
     
-    printf("send payload: %s\n", payload);
+#ifdef DEBUG
+    printf("[DDB Connector] send payload: %s\n", payload);
+#endif
     
     pubmsg.payload = payload;
     pubmsg.payloadlen = (int)strlen(payload);

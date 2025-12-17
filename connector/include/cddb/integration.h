@@ -95,11 +95,17 @@ static inline DDBConfig ddb_config_with_hash(DDBConfig *config,
   return new_config;
 }
 
+// logical group is just an alias to hash
+static inline DDBConfig ddb_config_with_logical_group(DDBConfig *config,
+                                        const char *logical_group) {
+  return ddb_config_with_hash(config, logical_group);
+}
+
 static inline char *ddb_config_to_string(DDBConfig *config) {
   char buffer[1024];
   snprintf(buffer, sizeof(buffer),
            "Config { ipv4 = %s, auto_discovery = %s, wait_for_attach = %s, "
-           "tag = %s, hash = %s, alias = %s, ini_filepath = %s }",
+           "tag = %s, hash (logical group) = %s, alias = %s, ini_filepath = %s }",
            config->ipv4 ? config->ipv4 : "NULL",
            config->auto_discovery ? "true" : "false",
            config->wait_for_attach ? "true" : "false",
@@ -138,10 +144,14 @@ static inline void ddb_wait_for_signal(int sig) {
   sigemptyset(&set);
   sigaddset(&set, sig);
 
+#ifdef DEBUG
   printf("Process PID: %d. Waiting for signal %d to continue...\n", getpid(),
          sig);
+#endif
   sigwait(&set, &received_sig);
+#ifdef DEBUG
   printf("Debugger attached. Resume execution...\n");
+#endif
 }
 
 static inline void ddb_sig_ddb_wait_handler(int signum) {
@@ -249,9 +259,11 @@ static inline void ddb_connector_init(DDBConnector *connector) {
   } else {
     ddb_setup_signal_handler();
   }
+#ifdef DEBUG
   printf("ddb connector initialized. meta = { pid = %d, comm_ip = %d, ipv4_str "
          "= %s }\n",
          ddb_meta.pid, ddb_meta.comm_ip, ddb_meta.ipv4_str);
+#endif
 }
 
 static inline void ddb_connector_destroy(DDBConnector *connector) {

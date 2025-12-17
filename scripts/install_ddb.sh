@@ -5,7 +5,7 @@
 sudo apt-get update
 sudo apt-get install -y \
     git build-essential cmake python3 python3-pip \
-    cmake make
+    cmake make gdb
 
 set -e
 mkdir $HOME/.ddb_src
