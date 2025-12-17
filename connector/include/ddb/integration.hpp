@@ -72,6 +72,11 @@ struct Config {
     return *this;
   }
 
+  // logical group is just an alias to hash
+  inline __attribute__ ((__always_inline__)) Config with_logical_group(const std::string &logical_group) {
+    return this->with_hash(logical_group);
+  }
+
   inline __attribute__ ((__always_inline__)) Config
   with_user_data(const std::map<std::string, std::string> &user_data) {
     this->user_data = user_data;
@@ -88,7 +93,7 @@ struct Config {
            ", auto_discovery = " + std::to_string(this->auto_discovery) +
            ", wait_for_attach = " + std::to_string(this->wait_for_attach) +
            ", tag = " + this->tag + ", alias = " + this->alias +
-           ", hash = " + this->hash +
+           ", hash (logical group) = " + this->hash +
            ", ini_filepath = " + this->ini_filepath + ", user_data = {" +
            ss.str() +
            "}"

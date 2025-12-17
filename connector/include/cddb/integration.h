@@ -95,11 +95,17 @@ static inline DDBConfig ddb_config_with_hash(DDBConfig *config,
   return new_config;
 }
 
+// logical group is just an alias to hash
+static inline DDBConfig ddb_config_with_logical_group(DDBConfig *config,
+                                        const char *logical_group) {
+  return ddb_config_with_hash(config, logical_group);
+}
+
 static inline char *ddb_config_to_string(DDBConfig *config) {
   char buffer[1024];
   snprintf(buffer, sizeof(buffer),
            "Config { ipv4 = %s, auto_discovery = %s, wait_for_attach = %s, "
-           "tag = %s, hash = %s, alias = %s, ini_filepath = %s }",
+           "tag = %s, hash (logical group) = %s, alias = %s, ini_filepath = %s }",
            config->ipv4 ? config->ipv4 : "NULL",
            config->auto_discovery ? "true" : "false",
            config->wait_for_attach ? "true" : "false",
