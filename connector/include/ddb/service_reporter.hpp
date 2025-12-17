@@ -46,13 +46,16 @@ struct DDBServiceReporter {
 static inline int read_config_data(DDBServiceReporter* reporter, const std::string& ini_filepath) {
     std::ifstream file(ini_filepath);
     if (!file.is_open()) {
-        std::cerr << "Failed to open service discovery config file" << std::endl;
+        std::cerr << "[DDB Connector] Failed to open service discovery config file" << std::endl;
         return -1;
     }
 
     std::getline(file, reporter->address);
     std::getline(file, reporter->topic);
-    std::cout << "read from config: address = " << reporter->address << ", topic = " << reporter->topic << std::endl;
+
+#ifdef DEBUG
+    std::cout << "[DDB Connector] DDB read from config: address = " << reporter->address << ", topic = " << reporter->topic << std::endl;
+#endif
 
     file.close();
     return 0;
@@ -74,7 +77,7 @@ static inline int service_reporter_init(DDBServiceReporter* reporter, const std:
     conn_opts.cleansession = 1;
 
     if ((rc = MQTTClient_connect(reporter->client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
-        printf("Failed to connect, return code %d\n", rc);
+        printf("[DDB Connector] Failed to connect MQTT broker, return code %d\n", rc);
         return rc;
     }
     return 0;
@@ -89,7 +92,7 @@ static inline int service_reporter_deinit(DDBServiceReporter* reporter) {
 static inline std::string compute_partial_sha256(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
-        std::cerr << "Failed to open file: " << filename << std::endl;
+        std::cerr << "[DDB Connector] Failed to open file: " << filename << std::endl;
         return "";
     }
 
@@ -278,7 +281,7 @@ static inline std::string get_self_exe_path() {
 static inline std::string compute_self_hash() {
     auto exe_path = get_self_exe_path();
     if (exe_path.empty()) {
-        std::cerr << "Failed to get self executable path" << std::endl;
+        std::cerr << "[DDB Connector] Failed to get self executable path" << std::endl;
         return "";
     }
     
@@ -294,7 +297,7 @@ static inline std::string compute_self_hash() {
     // Fallback: use partial hash (cross-platform)
     std::string hash = compute_partial_sha256(exe_path);
     if (hash.empty()) {
-        std::cerr << "Failed to compute hash for: " << exe_path << std::endl;
+        std::cerr << "[DDB Connector] Failed to compute hash for: " << exe_path << std::endl;
     }
     return hash;
 }
@@ -324,7 +327,9 @@ static inline int report_service(
     }
     std::string payload = ss.str();
 
-    std::cout << "send payload: " << payload << std::endl;
+#ifdef DEBUG
+    std::cout << "[DDB Connector] send payload: " << payload << std::endl;
+#endif
 
     pubmsg.payload = (void*) payload.c_str();
     // pubmsg.payloadlen = (int) strlen(payload);

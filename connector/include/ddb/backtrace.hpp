@@ -6,7 +6,6 @@
 
 #include <cassert>
 #include <cstdint>
-#include <functional>
 #include <iostream>
 
 #include "ddb/common.hpp"
@@ -107,9 +106,16 @@ static inline __attribute__((always_inline)) void get_context(
   asm volatile("mov %0, x30" : "=r"(lr));
   ctx->lr = (uintptr_t)lr;
 #endif
-  // std::cout << "rsp = " << _rsp << ", rip = " << _rip << ", rbp = " << _rbp
-  // << std::endl; std::cout << "sp = " << ctx->sp << ", pc = " << ctx->pc << ",
-  // fp = " << ctx->fp << std::endl;
+
+#ifdef DEBUG
+  std::cout << "[DDB Connector] Context: PC=0x" << std::hex << ctx->pc 
+        << " SP=0x" << ctx->sp 
+        << " FP=0x" << ctx->fp;
+  #ifdef __aarch64__
+    std::cout << " LR=0x" << ctx->lr;
+  #endif
+    std::cout << std::dec << std::endl;
+#endif
 }
 
 static inline __attribute__((always_inline)) void __get_caller_meta(
@@ -126,18 +132,24 @@ static inline __attribute__((always_inline)) void get_trace_meta(
   get_context(&trace_meta->ctx);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-attributes"
 namespace Backtrace {
-template <typename RT = void, class RPCCallable>
-__attribute__((noinline)) static RT extraction(
-    std::function<DDBTraceMeta()> extractor, RPCCallable&& rpc_callable) {
+template <typename RT = void, class Extractor, class RPCCallable>
+__attribute__((noinline)) 
+__attribute__((no_omit_frame_pointer))
+static RT extraction(
+    Extractor&& extractor, RPCCallable&& rpc_callable) {
   DDBTraceMeta meta;
   meta.magic = T_META_MATIC;
   asm volatile("" : "+m"(meta));  // Force compiler to assume meta is modified
-  if (extractor) {
-    meta = extractor();
+
+  if constexpr (!std::is_same_v<std::decay_t<Extractor>, std::nullptr_t>) {
+    meta = std::forward<Extractor>(extractor)();
   }
+
   if (!meta.valid()) {
-    std::cout << "WARN: Magic doesn't match" << std::endl;
+    std::cout << "[DDB Connector] WARN: Magic doesn't match" << std::endl;
   }
 
   if constexpr (!std::is_void_v<RT>) {
@@ -147,4 +159,5 @@ __attribute__((noinline)) static RT extraction(
   }
 }
 }  // namespace Backtrace
+#pragma clang diagnostic pop
 }  // namespace DDB

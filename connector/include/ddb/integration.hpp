@@ -122,14 +122,17 @@ static inline void wait_for_signal(int sig) {
   sigemptyset(&set);
   sigaddset(&set, sig);
 
+#ifdef DEBUG
   printf("Process PID: %d. Waiting for signal %d to continue...\n", getpid(),
          sig);
+#endif
 
   // Wait for the signal
   sigwait(&set, &received_sig);
 
-  // printf("Received signal %d. Resuming execution.\n", received_sig);
+#ifdef DEBUG
   printf("Debugger attached. Resume execution...\n");
+#endif
 }
 
 static inline void sig_ddb_wait_handler(int) { raise(SIGTRAP); }
@@ -158,9 +161,11 @@ public:
     } else {
       setup_ddb_signal_handler();
     }
-    std::cout << "ddb connector initialized. meta = { pid = "
+#ifdef DEBUG
+    std::cout << "[DDB Connector] DDB connector initialized. meta = { pid = "
               << DDB::ddb_meta.pid << ", comm_ip = " << DDB::ddb_meta.comm_ip
               << ", ipv4_str =" << DDB::ddb_meta.ipv4_str << " }" << std::endl;
+#endif
   }
 
   DDBConnector() { this->config = Config::get_default(); }
