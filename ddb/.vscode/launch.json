@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "[DEFAULT] Debug executable 'ddb'",
+            "name": "Debug DDB with default config",
             "cargo": {
                 "args": [
                     "build",
@@ -25,12 +25,37 @@
                 "--console-level",
                 "debug"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "[QUICKSAND] Debug executable 'ddb'",
+            "name": "Debug DDB with Config",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=ddb",
+                    "--package=ddb"
+                ],
+                "filter": {
+                    "name": "ddb",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "${input:configPath}",
+                "--console-log",
+                "--console-level",
+                "debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "[QUICKSAND] Debug DDB",
             "cargo": {
                 "args": [
                     "build",
@@ -48,12 +73,13 @@
                 "--console-level",
                 "debug"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "[SW] Debug executable 'ddb'",
+            "name": "[SW] Debug DDB",
             "cargo": {
                 "args": [
                     "build",
@@ -71,12 +97,13 @@
                 "--console-level",
                 "debug"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'ddb'",
+            "name": "Debug unit tests in DDB",
             "cargo": {
                 "args": [
                     "test",
@@ -90,7 +117,8 @@
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
         },
         {
             "name": "Python: Attach to GDB Extentsion Script",
@@ -112,6 +140,14 @@
                 "group": "Python",
                 "order": 1
             }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "configPath",
+            "type": "promptString",
+            "description": "Path to config file",
+            "default": "${workspaceFolder}/core/configs/dbg_auto_discovery.yaml"
         }
     ]
 }
