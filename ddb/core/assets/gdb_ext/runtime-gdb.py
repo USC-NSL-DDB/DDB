@@ -786,62 +786,80 @@ def find_environ_ptr():
         return None
 
 
-def modify_env_variable(env_name, new_value):
-    # Get environ pointer
+def find_env_variable(env_name: str) -> gdb.Value | None:
+    """
+    Searches for an environment variable by name.
+    Args:
+        env_name (str): The name of the environment variable to search for.
+    Returns:
+        gdb.Value | None: A gdb.Value pointer to the environment variable string (e.g., "VAR=value") if found,
+        or None if the variable is not found or an error occurs.
+    Notes:
+        - This function relies on the presence of a valid environment pointer, which is obtained via find_environ_ptr().
+        - The returned pointer refers to the environment string in the target process's memory.
+    """
     environ_ptr = find_environ_ptr()
     if not environ_ptr:
-        print("Could not find environ pointer")
-        return False
+        dbg("ERROR", "Could not find environ pointer")
+        return None
 
     try:
-        # Get char* type for proper casting
+        # Cast environ pointer to char**
         char_ptr_t = gdb.lookup_type("char").pointer()
         char_ptr_ptr_t = char_ptr_t.pointer()
-
-        # Cast environ pointer to char**
         environ_ptr = environ_ptr.cast(char_ptr_ptr_t)
 
         idx = 0
         while True:
-            try:
-                # Get pointer to current environment string
-                env_str_ptr = environ_ptr[idx]
+            # Get pointer to current environment string
+            env_str_ptr = environ_ptr[idx]
 
-                # Check for end of environ array
-                if int(env_str_ptr) == 0:
-                    break
-
-                # Convert to string safely
-                env_str = env_str_ptr.string()
-
-                if env_str.startswith(f"{env_name}="):
-                    # Create new string
-                    new_env_str = f"{env_name}={new_value}"
-
-                    # Get the buffer address
-                    buffer_addr = int(env_str_ptr)
-
-                    dbg(
-                        "INFO",
-                        f"Modifying environment variable '{env_name}' at address {buffer_addr}",
-                    )
-                    # Write the new string directly to the existing buffer
-                    for i, c in enumerate(new_env_str):
-                        gdb.execute(f"set *(char*)({buffer_addr + i}) = {ord(c)}")
-                    # Null terminate
-                    gdb.execute(f"set *(char*)({buffer_addr + len(new_env_str)}) = 0")
-                    return True
-                idx += 1
-            except gdb.MemoryError:
-                dbg("ERROR", f"Memory error at index {idx}")
+            # Check for end of environ array
+            if int(env_str_ptr) == 0:
                 break
-            except Exception as e:
-                dbg("ERROR", f"Error: {e}")
-                break
-        return False
+
+            # Convert to string safely
+            env_str = env_str_ptr.string()
+
+            if env_str.startswith(f"{env_name}="):
+                return env_str_ptr
+            idx += 1
     except Exception as e:
-        dbg("ERROR", f"Error modifying environment variable: {e}")
+        dbg("ERROR", f"Error find environment variable: {e}")
+        return None
+
+    dbg("INFO", f"Environment variable '{env_name}' not found")
+    return None
+
+
+def modify_env_variable(env_name, new_value) -> bool:
+    env_var_ptr = find_env_variable(env_name)
+    if env_var_ptr is None:
+        dbg("ERROR", f"Environment variable '{env_name}' not found")
         return False
+    try:
+        # Convert to string safely
+        env_str = env_var_ptr.string()
+
+        # Create new string
+        new_env_str = f"{env_name}={new_value}"
+
+        # Get the string buffer address
+        env_var_addr = int(env_var_ptr)
+
+        dbg(
+            "INFO",
+            f"Modifying environment variable '{env_name}' at address {env_var_addr:#x} from '{env_str}' to '{new_env_str}'",
+        )
+        # Write the new string directly to the existing buffer
+        for i, c in enumerate(new_env_str):
+            gdb.execute(f"set *(char*)({env_var_addr + i}) = {ord(c)}")
+        # Null terminate
+        gdb.execute(f"set *(char*)({env_var_addr + len(new_env_str)}) = 0")
+        return True
+    except Exception as e:
+        dbg("ERROR", f"Error: {e}")
+    return False
 
 
 GetGlobalVarCommand()
