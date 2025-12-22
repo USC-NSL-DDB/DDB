@@ -6,7 +6,7 @@ import struct
 import platform
 import inspect
 
-import gdb # type: ignore
+import gdb  # type: ignore
 
 # try:
 #     import debugpy
@@ -22,6 +22,7 @@ import gdb # type: ignore
 #     debugpy.wait_for_client()
 # except Exception as e:
 #     print(f"Failed to attach debugger: {e}")
+
 
 def dbg(*args):
     curr_frame = inspect.currentframe()
@@ -44,43 +45,40 @@ def dbg(*args):
         out_str += "\n"
         gdb.write(out_str)
 
+
 gdb.write("Loading DDB support.\n")
+
 
 class Arch(Enum):
     X86_64 = "x86_64"
     AARCH64 = "aarch64"
 
+
 class Reg(Enum):
     PC = "pc"
     SP = "sp"
     FP = "fp"
-    LR = "lr" # only for AARCH64
+    LR = "lr"  # only for AARCH64
 
     def __str__(self) -> str:
         return self.value
 
+
 REGISTER_MAP = {
-    Arch.X86_64: {
-        Reg.PC: "rip",
-        Reg.SP: "rsp",
-        Reg.FP: "rbp"
-    },
-    Arch.AARCH64: {
-        Reg.PC: "pc",
-        Reg.SP: "sp",
-        Reg.FP: "x29",
-        Reg.LR: "lr"
-    },
+    Arch.X86_64: {Reg.PC: "rip", Reg.SP: "rsp", Reg.FP: "rbp"},
+    Arch.AARCH64: {Reg.PC: "pc", Reg.SP: "sp", Reg.FP: "x29", Reg.LR: "lr"},
 }
+
 
 def get_architecture() -> Arch:
     arch = platform.machine()
-    if arch == 'x86_64':
+    if arch == "x86_64":
         return Arch.X86_64
-    elif arch in ('aarch64', 'arm64'):
+    elif arch in ("aarch64", "arm64"):
         return Arch.AARCH64
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
+
 
 class DistributedBTCmd(gdb.Command):
     def __init__(self):
@@ -93,8 +91,8 @@ class DistributedBTCmd(gdb.Command):
             stacks = result["stack"]
             if isinstance(stacks, list):
                 for stack in stacks:
-                    filepath = stack['file'] if 'file' in stack else ""
-                    gdb.write(f"{stack['level']} {stack['func']} file:{filepath}\n") 
+                    filepath = stack["file"] if "file" in stack else ""
+                    gdb.write(f"{stack['level']} {stack['func']} file:{filepath}\n")
             else:
                 dbg("ERROR", "stack info is not a list\n")
         else:
@@ -123,10 +121,13 @@ def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
 
 
 def int_to_ip(ip_int: int) -> str:
-    return socket.inet_ntoa(struct.pack('!I', ip_int))
+    return socket.inet_ntoa(struct.pack("!I", ip_int))
+
 
 # Function to fetch and print the global variable
-def get_global_variable(var_name, to_print: bool = False, check_is_var: bool = True) -> gdb.Value | None:
+def get_global_variable(
+    var_name, to_print: bool = False, check_is_var: bool = True
+) -> gdb.Value | None:
     try:
         var = gdb.lookup_symbol(var_name)[0]
         if var is None:
@@ -153,9 +154,9 @@ class GetGlobalVarCommand(gdb.Command):
     """A custom command to fetch a global variable"""
 
     def __init__(self):
-        super(GetGlobalVarCommand, self).__init__("get-global-var",
-                                                  gdb.COMMAND_DATA,
-                                                  gdb.COMPLETE_SYMBOL)
+        super(GetGlobalVarCommand, self).__init__(
+            "get-global-var", gdb.COMMAND_DATA, gdb.COMPLETE_SYMBOL
+        )
 
     def invoke(self, argument, from_tty):
         args = gdb.string_to_argv(argument)
@@ -167,8 +168,7 @@ class GetGlobalVarCommand(gdb.Command):
 
 class DistributedBacktraceMICmd(gdb.MICommand):
     def __init__(self):
-        super(DistributedBacktraceMICmd, self).__init__(
-            "-stack-list-distri-frames")
+        super(DistributedBacktraceMICmd, self).__init__("-stack-list-distri-frames")
 
     def invoke(self, arguments) -> dict[str, object]:
         result = gdb.execute_mi("-stack-list-frames")
@@ -196,21 +196,23 @@ class DistributedBacktraceMICmd(gdb.MICommand):
                 for sym in get_local_variables(cur_frame):
                     if sym.name == "meta":
                         val = sym.value(cur_frame)
-                        remote_ip = int(val['meta']['caller_comm_ip'])
-                        pid = int(val['meta']['pid'])
-                        parent_rip = int(val['ctx']['rip'])
-                        parent_rsp = int(val['ctx']['rsp'])
-                        parent_rbp = int(val['ctx']['rbp'])
+                        remote_ip = int(val["meta"]["caller_comm_ip"])
+                        pid = int(val["meta"]["pid"])
+                        parent_rip = int(val["ctx"]["rip"])
+                        parent_rsp = int(val["ctx"]["rsp"])
+                        parent_rbp = int(val["ctx"]["rbp"])
                         break
             if is_remote_call:
                 break
-        dbg("INFO", f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}")
+        dbg(
+            "INFO",
+            f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}",
+        )
 
         if not is_remote_call:
             return result
-        
-        ddb_meta = get_global_variable(
-            "ddb_meta", to_print=False, check_is_var=False)
+
+        ddb_meta = get_global_variable("ddb_meta", to_print=False, check_is_var=False)
         if ddb_meta:
             local_ip = int(ddb_meta["comm_ip"])
         else:
@@ -235,13 +237,15 @@ class DistributedBacktraceMICmd(gdb.MICommand):
                 "rip": parent_rip,
                 "rsp": parent_rsp,
                 "rbp": parent_rbp,
-                "pid": pid
-            }
+                "pid": pid,
+            },
         }
         result["bt_meta"] = backtrace_meta
         return result
 
+
 saved_frame = None
+
 
 class Registers:
     def __init__(self, rip, rsp, rbp):
@@ -252,60 +256,55 @@ class Registers:
     def __str__(self):
         return f"rip: {self.rip:#x}, rsp: {self.rsp:#x}, rbp: {self.rbp:#x}"
 
+
 def switch_context(regs: Registers) -> gdb.Frame:
     # switch to context
     saved_frame = gdb.selected_frame()
-    gdb.parse_and_eval('$save_sp = $sp')
-    gdb.parse_and_eval('$save_pc = $pc')
-    gdb.parse_and_eval('$save_rbp = $rbp')
+    gdb.parse_and_eval("$save_sp = $sp")
+    gdb.parse_and_eval("$save_pc = $pc")
+    gdb.parse_and_eval("$save_rbp = $rbp")
     # In GDB, assignments to sp must be done from the
     # top-most frame, so select frame 0 first.
-    gdb.execute('select-frame 0')
-    gdb.parse_and_eval('$sp = {0}'.format(str(regs.rsp)))
-    gdb.parse_and_eval('$pc = {0}'.format(str(regs.rip)))
-    gdb.parse_and_eval('$rbp = {0}'.format(str(regs.rbp)))
+    gdb.execute("select-frame 0")
+    gdb.parse_and_eval("$sp = {0}".format(str(regs.rsp)))
+    gdb.parse_and_eval("$pc = {0}".format(str(regs.rip)))
+    gdb.parse_and_eval("$rbp = {0}".format(str(regs.rbp)))
     return saved_frame
 
+
 def restore_context(saved_frame: Optional[gdb.Frame] = None):
-    gdb.execute('select-frame 0')
-    gdb.parse_and_eval('$pc = $save_pc')
-    gdb.parse_and_eval('$sp = $save_sp')
-    gdb.parse_and_eval('$rbp = $save_rbp')
+    gdb.execute("select-frame 0")
+    gdb.parse_and_eval("$pc = $save_pc")
+    gdb.parse_and_eval("$sp = $save_sp")
+    gdb.parse_and_eval("$rbp = $save_rbp")
     if saved_frame:
         saved_frame.select()
 
+
 class SwitchContextMICmd(gdb.MICommand):
     def __init__(self) -> None:
-        super(SwitchContextMICmd, self).__init__(
-            "-switch-context-custom"
-        )
+        super(SwitchContextMICmd, self).__init__("-switch-context-custom")
 
     def invoke(self, arguments):
         try:
             reg_map = REGISTER_MAP[get_architecture()]
             reg_to_set = map(lambda reg_pair: tuple(reg_pair.split("=")), arguments)
             old_ctx: Dict[str, int] = {}
-            gdb.execute('select-frame 0')
-            for (reg_alias, val) in reg_to_set:
+            gdb.execute("select-frame 0")
+            for reg_alias, val in reg_to_set:
                 try:
                     reg_real = reg_map[Reg(reg_alias)]
                     # extract the current value for that register.
-                    reg_val_to_save = int(gdb.parse_and_eval(f'${reg_real}'))
+                    reg_val_to_save = int(gdb.parse_and_eval(f"${reg_real}"))
                     # save it to the old context with register alias name.
                     old_ctx[str(reg_alias)] = reg_val_to_save
                 except KeyError:
                     continue
-                gdb.parse_and_eval(f'${reg_real} = {val}')
-            return {
-                "message": "success",
-                "old_ctx": old_ctx
-            }
+                gdb.parse_and_eval(f"${reg_real} = {val}")
+            return {"message": "success", "old_ctx": old_ctx}
         except Exception as e:
-            return {
-                "message": "error",
-                "old_ctx": {},
-                "error": str(e)
-            }
+            return {"message": "error", "old_ctx": {}, "error": str(e)}
+
 
 class SwitchContextCmd(gdb.Command):
     def __init__(self):
@@ -316,15 +315,15 @@ class SwitchContextCmd(gdb.Command):
         argv = gdb.string_to_argv(argument)
         sctx_mi_cmd.invoke(argv)
 
+
 class RestoreContextMICmd(gdb.MICommand):
     def __init__(self) -> None:
-        super(RestoreContextMICmd, self).__init__(
-            "-rctx"
-        )
+        super(RestoreContextMICmd, self).__init__("-rctx")
 
     def invoke(self, arguments):
         global saved_frame
         restore_context(saved_frame)
+
 
 class RestoreContextCmd(gdb.Command):
     def __init__(self):
@@ -335,10 +334,12 @@ class RestoreContextCmd(gdb.Command):
         rctx_mi_cmd.invoke([])
         dbg("INFO", "Executed rctx")
 
+
 class DistributedBacktraceInContextMICmd(gdb.MICommand):
     def __init__(self):
         super(DistributedBacktraceInContextMICmd, self).__init__(
-            "-stack-list-distri-frames-ctx")
+            "-stack-list-distri-frames-ctx"
+        )
         self.dbt_mi_cmd = dbt_mi_cmd
 
     def invoke(self, arguments):
@@ -347,22 +348,20 @@ class DistributedBacktraceInContextMICmd(gdb.MICommand):
 
         tracestack = self.dbt_mi_cmd.invoke([])
         restore_context(saved_frame)
-        return tracestack 
+        return tracestack
+
 
 class ShowCaladanThreadCmd(gdb.Command):
     "List all caladan threads."
 
     def __init__(self):
-        gdb.Command.__init__(
-            self, "info cldths",
-            gdb.COMMAND_STACK, gdb.COMPLETE_NONE
-        )
+        gdb.Command.__init__(self, "info cldths", gdb.COMMAND_STACK, gdb.COMPLETE_NONE)
 
     def invoke(self, argument, from_tty):
         # args = gdb.string_to_argv(arg)
         count = 0
         saw_ptr = []
-        vp = gdb.lookup_type('void').pointer()
+        vp = gdb.lookup_type("void").pointer()
         ks = gdb.parse_and_eval("ks")
         lb, up = ks.type.range()
         for i in range(lb, up + 1):
@@ -389,6 +388,7 @@ class ShowCaladanThreadCmd(gdb.Command):
                             print(f"\t{cldth}")
                             count += 1
 
+
 def pc_to_int(pc):
     # python2 will not cast pc (type void*) to an int cleanly
     # instead python2 and python3 work with the hex string representation
@@ -404,12 +404,14 @@ def pc_to_int(pc):
         pc = int(str(pc).split(None, 1)[0], 16)
     return pc
 
+
 def check_field_exists(obj: gdb.Value, field_name: str) -> bool:
     """Check if a field exists in a gdb.Value object."""
     for field in obj.type.fields():
         if field.name == field_name:
             return True
     return False
+
 
 class GetRemoteBTInfo(gdb.MICommand):
     def __init__(self):
@@ -427,23 +429,25 @@ class GetRemoteBTInfo(gdb.MICommand):
         found = False
         try:
             while frame is not None and frame.is_valid():
-                    frames.append(frame)
-                    frame = frame.older()
+                frames.append(frame)
+                frame = frame.older()
             for cur_frame in frames:
-                if found: 
+                if found:
                     break
                 curr_func = cur_frame.function()
-                if curr_func and curr_func.name.startswith("DDB::Backtrace::extraction"):
+                if curr_func and curr_func.name.startswith(
+                    "DDB::Backtrace::extraction"
+                ):
                     for sym in get_local_variables(cur_frame):
                         if sym.name == "meta":
                             val: gdb.Value = sym.value(cur_frame)
-                            meta: gdb.Value = val['meta']
-                            remote_ip = int(meta['caller_comm_ip'])
+                            meta: gdb.Value = val["meta"]
+                            remote_ip = int(meta["caller_comm_ip"])
                             if check_field_exists(meta, "proclet_id"):
-                                proclet_id = int(meta['proclet_id'])
-                            pid = int(meta['pid'])
-                            tid = int(meta['tid'])
-                            ctx_obj = val['ctx']
+                                proclet_id = int(meta["proclet_id"])
+                            pid = int(meta["pid"])
+                            tid = int(meta["tid"])
+                            ctx_obj = val["ctx"]
                             if ctx_obj.type.code == gdb.TYPE_CODE_STRUCT:
                                 for field in ctx_obj.type.fields():
                                     fname = field.name
@@ -452,9 +456,14 @@ class GetRemoteBTInfo(gdb.MICommand):
                                         try:
                                             regs[fname] = int(fval)
                                         except Exception as e:
-                                            dbg("ERROR", f"failed to convert {fname} (val = {fval}) to int. Error: {e}")
+                                            dbg(
+                                                "ERROR",
+                                                f"failed to convert {fname} (val = {fval}) to int. Error: {e}",
+                                            )
                                     else:
-                                        dbg("ERROR", f"field {str(field)} with no name?")
+                                        dbg(
+                                            "ERROR", f"field {str(field)} with no name?"
+                                        )
                             else:
                                 # ERROR
                                 dbg("ERROR", f"ctx is not a struct, but {ctx_obj.type}")
@@ -463,7 +472,7 @@ class GetRemoteBTInfo(gdb.MICommand):
                             found = True
                             break
             str_to_print = ""
-            for (reg, reg_val) in regs.items():
+            for reg, reg_val in regs.items():
                 str_to_print += f"{reg}: {reg_val}, "
             dbg("INFO", f"Extracted meta: {str_to_print}")
         except Exception as e:
@@ -480,13 +489,12 @@ class GetRemoteBTInfo(gdb.MICommand):
                     "pid": pid,
                     "tid": tid,
                     "ip": remote_ip,
-                    "proclet_id": proclet_id if proclet_id else 0
+                    "proclet_id": proclet_id if proclet_id else 0,
                 },
-                "local_meta": {
-                    "tid": ktid
-                }
-            }
+                "local_meta": {"tid": ktid},
+            },
         }
+
 
 class GetLockStateMI(gdb.MICommand):
     """A custom command to fetch the lock state (MI)"""
@@ -495,73 +503,77 @@ class GetLockStateMI(gdb.MICommand):
         super().__init__("-get-lock-state")
 
     def invoke(self, arguments) -> dict[str, object] | None:
-        ddb_shared: gdb.Value | None = get_global_variable("ddb_shared", to_print=True, check_is_var=False)
+        ddb_shared: gdb.Value | None = get_global_variable(
+            "ddb_shared", to_print=True, check_is_var=False
+        )
         if not ddb_shared:
             dbg("ERROR", "didn't find ddb_shared")
             return {}
 
-        thread_infos = ddb_shared['ddb_thread_infos']
-        lowners = ddb_shared['ddb_lowners']
-            
+        thread_infos = ddb_shared["ddb_thread_infos"]
+        lowners = ddb_shared["ddb_lowners"]
+
         # Parse thread infos array
-        thread_max_count = int(ddb_shared['ddb_max_idx'])
+        thread_max_count = int(ddb_shared["ddb_max_idx"])
         thread_data = []
         for i in range(thread_max_count):
             info = thread_infos[i]
             if info["valid"]:
-                wbuf = info['wbuf']
-                wbuf_len = wbuf['max_n']
-                wait_entries = wbuf['wait_entries']
+                wbuf = info["wbuf"]
+                wbuf_len = wbuf["max_n"]
+                wait_entries = wbuf["wait_entries"]
                 wait_buf = []
                 for j in range(wbuf_len):
                     wait_ent = wait_entries[j]
-                    if wait_ent['valid']:
-                        wait_buf.append({
-                            "type": int(wait_ent['type']),
-                            "id": int(wait_ent['identifier']),
-                        })
+                    if wait_ent["valid"]:
+                        wait_buf.append(
+                            {
+                                "type": int(wait_ent["type"]),
+                                "id": int(wait_ent["identifier"]),
+                            }
+                        )
 
-                thread_data.append({
-                    'tid': int(info['id']),
-                    'fsbase': int(info['fsbase']),
-                    'stackbase': int(info['stackbase']),
-                    'wait': wait_buf
-                })
+                thread_data.append(
+                    {
+                        "tid": int(info["id"]),
+                        "fsbase": int(info["fsbase"]),
+                        "stackbase": int(info["stackbase"]),
+                        "wait": wait_buf,
+                    }
+                )
 
         from pprint import pprint
+
         # pprint(thread_data)
         # Parse lock states array
-        lock_max_count = int(lowners['max_n'])
+        lock_max_count = int(lowners["max_n"])
         lock_data = []
         for i in range(lock_max_count):
-            lock = lowners['lowner_entries'][i]
-            if lock['valid']:
-                lock_data.append({
-                    'lid': int(lock['lid']),
-                    'owner_tid': int(lock['owner_tid'])
-                })
-        return {
-            "thread_info": thread_data,
-            "lock_info": lock_data
-        }
+            lock = lowners["lowner_entries"][i]
+            if lock["valid"]:
+                lock_data.append(
+                    {"lid": int(lock["lid"]), "owner_tid": int(lock["owner_tid"])}
+                )
+        return {"thread_info": thread_data, "lock_info": lock_data}
 
         # pprint(lock_data)
+
 
 class GetLockState(gdb.Command):
     """A custom command to fetch the lock state"""
 
     def __init__(self):
         super(GetLockState, self).__init__(
-            "get-lock-state",
-            gdb.COMMAND_DATA,
-            gdb.COMPLETE_SYMBOL
+            "get-lock-state", gdb.COMMAND_DATA, gdb.COMPLETE_SYMBOL
         )
 
     def invoke(self, argument, from_tty):
         from pprint import pprint
+
         global get_lock_state_cmd_mi
         r = get_lock_state_cmd_mi.invoke([])
         pprint(r)
+
 
 def get_thread_tid(thread: gdb.InferiorThread | None = None):
     """Get kernel thread ID (LWP) for a given thread or current thread"""
@@ -570,7 +582,7 @@ def get_thread_tid(thread: gdb.InferiorThread | None = None):
             thread = gdb.selected_thread()
         if thread is None:
             return None
-            
+
         # Get thread info string which contains LWP
         thread_info = thread.ptid
         # PTID is a tuple of (pid, lwpid, tid)
@@ -579,32 +591,35 @@ def get_thread_tid(thread: gdb.InferiorThread | None = None):
     except gdb.error:
         return None
 
+
 class GetThreadKtid(gdb.Command):
     """Command to print kernel thread ID for current or specified thread
     Usage: thread-tid [thread_num]"""
-    
+
     def __init__(self):
         super(GetThreadKtid, self).__init__("get-thread-ktid", gdb.COMMAND_DATA)
-    
+
     def invoke(self, argument, from_tty):
         global get_thrd_ktid_cmd_mi
         result = get_thrd_ktid_cmd_mi.invoke([argument] if argument else [])
         if "error" in result:
             dbg("ERROR", f"Error: {result['error']}")
         else:
-            dbg("INFO", f"Kernel thread ID (LWP) for thread {result['thrd_num']}: {result['ktid']}")
-       
+            dbg(
+                "INFO",
+                f"Kernel thread ID (LWP) for thread {result['thrd_num']}: {result['ktid']}",
+            )
+
+
 class GetThreadKtidMI(gdb.MICommand):
     """MI Command to print kernel thread ID for current or specified thread
     Usage: thread-tid [thread_num]"""
-    
+
     def __init__(self):
         super().__init__("-get-thread-ktid")
 
     def invoke(self, arguments) -> dict[str, object]:
-        result: Dict[str, object] = {
-            "ktid": None
-        }
+        result: Dict[str, object] = {"ktid": None}
         try:
             if arguments and arguments[0]:
                 # If thread number specified, find that thread
@@ -622,7 +637,7 @@ class GetThreadKtidMI(gdb.MICommand):
                 if thread is None:
                     result["error"] = "No thread selected"
                     return result
-            
+
             tid = get_thread_tid(thread)
             if tid is not None:
                 result["ktid"] = tid
@@ -637,23 +652,32 @@ class GetThreadKtidMI(gdb.MICommand):
             dbg("ERROR", f"Error: {str(e)}")
         return result
 
+
 pause_start_time = 0
 accumulated_time = 0
 
+
 def stop_handler(event: gdb.StopEvent):
     global pause_start_time
-    pause_start_time=time.perf_counter_ns()
+    pause_start_time = time.perf_counter_ns()
     dbg("INFO", f"pause detected, ts (ns) at pause: {pause_start_time}")
 
+
 cont_time = 0
-def cont_handler(event:gdb.ContinueEvent):
+
+
+def cont_handler(event: gdb.ContinueEvent):
     global cont_time
     dbg("INFO", f"continue detected, {(time.perf_counter_ns() - cont_time) / 1e6} ms")
+
 
 gdb.events.stop.connect(stop_handler)
 gdb.events.cont.connect(cont_handler)
 
-def sync_pause_time(on_finish: Callable[[], dict[str, object]] | None = None) -> dict[str, object]:
+
+def sync_pause_time(
+    on_finish: Callable[[], dict[str, object]] | None = None,
+) -> dict[str, object]:
     global pause_start_time, accumulated_time, cont_time
     ret = {}
     try:
@@ -663,69 +687,92 @@ def sync_pause_time(on_finish: Callable[[], dict[str, object]] | None = None) ->
         start_env_time = curr_ts_ns
         if pause_start_time > curr_ts_ns:
             raise Exception("pause_start_time is greater than current time")
-        
+
         pause_durartion_s = (curr_ts_ns - pause_start_time) / 1e9
         accumulated_time = round(pause_durartion_s + accumulated_time, 9)
 
-        dbg("INFO", f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s")
+        dbg(
+            "INFO",
+            f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s",
+        )
         modify_env_variable("FAKETIME", f"-{accumulated_time}")
-        dbg("INFO", f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms")
+        dbg(
+            "INFO",
+            f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
+        )
 
         cont_time = time.perf_counter_ns()
-        # ret= {"message": "success", "paused_time": accumulated_time} 
-        dbg("INFO", f"sync_pause_time completed, total paused time: {accumulated_time} s")
+        # ret= {"message": "success", "paused_time": accumulated_time}
+        dbg(
+            "INFO",
+            f"sync_pause_time completed, total paused time: {accumulated_time} s",
+        )
     except Exception as e:
         dbg("ERROR", f"sync_pause_time error: {e}")
     finally:
         ret = on_finish() if on_finish else {}
     return ret
 
+
 class RecordTimeAndContinueMiCommand(gdb.MICommand):
     def __init__(self):
         super(RecordTimeAndContinueMiCommand, self).__init__(
-            "-record-time-and-continue")
+            "-record-time-and-continue"
+        )
 
     def invoke(self, arguments):
-        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-continue", *arguments))
-    
+        return sync_pause_time(
+            on_finish=lambda: gdb.execute_mi("-exec-continue", *arguments)
+        )
+
+
 class RecordTimeAndNextMiCommand(gdb.MICommand):
     def __init__(self):
-        super(RecordTimeAndNextMiCommand, self).__init__(
-            "-record-time-and-next")
-        
+        super(RecordTimeAndNextMiCommand, self).__init__("-record-time-and-next")
+
     def invoke(self, arguments):
-        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-next", *arguments))
+        return sync_pause_time(
+            on_finish=lambda: gdb.execute_mi("-exec-next", *arguments)
+        )
+
 
 class RecordTimeAndStepMiCommand(gdb.MICommand):
     def __init__(self):
-        super(RecordTimeAndStepMiCommand, self).__init__(
-            "-record-time-and-step")
-        
+        super(RecordTimeAndStepMiCommand, self).__init__("-record-time-and-step")
+
     def invoke(self, arguments):
-        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-step", *arguments))
+        return sync_pause_time(
+            on_finish=lambda: gdb.execute_mi("-exec-step", *arguments)
+        )
+
 
 class RecordTimeAndFinishMiCommand(gdb.MICommand):
     def __init__(self):
-        super(RecordTimeAndFinishMiCommand, self).__init__(
-            "-record-time-and-finish")
-        
+        super(RecordTimeAndFinishMiCommand, self).__init__("-record-time-and-finish")
+
     def invoke(self, arguments):
-        return sync_pause_time(on_finish=lambda: gdb.execute_mi("-exec-finish", *arguments))
+        return sync_pause_time(
+            on_finish=lambda: gdb.execute_mi("-exec-finish", *arguments)
+        )
+
 
 def find_environ_ptr():
     try:
         # Try direct symbol access first
         try:
-            environ_addr = gdb.parse_and_eval('(char**)environ')
+            environ_addr = gdb.parse_and_eval("(char**)environ")
             if environ_addr != 0:
                 return environ_addr
         except Exception as e:
-            dbg("INFO", f"Direct access to 'environ' failed, trying alternative methods. Error: {e}")
+            dbg(
+                "INFO",
+                f"Direct access to 'environ' failed, trying alternative methods. Error: {e}",
+            )
 
         # Fallback to parsing info variables
-        symbols = gdb.execute('info variables environ', to_string=True)
-        for line in symbols.split('\n'):
-            if line.strip().endswith(' environ'):
+        symbols = gdb.execute("info variables environ", to_string=True)
+        for line in symbols.split("\n"):
+            if line.strip().endswith(" environ"):
                 try:
                     addr_str = line.split()[0]
                     return gdb.Value(int(addr_str, 16))
@@ -733,10 +780,11 @@ def find_environ_ptr():
                     dbg("INFO", f"Failed to parse address from line '{line}': {e}")
                     continue
         return None
-    
+
     except Exception as e:
         dbg("ERROR", f"Error finding environ: {e}")
         return None
+
 
 def modify_env_variable(env_name, new_value):
     # Get environ pointer
@@ -747,33 +795,36 @@ def modify_env_variable(env_name, new_value):
 
     try:
         # Get char* type for proper casting
-        char_ptr_t = gdb.lookup_type('char').pointer()
+        char_ptr_t = gdb.lookup_type("char").pointer()
         char_ptr_ptr_t = char_ptr_t.pointer()
-        
+
         # Cast environ pointer to char**
         environ_ptr = environ_ptr.cast(char_ptr_ptr_t)
-        
+
         idx = 0
         while True:
             try:
                 # Get pointer to current environment string
                 env_str_ptr = environ_ptr[idx]
-                
+
                 # Check for end of environ array
                 if int(env_str_ptr) == 0:
                     break
-                
+
                 # Convert to string safely
                 env_str = env_str_ptr.string()
-                
+
                 if env_str.startswith(f"{env_name}="):
                     # Create new string
                     new_env_str = f"{env_name}={new_value}"
-                    
+
                     # Get the buffer address
                     buffer_addr = int(env_str_ptr)
-                    
-                    dbg("INFO", f"Modifying environment variable '{env_name}' at address {buffer_addr}")
+
+                    dbg(
+                        "INFO",
+                        f"Modifying environment variable '{env_name}' at address {buffer_addr}",
+                    )
                     # Write the new string directly to the existing buffer
                     for i, c in enumerate(new_env_str):
                         gdb.execute(f"set *(char*)({buffer_addr + i}) = {ord(c)}")
@@ -792,9 +843,10 @@ def modify_env_variable(env_name, new_value):
         dbg("ERROR", f"Error modifying environment variable: {e}")
         return False
 
+
 GetGlobalVarCommand()
 get_lock_state_cmd_mi = GetLockStateMI()
-get_lock_state_cmd =GetLockState()
+get_lock_state_cmd = GetLockState()
 
 get_thrd_ktid_cmd_mi = GetThreadKtidMI()
 get_thrd_ktid_cmd = GetThreadKtid()
