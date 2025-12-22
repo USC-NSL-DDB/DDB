@@ -47,6 +47,7 @@ def dbg(*args):
 
 
 gdb.write("Loading DDB support.\n")
+FAKETIME_PRESENT: bool = False
 
 
 class Arch(Enum):
@@ -695,18 +696,18 @@ def sync_pause_time(
             "INFO",
             f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s",
         )
-        modify_env_variable("FAKETIME", f"-{accumulated_time}")
-        dbg(
-            "INFO",
-            f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
-        )
+        if not FAKETIME_PRESENT:
+            dbg("WARNING", "FAKETIME environment variable not present, skip modification")
+            return ret
+        else:
+            modify_env_variable("FAKETIME", f"-{accumulated_time}")
+            dbg(
+                "INFO",
+                f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
+            )
 
         cont_time = time.perf_counter_ns()
         # ret= {"message": "success", "paused_time": accumulated_time}
-        dbg(
-            "INFO",
-            f"sync_pause_time completed, total paused time: {accumulated_time} s",
-        )
     except Exception as e:
         dbg("ERROR", f"sync_pause_time error: {e}")
     finally:
@@ -832,6 +833,35 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
     return None
 
 
+def check_faketime_present() -> bool:
+    """
+    Checks if the FAKETIME environment variable is present and updates the global flag.
+
+    Returns:
+        bool: True if FAKETIME is present, False otherwise.
+
+    Side effects:
+        - Sets the global FAKETIME_PRESENT flag
+        - Logs INFO if FAKETIME is found, WARNING if not found
+    """
+    global FAKETIME_PRESENT
+
+    env_var_ptr = find_env_variable("FAKETIME")
+
+    if env_var_ptr is not None:
+        FAKETIME_PRESENT = True
+        try:
+            env_str = env_var_ptr.string()
+            dbg("INFO", f"FAKETIME environment variable found: {env_str}")
+        except Exception as e:
+            dbg("ERROR", f"FAKETIME environment variable found at {int(env_var_ptr):#x}, but failed to read string: {e}")
+    else:
+        FAKETIME_PRESENT = False
+        dbg("WARNING", "FAKETIME environment variable not found")
+
+    return FAKETIME_PRESENT
+
+
 def modify_env_variable(env_name, new_value) -> bool:
     env_var_ptr = find_env_variable(env_name)
     if env_var_ptr is None:
@@ -884,3 +914,6 @@ RecordTimeAndContinueMiCommand()
 RecordTimeAndNextMiCommand()
 RecordTimeAndStepMiCommand()
 RecordTimeAndFinishMiCommand()
+
+# Check if FAKETIME environment variable is present
+check_faketime_present()
