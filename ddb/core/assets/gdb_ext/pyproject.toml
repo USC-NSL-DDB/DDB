@@ -1,0 +1,13 @@
+[project]
+name = "gdb-ext-ddb"
+version = "0.1.0"
+description = "GDB extensions used by DDB"
+readme = ""
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "debugpy>=1.8.19",
+    "types-gdb>=16.3.0.20250920",
+]
