@@ -706,12 +706,12 @@ def sync_pause_time(
         if pause_start_time > curr_ts_ns:
             raise Exception("pause_start_time is greater than current time")
 
-        pause_durartion_s = (curr_ts_ns - pause_start_time) / 1e9
-        accumulated_time = round(pause_durartion_s + accumulated_time, 9)
+        pause_duration_s = (curr_ts_ns - pause_start_time) / 1e9
+        accumulated_time = round(pause_duration_s + accumulated_time, 9)
 
         dbg(
             LogLevel.DEBUG,
-            f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s",
+            f"pause_duration: {pause_duration_s} s, accumulated_time: {accumulated_time} s",
         )
         modify_env_variable("FAKETIME", f"-{accumulated_time}")
         dbg(
