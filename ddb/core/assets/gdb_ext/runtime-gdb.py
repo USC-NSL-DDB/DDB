@@ -932,4 +932,4 @@ RecordTimeAndStepMiCommand()
 RecordTimeAndFinishMiCommand()
 
 # Check if FAKETIME environment variable is present
-check_faketime_present()
+# check_faketime_present()
