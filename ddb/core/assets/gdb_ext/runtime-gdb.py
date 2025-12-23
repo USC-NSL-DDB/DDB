@@ -24,8 +24,33 @@ import gdb  # type: ignore
 #     print(f"Failed to attach debugger: {e}")
 
 
-def dbg(*args):
+class LogLevel(Enum):
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+    TRACE = "TRACE"
+
+
+def log_level_to_int(level: LogLevel) -> int:
+    level_map = {
+        LogLevel.ERROR: 40,
+        LogLevel.WARNING: 30,
+        LogLevel.INFO: 20,
+        LogLevel.DEBUG: 10,
+        LogLevel.TRACE: 5,
+    }
+    return level_map.get(level, 0)
+
+
+G_LOG_LEVEL = LogLevel.INFO
+
+
+def dbg(level: LogLevel, *args):
     curr_frame = inspect.currentframe()
+    if log_level_to_int(level) < log_level_to_int(G_LOG_LEVEL):
+        return
+    out_str = f"[{level.value}] "
     if curr_frame is not None:
         frame = curr_frame.f_back
         if frame is not None:
@@ -39,7 +64,7 @@ def dbg(*args):
             gdb.write(out_str)
             return
     else:
-        out_str = "[unknow location] "
+        out_str = "[unknown location] "
         for arg in args:
             out_str += f"{arg!r} "
         out_str += "\n"
@@ -95,9 +120,9 @@ class DistributedBTCmd(gdb.Command):
                     filepath = stack["file"] if "file" in stack else ""
                     gdb.write(f"{stack['level']} {stack['func']} file:{filepath}\n")
             else:
-                dbg("ERROR", "stack info is not a list\n")
+                dbg(LogLevel.ERROR, "stack info is not a list\n")
         else:
-            dbg("INFO", "no stack info presented")
+            dbg(LogLevel.INFO, "no stack info presented")
 
 
 def get_local_variables(frame: gdb.Frame) -> List[gdb.Symbol]:
@@ -133,7 +158,7 @@ def get_global_variable(
         var = gdb.lookup_symbol(var_name)[0]
         if var is None:
             if to_print:
-                dbg("ERROR", f"No such global variable: {var_name}")
+                dbg(LogLevel.ERROR, f"No such global variable: {var_name}")
             return None
         # check_is_var is used for this specific case where the
         # globally defined variable is not recognized as a variable by gdb.
@@ -141,13 +166,13 @@ def get_global_variable(
         if var is not None and is_var:
             value = var.value()
             if to_print:
-                dbg("INFO", f"Value of {var_name}: {value}")
+                dbg(LogLevel.INFO, f"Value of {var_name}: {value}")
             return value
         else:
-            dbg("ERROR", f"No such global variable: {var_name}")
+            dbg(LogLevel.ERROR, f"No such global variable: {var_name}")
             return None
     except gdb.error as e:
-        dbg("ERROR", f"Error accessing variable: {str(e)}")
+        dbg(LogLevel.ERROR, f"Error accessing variable: {str(e)}")
         return None
 
 
@@ -206,7 +231,7 @@ class DistributedBacktraceMICmd(gdb.MICommand):
             if is_remote_call:
                 break
         dbg(
-            "INFO",
+            LogLevel.DEBUG,
             f"ip: {remote_ip}, pid: {pid}, rip: {parent_rip}, rsp: {parent_rsp}, rbp: {parent_rbp}",
         )
 
@@ -217,14 +242,14 @@ class DistributedBacktraceMICmd(gdb.MICommand):
         if ddb_meta:
             local_ip = int(ddb_meta["comm_ip"])
         else:
-            dbg("INFO", "No ddb_meta is found")
+            dbg(LogLevel.DEBUG, "No ddb_meta is found")
 
         if remote_ip is None or local_ip is None:
-            dbg("ERROR", "Failed to find remote/local address")
+            dbg(LogLevel.DEBUG, "Failed to find remote/local address")
             return result
 
         if parent_rip is None or parent_rsp is None:
-            dbg("ERROR", "Failed to find parent rip/rsp")
+            dbg(LogLevel.DEBUG, "Failed to find parent rip/rsp")
             return result
 
         backtrace_meta = {
@@ -333,7 +358,6 @@ class RestoreContextCmd(gdb.Command):
     def invoke(self, argument, from_tty):
         global rctx_mi_cmd
         rctx_mi_cmd.invoke([])
-        dbg("INFO", "Executed rctx")
 
 
 class DistributedBacktraceInContextMICmd(gdb.MICommand):
@@ -373,7 +397,6 @@ class ShowCaladanThreadCmd(gdb.Command):
                 saw_ptr.append(ks_ptr)
                 th = ks_ptr.dereference()
                 idx = int(th["kthread_idx"])
-                # print(f"\nkth: {th}; kthread_idx: {idx}; index: {i}")
                 rq = th["rq"]
                 rq_lb, rq_up = rq.type.range()
                 for j in range(rq_lb, rq_up + 1):
@@ -458,16 +481,19 @@ class GetRemoteBTInfo(gdb.MICommand):
                                             regs[fname] = int(fval)
                                         except Exception as e:
                                             dbg(
-                                                "ERROR",
+                                                LogLevel.ERROR,
                                                 f"failed to convert {fname} (val = {fval}) to int. Error: {e}",
                                             )
                                     else:
                                         dbg(
-                                            "ERROR", f"field {str(field)} with no name?"
+                                            LogLevel.ERROR,
+                                            f"field {str(field)} with no name?",
                                         )
                             else:
-                                # ERROR
-                                dbg("ERROR", f"ctx is not a struct, but {ctx_obj.type}")
+                                dbg(
+                                    LogLevel.ERROR,
+                                    f"ctx is not a struct, but {ctx_obj.type}",
+                                )
                                 break
                             message = "success"
                             found = True
@@ -475,12 +501,12 @@ class GetRemoteBTInfo(gdb.MICommand):
             str_to_print = ""
             for reg, reg_val in regs.items():
                 str_to_print += f"{reg}: {reg_val}, "
-            dbg("INFO", f"Extracted meta: {str_to_print}")
+            dbg(LogLevel.DEBUG, f"Extracted meta: {str_to_print}")
         except Exception as e:
-            dbg("ERROR", f"Error: {e}")
+            dbg(LogLevel.ERROR, f"Error: {e}")
         result = gdb.execute_mi("-get-thread-ktid")
         if "error" in result:
-            dbg("ERROR", f"Error: {result['error']}")
+            dbg(LogLevel.ERROR, f"Error: {result['error']}")
         ktid = result["ktid"] if ("ktid" in result) and (result["ktid"]) else -1
         return {
             "message": message,
@@ -508,7 +534,7 @@ class GetLockStateMI(gdb.MICommand):
             "ddb_shared", to_print=True, check_is_var=False
         )
         if not ddb_shared:
-            dbg("ERROR", "didn't find ddb_shared")
+            dbg(LogLevel.ERROR, "didn't find ddb_shared")
             return {}
 
         thread_infos = ddb_shared["ddb_thread_infos"]
@@ -604,10 +630,10 @@ class GetThreadKtid(gdb.Command):
         global get_thrd_ktid_cmd_mi
         result = get_thrd_ktid_cmd_mi.invoke([argument] if argument else [])
         if "error" in result:
-            dbg("ERROR", f"Error: {result['error']}")
+            dbg(LogLevel.ERROR, f"Error: {result['error']}")
         else:
             dbg(
-                "INFO",
+                LogLevel.INFO,
                 f"Kernel thread ID (LWP) for thread {result['thrd_num']}: {result['ktid']}",
             )
 
@@ -650,39 +676,21 @@ class GetThreadKtidMI(gdb.MICommand):
             result["error"] = "Invalid thread number"
         except gdb.error as e:
             result["error"] = str(e)
-            dbg("ERROR", f"Error: {str(e)}")
+            dbg(LogLevel.ERROR, f"Error: {str(e)}")
         return result
 
-# This flag is used to track if the program was previously paused.
-# This is useful as in some cases, stop might not be triggered, but continue does.
-# In this case, we will skip the time synchronization as we don't have 
-# the ground truth of when pause happened.
-previously_paused = False
+
 pause_start_time = 0
 accumulated_time = 0
 
 
 def stop_handler(event: gdb.StopEvent):
-    global pause_start_time, previously_paused
+    global pause_start_time
     pause_start_time = time.perf_counter_ns()
-    previously_paused = True
-    dbg("INFO", f"pause detected, ts (ns) at pause: {pause_start_time}")
-
-
-cont_time = 0
-
-
-def cont_handler(event: gdb.ContinueEvent):
-    global cont_time, previously_paused
-    if previously_paused:
-        sync_pause_time()
-        previously_paused = False
-    else:
-        dbg("INFO", "continue detected without prior pause, skipping time sync")
+    dbg(LogLevel.DEBUG, f"pause detected, ts (ns) at pause: {pause_start_time}")
 
 
 gdb.events.stop.connect(stop_handler)
-gdb.events.cont.connect(cont_handler)
 
 
 def sync_pause_time(
@@ -692,7 +700,7 @@ def sync_pause_time(
     ret = {}
     try:
         curr_ts_ns = time.perf_counter_ns()
-        dbg("INFO", f"current timestamp: {curr_ts_ns}")
+        dbg(LogLevel.DEBUG, f"current timestamp: {curr_ts_ns}")
 
         start_env_time = curr_ts_ns
         if pause_start_time > curr_ts_ns:
@@ -702,21 +710,21 @@ def sync_pause_time(
         accumulated_time = round(pause_durartion_s + accumulated_time, 9)
 
         dbg(
-            "INFO",
+            LogLevel.DEBUG,
             f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s",
         )
         modify_env_variable("FAKETIME", f"-{accumulated_time}")
         dbg(
-            "INFO",
+            LogLevel.DEBUG,
             f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
         )
 
         dbg(
-            "INFO",
+            LogLevel.DEBUG,
             f"sync_pause_time completed, total paused time: {accumulated_time} s",
         )
     except Exception as e:
-        dbg("ERROR", f"sync_pause_time error: {e}")
+        dbg(LogLevel.ERROR, f"sync_pause_time error: {e}")
     finally:
         ret = on_finish() if on_finish else {}
     return ret
@@ -763,9 +771,12 @@ class RecordTimeAndFinishMiCommand(gdb.MICommand):
             on_finish=lambda: gdb.execute_mi("-exec-finish", *arguments)
         )
 
+
 class RecordTimeAndContinueCommand(gdb.Command):
     def __init__(self):
-        super(RecordTimeAndContinueCommand, self).__init__("record-time-and-continue", gdb.COMPLETE_COMMAND)
+        super(RecordTimeAndContinueCommand, self).__init__(
+            "record-time-and-continue", gdb.COMPLETE_COMMAND
+        )
 
     def invoke(self, argument, from_tty):
         global record_time_and_continue_mi
@@ -781,7 +792,7 @@ def find_environ_ptr():
                 return environ_addr
         except Exception as e:
             dbg(
-                "INFO",
+                LogLevel.DEBUG,
                 f"Direct access to 'environ' failed, trying alternative methods. Error: {e}",
             )
 
@@ -793,12 +804,15 @@ def find_environ_ptr():
                     addr_str = line.split()[0]
                     return gdb.Value(int(addr_str, 16))
                 except Exception as e:
-                    dbg("INFO", f"Failed to parse address from line '{line}': {e}")
+                    dbg(
+                        LogLevel.ERROR,
+                        f"Failed to parse address from line '{line}': {e}",
+                    )
                     continue
         return None
 
     except Exception as e:
-        dbg("ERROR", f"Error finding environ: {e}")
+        dbg(LogLevel.ERROR, f"Error finding environ: {e}")
         return None
 
 
@@ -816,7 +830,7 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
     """
     environ_ptr = find_environ_ptr()
     if not environ_ptr:
-        dbg("ERROR", "Could not find environ pointer")
+        dbg(LogLevel.ERROR, "Could not find environ pointer")
         return None
 
     try:
@@ -841,10 +855,10 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
                 return env_str_ptr
             idx += 1
     except Exception as e:
-        dbg("ERROR", f"Error find environment variable: {e}")
+        dbg(LogLevel.ERROR, f"Error find environment variable: {e}")
         return None
 
-    dbg("INFO", f"Environment variable '{env_name}' not found")
+    dbg(LogLevel.ERROR, f"Environment variable '{env_name}' not found")
     return None
 
 
@@ -867,12 +881,15 @@ def check_faketime_present() -> bool:
         FAKETIME_PRESENT = True
         try:
             env_str = env_var_ptr.string()
-            dbg("INFO", f"FAKETIME environment variable found: {env_str}")
+            dbg(LogLevel.DEBUG, f"FAKETIME environment variable found: {env_str}")
         except Exception as e:
-            dbg("ERROR", f"FAKETIME environment variable found at {int(env_var_ptr):#x}, but failed to read string: {e}")
+            dbg(
+                LogLevel.ERROR,
+                f"FAKETIME environment variable found at {int(env_var_ptr):#x}, but failed to read string: {e}",
+            )
     else:
         FAKETIME_PRESENT = False
-        dbg("WARNING", "FAKETIME environment variable not found")
+        dbg(LogLevel.WARNING, "FAKETIME environment variable not found")
 
     return FAKETIME_PRESENT
 
@@ -880,7 +897,7 @@ def check_faketime_present() -> bool:
 def modify_env_variable(env_name, new_value) -> bool:
     env_var_ptr = find_env_variable(env_name)
     if env_var_ptr is None:
-        dbg("ERROR", f"Environment variable '{env_name}' not found")
+        dbg(LogLevel.ERROR, f"Environment variable '{env_name}' not found")
         return False
     try:
         # Convert to string safely
@@ -893,7 +910,7 @@ def modify_env_variable(env_name, new_value) -> bool:
         env_var_addr = int(env_var_ptr)
 
         dbg(
-            "INFO",
+            LogLevel.DEBUG,
             f"Modifying environment variable '{env_name}' at address {env_var_addr:#x} from '{env_str}' to '{new_env_str}'",
         )
         # Write the new string directly to the existing buffer
@@ -903,7 +920,7 @@ def modify_env_variable(env_name, new_value) -> bool:
         gdb.execute(f"set *(char*)({env_var_addr + len(new_env_str)}) = 0")
         return True
     except Exception as e:
-        dbg("ERROR", f"Error: {e}")
+        dbg(LogLevel.ERROR, f"Error: {e}")
     return False
 
 
