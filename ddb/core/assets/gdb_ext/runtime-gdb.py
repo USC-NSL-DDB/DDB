@@ -653,14 +653,19 @@ class GetThreadKtidMI(gdb.MICommand):
             dbg("ERROR", f"Error: {str(e)}")
         return result
 
-
+# This flag is used to track if the program was previously paused.
+# This is useful as in some cases, stop might not be triggered, but continue does.
+# In this case, we will skip the time synchronization as we don't have 
+# the ground truth of when pause happened.
+previously_paused = False
 pause_start_time = 0
 accumulated_time = 0
 
 
 def stop_handler(event: gdb.StopEvent):
-    global pause_start_time
+    global pause_start_time, previously_paused
     pause_start_time = time.perf_counter_ns()
+    previously_paused = True
     dbg("INFO", f"pause detected, ts (ns) at pause: {pause_start_time}")
 
 
@@ -668,8 +673,12 @@ cont_time = 0
 
 
 def cont_handler(event: gdb.ContinueEvent):
-    global cont_time
-    dbg("INFO", f"continue detected, {(time.perf_counter_ns() - cont_time) / 1e6} ms")
+    global cont_time, previously_paused
+    if previously_paused:
+        sync_pause_time()
+        previously_paused = False
+    else:
+        dbg("INFO", "continue detected without prior pause, skipping time sync")
 
 
 gdb.events.stop.connect(stop_handler)
@@ -679,7 +688,7 @@ gdb.events.cont.connect(cont_handler)
 def sync_pause_time(
     on_finish: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    global pause_start_time, accumulated_time, cont_time
+    global pause_start_time, accumulated_time
     ret = {}
     try:
         curr_ts_ns = time.perf_counter_ns()
@@ -696,18 +705,16 @@ def sync_pause_time(
             "INFO",
             f"pause_duration: {pause_durartion_s} s, accumulated_time: {accumulated_time} s",
         )
-        if not FAKETIME_PRESENT:
-            dbg("WARNING", "FAKETIME environment variable not present, skip modification")
-            return ret
-        else:
-            modify_env_variable("FAKETIME", f"-{accumulated_time}")
-            dbg(
-                "INFO",
-                f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
-            )
+        modify_env_variable("FAKETIME", f"-{accumulated_time}")
+        dbg(
+            "INFO",
+            f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
+        )
 
-        cont_time = time.perf_counter_ns()
-        # ret= {"message": "success", "paused_time": accumulated_time}
+        dbg(
+            "INFO",
+            f"sync_pause_time completed, total paused time: {accumulated_time} s",
+        )
     except Exception as e:
         dbg("ERROR", f"sync_pause_time error: {e}")
     finally:
@@ -755,6 +762,14 @@ class RecordTimeAndFinishMiCommand(gdb.MICommand):
         return sync_pause_time(
             on_finish=lambda: gdb.execute_mi("-exec-finish", *arguments)
         )
+
+class RecordTimeAndContinueCommand(gdb.Command):
+    def __init__(self):
+        super(RecordTimeAndContinueCommand, self).__init__("record-time-and-continue", gdb.COMPLETE_COMMAND)
+
+    def invoke(self, argument, from_tty):
+        global record_time_and_continue_mi
+        record_time_and_continue_mi.invoke([argument] if argument else [])
 
 
 def find_environ_ptr():
@@ -910,7 +925,8 @@ rctx_cmd = RestoreContextCmd()
 GetRemoteBTInfo()
 ShowCaladanThreadCmd()
 
-RecordTimeAndContinueMiCommand()
+record_time_and_continue_mi = RecordTimeAndContinueMiCommand()
+RecordTimeAndContinueCommand()
 RecordTimeAndNextMiCommand()
 RecordTimeAndStepMiCommand()
 RecordTimeAndFinishMiCommand()
