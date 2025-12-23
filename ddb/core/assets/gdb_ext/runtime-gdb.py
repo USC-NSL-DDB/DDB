@@ -50,21 +50,21 @@ def dbg(level: LogLevel, *args):
     curr_frame = inspect.currentframe()
     if log_level_to_int(level) < log_level_to_int(G_LOG_LEVEL):
         return
-    out_str = f"[{level.value}] "
+    out_str = f"[({level.value}) "
     if curr_frame is not None:
         frame = curr_frame.f_back
         if frame is not None:
             filename = frame.f_code.co_filename
             lineno = frame.f_lineno
             funcname = frame.f_code.co_name
-            out_str = f"[{filename}:{lineno} in {funcname}] "
+            out_str += f"{filename}:{lineno} in {funcname}] "
             for arg in args:
                 out_str += f"{arg!r} "
             out_str += "\n"
             gdb.write(out_str)
             return
     else:
-        out_str = "[unknown location] "
+        out_str += "unknown location] "
         for arg in args:
             out_str += f"{arg!r} "
         out_str += "\n"
