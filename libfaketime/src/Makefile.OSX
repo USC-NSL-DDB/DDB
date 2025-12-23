@@ -56,22 +56,20 @@ INSTALL ?= install
 PREFIX ?= /usr/local
 
 CFLAGS += -DFAKE_SLEEP -DFAKE_INTERNAL_CALLS -DPREFIX='"'${PREFIX}'"' $(FAKETIME_COMPILE_CFLAGS) -DMACOS_DYLD_INTERPOSE -DFAKE_SETTIME
-LIB_LDFLAGS += -dynamiclib -current_version 0.9.10 -compatibility_version 0.7
+LIB_LDFLAGS += -dynamiclib -current_version 0.9.12 -compatibility_version 0.7
 
-# ARM64 MacOS (M1/M2/M3/Apple Silicon/etc) processors require a target set as their current version, or they
-# will receive the following error:
-# dyld[6675]: terminating because inserted dylib '/usr/local/lib/faketime/libfaketime.1.dylib' could not be loaded: tried: '/usr/local/lib/faketime/libfaketime.1.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'arm64e')), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/lib/faketime/libfaketime.1.dylib' (no such file), '/usr/local/lib/faketime/libfaketime.1.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'arm64e'))
-# dyld[6675]: tried: '/usr/local/lib/faketime/libfaketime.1.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'arm64e')), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/lib/faketime/libfaketime.1.dylib' (no such file), '/usr/local/lib/faketime/libfaketime.1.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'arm64e'))
-# Outputs `arm64` on ARM64
-OS := $(shell uname -m)
-# Outputs a number, eg 14.4 for MacOS Sonoma 14.4
-MACOS_PRODUCT_VERSION := $(shell sw_vers --productVersion | cut -d. -f1,2)
+# From macOS 13 onwards, system binaries are compiled against the new arm64e ABI on Apple Silicon.
+# These arm64e binaries enforce Pointer Authentication Code (PAC), and will refuse to run with
+# "unprotected" arm64 libraries. Meanwhile, older platforms might not recognize the new arm64e ABI.
 
-# Check if arm64 is in OS, if so, add the target
-ifeq ($(OS),arm64)
-  CFLAGS += -target arm64e-apple-macos$(MACOS_PRODUCT_VERSION)
-  LIB_LDFLAGS += -target arm64e-apple-macos$(MACOS_PRODUCT_VERSION)
-endif
+# Therefore, we now compile for two ABIs at the same time, producing a fat library of arm64e and arm64,
+# so in the end the OS gets to pick which architecture it wants at runtime.
+
+# In addition, we need to enable signing and authentication of indirect calls (-fptrauth-calls);
+# otherwise in ftpl_init, pthread_once will indirectly call ftpl_really_init, which then fail PAC.
+# Ideally this should be a compiler default for the arm64e ABI, but apparently not.
+
+ARCH := $(shell uname -m)
 
 SONAME = 1
 LIBS = libfaketime.${SONAME}.dylib
@@ -79,14 +77,26 @@ BINS = faketime
 
 all: ${LIBS} ${BINS}
 
+ifeq ($(ARCH),arm64)
+libfaketime.${SONAME}.dylib: libfaketime.c
+	${CC} -o libfaketime.arm64e.dylib ${CFLAGS} -arch arm64e -fptrauth-calls -fptrauth-returns ${LDFLAGS} ${LIB_LDFLAGS} -install_name ${PREFIX}/lib/faketime/$@ $<
+	${CC} -o libfaketime.arm64.dylib ${CFLAGS} -arch arm64 ${LDFLAGS} ${LIB_LDFLAGS} -install_name ${PREFIX}/lib/faketime/$@ $<
+	lipo -create -output $@ libfaketime.arm64e.dylib libfaketime.arm64.dylib
+	rm libfaketime.arm64e.dylib libfaketime.arm64.dylib
+
+faketime: faketime.c
+	${CC} -o $@ ${CFLAGS} -arch arm64e -arch arm64 ${LDFLAGS} $<
+
+else
 libfaketime.${SONAME}.dylib: libfaketime.c
 	${CC} -o $@ ${CFLAGS} ${LDFLAGS} ${LIB_LDFLAGS} -install_name ${PREFIX}/lib/faketime/$@ $<
 
 faketime: faketime.c
 	${CC} -o $@ ${CFLAGS} ${LDFLAGS} $<
+endif
 
 clean:
-	@rm -f ${OBJ} ${LIBS} ${BINS}
+	@rm -f ${OBJ} ${LIBS} ${BINS} libfaketime.arm64e.dylib libfaketime.arm64.dylib
 
 distclean: clean
 	@echo

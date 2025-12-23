@@ -5,7 +5,11 @@
 		},
 		{
 			"path": "../ddb"
+		},
+		{
+			"path": "../ddb/core/assets/gdb_ext",
 		}
 	],
-	"settings": {}
+	"settings": {
+	}
 }
