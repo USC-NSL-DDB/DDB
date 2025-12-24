@@ -2,6 +2,92 @@ use crate::common::config::GdbCommand;
 
 use super::DbgCmdGenerator;
 
+
+#[derive(Debug, Clone)]
+pub enum FrameFilterMatchType {
+    Exact,
+    Glob,
+    Regex,
+}
+
+impl FrameFilterMatchType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            FrameFilterMatchType::Exact => "exact",
+            FrameFilterMatchType::Glob => "glob",
+            FrameFilterMatchType::Regex => "regex",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FrameFilterAddArgs {
+    pattern: String,
+    match_type: FrameFilterMatchType
+}
+
+impl FrameFilterAddArgs {
+    pub fn new(pattern: &str, match_type: FrameFilterMatchType) -> Self {
+        Self {
+            pattern: pattern.to_string(),
+            match_type,
+        }
+    } 
+    
+    pub fn as_str(&self) -> String {
+        return format!("{} --match-type {}", self.pattern, self.match_type.as_str());
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FrameFilterRemoveArgs {
+    pattern: String,
+}
+
+impl FrameFilterRemoveArgs {
+    pub fn new(pattern: &str) -> Self {
+        Self {
+            pattern: pattern.to_string(),
+        }
+    } 
+    
+    pub fn as_str(&self) -> String {
+        return self.pattern.clone();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum FrameFilterCmdArg {
+    Enable,
+    Disable,
+    AddFunction(FrameFilterAddArgs),
+    RemoveFunction(FrameFilterRemoveArgs),
+    AddFile(FrameFilterAddArgs),
+    RemoveFile(FrameFilterRemoveArgs),
+    PresetEnable(String),
+    PresetDisable(String),
+    Clear
+}
+
+impl FrameFilterCmdArg {
+    pub fn to_str(&self) -> String {
+        match self {
+            FrameFilterCmdArg::Enable => "--enable".to_string(),
+            FrameFilterCmdArg::Disable => "--disable".to_string(),
+            FrameFilterCmdArg::AddFunction(args) => format!("--add-function {}", args.as_str()),
+            FrameFilterCmdArg::RemoveFunction(args) => format!("--remove-function {}", args.as_str()),
+            FrameFilterCmdArg::AddFile(args) => format!("--add-file {}", args.as_str()),
+            FrameFilterCmdArg::RemoveFile(args) => format!("--remove-file {}", args.as_str()),
+            FrameFilterCmdArg::PresetEnable(name) => format!("--preset-enable {}", name),
+            FrameFilterCmdArg::PresetDisable(name) => format!("--preset-disable {}", name),
+            FrameFilterCmdArg::Clear => "--clear".to_string(),
+        }
+    }
+}
+
+const DDB_FILTER_CONFIG_CMD: &str = "-ddb-filter-config";
+
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum GdbCmd {
@@ -17,6 +103,8 @@ pub enum GdbCmd {
     ExeArgs(String),
     // Plain commands (usually from user inputs or hardcoded commands)
     Plain(String),
+    // Frame Filter Commands (enabled by custom DDB GDB extension)
+    FrameFilterCmd(FrameFilterCmdArg),
 }
 
 impl From<GdbCommand> for GdbCmd {
@@ -42,6 +130,7 @@ impl Into<GdbCommand> for GdbCmd {
 }
 
 impl DbgCmdGenerator for GdbCmd {
+
     fn generate(&self) -> String {
         let cmd = match self {
             GdbCmd::SetOption(opt) => format!("-gdb-set {}", opt.generate()),
@@ -50,6 +139,9 @@ impl DbgCmdGenerator for GdbCmd {
             GdbCmd::FileExecAndSym(bin_path) => format!("-file-exec-and-symbols {}", bin_path),
             GdbCmd::ExeArgs(args) => format!("-exec-arguments {}", args),
             GdbCmd::Plain(cmd) => cmd.clone(),
+            GdbCmd::FrameFilterCmd(ff_cmd) => {
+                format!("{} {}", DDB_FILTER_CONFIG_CMD, ff_cmd.to_str())
+            }
         };
 
         // GDB command needs to be ended with '\n'

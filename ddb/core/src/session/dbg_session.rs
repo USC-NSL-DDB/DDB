@@ -6,7 +6,7 @@ use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{get_router, SessionResponse};
-use crate::common::default_vals::PROCLET_GDB_EXT_NAME;
+use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
 use crate::dbg_cmd::{GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
 use crate::state::{get_group_mgr, STATES};
@@ -215,6 +215,12 @@ impl DbgSession {
             }
             _ => {}
         }
+
+        let gdb_ext_frame_filter_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
+        bdr.add(GdbCmd::ConsoleExec(format!(
+            r#"source {}"#,
+            gdb_ext_frame_filter_path.to_str().unwrap()
+        )));
         
         if Config::global().conf.support_migration {
             let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(PROCLET_GDB_EXT_NAME);
