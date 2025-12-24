@@ -1,7 +1,7 @@
 /*
  *  libfaketime wrapper command
  *
- *  This file is part of libfaketime, version 0.9.10
+ *  This file is part of libfaketime, version 0.9.12
  *
  *  libfaketime is free software; you can redistribute it and/or modify it
  *  under the terms of the GNU General Public License v2 as published by the
@@ -48,7 +48,7 @@
 
 #include "faketime_common.h"
 
-const char version[] = "0.9.10";
+const char version[] = "0.9.12";
 
 #if (defined __APPLE__) || (defined __sun)
 static const char *date_cmd = "gdate";
@@ -84,11 +84,11 @@ void usage(const char *name)
   "  --date-prog PROG    : Use specified GNU-compatible implementation of 'date' program\n"
   "\n"
   "Examples:\n"
-  "%s 'last friday 5 pm' /bin/date\n"
-  "%s '2008-12-24 08:15:42' /bin/date\n"
-  "%s -f '+2,5y x10,0' /bin/bash -c 'date; while true; do echo $SECONDS ; sleep 1 ; done'\n"
-  "%s -f '+2,5y x0,50' /bin/bash -c 'date; while true; do echo $SECONDS ; sleep 1 ; done'\n"
-  "%s -f '+2,5y i2,0' /bin/bash -c 'date; while true; do date; sleep 1 ; done'\n"
+  "%s 'last friday 5 pm' date\n"
+  "%s '2008-12-24 08:15:42' date\n"
+  "%s -f '+2,5y x10,0' bash -c 'date; while true; do echo $SECONDS ; sleep 1 ; done'\n"
+  "%s -f '+2,5y x0,50' bash -c 'date; while true; do echo $SECONDS ; sleep 1 ; done'\n"
+  "%s -f '+2,5y i2,0' bash -c 'date; while true; do date; sleep 1 ; done'\n"
   "In this single case all spawned processes will use the same global clock\n"
   "without restarting it at the start of each process.\n\n"
   "(Please note that it depends on your locale settings whether . or , has to be used for fractions)\n"
