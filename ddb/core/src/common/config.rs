@@ -63,15 +63,15 @@ pub struct FrameFilterPatternConfig {
     match_type: FrameFilterMatchType
 }
 
-impl Into<FrameFilterAddArgs> for FrameFilterPatternConfig {
-    fn into(self) -> FrameFilterAddArgs {
-        FrameFilterAddArgs::new(&self.pattern, self.match_type)
+impl From<FrameFilterPatternConfig> for FrameFilterAddArgs {
+    fn from(config: FrameFilterPatternConfig) -> Self {
+        FrameFilterAddArgs::new(&config.pattern, config.match_type)
     }
 }
 
-impl Into<FrameFilterAddArgs> for &FrameFilterPatternConfig {
-    fn into(self) -> FrameFilterAddArgs {
-        FrameFilterAddArgs::new(&self.pattern, self.match_type.clone())
+impl From<&FrameFilterPatternConfig> for FrameFilterAddArgs {
+    fn from(config: &FrameFilterPatternConfig) -> Self {
+        FrameFilterAddArgs::new(&config.pattern, config.match_type.clone())
     }
 }
 
