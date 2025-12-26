@@ -1,9 +1,11 @@
 use crate::common::config::GdbCommand;
 
 use super::DbgCmdGenerator;
+use serde::{Serialize, Deserialize};
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FrameFilterMatchType {
     Exact,
     Glob,

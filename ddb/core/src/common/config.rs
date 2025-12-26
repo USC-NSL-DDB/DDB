@@ -5,6 +5,11 @@ use std::fs;
 use std::path::Path;
 use tracing::debug;
 
+use crate::dbg_cmd::{
+    FrameFilterAddArgs,
+    FrameFilterMatchType
+};
+
 // Global configuration instance
 static mut GLOBAL_CONFIG: Option<Config> = None;
 
@@ -36,6 +41,9 @@ pub struct Config {
 
     #[serde(rename = "ServiceWeaverConf", default)]
     pub service_weaver_conf: Option<ServiceWeaverConf>,
+
+    #[serde(rename = "FrameFilter", default)]
+    pub frame_filter: Option<FrameFilterConfig>,
 }
 
 impl Config {
@@ -45,6 +53,31 @@ impl Config {
             _ => false,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FrameFilterPatternConfig {
+    pattern: String,
+    match_type: FrameFilterMatchType
+}
+
+impl Into<FrameFilterAddArgs> for FrameFilterPatternConfig {
+    fn into(self) -> FrameFilterAddArgs {
+        FrameFilterAddArgs::new(&self.pattern, self.match_type)
+    }
+}
+
+impl Into<FrameFilterAddArgs> for &FrameFilterPatternConfig {
+    fn into(self) -> FrameFilterAddArgs {
+        FrameFilterAddArgs::new(&self.pattern, self.match_type.clone())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FrameFilterConfig {
+    pub filter_file: Vec<FrameFilterPatternConfig>,
+    pub filter_function: Vec<FrameFilterPatternConfig>,
+    pub filter_preset: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -252,6 +285,7 @@ impl Default for Config {
             service_discovery: None,
             conf: Conf::default(),
             service_weaver_conf: None,
+            frame_filter: None,
         }
     }
 }

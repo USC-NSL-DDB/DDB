@@ -7,7 +7,7 @@ use tracing::debug;
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{get_router, SessionResponse};
 use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
-use crate::dbg_cmd::{GdbCmd, GdbOption};
+use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
 use crate::state::{get_group_mgr, STATES};
 use crate::{cmd_flow, common};
@@ -205,8 +205,9 @@ impl DbgSession {
 
         bdr.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
 
+        // source framework-specific GDB extension scripts
         match Config::global().framework {
-            Framework::GRPC | Framework::Nu => {
+            Framework::GRPC | Framework::Nu | Framework::Quicksand => {
                 let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_NAME);
                 bdr.add(GdbCmd::ConsoleExec(format!(
                     r#"source {}"#,
@@ -215,19 +216,42 @@ impl DbgSession {
             }
             _ => {}
         }
+        match Config::global().framework {
+            Framework::Nu | Framework::Quicksand => {
+                if Config::global().conf.support_migration {
+                    let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(PROCLET_GDB_EXT_NAME);
+                    bdr.add(GdbCmd::ConsoleExec(format!(
+                        r#"source {}"#,
+                        gdb_ext_path.to_str().unwrap()
+                    )));
+                }
+            }
+            _ => {}
+        }
 
+        // source GDB extension scripts
         let gdb_ext_frame_filter_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
         bdr.add(GdbCmd::ConsoleExec(format!(
             r#"source {}"#,
             gdb_ext_frame_filter_path.to_str().unwrap()
         )));
         
-        if Config::global().conf.support_migration {
-            let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(PROCLET_GDB_EXT_NAME);
-            bdr.add(GdbCmd::ConsoleExec(format!(
-                r#"source {}"#,
-                gdb_ext_path.to_str().unwrap()
-            )));
+        // apply frame filter settings if any
+        if let Some(frame_filter_cfg) = &Config::global().frame_filter {
+            bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
+            for pattern in &frame_filter_cfg.filter_file {
+                let args: FrameFilterAddArgs = pattern.into();
+                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFile(args)));
+            }
+            for pattern in &frame_filter_cfg.filter_function {
+                let args: FrameFilterAddArgs = pattern.into();
+                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFunction(args)));
+            }
+            for preset in &frame_filter_cfg.filter_preset {
+                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::PresetEnable(
+                    preset.clone(),
+                )));
+            }
         }
 
         for cmd in &self.config.prerun_gdb_cmds {
@@ -241,7 +265,7 @@ impl DbgSession {
             _ => return Err(anyhow::anyhow!("Invalid mode for remote attach")),
         }
 
-        if common::config::Config::global().service_discovery.is_some() {
+        if Config::global().service_discovery.is_some() {
             // Broker is enabled. We need to handle the SIG40 signal.
             bdr.add(GdbCmd::ConsoleExec("signal SIG40".to_string()));
         }
