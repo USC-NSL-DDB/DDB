@@ -53,8 +53,8 @@ impl FrameFilterRemoveArgs {
         }
     } 
     
-    pub fn as_str(&self) -> String {
-        return self.pattern.clone();
+    pub fn as_str(&self) -> &str {
+        &self.pattern
     }
 }
 
