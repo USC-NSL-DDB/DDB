@@ -493,7 +493,7 @@ class DDBFilterCommand(gdb.Command):
                 type_str = args[type_idx + 1]
                 return MatchType(type_str)
         except (ValueError, KeyError):
-            pass
+            dbg(LogLevel.DEBUG, f"Invalid or missing --type argument: {args}")
         return MatchType.GLOB  # Default to glob matching
 
     def _handle_preset(self, args: List[str]):
@@ -698,7 +698,7 @@ class DDBFilterMICommand(gdb.MICommand):
             if idx + 1 < len(arguments):
                 return MatchType(arguments[idx + 1])
         except (ValueError, KeyError):
-            pass
+            dbg(LogLevel.DEBUG, f"Invalid or missing --match-type in MI arguments: {arguments}")
         return MatchType.GLOB  # Default
 
     def _success_response(self, message: str) -> Dict[str, object]:

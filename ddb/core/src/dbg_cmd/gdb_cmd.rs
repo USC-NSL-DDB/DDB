@@ -36,8 +36,8 @@ impl FrameFilterAddArgs {
         }
     } 
     
-    pub fn as_str(&self) -> String {
-        return format!("{} --match-type {}", self.pattern, self.match_type.as_str());
+    pub fn to_string(&self) -> String {
+        format!("{} --match-type {}", self.pattern, self.match_type.as_str())
     }
 }
 
@@ -58,6 +58,7 @@ impl FrameFilterRemoveArgs {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum FrameFilterCmdArg {
     Enable,
@@ -76,9 +77,9 @@ impl FrameFilterCmdArg {
         match self {
             FrameFilterCmdArg::Enable => "--enable".to_string(),
             FrameFilterCmdArg::Disable => "--disable".to_string(),
-            FrameFilterCmdArg::AddFunction(args) => format!("--add-function {}", args.as_str()),
+            FrameFilterCmdArg::AddFunction(args) => format!("--add-function {}", args.to_string()),
             FrameFilterCmdArg::RemoveFunction(args) => format!("--remove-function {}", args.as_str()),
-            FrameFilterCmdArg::AddFile(args) => format!("--add-file {}", args.as_str()),
+            FrameFilterCmdArg::AddFile(args) => format!("--add-file {}", args.to_string()),
             FrameFilterCmdArg::RemoveFile(args) => format!("--remove-file {}", args.as_str()),
             FrameFilterCmdArg::PresetEnable(name) => format!("--preset-enable {}", name),
             FrameFilterCmdArg::PresetDisable(name) => format!("--preset-disable {}", name),
@@ -136,7 +137,6 @@ impl Into<GdbCommand> for GdbCmd {
 }
 
 impl DbgCmdGenerator for GdbCmd {
-
     fn generate(&self) -> String {
         let cmd = match self {
             GdbCmd::SetOption(opt) => format!("-gdb-set {}", opt.generate()),
