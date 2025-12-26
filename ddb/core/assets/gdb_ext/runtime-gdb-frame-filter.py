@@ -255,7 +255,7 @@ class FilterConfig:
 # Framework-specific filter presets
 FRAMEWORK_PRESETS = {
     "ddb-runtime": {
-        "functions": ["DDB::Backtrace::extraction*", "DDB::Runtime::*"],
+        "functions": ["DDB::*"],
         "files": [],
         "description": "DDB runtime backtrace extraction frames"
     },
@@ -289,6 +289,13 @@ FRAMEWORK_PRESETS = {
             "/usr/local/include/grpc*/*"
         ],
         "description": "gRPC and Protocol Buffers internal frames"
+    },
+    "protobuf-gen": {
+        "functions": [],
+        "files": [
+            "*.grpc.pb.cc"
+        ],
+        "description": "Protobuf generated codes"
     }
 }
 

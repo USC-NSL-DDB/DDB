@@ -238,6 +238,7 @@ impl DbgSession {
         
         // apply frame filter settings if any
         if let Some(frame_filter_cfg) = &Config::global().frame_filter {
+            bdr.add(GdbCmd::EnableFrameFilter);
             bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
             for pattern in &frame_filter_cfg.filter_file {
                 let args: FrameFilterAddArgs = pattern.into();

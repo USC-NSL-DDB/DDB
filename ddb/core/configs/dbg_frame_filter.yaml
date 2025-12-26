@@ -21,14 +21,14 @@
 
 FrameFilter:
   filter_file: 
-    - name: "dbg_frame_filter.cpp"
+    - pattern: "dbg_frame_filter.cpp"
       match_type: "exact" # exact | glob | regex 
-    - name: "dbg_frame_filter.h"
+    - pattern: "dbg_frame_filter.h"
       match_type: "exact" # exact | glob | regex
   filter_function:
-    - name: "filtered_function"
+    - pattern: "filtered_function"
       match_type: "exact" # exact | glob | regex
-    - name: "filtered_*"
+    - pattern: "filtered_*"
       match_type: "glob" # exact | glob | regex
   filter_preset:
     - "cpp-stdlib"

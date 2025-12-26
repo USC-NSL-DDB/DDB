@@ -57,7 +57,9 @@ impl Config {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FrameFilterPatternConfig {
+    #[serde(rename = "pattern")]
     pattern: String,
+    #[serde(rename = "match_type")]
     match_type: FrameFilterMatchType
 }
 
@@ -75,8 +77,11 @@ impl Into<FrameFilterAddArgs> for &FrameFilterPatternConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FrameFilterConfig {
+    #[serde(default)]
     pub filter_file: Vec<FrameFilterPatternConfig>,
+    #[serde(default)]
     pub filter_function: Vec<FrameFilterPatternConfig>,
+    #[serde(default)]
     pub filter_preset: Vec<String>,
 }
 
