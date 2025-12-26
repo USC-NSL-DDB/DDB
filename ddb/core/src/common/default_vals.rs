@@ -12,6 +12,9 @@ pub const DEFAULT_EMBEDED_GDB_EXT_PATH: &str = "gdb_ext/runtime-gdb.py";
 pub const DEFAULT_GDB_EXT_DIR: &str = "/tmp/ddb/gdb_ext";
 pub const DEFAULT_GDB_EXT_NAME: &str = "runtime-gdb.py";
 
+pub const DEFAULT_EMBEDED_GDB_EXT_FRAME_FILTER_PATH: &str = "gdb_ext/runtime-gdb-frame-filter.py";
+pub const DEFAULT_GDB_EXT_FRAME_FILTER_NAME: &str = "runtime-gdb-frame-filter.py";
+
 pub const EMBEDED_PROCLET_GDB_EXT_PATH: &str = "gdb_ext/proclet.py";
 pub const PROCLET_GDB_EXT_NAME: &str = "proclet.py";
 

@@ -1,0 +1,44 @@
+---
+# PreTasks:
+# - name: "Restart runtime"
+#   command: "./nu_scripts/start_rt.sh"
+
+# PostTasks:
+# - name: "Shutdown runtime"
+#   command: "./nu_scripts/stop_rt.sh"
+# Framework: serviceweaverkube
+# Framework: nu
+
+# PrerunGdbCommands:
+# - name: "enable script"
+#   command: "source ../gdb_ext/runtime-gdb-grpc.py"
+# - name: "enable non-stop mode"
+#   command: "set non-stop off"
+
+# SSH:
+#   user: ybyan
+  # port: 22
+
+FrameFilter:
+  filter_file: 
+    - pattern: "dbg_frame_filter.cpp"
+      match_type: "exact" # exact | glob | regex 
+    - pattern: "dbg_frame_filter.h"
+      match_type: "exact" # exact | glob | regex
+  filter_function:
+    - pattern: "filtered_function"
+      match_type: "exact" # exact | glob | regex
+    - pattern: "filtered_*"
+      match_type: "glob" # exact | glob | regex
+  filter_preset:
+    - "cpp-stdlib"
+    - "grpc"
+
+ServiceDiscovery:
+  Broker:
+    hostname: 127.0.0.1
+    managed:
+      type: emqx
+
+Conf:
+  on_exit: kill
