@@ -181,6 +181,7 @@ impl SetupProcedure {
         // However, the return value is currently not used
         // For now, we assume the script is written to the default location
         utils::gdb::setup_gdb_ext_script()?;
+        utils::gdb::setup_gdb_ext_frame_filter_script()?;
         
         if common::Config::global().conf.support_migration {
             let path = utils::gdb::setup_proclet_ext_script()?; 
