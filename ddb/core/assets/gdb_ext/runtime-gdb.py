@@ -43,6 +43,9 @@ def log_level_to_int(level: LogLevel) -> int:
     return level_map.get(level, 0)
 
 
+gdb.write("Loading DDB support.\n")
+FAKETIME_PRESENT: bool = False
+IN_INIT: bool = True
 G_LOG_LEVEL = LogLevel.INFO
 
 
@@ -69,10 +72,6 @@ def dbg(level: LogLevel, *args):
             out_str += f"{arg!r} "
         out_str += "\n"
         gdb.write(out_str)
-
-
-gdb.write("Loading DDB support.\n")
-FAKETIME_PRESENT: bool = False
 
 
 class Arch(Enum):
@@ -685,7 +684,13 @@ accumulated_time = 0
 
 
 def stop_handler(event: gdb.StopEvent):
-    global pause_start_time
+    global pause_start_time, IN_INIT, FAKETIME_PRESENT
+    if IN_INIT:
+        check_faketime_present()
+        IN_INIT = False
+    if not FAKETIME_PRESENT:
+        dbg(LogLevel.DEBUG, "FAKETIME not present, stop handler is skipped.")
+        return
     pause_start_time = time.perf_counter_ns()
     dbg(LogLevel.DEBUG, f"pause detected, ts (ns) at pause: {pause_start_time}")
 
@@ -696,8 +701,13 @@ gdb.events.stop.connect(stop_handler)
 def sync_pause_time(
     on_finish: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    global pause_start_time, accumulated_time
+    global pause_start_time, accumulated_time, FAKETIME_PRESENT
     ret = {}
+    if not FAKETIME_PRESENT:
+        ret = on_finish() if on_finish else {}
+        dbg(LogLevel.DEBUG, "Time sync is skipped due to FAKETIME not present.")
+        return ret
+
     try:
         curr_ts_ns = time.perf_counter_ns()
         dbg(LogLevel.DEBUG, f"current timestamp: {curr_ts_ns}")
@@ -713,16 +723,18 @@ def sync_pause_time(
             LogLevel.DEBUG,
             f"pause_duration: {pause_duration_s} s, accumulated_time: {accumulated_time} s",
         )
-        modify_env_variable("FAKETIME", f"-{accumulated_time}")
-        dbg(
-            LogLevel.DEBUG,
-            f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
-        )
-
-        dbg(
-            LogLevel.DEBUG,
-            f"sync_pause_time completed, total paused time: {accumulated_time} s",
-        )
+        success = modify_env_variable("FAKETIME", f"-{accumulated_time}")
+        if not success:
+            dbg(LogLevel.WARNING, "Setting FAKETIME failed while FAKETIME is present.")
+        else:
+            dbg(
+                LogLevel.DEBUG,
+                f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
+            )
+            dbg(
+                LogLevel.DEBUG,
+                f"sync_pause_time completed, total paused time: {accumulated_time} s",
+            )
     except Exception as e:
         dbg(LogLevel.ERROR, f"sync_pause_time error: {e}")
     finally:
