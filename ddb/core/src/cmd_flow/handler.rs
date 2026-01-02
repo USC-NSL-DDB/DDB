@@ -493,8 +493,6 @@ impl DistributeBacktraceHandler {
             .get_payload_mut()
             .unwrap();
         let (sid, _) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-        //print out the payload
-        // println!("payload: {:?}", payload);
         for frame in payload
             .get_mut("stack")
             .unwrap()
@@ -522,12 +520,10 @@ impl DistributeBacktraceHandler {
         {
             Ok(meta) => Some(meta),
             Err(e) => {
-                error!("No dbt metadata is found: {:?}", e);
+                debug!("No dbt metadata is found due to: {:?}.", e);
                 None
             }
         };
-        // println!("remote_bt_parent_meta: {:?}", remote_bt_parent_meta);
-        // println!("resp: {:?}", stack_resp);
         Ok(BacktraceData {
             bt: stack_resp,
             parent_meta: remote_bt_parent_meta,
