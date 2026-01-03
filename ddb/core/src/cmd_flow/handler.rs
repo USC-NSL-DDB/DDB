@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -486,19 +486,8 @@ impl DistributeBacktraceHandler {
             .to_default_target()
             .await?;
 
-        let payload = stack_resp
-            .get_responses_mut()
-            .first_mut()
-            .unwrap()
-            .get_payload_mut()
-            .unwrap();
         let (sid, _) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-        for frame in payload
-            .get_mut("stack")
-            .unwrap()
-            .expect_list_ref_mut()
-            .unwrap()
-            .iter_mut()
+        for frame in Self::get_stack_ref_mut(&mut stack_resp).iter_mut()
         {
             let frame = frame.expect_dict_ref_mut().unwrap();
             frame.insert("session".to_string(), sid.to_string().into());
@@ -598,6 +587,13 @@ impl DistributeBacktraceHandler {
             .unwrap()
             .expect_list()
             .unwrap()
+    }
+    fn update_frame_levels<'a>(responses: &'a mut FinishedCmd) {
+        let stack = Self::get_stack_ref_mut(responses);
+        for (i, frame) in stack.iter_mut().enumerate() {
+            let frame = frame.expect_dict_ref_mut().unwrap();
+            frame.insert("level".to_string(), (i as u64).to_string().into());
+        }
     }
 }
 
@@ -723,6 +719,19 @@ impl Handler for DistributeBacktraceHandler {
                         Ok(data) => {
                             // move the backtrace to the output payload
                             let frames = Self::get_stack_owned(data.bt);
+                            let (sid, _) = STATES.get_ltid_by_gtid(inspect_gtid).unwrap().into();
+                            let boundary_frame: gdbmi::raw::Value = HashMap::from([
+                                ("line".to_string(), "0".into()),
+                                ("level".to_string(), "-1".into()),
+                                ("func".to_string(), "<boundary>".into()),
+                                ("addr".to_string(), "0xDEADBEEF".into()),
+                                ("file".to_string(), "???".into()),
+                                ("arch".to_string(), "???".into()),
+                                ("session".to_string(), sid.to_string().into()),
+                                ("thread".to_string(), inspect_gtid.to_string().into()),
+                                ("boundary_frame".to_string(), "1".into()),
+                            ]).into();
+                            Self::get_stack_ref_mut(&mut out_result).push(boundary_frame);
                             Self::get_stack_ref_mut(&mut out_result).extend(frames);
 
                             if let Some(parent_meta) = data.parent_meta {
@@ -745,6 +754,9 @@ impl Handler for DistributeBacktraceHandler {
                         .unwrap();
                 }
             }
+            // finally, update frame levels
+            // This ensures the levels are incrementally increased from 0..n
+            Self::update_frame_levels(&mut out_result);
             output::emit_static(out_result, PlainFormatter);
         }
     }
