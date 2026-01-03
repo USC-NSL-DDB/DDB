@@ -35,7 +35,7 @@ jobs:
       
       - name: Run cargo check
         working-directory: ddb
-        run: cargo check
+        run: cargo check -p ddb
       
       - name: Run cargo test for ddb package
         working-directory: ddb
