@@ -756,7 +756,7 @@ impl Handler for DistributeBacktraceHandler {
                 }
             }
             // finally, update frame levels
-            // This ensure the levels are incremental increased from 0..n
+            // This ensures the levels are incrementally increased from 0..n
             Self::update_frame_levels(&mut out_result);
             output::emit_static(out_result, PlainFormatter);
         }
