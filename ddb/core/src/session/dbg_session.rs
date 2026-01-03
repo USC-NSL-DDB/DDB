@@ -229,15 +229,15 @@ impl DbgSession {
             _ => {}
         }
 
-        // source GDB extension scripts
-        let gdb_ext_frame_filter_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
-        bdr.add(GdbCmd::ConsoleExec(format!(
-            r#"source {}"#,
-            gdb_ext_frame_filter_path.to_str().unwrap()
-        )));
-        
         // apply frame filter settings if any
         if let Some(frame_filter_cfg) = &Config::global().frame_filter {
+            debug!("Applying frame filter settings: {:?}", frame_filter_cfg);
+            let gdb_ext_frame_filter_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
+            bdr.add(GdbCmd::ConsoleExec(format!(
+                r#"source {}"#,
+                gdb_ext_frame_filter_path.to_str().unwrap()
+            )));
+
             bdr.add(GdbCmd::EnableFrameFilter);
             bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
             for pattern in &frame_filter_cfg.filter_file {

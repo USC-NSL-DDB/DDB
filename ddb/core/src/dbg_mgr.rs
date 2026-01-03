@@ -215,7 +215,7 @@ impl DbgManager {
                 let (exited_sender, _exited) = tokio::sync::watch::channel(false);
                 let mut jump_host_session = russh::client::connect(
                     Arc::new(Config::default()),
-                    (swc.jump_clinet_host.clone(), swc.jump_client_port),
+                    (swc.jump_client_host.clone(), swc.jump_client_port),
                     crate::connection::ssh_client_channel::SSHProxyClientHandler(exited_sender),
                 )
                 .await

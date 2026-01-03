@@ -95,7 +95,9 @@ impl DiscoveryMessageProducer for K8sProducer {
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         let kubeconfig_path =
-            Path::new("/home/junzhouh/distributed_debugger/SocialNetwork-serviceweaver/kubeconfig");
+            Path::new(self.config.service_weaver_conf.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ServiceWeaver configuration is required but not provided"))?
+            .kubectl_config_path.as_str());
         let kubeconfig = Kubeconfig::read_from(kubeconfig_path)?;
         let mut config =
             Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;
@@ -207,80 +209,4 @@ impl DiscoveryMessageProducer for K8sProducer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
 
-    use super::*;
-    use futures::{StreamExt, TryStreamExt};
-    use k8s_openapi::api::core::v1::Pod;
-    use kube::api::{ListParams, WatchEvent, WatchParams};
-    use kube::config::{KubeConfigOptions, Kubeconfig};
-    use kube::{Api, Client, Config};
-
-    #[tokio::test]
-    async fn test_list_and_watch_pods() -> Result<(), Box<dyn std::error::Error>> {
-        // Initialize Kubernetes client (assumes a valid KUBECONFIG or in-cluster configuration)
-        let kubeconfig_path =
-            Path::new("/home/junzhouh/distributed_debugger/SocialNetwork-serviceweaver/kubeconfig");
-        let kubeconfig = Kubeconfig::read_from(kubeconfig_path)?;
-        let mut config =
-            Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;
-        config.accept_invalid_certs = true;
-        let client = Client::try_from(config)?;
-        let pods: Api<Pod> = Api::namespaced(client, "default");
-
-        // Define label selector for pods with serviceweaver/name equal to "my-label"
-        let label_selector = "serviceweaver/app=server.out";
-        let lp = ListParams::default().labels(label_selector);
-
-        // List existing pods
-        let pod_list = pods.list(&lp).await?;
-        println!(
-            "Found {} pods with label {}:",
-            pod_list.items.len(),
-            label_selector
-        );
-        for pod in pod_list.items {
-            println!(" - {}", pod.metadata.name.unwrap_or_default());
-        }
-        // Start watching for pod events
-        // For testing, we'll process a limited number of events
-        // For testing, we'll process a limited number of events
-        let wp = WatchParams::default().labels(label_selector);
-        let mut stream = pods.watch(&wp, "0").await?.boxed();
-        let mut event_count = 0;
-        while let Some(status) = stream.try_next().await? {
-            match status {
-                WatchEvent::Added(pod) => {
-                    // Specify the namespace and pod name
-                    let namespace = "default";
-                    let pod_name = pod.metadata.name.unwrap_or_default();
-                    println!("Try to get PID for pod: {}", pod_name);
-                    let pid = get_pod_pid(&pods, &pod_name, "server.out").await?;
-                    println!("New pod added: {}", pod_name);
-                    println!("PID: {}", pid);
-                }
-                WatchEvent::Modified(pod) => {
-                    println!("Pod modified: {}", pod.metadata.name.unwrap_or_default());
-                }
-                WatchEvent::Deleted(pod) => {
-                    println!("Pod deleted: {}", pod.metadata.name.unwrap_or_default());
-                }
-                WatchEvent::Bookmark(_) => { /* Ignore bookmarks */ }
-                WatchEvent::Error(e) => {
-                    eprintln!("Watch error: {:?}", e);
-                    break;
-                }
-            }
-            event_count += 1;
-            // For test purposes, break after a few events
-            if event_count >= 10000 {
-                break;
-            }
-        }
-
-        // Test passes if the code runs without panicking.
-        Ok(())
-    }
-}
