@@ -588,7 +588,6 @@ impl DistributeBacktraceHandler {
             .expect_list()
             .unwrap()
     }
-    
     fn update_frame_levels<'a>(responses: &'a mut FinishedCmd) {
         let stack = Self::get_stack_ref_mut(responses);
         for (i, frame) in stack.iter_mut().enumerate() {
