@@ -1,0 +1,42 @@
+name: DDB Core Compilation Check
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - 'ddb/**/*.rs'
+      - 'ddb/**/Cargo.toml'
+      - 'ddb/**/Cargo.lock'
+      - '.github/workflows/rust-check.yml'
+  pull_request:
+    paths:
+      - 'ddb/**/*.rs'
+      - 'ddb/**/Cargo.toml'
+      - 'ddb/**/Cargo.lock'
+      - '.github/workflows/rust-check.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: DDB Core Compilation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          rustflags: ""
+      
+      - name: Run cargo check
+        working-directory: ddb
+        run: cargo check
+      
+      - name: Run cargo test for ddb package
+        working-directory: ddb
+        run: cargo test -p ddb
