@@ -77,6 +77,12 @@ impl From<&str> for Value {
     }
 }
 
+impl From<HashMap<String, Value>> for Value {
+    fn from(map: HashMap<String, Value>) -> Self {
+        Self::Dict(Dict::from(map))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct Dict(pub HashMap<String, Value>);
 
