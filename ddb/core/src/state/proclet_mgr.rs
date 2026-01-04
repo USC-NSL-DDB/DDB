@@ -1,4 +1,3 @@
-
 use std::fmt::{Debug, Display};
 
 use dashmap::DashMap;
@@ -13,7 +12,11 @@ pub struct ProcletMgr {
 
 impl Display for ProcletMgr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ProcletMgr {{ caladan_ip_to_sid: {:?} }}", self.caladan_ip_to_sid)
+        write!(
+            f,
+            "ProcletMgr {{ caladan_ip_to_sid: {:?} }}",
+            self.caladan_ip_to_sid
+        )
     }
 }
 

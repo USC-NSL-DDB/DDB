@@ -1,8 +1,8 @@
 pub mod proclet_ctrl;
 pub mod proclet_restore;
 
-use std::sync::OnceLock;
 use proclet_restore::ProcletRestorationMgr;
+use std::sync::OnceLock;
 
 // re-export just for being lazy...
 fn next_rpc_req_id() -> u64 {

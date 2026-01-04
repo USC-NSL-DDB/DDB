@@ -182,10 +182,13 @@ impl SetupProcedure {
         // For now, we assume the script is written to the default location
         utils::gdb::setup_gdb_ext_script()?;
         utils::gdb::setup_gdb_ext_frame_filter_script()?;
-        
+
         if common::Config::global().conf.support_migration {
-            let path = utils::gdb::setup_proclet_ext_script()?; 
-            info!("feature: [ENABLED] proclet migration. Proclet gdb ext script written to: {}", path.display());
+            let path = utils::gdb::setup_proclet_ext_script()?;
+            info!(
+                "feature: [ENABLED] proclet migration. Proclet gdb ext script written to: {}",
+                path.display()
+            );
         } else {
             info!("feature: [DISALED] proclet migration.");
         }

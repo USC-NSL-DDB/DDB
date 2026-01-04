@@ -58,6 +58,7 @@ impl ProcletCtrlHdr {
         let cmd_size = std::mem::size_of::<u32>();
         let len_size = std::mem::size_of::<u32>();
         let token_size = std::mem::size_of::<u64>();
+        #[allow(unused_assignments)]
         let mut start = 0;
         let mut end = cmd_size;
         let cmd = u32::from_be_bytes(bytes[0..end].try_into().unwrap());
@@ -258,13 +259,14 @@ impl ProcletCtrlClient {
                 debug!("Proclet ID: {}, Caladan IP: {}", proc_id, caladan_ip);
                 // some sanity checks...
                 assert_eq!(
-                    proclet_id,
-                    proc_id,
+                    proclet_id, proc_id,
                     "Proclet ID mismatch: expected {}, got {}",
-                    proclet_id,
-                    proc_id
+                    proclet_id, proc_id
                 );
-                Ok(QueryProcletResp { proclet_id, caladan_ip })
+                Ok(QueryProcletResp {
+                    proclet_id,
+                    caladan_ip,
+                })
             }
             _ => {
                 error!("Unexpected response type");

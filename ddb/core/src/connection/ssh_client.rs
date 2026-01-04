@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use russh::{
@@ -166,7 +166,8 @@ impl SSHConnection {
             }
             _ => {
                 return Err(SSHConnectionError::NonRetryable(anyhow::anyhow!(
-                    "SSH authentication failed. Auth result: {:?}", auth_result
+                    "SSH authentication failed. Auth result: {:?}",
+                    auth_result
                 )));
             }
         }

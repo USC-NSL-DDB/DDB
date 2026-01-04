@@ -1,11 +1,10 @@
 pub mod broker;
+pub mod discovery_message_producer;
+pub mod k8s_producer;
+pub mod mqtt_producer;
 pub mod service_mgr;
 pub mod subscriber;
-pub mod discovery_message_producer;
-pub mod mqtt_producer;
-pub mod k8s_producer;
 pub use discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo};
-
 
 #[cfg(test)]
 mod tests {

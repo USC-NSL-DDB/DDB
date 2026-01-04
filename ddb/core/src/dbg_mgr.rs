@@ -11,7 +11,7 @@ use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
-use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp, QueryProcletResp};
+use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
     common::{self, config::Framework},
@@ -168,7 +168,7 @@ impl DbgManager {
 
         if self.sessions.is_empty() {
             debug!("No more sessions in GdbManager. Possibly shutting down…");
-            crate::SHUTDOWN_SIGNAL.trigger();
+            crate::SHUTDOWN_SIGNAL.trigger_once(crate::status::ShutdownCause::NoSessions);
         }
     }
 
@@ -307,7 +307,8 @@ impl DbgManagable for DbgManager {
     async fn cleanup(&self) {
         // 1) Shutdown the service discovery if it exists
         if let Some(sd) = &mut *self.sd.lock().await {
-            sd.shutdown().await;
+            // bound shutdown of discovery to the global timeout
+            let _ = tokio::time::timeout(crate::status::SHUTDOWN_TIMEOUT, sd.shutdown()).await;
         }
 
         // 2) Clean up all existing sessions
@@ -323,8 +324,8 @@ impl DbgManagable for DbgManager {
             }
         }
 
-        // Wait for session cleanup
-        join_all(tasks).await;
+        // Wait for session cleanup, but bound by shutdown timeout
+        let _ = tokio::time::timeout(crate::status::SHUTDOWN_TIMEOUT, join_all(tasks)).await;
 
         debug!("GdbManager cleanup complete.");
     }

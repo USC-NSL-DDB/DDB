@@ -10,13 +10,13 @@ use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{sync::watch, time};
 use tracing::debug;
 
+use super::{RemoteConnectable, SSHIo};
 use crate::{
     common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH,
     dbg_ctrl::{InputReceiver, OutputSender},
 };
-use super::{RemoteConnectable, SSHIo};
-/// SSHProxyCred holds the credentials to connect to the "inner" host 
-/// (the one behind the bastion). We still need a private key for 
+/// SSHProxyCred holds the credentials to connect to the "inner" host
+/// (the one behind the bastion). We still need a private key for
 /// the second hop's authentication.
 #[derive(Debug, Clone)]
 pub struct SSHProxyCred {
@@ -127,7 +127,7 @@ impl SSHProxyConnection {
         }
     }
 
-    /// Actually do the "SSH over SSH" connection: 
+    /// Actually do the "SSH over SSH" connection:
     /// 1) Open a direct TCP/IP channel to the target using the already-connected bastion session.
     /// 2) Run a new SSH client handshake over that channel using `connect_stream`.
     /// 3) Authenticate with the target.
@@ -158,30 +158,29 @@ impl SSHProxyConnection {
         // Step 4: authenticate to the target (inner) host
         if let Some(password) = &self.cred.target_password {
             debug!("Attempting password authentication");
-            match session.authenticate_password(self.cred.target_username.clone(), password).await {
-                Ok(auth_result) => {
-                    match auth_result {
-                        russh::client::AuthResult::Success => {
-                            debug!("Password authentication successful");
-                        }
-                        russh::client::AuthResult::Failure { remaining_methods } => {
-                            return Err(anyhow::anyhow!(
-                                "Password authentication failed. Available methods: {:?}", 
-                                remaining_methods
-                            ));
-                        }
+            match session
+                .authenticate_password(self.cred.target_username.clone(), password)
+                .await
+            {
+                Ok(auth_result) => match auth_result {
+                    russh::client::AuthResult::Success => {
+                        debug!("Password authentication successful");
                     }
-                }
+                    russh::client::AuthResult::Failure { remaining_methods } => {
+                        return Err(anyhow::anyhow!(
+                            "Password authentication failed. Available methods: {:?}",
+                            remaining_methods
+                        ));
+                    }
+                },
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "Authentication error: {:?}", 
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Authentication error: {:?}", e));
                 }
             }
         } else {
             debug!("Attempting public key authentication");
-            let key_pair = load_secret_key(self.cred.target_private_key_path.clone().unwrap(), None)?;
+            let key_pair =
+                load_secret_key(self.cred.target_private_key_path.clone().unwrap(), None)?;
             match session
                 .authenticate_publickey(
                     self.cred.target_username.clone(),
@@ -190,30 +189,25 @@ impl SSHProxyConnection {
                         session.best_supported_rsa_hash().await.unwrap().flatten(),
                     ),
                 )
-                .await 
+                .await
             {
-                Ok(auth_result) => {
-                    match auth_result {
-                        russh::client::AuthResult::Success => {
-                            debug!("Public key authentication successful");
-                        }
-                        russh::client::AuthResult::Failure { remaining_methods } => {
-                            return Err(anyhow::anyhow!(
-                                "Public key authentication failed. Available methods: {:?}", 
-                                remaining_methods
-                            ));
-                        }
+                Ok(auth_result) => match auth_result {
+                    russh::client::AuthResult::Success => {
+                        debug!("Public key authentication successful");
                     }
-                }
+                    russh::client::AuthResult::Failure { remaining_methods } => {
+                        return Err(anyhow::anyhow!(
+                            "Public key authentication failed. Available methods: {:?}",
+                            remaining_methods
+                        ));
+                    }
+                },
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "Authentication error: {:?}", 
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Authentication error: {:?}", e));
                 }
             }
         }
-    
+
         self.inner_session = Some(session);
         Ok(())
     }
@@ -284,7 +278,8 @@ impl RemoteConnectable for SSHProxyConnection {
                 Err(e) => {
                     debug!(
                         "(Proxy) Failed to connect via bastion: {}. Retrying... (attempt {})",
-                        e, counter + 1
+                        e,
+                        counter + 1
                     );
                 }
             }
@@ -341,8 +336,6 @@ impl RemoteConnectable for SSHProxyConnection {
     }
 }
 
-
-
 // Typically in tests/integration_tests/ssh_proxy_integration.rs
 #[cfg(test)]
 mod integration_tests {
@@ -350,7 +343,7 @@ mod integration_tests {
     use super::*;
     use std::sync::Once;
     use tracing::debug;
-    use tracing_subscriber::{FmtSubscriber, EnvFilter};
+    use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
     static INIT: Once = Once::new();
 
@@ -370,7 +363,7 @@ mod integration_tests {
     }
     use super::*;
     use anyhow::Result;
+    use russh::client::Config as SSHConfig;
     use std::sync::Arc;
     use tokio::{runtime::Runtime, time::Duration};
-    use russh::client::Config as SSHConfig;
 }

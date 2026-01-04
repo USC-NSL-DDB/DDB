@@ -7,7 +7,7 @@ use tracing::{debug, error};
 use super::{
     framework_adapter::FrameworkCommandAdapter,
     handler::*,
-    router::{Router, Target},
+    router::Target,
     DynFormatter, OutgoingCmd, OutputSource,
 };
 use crate::{
@@ -369,9 +369,16 @@ impl CmdHandler {
     pub fn register_handler<H: Handler + 'static>(&self, prefix: &str, handler: H) {
         self.handlers.insert(prefix.to_string(), Box::new(handler));
     }
-    
+
     #[allow(unused)]
-    pub fn register_handler_with_initializer<H: Handler + 'static, F: FnOnce(Arc<dyn FrameworkCommandAdapter>) -> H>(&self, prefix: &str, initializer: F) {
+    pub fn register_handler_with_initializer<
+        H: Handler + 'static,
+        F: FnOnce(Arc<dyn FrameworkCommandAdapter>) -> H,
+    >(
+        &self,
+        prefix: &str,
+        initializer: F,
+    ) {
         let handler = initializer(self.adapter.clone());
         self.handlers.insert(prefix.to_string(), Box::new(handler));
     }

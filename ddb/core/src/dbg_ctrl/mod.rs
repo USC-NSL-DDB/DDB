@@ -1,5 +1,5 @@
-pub mod dbg_ctrl;
 pub mod dbg_bridge_ctrl;
+pub mod dbg_ctrl;
 use bytes::Bytes;
 pub use dbg_ctrl::*;
 

@@ -1,8 +1,7 @@
 use crate::common::config::GdbCommand;
 
 use super::DbgCmdGenerator;
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,7 +24,7 @@ impl FrameFilterMatchType {
 #[derive(Debug, Clone)]
 pub struct FrameFilterAddArgs {
     pattern: String,
-    match_type: FrameFilterMatchType
+    match_type: FrameFilterMatchType,
 }
 
 impl FrameFilterAddArgs {
@@ -34,8 +33,8 @@ impl FrameFilterAddArgs {
             pattern: pattern.to_string(),
             match_type,
         }
-    } 
-    
+    }
+
     pub fn to_string(&self) -> String {
         format!("{} --match-type {}", self.pattern, self.match_type.as_str())
     }
@@ -51,8 +50,8 @@ impl FrameFilterRemoveArgs {
         Self {
             pattern: pattern.to_string(),
         }
-    } 
-    
+    }
+
     pub fn as_str(&self) -> &str {
         &self.pattern
     }
@@ -69,7 +68,7 @@ pub enum FrameFilterCmdArg {
     RemoveFile(FrameFilterRemoveArgs),
     PresetEnable(String),
     PresetDisable(String),
-    Clear
+    Clear,
 }
 
 impl FrameFilterCmdArg {
@@ -78,7 +77,9 @@ impl FrameFilterCmdArg {
             FrameFilterCmdArg::Enable => "--enable".to_string(),
             FrameFilterCmdArg::Disable => "--disable".to_string(),
             FrameFilterCmdArg::AddFunction(args) => format!("--add-function {}", args.to_string()),
-            FrameFilterCmdArg::RemoveFunction(args) => format!("--remove-function {}", args.as_str()),
+            FrameFilterCmdArg::RemoveFunction(args) => {
+                format!("--remove-function {}", args.as_str())
+            }
             FrameFilterCmdArg::AddFile(args) => format!("--add-file {}", args.to_string()),
             FrameFilterCmdArg::RemoveFile(args) => format!("--remove-file {}", args.as_str()),
             FrameFilterCmdArg::PresetEnable(name) => format!("--preset-enable {}", name),
@@ -89,7 +90,6 @@ impl FrameFilterCmdArg {
 }
 
 const DDB_FILTER_CONFIG_CMD: &str = "-ddb-filter-config";
-
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -258,7 +258,10 @@ mod tests {
         assert_eq!(cmds.len(), 7);
         assert_eq!(cmds[0].trim(), "-gdb-set logging enabled on");
         assert_eq!(cmds[1].trim(), "-gdb-set mi-async on");
-        assert_eq!(cmds[2].trim(), r#"-interpreter-exec console "info registers""#);
+        assert_eq!(
+            cmds[2].trim(),
+            r#"-interpreter-exec console "info registers""#
+        );
         assert_eq!(cmds[3].trim(), "-target-attach 1234");
         assert_eq!(cmds[4].trim(), "-file-exec-and-symbols /path/to/bin");
         assert_eq!(cmds[5].trim(), "-exec-arguments arg1 arg2");

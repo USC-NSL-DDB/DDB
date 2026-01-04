@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::api::server::ApiServer;
+use crate::status::{Component, SHUTDOWN_ACKS};
 
 pub struct App {
     api_svr: Arc<ApiServer>,
@@ -23,15 +24,23 @@ impl App {
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
         let server = Arc::clone(&self.api_svr);
         self.api_svr_handle = Some(std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async {
-                if let Err(error) = server.run().await {
+                if let Err(error) = server.run(shutdown_rx).await {
                     error!("Error running server: {}", error);
                 }
+                info!("API server stopped");
+                SHUTDOWN_ACKS.ack(Component::Api);
             });
         }));
+    }
+
+    pub fn join(&mut self) {
+        if let Some(handle) = self.api_svr_handle.take() {
+            let _ = handle.join();
+        }
     }
 }

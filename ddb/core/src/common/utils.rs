@@ -29,7 +29,9 @@ pub mod gdb {
     use std::path::{Path, PathBuf};
 
     use crate::common::default_vals::{
-        DEFAULT_EMBEDED_GDB_EXT_FRAME_FILTER_PATH, DEFAULT_EMBEDED_GDB_EXT_PATH, DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_FRAME_FILTER_NAME, DEFAULT_GDB_EXT_NAME, DEFAULT_MI_VERSION, EMBEDED_PROCLET_GDB_EXT_PATH, PROCLET_GDB_EXT_NAME
+        DEFAULT_EMBEDED_GDB_EXT_FRAME_FILTER_PATH, DEFAULT_EMBEDED_GDB_EXT_PATH,
+        DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_FRAME_FILTER_NAME, DEFAULT_GDB_EXT_NAME,
+        DEFAULT_MI_VERSION, EMBEDED_PROCLET_GDB_EXT_PATH, PROCLET_GDB_EXT_NAME,
     };
     use crate::Asset;
     use anyhow::{Context, Result};
@@ -90,14 +92,13 @@ pub mod gdb {
             )
         }
     }
-    
+
     fn write_gdb_ext_script(file_path: &PathBuf, content: &[u8]) -> Result<PathBuf> {
         // Write the content to the script file
         // NOTE: this file should be shared across
         // all nodes in the cluster and be mounted
         // to the same path on each node
-        fs::write(&file_path, content)
-            .context("Failed to create gdb extension script")?;
+        fs::write(&file_path, content).context("Failed to create gdb extension script")?;
 
         // Return the absolute file path
         Ok(file_path
@@ -112,7 +113,7 @@ pub mod gdb {
         let file_path = path.join(DEFAULT_GDB_EXT_NAME);
         Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
     }
-    
+
     pub fn setup_gdb_ext_frame_filter_script() -> Result<PathBuf> {
         let script_content = Asset::get(DEFAULT_EMBEDED_GDB_EXT_FRAME_FILTER_PATH)
             .context("Failed to get gdb frame filter script")?;
@@ -120,10 +121,10 @@ pub mod gdb {
         let file_path = path.join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
         Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
     }
-    
+
     pub fn setup_proclet_ext_script() -> Result<PathBuf> {
-        let script_content = Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH)
-            .context("Failed to get embeded proclet.py")?;
+        let script_content =
+            Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH).context("Failed to get embeded proclet.py")?;
         let path = Path::new(DEFAULT_GDB_EXT_DIR);
         let file_path = path.join(PROCLET_GDB_EXT_NAME);
         Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
@@ -267,9 +268,8 @@ mod tests {
         let hostname = get_hostname().expect("Failed to get hostname");
         assert!(!hostname.is_empty(), "Hostname should not be empty");
         // Hostname should be valid UTF-8 and contain only valid characters
-        assert!(hostname.chars().all(|c| c.is_ascii_alphanumeric()
-            || c == '-'
-            || c == '.'
-            || c == '_'));
+        assert!(hostname
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_'));
     }
 }
