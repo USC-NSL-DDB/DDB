@@ -18,13 +18,9 @@ use crate::{
 };
 
 use super::{
-    api, emit_static,
-    framework_adapter::FrameworkCommandAdapter,
-    input::ParsedInputCmd,
-    output,
-    router::Target,
-    FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
-    ThreadInfoFormatter,
+    api, emit_static, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
+    router::Target, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
+    ProcessReadableFormatter, ThreadInfoFormatter,
 };
 
 /// Handler trait for processing parsed commands with routing and formatting logic

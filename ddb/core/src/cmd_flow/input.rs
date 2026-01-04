@@ -5,10 +5,8 @@ use dashmap::DashMap;
 use tracing::{debug, error};
 
 use super::{
-    framework_adapter::FrameworkCommandAdapter,
-    handler::*,
-    router::Target,
-    DynFormatter, OutgoingCmd, OutputSource,
+    framework_adapter::FrameworkCommandAdapter, handler::*, router::Target, DynFormatter,
+    OutgoingCmd, OutputSource,
 };
 use crate::{
     cmd_flow::{

@@ -1,6 +1,8 @@
 use lazy_static::lazy_static;
 use std::{
-    collections::HashMap, sync::{Mutex, OnceLock}, time::Duration
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::Duration,
 };
 use tokio::sync::{oneshot, watch};
 use tracing::{debug, error, info};
