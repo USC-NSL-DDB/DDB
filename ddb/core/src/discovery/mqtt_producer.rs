@@ -231,13 +231,8 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         let _ = self.sig_stop.send(true);
 
         // 2. Wait a short grace period for tasks to exit; abort if still running
-        for mut handle in self.handles.drain(..) {
-            match tokio::time::timeout(crate::status::SHUTDOWN_TIMEOUT, &mut handle).await {
-                Ok(_) => {}
-                Err(_) => {
-                    handle.abort();
-                }
-            }
+        for handle in self.handles.drain(..) {
+            handle.abort();
         }
 
         // 3. Stop broker if we own it

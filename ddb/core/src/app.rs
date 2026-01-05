@@ -2,7 +2,8 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::api::server::ApiServer;
-use crate::status::{Component, SHUTDOWN_ACKS};
+use crate::shutdown::get_shutdown_ctrl;
+use crate::status::{Component};
 
 pub struct App {
     api_svr: Arc<ApiServer>,
@@ -33,7 +34,7 @@ impl App {
                     error!("Error running server: {}", error);
                 }
                 info!("API server stopped");
-                SHUTDOWN_ACKS.ack(Component::Api);
+                get_shutdown_ctrl().ack_shutdown(Component::Api);
             });
         }));
     }
