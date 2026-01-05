@@ -124,7 +124,7 @@ pub mod gdb {
 
     pub fn setup_proclet_ext_script() -> Result<PathBuf> {
         let script_content =
-            Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH).context("Failed to get embeded proclet.py")?;
+            Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH).context("Failed to get embedded proclet.py")?;
         let path = Path::new(DEFAULT_GDB_EXT_DIR);
         let file_path = path.join(PROCLET_GDB_EXT_NAME);
         Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
