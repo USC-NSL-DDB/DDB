@@ -171,8 +171,6 @@ impl ShutdownCtrl {
                 }
             }
         });
-        // join the signal handling thread to ensure it has exited.
-        // self.signal_handling_thrd.take().map(|thrd| thrd.join());
     }
 }
 
