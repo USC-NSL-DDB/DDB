@@ -190,7 +190,7 @@ impl SetupProcedure {
                 path.display()
             );
         } else {
-            info!("feature: [DISALED] proclet migration.");
+            info!("feature: [DISABLED] proclet migration.");
         }
 
         // Setup logging
