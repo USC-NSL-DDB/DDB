@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock}
+    sync::{Mutex, OnceLock},
 };
 use tracing::{debug, error, info};
 
@@ -13,7 +13,6 @@ fn init_rt_status() -> &'static RuntimeStatus {
 pub fn get_rt_status() -> &'static RuntimeStatus {
     init_rt_status()
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Component {

@@ -1,6 +1,9 @@
 use nix::sys::signal::{pthread_sigmask, SigSet, SigmaskHow, Signal};
 use std::{
-    collections::HashMap, future::IntoFuture, sync::{Mutex, OnceLock}, time::Duration
+    collections::HashMap,
+    future::IntoFuture,
+    sync::{Mutex, OnceLock},
+    time::Duration,
 };
 use tokio::{
     sync::{oneshot, watch},
@@ -90,9 +93,12 @@ impl ShutdownCtrl {
 
     pub fn register_ack(&self, component: Component) {
         let receiver = get_shutdown_acks().register(component);
-        self.shutdown_ack_pending.lock().unwrap().push((component, receiver));
+        self.shutdown_ack_pending
+            .lock()
+            .unwrap()
+            .push((component, receiver));
     }
-    
+
     pub fn register_acks(&self, components: &[Component]) {
         for &component in components {
             self.register_ack(component);
@@ -133,7 +139,10 @@ impl ShutdownCtrl {
         }));
     }
 
-    pub async fn shutdown_cleanup<F>(&self, cleanup_fn: F) where F: IntoFuture {
+    pub async fn shutdown_cleanup<F>(&self, cleanup_fn: F)
+    where
+        F: IntoFuture,
+    {
         let _ = timeout(SHUTDOWN_TIMEOUT, cleanup_fn).await;
     }
 

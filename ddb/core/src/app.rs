@@ -3,7 +3,7 @@ use tracing::{error, info};
 
 use crate::api::server::ApiServer;
 use crate::shutdown::get_shutdown_ctrl;
-use crate::status::{Component};
+use crate::status::Component;
 
 pub struct App {
     api_svr: Arc<ApiServer>,
