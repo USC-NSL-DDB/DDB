@@ -12,7 +12,6 @@ pub struct Args {
     // /// Enable debug mode
     // #[arg(long)]
     // pub debug: bool,
-
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub console_log: bool,
 

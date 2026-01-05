@@ -47,9 +47,7 @@ pub struct MIFormatter;
 impl MIFormatter {
     #[inline]
     fn escape_str(input: &str) -> String {
-        input
-            .replace(r#"\"#, r#"\\"#)
-            .replace(r#"""#, r#"\""#)
+        input.replace(r#"\"#, r#"\\"#).replace(r#"""#, r#"\""#)
     }
 
     #[inline]
@@ -339,13 +337,13 @@ mod tests {
 
         assert_eq!(output, expected);
     }
-    
+
     #[test]
     fn test_mi_parse_inner_string_escape() {
         let output = r#"*stopped,reason="end-stepping-range",frame={addr="0x000075e25f7082a5",func="clusterInit",args=[{name="cluster_id",value="0x7ffedc6a85d0 \"cd6fab923d16922ebae3ade229880640\\300\\210j\\334\\376\\177\""}],file="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",fullname="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",line="1087",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="21""#;
-        let msg = GdbParser::parse(output.trim()).unwrap(); 
+        let msg = GdbParser::parse(output.trim()).unwrap();
         // println!("{:?}", msg);
-        
+
         match msg.clone() {
             Message::Response(Response::Notify {
                 token,

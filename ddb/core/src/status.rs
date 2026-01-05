@@ -1,14 +1,8 @@
-use lazy_static::lazy_static;
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},
 };
-use tokio::sync::watch;
 use tracing::{debug, error, info};
-
-lazy_static! {
-    pub static ref SHUTDOWN_SIGNAL: ShutdownCtrl = ShutdownCtrl::new();
-}
 
 static RUNTIME_STATUS: OnceLock<RuntimeStatus> = OnceLock::new();
 
@@ -20,46 +14,11 @@ pub fn get_rt_status() -> &'static RuntimeStatus {
     init_rt_status()
 }
 
-pub struct ShutdownCtrl {
-    tx: Mutex<watch::Sender<bool>>,
-    rx: Mutex<watch::Receiver<bool>>,
-}
-
-impl ShutdownCtrl {
-    pub fn new() -> Self {
-        let (tx, rx) = watch::channel(false);
-        ShutdownCtrl {
-            tx: Mutex::new(tx),
-            rx: Mutex::new(rx),
-        }
-    }
-
-    // Get a new receiver
-    pub fn subscribe(&self) -> watch::Receiver<bool> {
-        self.rx.lock().unwrap().clone()
-    }
-
-    // Trigger shutdown
-    pub fn trigger(&self) {
-        let _ = self.tx.lock().unwrap().send(true);
-    }
-}
-
-#[inline]
-pub async fn wait_for_exit() {
-    let mut mgr_sig = SHUTDOWN_SIGNAL.subscribe();
-    match mgr_sig.changed().await {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Error: {}", e);
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Component {
     CmdFlow,
     DbgMgr,
+    Api,
 }
 
 pub struct RuntimeStatus {

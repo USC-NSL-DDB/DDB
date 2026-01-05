@@ -166,8 +166,7 @@ impl DbgSession {
 
         // Create log directory
         let log_dir = Path::new("/tmp/ddb/gdb_logs");
-        fs::create_dir_all(log_dir)
-            .context("Failed to create GDB log directory")?;
+        fs::create_dir_all(log_dir).context("Failed to create GDB log directory")?;
 
         // Create log file path: /tmp/ddb/gdb_logs/<hostname>_<pid>_gdb.txt
         let log_file = log_dir.join(format!("{}_{}_gdb.txt", hostname, pid));
@@ -232,7 +231,8 @@ impl DbgSession {
         // apply frame filter settings if any
         if let Some(frame_filter_cfg) = &Config::global().frame_filter {
             debug!("Applying frame filter settings: {:?}", frame_filter_cfg);
-            let gdb_ext_frame_filter_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
+            let gdb_ext_frame_filter_path =
+                Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
             bdr.add(GdbCmd::ConsoleExec(format!(
                 r#"source {}"#,
                 gdb_ext_frame_filter_path.to_str().unwrap()

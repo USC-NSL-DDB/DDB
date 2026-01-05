@@ -5,10 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::debug;
 
-use crate::dbg_cmd::{
-    FrameFilterAddArgs,
-    FrameFilterMatchType
-};
+use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterMatchType};
 
 // Global configuration instance
 static mut GLOBAL_CONFIG: Option<Config> = None;
@@ -60,7 +57,7 @@ pub struct FrameFilterPatternConfig {
     #[serde(rename = "pattern")]
     pattern: String,
     #[serde(rename = "match_type")]
-    match_type: FrameFilterMatchType
+    match_type: FrameFilterMatchType,
 }
 
 impl From<FrameFilterPatternConfig> for FrameFilterAddArgs {
@@ -104,9 +101,7 @@ pub struct GdbConf {
 
 impl Default for GdbConf {
     fn default() -> Self {
-        Self {
-            logging: false,
-        }
+        Self { logging: false }
     }
 }
 

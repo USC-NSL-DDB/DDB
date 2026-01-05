@@ -314,8 +314,8 @@ mod tests {
 
     #[test]
     fn test_parse_msg() -> Result {
-        let output= r#"*stopped,frame={addr="0x000000000047b7a3",func="runtime.futex",args=[],file="/home/cc/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.21.6.linux-amd64/src/runtime/sys_linux_amd64.s",fullname="/home/cc/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.21.6.linux-amd64/src/runtime/sys_linux_amd64.s",line="558",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="20""#;
-        let msg=parse_message(output)?;
+        let output = r#"*stopped,frame={addr="0x000000000047b7a3",func="runtime.futex",args=[],file="/home/cc/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.21.6.linux-amd64/src/runtime/sys_linux_amd64.s",fullname="/home/cc/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.21.6.linux-amd64/src/runtime/sys_linux_amd64.s",line="558",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="20""#;
+        let msg = parse_message(output)?;
         println!("{:?}", msg);
         Ok(())
     }

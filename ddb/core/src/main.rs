@@ -9,19 +9,19 @@ mod dbg_ctrl;
 mod dbg_mgr;
 mod dbg_parser;
 mod discovery;
+mod feature;
 mod global;
 mod logging;
 mod session;
 mod setup;
+mod shutdown;
 mod state;
 mod status;
-mod feature;
 
 use std::sync::Arc;
 use std::sync::OnceLock;
 
 use app::App;
-use clap::Parser;
 use cmd_flow::framework_adapter::*;
 use cmd_flow::get_cmd_handler;
 use cmd_flow::init_cmd_handler;
@@ -32,14 +32,15 @@ use dbg_mgr::DbgManagable;
 use dbg_mgr::DbgManager;
 use setup::LoggingSettings;
 use setup::{AppDirConfig, SetupProcedure};
+use shutdown::{get_shutdown_ctrl, ShutdownCause, ShutdownCtrl};
 use status::*;
 
 use anyhow::Result;
+use clap::Parser;
 use console_subscriber;
 use rust_embed::Embed;
 use tokio::io::{self, AsyncBufReadExt};
-use tokio::signal;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Embed)]
 #[folder = "assets/"]
@@ -81,38 +82,25 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
                             continue;
                         }
                         if input == "exit" {
+                            get_shutdown_ctrl().trigger_once(ShutdownCause::UserExit);
                             println!("Exiting command loop...");
                             break;
                         }
                         get_cmd_handler().input(input).await;
                     }
                     Ok(None) => {
+                        get_shutdown_ctrl().trigger_once(ShutdownCause::StdinEof);
                         println!("EOF reached, exiting command loop...");
                         break;
                     }
                     Err(err) => {
+                        get_shutdown_ctrl().trigger_once(ShutdownCause::StdinError);
                         eprintln!("Error reading line: {}", err);
                         break;
                     }
                 }
             }
         }
-    }
-}
-
-async fn handle_signals(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
-    let mut interrupt = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
-    let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
-
-    tokio::select! {
-        _ = interrupt.recv() => {
-            println!("Received SIGINT, shutting down...");
-        }
-        _ = terminate.recv() => {
-            println!("Received SIGTERM, shutting down...");
-        }
-        // receive stop signal from outside, e.g. user inputs exit.
-        _ = stop_sig.changed() => {}
     }
 }
 
@@ -139,13 +127,17 @@ fn main() -> Result<()> {
     }
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
+    get_shutdown_ctrl().setup_signal_handling();
+    get_shutdown_ctrl().register_acks(&[Component::CmdFlow, Component::DbgMgr, Component::Api]);
+
     // Keep the guard to ensure the async logger is running.
     let _guard = SetupProcedure::new()
         .with_app_dir_config(app_dir_conf)
         .with_logging_settings(logging_settings)
         .run()?;
 
-    App::new(Config::global().conf.api_server_port).run();
+    let mut app = App::new(Config::global().conf.api_server_port);
+    app.run(get_shutdown_ctrl().subscribe());
 
     init_cmd_handler(|| {
         let adapter: Arc<dyn FrameworkCommandAdapter> = match Config::global().framework {
@@ -175,9 +167,14 @@ fn main() -> Result<()> {
 
             get_rt_status().up(Component::CmdFlow);
 
-            wait_for_exit().await;
-            cmd_handler.stop();
-            tracker.stop();
+            ShutdownCtrl::wait_for_exit().await;
+            get_shutdown_ctrl()
+                .shutdown_cleanup(async {
+                    cmd_handler.stop();
+                    tracker.stop();
+                })
+                .await;
+            get_shutdown_ctrl().ack_shutdown(Component::CmdFlow);
         });
     });
 
@@ -197,12 +194,17 @@ fn main() -> Result<()> {
 
             get_rt_status().up(Component::DbgMgr);
 
-            wait_for_exit().await;
-            get_dbg_mgr().cleanup().await;
+            ShutdownCtrl::wait_for_exit().await;
+            get_shutdown_ctrl()
+                .shutdown_cleanup(async {
+                    get_dbg_mgr().cleanup().await;
+                })
+                .await;
+            get_shutdown_ctrl().ack_shutdown(Component::DbgMgr);
         });
     });
 
-    // schedule cmd loop and signal handling in the same thread
+    // schedule cmd loop in the same thread
     // the main thread is sit idle and wait for the signal to stop
     let main_loop = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -211,16 +213,11 @@ fn main() -> Result<()> {
             .build()
             .unwrap();
         rt.block_on(async {
-            let cmd_loop_handler = tokio::spawn(run_cmd_loop(SHUTDOWN_SIGNAL.subscribe()));
-            let signal_handler = tokio::spawn(handle_signals(SHUTDOWN_SIGNAL.subscribe()));
+            let cmd_loop_handler = tokio::spawn(run_cmd_loop(get_shutdown_ctrl().subscribe()));
 
             tokio::select! {
-                _ = signal_handler => {
-                    SHUTDOWN_SIGNAL.trigger();
-                }
-                _ = cmd_loop_handler => {
-                    SHUTDOWN_SIGNAL.trigger();
-                }
+                _ = cmd_loop_handler => {}
+                _ = ShutdownCtrl::wait_for_exit() => {}
             }
         });
         // Seems like tokio has trouble shutting down the IO reader properly
@@ -228,10 +225,14 @@ fn main() -> Result<()> {
         rt.shutdown_background();
     });
 
+    get_shutdown_ctrl().wait_for_shutdown();
+
+    app.join();
     main_loop.join().unwrap();
     dbg_handle.join().unwrap();
     cmd_flow_handle.join().unwrap();
 
+    debug!("Exiting due to {:?}", get_shutdown_ctrl().cause());
     info!("Bye!");
     Ok(())
 }

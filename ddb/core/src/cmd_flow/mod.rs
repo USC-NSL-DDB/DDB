@@ -59,7 +59,8 @@ pub use output::*;
 pub use tracker::*;
 
 // Re-export facade API for convenient access
-pub use api::{send, send_and_return, Target, Error as ApiError};
+#[allow(unused_imports)]
+pub use api::{send, send_and_return, Error as ApiError, Target};
 
 use input::CmdHandler;
 use router::Router;
