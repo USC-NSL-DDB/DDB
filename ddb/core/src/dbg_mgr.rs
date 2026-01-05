@@ -325,7 +325,7 @@ impl DbgManagable for DbgManager {
         }
 
         join_all(tasks).await;
-        debug!("GdbManager cleanup complete.");
+        debug!("DbgManager cleanup complete.");
     }
 }
 
