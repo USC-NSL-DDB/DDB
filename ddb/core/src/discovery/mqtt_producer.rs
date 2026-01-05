@@ -230,7 +230,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         // 1. Send stop signal to the monitor/consumer tasks first
         let _ = self.sig_stop.send(true);
 
-        // 2. Wait a short grace period for tasks to exit; abort if still running
+        // 2. Abort ongoing tasks
         for handle in self.handles.drain(..) {
             handle.abort();
         }
