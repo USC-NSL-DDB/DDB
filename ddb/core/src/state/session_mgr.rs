@@ -31,7 +31,7 @@ pub struct ThreadContext {
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum SessionStatus {
     ON,
-    OFF
+    OFF,
 }
 
 impl Into<&str> for SessionStatus {
@@ -51,7 +51,7 @@ pub struct SessionMeta {
     pub t_status: HashMap<u64, ThreadStatus>,
     pub curr_ctx: Option<ThreadContext>,
     pub in_custom_ctx: bool,
-    
+
     pub service_meta: Option<ServiceMeta>,
 
     // indicate of the session is connected or not
@@ -239,7 +239,11 @@ impl SessionStateMgr {
         let sessions = self.sessions.pin();
         sessions.insert(
             sid,
-            Arc::new(RwLock::new(SessionMeta::new(sid, tag.to_string(), service_meta))),
+            Arc::new(RwLock::new(SessionMeta::new(
+                sid,
+                tag.to_string(),
+                service_meta,
+            ))),
         );
     }
 

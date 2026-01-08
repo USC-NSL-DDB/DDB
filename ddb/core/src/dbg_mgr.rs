@@ -11,7 +11,8 @@ use tracing::{debug, error};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
-use crate::feature::proclet_ctrl::{ProcletCtrlClient, ProcletCtrlCmdResp, QueryProcletResp};
+use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
+use crate::shutdown::get_shutdown_ctrl;
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
     common::{self, config::Framework},
@@ -167,8 +168,8 @@ impl DbgManager {
         }
 
         if self.sessions.is_empty() {
-            debug!("No more sessions in GdbManager. Possibly shutting down…");
-            crate::SHUTDOWN_SIGNAL.trigger();
+            debug!("No more sessions in DbgManager. Possibly shutting down…");
+            get_shutdown_ctrl().trigger_once(crate::shutdown::ShutdownCause::NoSessions);
         }
     }
 
@@ -323,10 +324,8 @@ impl DbgManagable for DbgManager {
             }
         }
 
-        // Wait for session cleanup
         join_all(tasks).await;
-
-        debug!("GdbManager cleanup complete.");
+        debug!("DbgManager cleanup complete.");
     }
 }
 

@@ -14,7 +14,6 @@ use kube::{Api, Client, Config};
 use russh::client::Handle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::info;
 
 /// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
 /// `ServiceInfo` events and send them through a channel.
@@ -94,10 +93,16 @@ impl DiscoveryMessageProducer for K8sProducer {
     /// 4. Spawning a monitor task that feeds an internal channel with MQTT events,
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
-        let kubeconfig_path =
-            Path::new(self.config.service_weaver_conf.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ServiceWeaver configuration is required but not provided"))?
-            .kubectl_config_path.as_str());
+        let kubeconfig_path = Path::new(
+            self.config
+                .service_weaver_conf
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("ServiceWeaver configuration is required but not provided")
+                })?
+                .kubectl_config_path
+                .as_str(),
+        );
         let kubeconfig = Kubeconfig::read_from(kubeconfig_path)?;
         let mut config =
             Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;
@@ -111,7 +116,7 @@ impl DiscoveryMessageProducer for K8sProducer {
         let lp = ListParams::default().labels(label_selector);
 
         // List existing pods
-        let pod_list = pods.list(&lp).await?;
+        let _pod_list = pods.list(&lp).await?;
         // println!(
         //     "Found {} pods with label {}:",
         //     pod_list.items.len(),
@@ -208,5 +213,3 @@ impl DiscoveryMessageProducer for K8sProducer {
         Ok(())
     }
 }
-
-

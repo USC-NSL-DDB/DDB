@@ -313,9 +313,7 @@ mod tests {
     #[test]
     fn test_send_with_custom_formatter() {
         // Test that send().with() can be constructed with a custom formatter
-        let builder = send("-thread-info")
-            .unwrap()
-            .with(ThreadInfoFormatter);
+        let builder = send("-thread-info").unwrap().with(ThreadInfoFormatter);
 
         assert_eq!(builder.parsed_cmd.prefix, "-thread-info");
         assert_eq!(builder.parsed_cmd.args, "");
@@ -325,9 +323,7 @@ mod tests {
     #[test]
     fn test_send_with_formatter_preserves_external_token() {
         // Test that send().with() preserves external token
-        let builder = send("42-thread-info")
-            .unwrap()
-            .with(NullFormatter);
+        let builder = send("42-thread-info").unwrap().with(NullFormatter);
 
         assert_eq!(builder.parsed_cmd.prefix, "-thread-info");
         assert_eq!(builder.parsed_cmd.external_token, Some(42));

@@ -8,11 +8,7 @@ use anyhow::{bail, Context, Result};
 use dashmap::DashMap;
 use tracing::{debug, trace};
 
-use crate::{
-    cmd_flow::api,
-    get_dbg_mgr,
-    state::get_proclet_mgr,
-};
+use crate::{cmd_flow::api, get_dbg_mgr, state::get_proclet_mgr};
 
 type ProcletId = u64;
 

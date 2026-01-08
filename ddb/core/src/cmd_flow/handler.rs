@@ -18,13 +18,9 @@ use crate::{
 };
 
 use super::{
-    api, emit_static,
-    framework_adapter::FrameworkCommandAdapter,
-    input::ParsedInputCmd,
-    output,
-    router::{Router, Target},
-    FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
-    ThreadInfoFormatter,
+    api, emit_static, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
+    router::Target, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
+    ProcessReadableFormatter, ThreadInfoFormatter,
 };
 
 /// Handler trait for processing parsed commands with routing and formatting logic
@@ -330,7 +326,6 @@ impl Handler for ThreadSelectHandler {
                 .unwrap()
                 .with(PlainFormatter)
                 .to(target);
-
         } else {
             let _ = cmd.send().with(PlainFormatter).to_default_target();
         }
@@ -487,8 +482,7 @@ impl DistributeBacktraceHandler {
             .await?;
 
         let (sid, _) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-        for frame in Self::get_stack_ref_mut(&mut stack_resp).iter_mut()
-        {
+        for frame in Self::get_stack_ref_mut(&mut stack_resp).iter_mut() {
             let frame = frame.expect_dict_ref_mut().unwrap();
             frame.insert("session".to_string(), sid.to_string().into());
             frame.insert("thread".to_string(), gtid.to_string().into());
@@ -730,7 +724,8 @@ impl Handler for DistributeBacktraceHandler {
                                 ("session".to_string(), sid.to_string().into()),
                                 ("thread".to_string(), inspect_gtid.to_string().into()),
                                 ("boundary_frame".to_string(), "1".into()),
-                            ]).into();
+                            ])
+                            .into();
                             Self::get_stack_ref_mut(&mut out_result).push(boundary_frame);
                             Self::get_stack_ref_mut(&mut out_result).extend(frames);
 

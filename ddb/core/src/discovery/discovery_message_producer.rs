@@ -1,15 +1,14 @@
 use async_trait::async_trait;
 use flume::Sender;
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::fmt;
+use std::net::Ipv4Addr;
 
 use crate::dbg_ctrl::DbgController;
 
 pub type UserDataMap = Option<HashMap<String, String>>;
 
-pub struct ServiceInfo
-{
+pub struct ServiceInfo {
     pub ip: Ipv4Addr,
     pub tag: String,
     pub pid: u64,
@@ -19,9 +18,16 @@ pub struct ServiceInfo
     pub user_data: UserDataMap,
 }
 
-impl ServiceInfo
-{
-    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String, ssh_controller: DbgController, user_data: UserDataMap) -> Self {
+impl ServiceInfo {
+    pub fn new(
+        ip: Ipv4Addr,
+        tag: String,
+        pid: u64,
+        hash: String,
+        alias: String,
+        ssh_controller: DbgController,
+        user_data: UserDataMap,
+    ) -> Self {
         ServiceInfo {
             ip,
             tag,
@@ -29,7 +35,7 @@ impl ServiceInfo
             hash,
             alias,
             ssh_controller,
-            user_data
+            user_data,
         }
     }
 }
@@ -57,8 +63,7 @@ impl fmt::Debug for ServiceInfo {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct ServiceMeta
-{
+pub struct ServiceMeta {
     pub ip: Ipv4Addr,
     pub tag: String,
     pub pid: u64,
@@ -68,17 +73,24 @@ pub struct ServiceMeta
 }
 
 impl ServiceMeta {
-    pub fn new(ip: Ipv4Addr, tag: String, pid: u64, hash: String, alias: String, user_data: UserDataMap) -> Self {
+    pub fn new(
+        ip: Ipv4Addr,
+        tag: String,
+        pid: u64,
+        hash: String,
+        alias: String,
+        user_data: UserDataMap,
+    ) -> Self {
         ServiceMeta {
             ip,
             tag,
             pid,
             hash,
             alias,
-            user_data
+            user_data,
         }
     }
-    
+
     pub fn from_service_info(info: &ServiceInfo) -> Self {
         ServiceMeta {
             ip: info.ip,
@@ -89,7 +101,7 @@ impl ServiceMeta {
             user_data: info.user_data.clone(),
         }
     }
-    
+
     pub fn from_service_info_owned(info: ServiceInfo) -> Self {
         ServiceMeta {
             ip: info.ip,
@@ -125,8 +137,7 @@ impl fmt::Display for ServiceMeta {
 }
 
 #[async_trait]
-pub trait DiscoveryMessageProducer: Send + Sync
-{
+pub trait DiscoveryMessageProducer: Send + Sync {
     /// Start producing events.
     ///
     /// * `tx`: A `flume::Sender` where this producer should push events as they arrive.

@@ -11,7 +11,12 @@ use super::{
     DynFormatter, FinishedCmd, OutputSource, PlainFormatter, Tracker,
 };
 use crate::{
-    dbg_ctrl::InputSender, get_dbg_mgr, state::{get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_source_mgr, GroupId, LocalThreadId, STATES}
+    dbg_ctrl::InputSender,
+    get_dbg_mgr,
+    state::{
+        get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_source_mgr, GroupId, LocalThreadId,
+        STATES,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -324,7 +329,7 @@ impl Router {
         if cmd == "p-bkpt-mgr" {
             info!("p-bkpt-mgr: {:#?}", get_bkpt_mgr())
         }
-        
+
         if cmd == "p-proclet-mgr" {
             info!("p-proclet-mgr: {:#?}", get_proclet_mgr())
         }
@@ -364,7 +369,7 @@ impl Router {
                 warn!("Failed to parse command: {:?}", cmd);
             }
         }
-        
+
         if cmd.contains("q-proclet") {
             let parts = cmd.split_whitespace().collect::<Vec<&str>>();
             if parts.len() < 2 {
@@ -372,7 +377,7 @@ impl Router {
                 return;
             }
             let proclet_id = parts[1].parse::<u64>().unwrap();
-            
+
             tokio::spawn(async move {
                 match get_dbg_mgr().query_proclet(proclet_id).await {
                     Ok(proclet) => {

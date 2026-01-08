@@ -84,9 +84,7 @@ impl GroupMgr {
 
     #[inline]
     pub fn get_group_id_by_sid(&self, sid: u64) -> Option<GroupId> {
-        self.sid_to_group
-            .get(&sid)
-            .map(|s| s.value().clone())
+        self.sid_to_group.get(&sid).map(|s| s.value().clone())
     }
 
     #[inline]

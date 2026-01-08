@@ -8,10 +8,13 @@ sudo apt-get install -y \
     cmake make gdb
 
 set -e
-mkdir $HOME/.ddb_src
+mkdir -p $HOME/.ddb_src
 pushd $HOME/.ddb_src
-git clone --branch main https://github.com/USC-NSL-DDB/DDB.git
-cd DDB/scripts
+rm -rf DDB
+git clone --depth 1 --branch main https://github.com/USC-NSL-DDB/DDB.git
+pushd DDB/scripts
 ./install.sh
 ./setup.sh
+popd
+rm -rf DDB
 popd

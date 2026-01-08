@@ -22,7 +22,9 @@ use crate::{
 };
 
 use super::{
-    emit, emit_static, DynFormatter, GenericStopAsyncRecordFormatter, RunningAsyncRecordFormatter, StopAsyncRecordFormatter, ThreadCreatedNotifFormatter, ThreadExitedNotifFormatter, ThreadGroupNotifFormatter
+    emit, emit_static, DynFormatter, GenericStopAsyncRecordFormatter, RunningAsyncRecordFormatter,
+    StopAsyncRecordFormatter, ThreadCreatedNotifFormatter, ThreadExitedNotifFormatter,
+    ThreadGroupNotifFormatter,
 };
 
 /// Determines the destination for command output
@@ -317,7 +319,10 @@ impl Tracker {
     // get a copy of the inflight commands
     // this is a costy operation.
     pub fn get_inflight_cmds_copy(&self) -> Vec<OutgoingCmdCpy> {
-        self.inflight_cmds.iter().map(|entry| entry.value().into()).collect()
+        self.inflight_cmds
+            .iter()
+            .map(|entry| entry.value().into())
+            .collect()
     }
 
     #[inline]

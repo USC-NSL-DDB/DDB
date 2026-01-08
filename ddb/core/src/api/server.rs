@@ -67,7 +67,10 @@ impl ApiServer {
         }
     }
 
-    pub async fn run(&self) -> Result<(), std::io::Error> {
+    pub async fn run(
+        &self,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), std::io::Error> {
         let app = Router::new()
             .route("/", get(root_handler))
             .route("/status", get(get_status))
@@ -82,7 +85,15 @@ impl ApiServer {
             .await
             .unwrap();
         info!("API Server listening on {}", listener.local_addr().unwrap());
-        axum::serve(listener, app).await.unwrap();
+
+        let shutdown = async move {
+            let _ = shutdown_rx.changed().await;
+        };
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown)
+            .await
+            .unwrap();
         Ok(())
     }
 }

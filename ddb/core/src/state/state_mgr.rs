@@ -30,7 +30,9 @@ impl StateMgr {
 
     #[inline]
     pub async fn register_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
-        self.session_states.add_session(sid, tag, service_meta).await;
+        self.session_states
+            .add_session(sid, tag, service_meta)
+            .await;
     }
 
     #[inline]
@@ -216,10 +218,10 @@ impl StateMgr {
     pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
         self.session_states.get_session(sid)
     }
-    
+
     /// Get session service meta
     /// This function get a deep copy of session service meta data
-    #[inline] 
+    #[inline]
     pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
         if let Some(s_meta) = self.get_session(sid) {
             let s_meta = s_meta.read().await;

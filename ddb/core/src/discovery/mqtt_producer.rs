@@ -102,22 +102,28 @@ impl From<&str> for MqttPayload {
                 (hash.to_string(), alias)
             })
             .unwrap_or((String::new(), String::new()));
-        
-        let user_data = parts.last().map(|&user_data| {
-            // if doesn't start with "{", meaning it is not a user_data field, then ignore it.
-            // we assume the user_data field is the last one in the payload if it exists.
-            user_data.starts_with("{").then(|| {
-                let user_data = user_data.trim_start_matches('{').trim_end_matches('}');
-                // example payload:
-                // {key1=value1,key2=value2}
-                user_data.split(",").map(|kv| {
-                    let kv_parts: Vec<_> = kv.trim().split('=').collect();
-                    let key = kv_parts[0].trim().to_string();
-                    let value = kv_parts.get(1).unwrap_or(&"").trim().to_string();
-                    (key, value)
-                }).collect::<HashMap<String, String>>()                
+
+        let user_data = parts
+            .last()
+            .map(|&user_data| {
+                // if doesn't start with "{", meaning it is not a user_data field, then ignore it.
+                // we assume the user_data field is the last one in the payload if it exists.
+                user_data.starts_with("{").then(|| {
+                    let user_data = user_data.trim_start_matches('{').trim_end_matches('}');
+                    // example payload:
+                    // {key1=value1,key2=value2}
+                    user_data
+                        .split(",")
+                        .map(|kv| {
+                            let kv_parts: Vec<_> = kv.trim().split('=').collect();
+                            let key = kv_parts[0].trim().to_string();
+                            let value = kv_parts.get(1).unwrap_or(&"").trim().to_string();
+                            (key, value)
+                        })
+                        .collect::<HashMap<String, String>>()
+                })
             })
-        }).flatten();
+            .flatten();
 
         MqttPayload {
             ip,
@@ -125,7 +131,7 @@ impl From<&str> for MqttPayload {
             pid,
             hash,
             alias,
-            user_data
+            user_data,
         }
     }
 }
@@ -138,10 +144,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// 3. Subscribing to the desired topic,
     /// 4. Spawning a monitor task that feeds an internal channel with MQTT events,
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
-    async fn start_producing(
-        &mut self,
-        tx: Sender<ServiceInfo>,
-    ) -> Result<()> {
+    async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         // 1. Start the broker if we manage it
         if let Some(broker) = &self.managed_broker {
             info!("Starting managed broker...");
@@ -224,22 +227,15 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// 2. Signal “stop” to the monitor task,
     /// 3. Stop the broker if we started it.
     async fn stop_producing(&mut self) -> Result<()> {
-        //
-        // 1. Abort tasks
-        //
-        for handle in &self.handles {
-            handle.abort();
-        }
-        self.handles.clear();
-
-        //
-        // 2. Send stop signal to the monitor task
-        //
+        // 1. Send stop signal to the monitor/consumer tasks first
         let _ = self.sig_stop.send(true);
 
-        //
+        // 2. Abort ongoing tasks
+        for handle in self.handles.drain(..) {
+            handle.abort();
+        }
+
         // 3. Stop broker if we own it
-        //
         if let Some(broker) = &self.managed_broker {
             broker.stop().context("Failed to stop managed broker")?;
         }
