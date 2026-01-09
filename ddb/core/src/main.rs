@@ -209,16 +209,11 @@ fn main() -> Result<()> {
     let main_loop = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .thread_name("ddb-main-loop")
+            .thread_name("ddb-cmd-loop")
             .build()
             .unwrap();
         rt.block_on(async {
-            let cmd_loop_handler = tokio::spawn(run_cmd_loop(get_shutdown_ctrl().subscribe()));
-
-            tokio::select! {
-                _ = cmd_loop_handler => {}
-                _ = ShutdownCtrl::wait_for_exit() => {}
-            }
+            run_cmd_loop(get_shutdown_ctrl().subscribe()).await;
         });
         // Seems like tokio has trouble shutting down the IO reader properly
         // so we need to manually shutdown the runtime
