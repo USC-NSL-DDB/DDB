@@ -119,12 +119,8 @@ pub fn get_dbg_mgr() -> &'static Arc<DbgManager> {
 fn main() -> Result<()> {
     // init_console_subscriber();
     let args = arg::Args::parse();
-    // FIXME: we can remove this unsafe block with
-    // OnceLock or lazy_static
     let logging_settings = LoggingSettings::from_args(&args);
-    unsafe {
-        Config::init_global(args.config)?;
-    }
+    Config::init_global(args.config)?;
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
     get_shutdown_ctrl().setup_signal_handling();
