@@ -5,7 +5,7 @@ use tracing_appender::{
     rolling::{RollingFileAppender, Rotation},
 };
 use tracing_subscriber::{
-    fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+    EnvFilter, Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt
 };
 
 pub fn setup_logging(
@@ -15,14 +15,18 @@ pub fn setup_logging(
     console_level: &str,
     file_level: &str,
 ) -> Result<WorkerGuard> {
-    let console_filter = EnvFilter::from_str(&format!("ddb={}", console_level))?;
-    let file_filter = EnvFilter::from_str(&format!("ddb={}", file_level))?;
+    let mut layers = Vec::new();
 
+    let file_filter = EnvFilter::from_default_env()
+        .add_directive(format!("ddb={}", file_level).parse()?);
+
+    let console_filter = EnvFilter::from_default_env()
+        .add_directive(format!("ddb={}", console_level).parse()?);
+
+    // Create a non-blocking writer (async log writing) for file logging
     let file_appender =
         RollingFileAppender::new(Rotation::DAILY, log_dir, format!("{}.log", app_name));
-    // Create a non-blocking writer (async log writing)
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    // File Layer writes to file
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_target(true)
@@ -32,9 +36,9 @@ pub fn setup_logging(
         .with_line_number(true)
         .with_span_events(FmtSpan::CLOSE)
         .with_writer(non_blocking) // Use non-blocking writer
-        .with_filter(file_filter);
-
-    let t = tracing_subscriber::registry().with(file_layer);
+        .with_filter(file_filter)
+        .boxed();
+    layers.push(file_layer);
 
     if enable_console_logging {
         // Console Layer with color support and pretty formatting
@@ -46,11 +50,11 @@ pub fn setup_logging(
             .with_line_number(true)
             .with_span_events(FmtSpan::CLOSE)
             .with_ansi(true)
-            .with_filter(console_filter);
-        t.with(console_layer).try_init()?;
-    } else {
-        t.try_init()?;
-    }
+            .with_filter(console_filter)
+            .boxed();
+        layers.push(console_layer);
+    } 
 
+    tracing_subscriber::registry().with(layers).try_init()?;
     Ok(guard)
 }
