@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flume::Receiver;
@@ -7,7 +7,7 @@ use russh::client::Config;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
@@ -30,7 +30,7 @@ pub trait DbgManagable {
     }
 
     async fn new_with_config(config: &'static crate::common::config::Config) -> Self;
-    async fn start(&self);
+    async fn start(&self) -> Result<()>;
     async fn cleanup(&self);
 }
 
@@ -158,6 +158,8 @@ pub struct DbgManager {
 
     // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
     proclet_ctrl: Option<ProcletCtrlClient>,
+
+    config: &'static crate::common::config::Config,
 }
 
 impl DbgManager {
@@ -173,7 +175,7 @@ impl DbgManager {
         }
     }
 
-    async fn init_sd(&mut self, config: &'static crate::common::config::Config) {
+    async fn init_sd(&self, config: &'static crate::common::config::Config) -> Result<()> {
         let (producer_tx, producer_rx) = flume::unbounded::<crate::discovery::ServiceInfo>();
         match config.framework {
             Framework::Nu | Framework::GRPC => {
@@ -197,15 +199,24 @@ impl DbgManager {
                         crate::discovery::mqtt_producer::MqttProducer::new(Some(b), &config);
                     let producer_tx_clone = producer_tx.clone();
 
-                    mqtt_producer
-                        .start_producing(producer_tx_clone)
-                        .await
-                        .unwrap();
+                    // Note: start_producing may fail if the broker is offline.
+                    // We delay the error checking as we want to have `sd` to be initialized first.
+                    // So that it can be cleaned up properly in case of failure (via `cleanup`).
+                    let result = mqtt_producer.start_producing(producer_tx_clone).await;
 
-                    self.sd = Mutex::new(Some(ServiceDiscover::new(
-                        Box::new(mqtt_producer),
-                        producer_rx,
-                    )));
+                    self.sd
+                        .lock()
+                        .await
+                        .replace(ServiceDiscover::new(Box::new(mqtt_producer), producer_rx));
+
+                    match result {
+                        Ok(_) => {
+                            info!("MQTT broker/producer started successfully.");
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
                 }
             }
             Framework::ServiceWeaverKube => {
@@ -255,15 +266,22 @@ impl DbgManager {
                     .await
                     .unwrap();
 
-                self.sd = Mutex::new(Some(ServiceDiscover::new(
-                    Box::new(serviceweaver_producer),
-                    producer_rx,
-                )));
+                self.sd.lock()
+                    .await
+                    .replace(ServiceDiscover::new(
+                        Box::new(serviceweaver_producer),
+                        producer_rx,
+                    ));
+                // Mutex::new(Some(ServiceDiscover::new(
+                //     Box::new(serviceweaver_producer),
+                //     producer_rx,
+                // )));
             }
             _ => {
                 panic!("Unsupported framework adapter for now.");
             }
         }
+        Ok(())
     }
 }
 
@@ -289,25 +307,29 @@ impl DbgManagable for DbgManager {
             _ => None,
         };
 
-        let mut dbg_mgr = DbgManager {
+        DbgManager {
             sessions: sessions.clone(),
             sd: Mutex::new(None),
             proclet_ctrl,
-        };
-        dbg_mgr.init_sd(config).await;
-        return dbg_mgr;
+            config,
+        }
+        // dbg_mgr.init_sd(config).await;
+        // return dbg_mgr;
     }
 
-    async fn start(&self) {
+    async fn start(&self) -> Result<()> {
+        self.init_sd(self.config).await?;
         if let Some(sd) = &mut *self.sd.lock().await {
             sd.start(self.sessions.clone());
         }
         debug!("GdbManager is now listening for discovered services.");
+        Ok(())
     }
 
     async fn cleanup(&self) {
         // 1) Shutdown the service discovery if it exists
         if let Some(sd) = &mut *self.sd.lock().await {
+            debug!("Shutting down ServiceDiscover…");
             sd.shutdown().await;
         }
 

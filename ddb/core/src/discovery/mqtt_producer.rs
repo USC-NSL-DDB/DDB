@@ -170,9 +170,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
             sd_defaults::DEFAULT_BROKER_HOSTNAME,
             sd_defaults::BROKER_PORT,
         );
-        if let Err(e) = client.check_broker_online().await {
-            return Err(anyhow::anyhow!("Failed to connect to broker: {}", e));
-        }
+        client.check_broker_online().await?;
         info!("Successfully connected to broker");
         let (event_sender, event_receiver) = flume::bounded(1024);
         self.monitor(client, event_sender.clone());
@@ -227,6 +225,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// 2. Signal “stop” to the monitor task,
     /// 3. Stop the broker if we started it.
     async fn stop_producing(&mut self) -> Result<()> {
+        debug!("Stopping MqttProducer…");
         // 1. Send stop signal to the monitor/consumer tasks first
         let _ = self.sig_stop.send(true);
 
@@ -237,6 +236,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
 
         // 3. Stop broker if we own it
         if let Some(broker) = &self.managed_broker {
+            debug!("Stopping managed broker…");
             broker.stop().context("Failed to stop managed broker")?;
         }
 

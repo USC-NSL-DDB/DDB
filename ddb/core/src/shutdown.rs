@@ -35,6 +35,7 @@ pub enum ShutdownCause {
     StdinEof,
     StdinError,
     NoSessions,
+    DbgMgrInitFailure,
     Other,
 }
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rumqttc::{Client, MqttOptions, QoS};
 use std::time::Duration;
 use tokio::{
@@ -42,7 +42,15 @@ impl AsyncDiscoverClient {
             }
 
             if start_time.elapsed() >= timeout {
-                return Err(anyhow::anyhow!("Exceeded retry timeout, broker is offline"));
+                let (addr, port) = self.el.mqtt_options.broker_address();
+                return Err(anyhow::anyhow!("Exceeded retry timeout, broker is offline")).context(
+                    format!(
+                        "Failed to connect to service discovery broker at {}:{} after {} secs.",
+                        addr,
+                        port,
+                        timeout.as_secs()
+                    ),
+                );
             }
 
             // Wait before retrying
