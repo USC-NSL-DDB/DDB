@@ -175,7 +175,8 @@ impl DbgManager {
         }
     }
 
-    async fn init_sd(&self, config: &'static crate::common::config::Config) -> Result<()> {
+    async fn init_sd(&self) -> Result<()> {
+        let config = self.config;
         let (producer_tx, producer_rx) = flume::unbounded::<crate::discovery::ServiceInfo>();
         match config.framework {
             Framework::Nu | Framework::GRPC => {
@@ -272,10 +273,6 @@ impl DbgManager {
                         Box::new(serviceweaver_producer),
                         producer_rx,
                     ));
-                // Mutex::new(Some(ServiceDiscover::new(
-                //     Box::new(serviceweaver_producer),
-                //     producer_rx,
-                // )));
             }
             _ => {
                 panic!("Unsupported framework adapter for now.");
@@ -318,7 +315,7 @@ impl DbgManagable for DbgManager {
     }
 
     async fn start(&self) -> Result<()> {
-        self.init_sd(self.config).await?;
+        self.init_sd().await?;
         if let Some(sd) = &mut *self.sd.lock().await {
             sd.start(self.sessions.clone());
         }
