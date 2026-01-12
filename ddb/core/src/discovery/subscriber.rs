@@ -28,7 +28,7 @@ impl AsyncDiscoverClient {
 
     pub async fn check_broker_online(&mut self) -> Result<()> {
         let start_time = Instant::now();
-        let timeout = Duration::from_secs(5);
+        let timeout = Duration::from_secs(30);
 
         loop {
             // Try connecting and poll for events
