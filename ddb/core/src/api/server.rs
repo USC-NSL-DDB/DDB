@@ -241,20 +241,12 @@ async fn get_pending_commands() -> impl IntoResponse {
     }
     (StatusCode::OK, Json(json!(results)))
 }
+
 async fn get_groups() -> impl IntoResponse {
     // This assumes you have a function to get the global GroupMgr instance,
     // similar to `get_source_mgr()` or `get_cmd_tracker()` in your code.
     // You might need to adjust this line to match your actual state management.
     let group_mgr = crate::state::get_group_mgr();
-
-    // Retrieve all groups from the GroupMgr.
-    let all_groups = group_mgr.get_all_grps_if(|_id, _meta| true);
-
-    // Transform the data into the desired format: { group_id: sessions }
-    let result: HashMap<(GroupId, GroupHash), HashSet<SessionId>> = all_groups
-        .into_iter()
-        .map(|(grp_hash, meta)| ((meta.get_grp_id(), grp_hash), meta.get_sids().clone()))
-        .collect();
-
+    let result: Vec<GroupMeta> = group_mgr.get_all_grp_meta();
     (StatusCode::OK, Json(result))
 }
