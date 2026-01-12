@@ -40,6 +40,7 @@ use clap::Parser;
 use console_subscriber;
 use rust_embed::Embed;
 use tokio::io::{self, AsyncBufReadExt};
+use tracing::error;
 use tracing::{debug, info};
 
 #[derive(Embed)]
@@ -60,7 +61,14 @@ fn init_console_subscriber() {
 
 async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
     // wait for all components to be up to receive input
-    status::get_rt_status().wait_for_up().await;
+    // Or immediately exit if stop signal is received
+    tokio::select! {
+        _ = stop_sig.changed() => {
+            debug!("Exiting command loop before starting, stop signal received.");
+            return;
+        }
+        _ = status::get_rt_status().wait_for_up() => {}
+    }
 
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin).lines();
@@ -186,10 +194,17 @@ fn main() -> Result<()> {
         runtime.block_on(async {
             let dbg_mgr = DbgManager::new().await;
             init_dbg_mgr(|| Arc::new(dbg_mgr));
-            get_dbg_mgr().start().await;
-
-            get_rt_status().up(Component::DbgMgr);
-
+            match get_dbg_mgr().start().await {
+                Ok(_) => {
+                    debug!("DbgManager started successfully.");
+                    get_rt_status().up(Component::DbgMgr);
+                }
+                Err(e) => {
+                    error!("Failed to start DbgManager: {:?}", e);
+                    get_shutdown_ctrl()
+                        .trigger_once(ShutdownCause::DbgMgrInitFailure);
+                }
+            }
             ShutdownCtrl::wait_for_exit().await;
             get_shutdown_ctrl()
                 .shutdown_cleanup(async {

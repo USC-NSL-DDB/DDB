@@ -158,8 +158,7 @@ impl MessageBroker for EMQXBroker {
         let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
 
         // Stop and remove the existing `emqx` container
-        run_command::<true>("docker", &["stop", "emqx"]).ok();
-        run_command::<true>("docker", &["rm", "emqx"]).ok();
+        run_command::<true, true>("docker", &["rm", "-f", "emqx"]).ok();
 
         fs::create_dir_all("/tmp/ddb/emqx/data")?;
         fs::create_dir_all("/tmp/ddb/emqx/logs")?;
@@ -176,7 +175,7 @@ impl MessageBroker for EMQXBroker {
         let conf_path = temp_conf_file.path().to_str().unwrap();
 
         // Start the new EMQX container
-        run_command::<true>(
+        run_command::<true, true>(
             "docker",
             &[
                 "run",
@@ -208,19 +207,17 @@ impl MessageBroker for EMQXBroker {
     }
 
     fn stop(&self) -> Result<()> {
-        match Command::new("/bin/bash")
-            .arg("-c")
-            .arg("docker stop emqx && docker rm emqx")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+        use crate::common::utils::run_command;
+        let start = std::time::Instant::now(); 
+        match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
             Ok(_) => {
-                debug!("EMQX broker stop successfully!");
+                debug!("EMQX broker stopped successfully!");
+                debug!("Time taken to stop EMQX broker: {:?}", start.elapsed());
                 Ok(())
             }
             Err(e) => {
                 error!("Failed to stop EMQX broker: {}", e);
+                debug!("Time taken to stop EMQX broker: {:?}", start.elapsed());
                 Err(BrokerError::StopError(e.to_string()).into())
             }
         }
