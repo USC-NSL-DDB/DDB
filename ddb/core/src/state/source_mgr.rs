@@ -74,7 +74,7 @@ impl SourceMgr {
         self.source_map.get(src_path).map(|v| {
             v.value()
                 .iter()
-                .filter_map(|group_id| super::get_group_mgr().get_group(group_id))
+                .filter_map(|group_id| super::get_group_mgr().get_grp_by_id(*group_id))
                 .collect::<Vec<_>>()
         })
     }
@@ -86,7 +86,7 @@ impl SourceMgr {
         self.source_map.get(src_path).map(|v| {
             v.value()
                 .iter()
-                .filter_map(|group_id| super::get_group_mgr().get_group(group_id.clone()))
+                .filter_map(|group_id| super::get_group_mgr().get_grp_by_id(*group_id))
                 .collect::<Vec<_>>()
         })
     }
@@ -136,7 +136,7 @@ impl SourceMgr {
         &self,
         path: &str,
         sid: u64,
-        grp_id: &str,
+        grp_hash: &str,
     ) -> Result<()> {
         let _path = std::path::Path::new(path);
         let dirname = _path.parent().ok_or(anyhow!("Invalid path"))?;
@@ -173,6 +173,10 @@ impl SourceMgr {
             })
             .collect::<Vec<_>>();
 
+        let grp_id = get_group_mgr().get_grp_id_by_hash(grp_hash).ok_or(anyhow!(
+            "Group ID not found for group hash: {}",
+            grp_hash
+        ))?;
         if sources.is_empty() {
             // if no source files are found, we still
             // mark the path has been searched for this group
@@ -180,10 +184,10 @@ impl SourceMgr {
             self.checked_list
                 .entry(path.to_string())
                 .or_insert(HashSet::new())
-                .insert(grp_id.to_string());
+                .insert(grp_id);
         } else {
             for source_path in sources {
-                self.add_source(source_path, grp_id.to_string());
+                self.add_source(source_path, grp_id);
             }
         }
         Ok(())
@@ -196,15 +200,15 @@ impl SourceMgr {
         // - Check the `checked_list` to filter out all checked groups
         // - For the remaining groups, resolve the source file
         // - Update the `checked_list` correspondingly
-        let grps = get_group_mgr().get_all_groups_if(|group_id, g_meta| {
+        let grps = get_group_mgr().get_all_grps_if(|grp_hash, g_meta| {
             let sids = g_meta.get_sids();
             // no session is present in the group, skip
             if sids.is_empty() {
                 return false;
             }
             // if the group has been resolve for this source path, skip
-            if self.is_source_resolved_for_group(path, group_id) {
-                debug!("Source already resolved for group: {}", group_id);
+            if self.is_source_resolved_for_group(path, g_meta.get_grp_id()) {
+                debug!("Source already resolved for group: id={}, hash={}", g_meta.get_grp_id(), grp_hash);
                 return false;
             }
             true
@@ -244,21 +248,21 @@ impl SourceMgr {
     }
 
     #[inline]
-    pub fn group_exists(&self, group_id: &str) -> bool {
-        self.added_groups.read().unwrap().contains(group_id)
+    pub fn group_exists(&self, group_id: u64) -> bool {
+        self.added_groups.read().unwrap().contains(&group_id)
     }
 
     #[inline]
     pub fn group_exists_by_sid(&self, sid: u64) -> bool {
-        if let Some(group_id) = super::get_group_mgr().get_group_id(sid) {
-            return self.group_exists(&group_id);
+        if let Some(group_id) = super::get_group_mgr().get_grp_id_by_sid(sid) {
+            return self.group_exists(group_id);
         }
         false
     }
 
     #[inline]
-    pub fn new_group(&self, group_id: String, sources: Vec<String>) {
-        if self.group_exists(&group_id) {
+    pub fn new_group(&self, group_id: u64, sources: Vec<String>) {
+        if self.group_exists(group_id) {
             // fast path: group already exists
             return;
         }
@@ -266,35 +270,35 @@ impl SourceMgr {
         // slow path
         let mut added_groups = self.added_groups.write().unwrap();
         for source in sources {
-            self.add_source(source, group_id.clone());
+            self.add_source(source, group_id);
         }
         added_groups.insert(group_id);
     }
 
     #[inline]
     pub fn new_group_by_sid(&self, sid: u64, sources: Vec<String>) {
-        if let Some(group_id) = super::get_group_mgr().get_group_id(sid) {
+        if let Some(group_id) = super::get_group_mgr().get_grp_id_by_sid(sid) {
             self.new_group(group_id, sources);
         }
     }
 
     #[inline]
-    pub fn add_source(&self, source_path: String, group_id: String) {
+    pub fn add_source(&self, source_path: String, group_id: u64) {
         self.checked_list
             .entry(source_path.clone())
             .or_insert(HashSet::new())
-            .insert(group_id.clone());
+            .insert(group_id);
         self.source_map
             .entry(source_path.clone())
             .or_insert(HashSet::new())
-            .insert(group_id.clone());
+            .insert(group_id);
     }
 
     #[inline]
-    pub fn is_source_resolved_for_group(&self, source_path: &str, group_id: &str) -> bool {
+    pub fn is_source_resolved_for_group(&self, source_path: &str, group_id: u64) -> bool {
         self.checked_list
             .get(source_path)
-            .map(|v| v.contains(group_id))
+            .map(|v| v.contains(&group_id))
             .unwrap_or(false)
     }
 }

@@ -55,34 +55,34 @@ impl BreakpointMgr {
     //     }
     // }
 
-    pub fn add(&self, grp_id: &GroupId, bkpt: BkptMeta) {
-        self.bkpts.entry(grp_id.clone()).or_default().insert(bkpt);
+    pub fn add(&self, grp_id: GroupId, bkpt: BkptMeta) {
+        self.bkpts.entry(grp_id).or_default().insert(bkpt);
     }
 
     pub fn add_by_sid(&self, sid: u64, bkpt: BkptMeta) {
-        if let Some(grp_id) = get_group_mgr().get_group_id_by_sid(sid) {
-            self.add(&grp_id, bkpt);
+        if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(sid) {
+            self.add(grp_id, bkpt);
         }
     }
 
-    pub fn get(&self, grp_id: &GroupId) -> Option<HashSet<BkptMeta>> {
-        self.bkpts.get(grp_id).map(|v| v.clone())
+    pub fn get(&self, grp_id: GroupId) -> Option<HashSet<BkptMeta>> {
+        self.bkpts.get(&grp_id).map(|v| v.clone())
     }
 
     pub fn get_by_sid(&self, sid: u64) -> Option<HashSet<BkptMeta>> {
-        let grp_id = get_group_mgr().get_group_id_by_sid(sid);
-        grp_id.map(|id| self.get(&id)).flatten()
+        let grp_id = get_group_mgr().get_grp_id_by_sid(sid);
+        grp_id.map(|id| self.get(id)).flatten()
     }
 
     // This function holds a mutable reference to the entry.
     // Thus, the operation closure should not contain any await point.
     // Otherwise, it will cause a deadlock.
     // If this is a concern, we can consider swicth the data struct.
-    pub fn modify<F>(&self, grp_id: &GroupId, op: F)
+    pub fn modify<F>(&self, grp_id: GroupId, op: F)
     where
         F: FnOnce(&mut HashSet<BkptMeta>),
     {
-        if let Some(mut entry) = self.bkpts.get_mut(grp_id) {
+        if let Some(mut entry) = self.bkpts.get_mut(&grp_id) {
             op(&mut entry.value_mut());
         }
     }

@@ -364,7 +364,7 @@ impl Formatter for ThreadCreatedNotifFormatter {
             .map(|meta| meta.alias.clone())
             .unwrap_or("UNKNOWN".to_string());
         let group_id = get_group_mgr()
-            .get_group_id(self.sid)
+            .get_grp_hash_by_sid(self.sid)
             .unwrap_or("UNKNOWN".to_string());
         let payload: Dict = vec![
             ("id".to_string(), format!("{}", self.gtid).into()),

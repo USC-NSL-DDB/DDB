@@ -105,7 +105,7 @@ impl Router {
             Target::Broadcast => self.broadcast(cmd),
             Target::First => self.send_to_first(cmd),
             Target::SessionSet(sids) => self.send_to_session_set(&sids, cmd),
-            Target::Group(gid) => self.send_to_group(&gid, cmd),
+            Target::Group(gid) => self.send_to_group(gid, cmd),
         }
     }
 
@@ -122,12 +122,12 @@ impl Router {
             Target::Broadcast => self.broadcast_ret(cmd).await,
             Target::First => self.send_to_first_ret(cmd).await,
             Target::SessionSet(sids) => self.send_to_session_set_ret(&sids, cmd).await,
-            Target::Group(gid) => self.send_to_group_ret(&gid, cmd).await,
+            Target::Group(gid) => self.send_to_group_ret(gid, cmd).await,
         }
     }
 
-    pub fn send_to_group<F: DynFormatter>(&self, gid: &GroupId, cmd: Command<F>) {
-        if let Some(grp) = get_group_mgr().get_group(gid) {
+    pub fn send_to_group<F: DynFormatter>(&self, gid: GroupId, cmd: Command<F>) {
+        if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
             self.send_to_session_set(grp.get_sids(), cmd);
         } else {
             warn!("Group (id: {}) doesn't exist", gid);
@@ -136,10 +136,10 @@ impl Router {
 
     pub async fn send_to_group_ret<F: DynFormatter>(
         &self,
-        gid: &GroupId,
+        gid: GroupId,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        if let Some(grp) = get_group_mgr().get_group(gid) {
+        if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
             self.send_to_session_set_ret(grp.get_sids(), cmd).await
         } else {
             bail!("Group (id: {}) doesn't exist", gid);

@@ -14,8 +14,8 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
-    state::{GroupId, GroupMeta, SessionId},
+    cmd_flow::{FinishedCmd, api as cmd_flow_api, router::Target},
+    state::{GroupHash, GroupId, GroupMeta, SessionId},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -217,7 +217,7 @@ async fn get_sessions() -> impl IntoResponse {
             "tag": tag,
             "alias": service_meta.map(|x| x.alias.clone()).unwrap_or("UNKNOWN".to_string()),
             "status": status,
-            "groupId": crate::state::get_group_mgr().get_group_id(sid).unwrap_or("UNKNOWN".to_string()),
+            "groupId": crate::state::get_group_mgr().get_grp_hash_by_sid(sid).unwrap_or("UNKNOWN".to_string()),
         });
         results.push(session);
     }
@@ -248,12 +248,12 @@ async fn get_groups() -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
 
     // Retrieve all groups from the GroupMgr.
-    let all_groups = group_mgr.get_all_groups_if(|_id, _meta| true);
+    let all_groups = group_mgr.get_all_grps_if(|_id, _meta| true);
 
     // Transform the data into the desired format: { group_id: sessions }
-    let result: HashMap<GroupId, HashSet<SessionId>> = all_groups
+    let result: HashMap<(GroupId, GroupHash), HashSet<SessionId>> = all_groups
         .into_iter()
-        .map(|(id, meta)| (id, meta.get_sids().clone()))
+        .map(|(grp_hash, meta)| ((meta.get_grp_id(), grp_hash), meta.get_sids().clone()))
         .collect();
 
     (StatusCode::OK, Json(result))

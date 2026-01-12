@@ -106,7 +106,7 @@ impl DbgSession {
 
         // update the group manager
         if let Some(meta) = &self.config.service_meta {
-            get_group_mgr().add_session(meta.hash.clone(), meta.alias.clone(), self.sid);
+            get_group_mgr().add_session(&meta.hash, meta.alias.clone(), self.sid);
         }
         self.sync_state().await?;
         // update router with input sender
@@ -125,9 +125,9 @@ impl DbgSession {
     /// have the latest updates, a.k.a., the current session is added to
     /// the group.
     pub async fn sync_state(&self) -> Result<()> {
-        if let Some(grp_id) = get_group_mgr().get_group_id_by_sid(self.sid) {
+        if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
             // insert existing breakpoints
-            if let Some(bkpts) = crate::state::get_bkpt_mgr().get(&grp_id) {
+            if let Some(bkpts) = crate::state::get_bkpt_mgr().get(grp_id) {
                 debug!("Inserting existing breakpoints: {:?}", bkpts);
                 let bkpts_cmd = bkpts
                     .iter()
