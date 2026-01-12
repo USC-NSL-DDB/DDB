@@ -310,8 +310,6 @@ impl DbgManagable for DbgManager {
             proclet_ctrl,
             config,
         }
-        // dbg_mgr.init_sd(config).await;
-        // return dbg_mgr;
     }
 
     async fn start(&self) -> Result<()> {
