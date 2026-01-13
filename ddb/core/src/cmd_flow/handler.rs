@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -10,10 +10,12 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
+    cmd_flow::ParsedSessionResponse,
     common::Config,
     feature::get_proclet_restore_mgr,
     state::{
-        get_bkpt_mgr, BkptMeta, LocalThreadId, SessionMeta, ThreadContext, ThreadStatus, STATES,
+        get_bkpt_mgr, get_group_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, SessionMeta,
+        SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, STATES,
     },
 };
 
@@ -92,23 +94,199 @@ impl BreakInsertHandler {
     }
 }
 
+impl BreakInsertHandler {
+    async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) {
+        let grp_bkpt = GroupSubBkpt::new(gid);
+        let ret = api::send_and_return(cmd)
+            .unwrap()
+            .to(Target::Group(gid))
+            .await
+            .unwrap();
+        for resp in ret.get_responses() {
+            let bkpt_info = resp
+                .get_payload()
+                .unwrap()
+                .get("bkpt")
+                .unwrap()
+                .expect_dict_ref()
+                .unwrap();
+            let local_bkpt_id = bkpt_info
+                .get("number")
+                .unwrap()
+                .expect_string_ref()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            let times = bkpt_info
+                .get("times")
+                .unwrap()
+                .expect_string_ref()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            // TODO: work out how to store `times` information.
+            grp_bkpt.add_local_bkpt(resp.get_sid(), local_bkpt_id);
+        }
+        let subbkpt = SubBkptType::Group(grp_bkpt);
+        get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+    }
+
+    async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) {
+        let ret = api::send_and_return(cmd)
+            .unwrap()
+            .to(Target::Session(sid))
+            .await
+            .unwrap();
+        let bkpt_info = ret
+            .get_responses()
+            .first()
+            .unwrap()
+            .get_payload()
+            .unwrap()
+            .get("bkpt")
+            .unwrap()
+            .expect_dict_ref()
+            .unwrap();
+        let local_bkpt_id = bkpt_info
+            .get("number")
+            .unwrap()
+            .expect_string_ref()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        let times = bkpt_info
+            .get("times")
+            .unwrap()
+            .expect_string_ref()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        // TODO: work out how to store `times` information.
+        let subbkpt = SubBkptType::Session(SessionSubBkpt::new(local_bkpt_id, sid));
+        get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+    }
+}
+
 #[async_trait]
 impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let full_cmd = cmd.full_cmd();
-        let results = cmd.send_and_return().to_default_target().await;
-        if let Ok(results) = results {
-            for resp in results.get_responses() {
-                if resp.get_message() == "done" {
-                    get_bkpt_mgr().add_by_sid(resp.get_sid(), BkptMeta::new(full_cmd.clone()));
-                } else {
-                    warn!("Failed to insert breakpoint from dbg: {:?}", resp);
+        let args = &cmd.args;
+        // Assumption: the args contains the breakpoint loc at the last place.
+        // In the last element, the first element is the file path and the second element is the line number.
+        let _bkpt_loc: [&str; 2]; // Use stack allocation for perf optimization.
+        let bkpt_loc_parts = args
+            .trim()
+            .rsplit_once(char::is_whitespace)
+            .unwrap()
+            .1
+            .split_once(":")
+            .unwrap();
+        _bkpt_loc = [bkpt_loc_parts.0, bkpt_loc_parts.1];
+        let bkpt_loc: BkptLoc = _bkpt_loc.into();
+        let bkpt_id = get_bkpt_mgr().add_bkpt(bkpt_loc);
+
+        match cmd.target {
+            Target::Session(sid) => {
+                Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await;
+            }
+            Target::Group(gid) => {
+                Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await;
+            }
+            Target::Multiple(targets) => {
+                // dedup to ensure:
+                // 1. no deuplicate targets
+                // 2. if the session targets are already included in one of the group targets, skip them.
+                // 3. drop other targets, only support for session and group targets.
+                // result: deduped Vec<Target>
+                // let mut deduped_targets: Vec<Target> = Vec::new();
+                let groupped_sids = targets.iter().filter_map(|ele| {
+                    match ele {
+                        Target::Group(gid) => {
+                            get_group_mgr().get_grp_by_id(*gid).map(|grp| {
+                                grp.get_sids().clone()
+                            })
+                        },
+                        _ => None,
+                    }
+                }).flatten().collect::<HashSet<u64>>();
+                let dedupped_targets = targets.iter().filter(|target| {
+                    match target {
+                        Target::Session(sid) => {
+                            !groupped_sids.contains(sid)
+                        },
+                        _ => true,
+                    }
+                }).collect::<Vec<&Target>>();
+                for t in dedupped_targets {
+                    match *t {
+                        Target::Session(sid) => {
+                            Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await;
+                        }
+                        Target::Group(gid) => {
+                            Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await;
+                        }
+                        _ => {
+                            // skip other target types
+                        }
+                    }
                 }
             }
-            emit_static(results, PlainFormatter);
-        } else {
-            error!("Failed to insert breakpoint: {:?}", results);
+            _ => {
+                warn!(
+                    "Unsupported target for BreakInsertHandler: {:?}",
+                    cmd.target
+                );
+                return;
+            }
         }
+
+        // let results = cmd.send_and_return().to_default_target().await;
+
+        // if let Ok(results) = results {
+        //     for resp in results.get_responses() {
+        //         if resp.get_message() == "done" {
+        //             get_bkpt_mgr().add_by_sid(resp.get_sid(), BkptMeta::new(full_cmd.clone()));
+        //         } else {
+        //             warn!("Failed to insert breakpoint from dbg: {:?}", resp);
+        //         }
+        //     }
+        //     emit_static(results, PlainFormatter);
+        // } else {
+        //     error!("Failed to insert breakpoint: {:?}", results);
+        // }
+    }
+}
+
+pub struct BreakDeleteHandler {
+    base: DefaultHandler,
+}
+
+impl BreakDeleteHandler {
+    pub fn new() -> Self {
+        BreakDeleteHandler {
+            base: DefaultHandler::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Handler for BreakDeleteHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        // let full_cmd = cmd.full_cmd();
+        // let results = cmd.send_and_return().to_default_target().await;
+        // if let Ok(results) = results {
+        //     for resp in results.get_responses() {
+        //         if resp.get_message() == "done" {
+        //             get_bkpt_mgr().add_by_sid(resp.get_sid(), BkptMeta::new(full_cmd.clone()));
+        //         } else {
+        //             warn!("Failed to delete breakpoint from dbg: {:?}", resp);
+        //         }
+        //     }
+        //     emit_static(results, PlainFormatter);
+        // } else {
+        //     error!("Failed to delete breakpoint: {:?}", results);
+        // }
     }
 }
 

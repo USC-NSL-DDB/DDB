@@ -1,14 +1,15 @@
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-struct SimpleCounter(AtomicU64);
+#[derive(Debug)]
+pub struct SimpleCounter(AtomicU64);
 
 impl SimpleCounter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         SimpleCounter(AtomicU64::new(1))
     }
 
-    fn next(&self) -> u64 {
+    pub fn next(&self) -> u64 {
         // Fetch and add 1, returning the previous value
         self.0.fetch_add(1, Ordering::SeqCst)
     }
@@ -21,6 +22,7 @@ lazy_static! {
     static ref TOKEN_COUNTER: SimpleCounter = SimpleCounter::new();
     static ref GROUP_COUNTER: SimpleCounter = SimpleCounter::new();
     static ref RPC_REQ_COUNTER: SimpleCounter = SimpleCounter::new();
+    static ref BKPT_COUNTER: SimpleCounter = SimpleCounter::new();
 }
 
 pub fn next_session_id() -> u64 {
@@ -45,4 +47,8 @@ pub fn next_group_id() -> u64 {
 
 pub fn next_rpc_req_id() -> u64 {
     RPC_REQ_COUNTER.next()
+}
+
+pub fn next_bkpt_id() -> u64 {
+    BKPT_COUNTER.next()
 }

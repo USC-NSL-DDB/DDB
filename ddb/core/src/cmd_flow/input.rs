@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Command<F: DynFormatter + 'static> {
+pub struct Command<F: DynFormatter + 'static> where F: Clone {
     pub external_token: Option<u64>,
     pub internal_token: u64,
     pub raw_cmd: String,
@@ -27,7 +27,7 @@ pub struct Command<F: DynFormatter + 'static> {
 
 impl<F> Command<F>
 where
-    F: DynFormatter + 'static,
+    F: DynFormatter + 'static + Clone,
 {
     /// Prepares the command to be sent by creating an OutgoingCmd and formatting the raw command string
     /// This function consumes `self`.
@@ -129,7 +129,7 @@ impl ParsedInputCmd {
     }
 
     #[inline]
-    pub fn to_command<F: DynFormatter + 'static>(self, formatter: F) -> (Target, Command<F>) {
+    pub fn to_command<F: DynFormatter + 'static + Clone>(self, formatter: F) -> (Target, Command<F>) {
         let raw_cmd = self.full_cmd();
         (
             self.target,
@@ -266,6 +266,55 @@ impl InputCmdParser {
                 return Ok((target, prefix, rest.join(" ").trim().to_string()));
             }
         }
+        
+        if let Some(index) = rest.iter().position(|s| *s == "--group") {
+            // --group for targeting a specific group
+            if index < rest.len() - 1 {
+                let gid = rest[index + 1]
+                    .parse::<u64>()
+                    .expect("valid gid when use --group flag");
+                let target = Target::Group(gid);
+                let mut rest = rest.clone();
+                // remove the `--group` and its argument from the rest.
+                // underlying debugger doesn't have group concept.
+                rest.remove(index);
+                rest.remove(index); // the next element is shifted after the first remove
+                return Ok((target, prefix, rest.join(" ").trim().to_string()));
+            }
+        }
+
+        if let Some(index) = rest.iter().position(|s| *s == "--multiple") {
+            // --multiple for multiple targets (mixed of sessions and groups, no threads yet)
+            // Syntax example: --multiple g1,g2,s1,s2 
+            // where s=session, g=group, comma separated, but no spaces
+            if index < rest.len() - 1 {
+                let target_list = rest[index + 1]
+                    .split(',')
+                    .map(|t| {
+                        if t.starts_with('s') {
+                            let sid = t[1..]
+                                .parse::<u64>()
+                                .expect("valid sid when use --multiple flag");
+                            Target::Session(sid)
+                        } else if t.starts_with('g') {
+                            let gid = t[1..]
+                                .parse::<u64>()
+                                .expect("valid gid when use --multiple flag");
+                            Target::Group(gid)
+                        } else {
+                            panic!("Invalid target {} in --multiple flag", t);
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let target = Target::Multiple(target_list);
+                let mut rest = rest.clone();
+                // remove the `--group` and its argument from the rest.
+                // underlying debugger doesn't have group concept.
+                rest.remove(index);
+                rest.remove(index); // the next element is shifted after the first remove
+                return Ok((target, prefix, rest.join(" ").trim().to_string()));
+            }
+        }
 
         if let Some(gtid) = STATES.get_curr_gtid() {
             // if there is a current global thread selected, use it as the target
@@ -329,6 +378,7 @@ impl CmdHandler {
 
         let handlers = handlers_map! {
             "-break-insert" => BreakInsertHandler::new(),
+            "-break-delete" => BreakDeleteHandler::new(),
             "-thread-info" => ThreadInfoHandler::new(),
             "-exec-continue" => ContinueHandler::new(),
             "-record-time-and-continue" => ContinueHandler::new(),

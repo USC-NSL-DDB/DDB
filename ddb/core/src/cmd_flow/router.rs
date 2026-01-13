@@ -29,6 +29,7 @@ pub enum Target {
     SessionSet(HashSet<u64>),
     Broadcast,
     First,
+    Multiple(Vec<Target>),
 }
 
 impl Default for Target {
@@ -96,7 +97,7 @@ impl Router {
         }
     }
 
-    pub fn send_to<F: DynFormatter>(&self, target: Target, cmd: Command<F>) {
+    pub fn send_to<F: DynFormatter + Clone>(&self, target: Target, cmd: Command<F>) {
         match target {
             Target::Session(sid) => self.send_to_session(sid, cmd),
             Target::Thread(gtid) => self.send_to_thread(gtid, cmd),
@@ -106,10 +107,13 @@ impl Router {
             Target::First => self.send_to_first(cmd),
             Target::SessionSet(sids) => self.send_to_session_set(&sids, cmd),
             Target::Group(gid) => self.send_to_group(gid, cmd),
+            Target::Multiple(targets) => {
+                self.send_to_multiple(targets, cmd);
+            }
         }
     }
 
-    pub async fn send_to_ret<F: DynFormatter>(
+    pub async fn send_to_ret<F: DynFormatter + Clone>(
         &self,
         target: Target,
         cmd: Command<F>,
@@ -123,10 +127,40 @@ impl Router {
             Target::First => self.send_to_first_ret(cmd).await,
             Target::SessionSet(sids) => self.send_to_session_set_ret(&sids, cmd).await,
             Target::Group(gid) => self.send_to_group_ret(gid, cmd).await,
+            Target::Multiple(targets) => self.send_to_multiple_ret(targets, cmd).await,
+        }
+    }
+    
+    pub fn send_to_multiple<F: DynFormatter + Clone>(&self, targets: Vec<Target>, cmd: Command<F>) {
+        for target in targets {
+            self.send_to(target, cmd.clone());
         }
     }
 
-    pub fn send_to_group<F: DynFormatter>(&self, gid: GroupId, cmd: Command<F>) {
+    pub async fn send_to_multiple_ret<F: DynFormatter + Clone>(&self, targets: Vec<Target>, cmd: Command<F>) -> Result<FinishedCmd> {
+        let futures: Vec<_> = targets.into_iter().map(|target| {
+            let cmd = cmd.clone();
+            async move {
+                self.send_to_ret(target, cmd).await
+            }
+        }).collect();
+        let results = futures::future::join_all(futures).await.into_iter().collect::<Result<Vec<_>>>()?;
+        if results.is_empty() {
+            bail!("No results from send_to_multiple_ret");
+        }
+        if results.len() == 1 {
+            return Ok(results.into_iter().next().unwrap());
+        }
+        // Combine all FinishedCmd into one
+        let mut head_cmd = results[0].clone();
+        let combined_resps = head_cmd.get_responses_mut();
+        for resp in results.into_iter().skip(1) {
+            combined_resps.extend(resp.get_responses().clone());
+        }
+        Ok(head_cmd)
+    }
+
+    pub fn send_to_group<F: DynFormatter + Clone>(&self, gid: GroupId, cmd: Command<F>) {
         if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
             self.send_to_session_set(grp.get_sids(), cmd);
         } else {
@@ -134,7 +168,7 @@ impl Router {
         }
     }
 
-    pub async fn send_to_group_ret<F: DynFormatter>(
+    pub async fn send_to_group_ret<F: DynFormatter + Clone>(
         &self,
         gid: GroupId,
         cmd: Command<F>,
@@ -146,7 +180,7 @@ impl Router {
         }
     }
 
-    pub fn send_to_session_set<F: DynFormatter>(&self, sids: &HashSet<u64>, cmd: Command<F>) {
+    pub fn send_to_session_set<F: DynFormatter + Clone>(&self, sids: &HashSet<u64>, cmd: Command<F>) {
         // perform some sanity checks to remove all non-existent sessions
         let sids = sids
             .iter()
@@ -163,7 +197,7 @@ impl Router {
         }
     }
 
-    pub async fn send_to_session_set_ret<F: DynFormatter>(
+    pub async fn send_to_session_set_ret<F: DynFormatter + Clone>(
         &self,
         sids: &HashSet<u64>,
         cmd: Command<F>,
@@ -185,7 +219,7 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_session<F: DynFormatter>(&self, sid: u64, cmd: Command<F>) {
+    pub fn send_to_session<F: DynFormatter + Clone>(&self, sid: u64, cmd: Command<F>) {
         STATES.set_curr_session(sid);
 
         let out_src = OutputSource::STDOUT;
@@ -194,7 +228,7 @@ impl Router {
         self.write_to(sid, cmd);
     }
 
-    pub async fn send_to_session_ret<F: DynFormatter>(
+    pub async fn send_to_session_ret<F: DynFormatter + Clone>(
         &self,
         sid: u64,
         cmd: Command<F>,
@@ -209,7 +243,7 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_thread<F: DynFormatter>(&self, gtid: u64, cmd: Command<F>) {
+    pub fn send_to_thread<F: DynFormatter + Clone>(&self, gtid: u64, cmd: Command<F>) {
         if let Some(LocalThreadId(sid, tid)) = STATES.get_ltid_by_gtid(gtid) {
             STATES.set_curr_session(sid);
             let out_src = OutputSource::STDOUT;
@@ -221,7 +255,7 @@ impl Router {
         }
     }
 
-    pub async fn send_to_thread_ret<F: DynFormatter>(
+    pub async fn send_to_thread_ret<F: DynFormatter + Clone>(
         &self,
         gtid: u64,
         cmd: Command<F>,
@@ -240,7 +274,7 @@ impl Router {
         }
     }
 
-    pub fn send_to_current_thread<F: DynFormatter>(&self, cmd: Command<F>) {
+    pub fn send_to_current_thread<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
         if let Some(gtid) = STATES.get_curr_gtid() {
             self.send_to_thread(gtid, cmd);
         } else {
@@ -248,7 +282,7 @@ impl Router {
         }
     }
 
-    pub async fn send_to_current_thread_ret<F: DynFormatter>(
+    pub async fn send_to_current_thread_ret<F: DynFormatter + Clone>(
         &self,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
@@ -259,13 +293,13 @@ impl Router {
         }
     }
 
-    pub fn send_to_current_session<F: DynFormatter>(&self, cmd: Command<F>) {
+    pub fn send_to_current_session<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
         if let Some(sid) = STATES.get_curr_session() {
             self.send_to_session(sid, cmd);
         }
     }
 
-    pub async fn send_to_current_session_ret<F: DynFormatter>(
+    pub async fn send_to_current_session_ret<F: DynFormatter + Clone>(
         &self,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
@@ -275,7 +309,7 @@ impl Router {
         bail!("No current session selected.");
     }
 
-    pub fn broadcast<F: DynFormatter>(&self, cmd: Command<F>) {
+    pub fn broadcast<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
         let num_sessions = self.sessions.len() as u32;
         let out_src = OutputSource::STDOUT;
         let (out_meta, cmd) = cmd.prepare_to_send(num_sessions, out_src);
@@ -283,7 +317,7 @@ impl Router {
         self.write_to_all(cmd);
     }
 
-    pub async fn broadcast_ret<F: DynFormatter>(&self, cmd: Command<F>) -> Result<FinishedCmd> {
+    pub async fn broadcast_ret<F: DynFormatter + Clone>(&self, cmd: Command<F>) -> Result<FinishedCmd> {
         let num_sessions = self.sessions.len() as u32;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let out_src = OutputSource::RETURN(tx);
@@ -293,7 +327,7 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_first<F: DynFormatter>(&self, cmd: Command<F>) {
+    pub fn send_to_first<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
         if let Some(s) = self.sessions.iter().next() {
             let sid = s.key().clone();
             drop(s);
@@ -303,7 +337,7 @@ impl Router {
         }
     }
 
-    pub async fn send_to_first_ret<F: DynFormatter>(&self, cmd: Command<F>) -> Result<FinishedCmd> {
+    pub async fn send_to_first_ret<F: DynFormatter + Clone>(&self, cmd: Command<F>) -> Result<FinishedCmd> {
         if let Some(s) = self.sessions.iter().next() {
             let sid = s.key().clone();
             drop(s);

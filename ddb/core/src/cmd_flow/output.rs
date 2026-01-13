@@ -79,7 +79,7 @@ where
 ///     }
 /// }
 /// ```
-pub trait Formatter {
+pub trait Formatter: Clone {
     type Transformed;
 
     // transform the responses, e.g. swap thread id with our own tracked global id
@@ -157,6 +157,7 @@ impl Formatter for UnitFormatter {
 }
 
 /// handle `-thread-info` command response
+#[derive(Clone)]
 pub struct ThreadInfoFormatter;
 impl Formatter for ThreadInfoFormatter {
     // (token, transformed responses)
@@ -208,6 +209,7 @@ impl Formatter for ThreadInfoFormatter {
 }
 
 /// handle `-list-thread-groups` command response
+#[derive(Clone)]
 pub struct ProcessInfoFormatter;
 impl Formatter for ProcessInfoFormatter {
     type Transformed = (Option<u64>, Dict);
@@ -247,6 +249,7 @@ impl Formatter for ProcessInfoFormatter {
 }
 
 /// handle `info inferiors` command response
+#[derive(Clone)]
 pub struct ProcessReadableFormatter;
 impl Formatter for ProcessReadableFormatter {
     type Transformed = (Option<u64>, Dict);
@@ -294,6 +297,7 @@ impl Formatter for ProcessReadableFormatter {
 /// skip for now...
 
 /// handle `thread-group-*` related async record
+#[derive(Clone)]
 pub struct ThreadGroupNotifFormatter(u64); // gtgid
 impl Formatter for ThreadGroupNotifFormatter {
     type Transformed = (ParsedSessionResponse, Dict, Option<u64>);
@@ -327,6 +331,7 @@ impl ThreadGroupNotifFormatter {
 }
 
 /// handle `thread-created` async record
+#[derive(Clone)]
 pub struct ThreadCreatedNotifFormatter {
     gtid: u64,
     gtgid: u64,
@@ -379,6 +384,7 @@ impl Formatter for ThreadCreatedNotifFormatter {
 }
 
 /// handle `thread-exited` async record
+#[derive(Clone)]
 pub struct ThreadExitedNotifFormatter {
     gtid: u64,
     gtgid: u64,
@@ -416,6 +422,7 @@ impl Formatter for ThreadExitedNotifFormatter {
 }
 
 /// handle `running` async record
+#[derive(Clone)]
 pub struct RunningAsyncRecordFormatter {
     all_running: bool,
 }
@@ -476,6 +483,7 @@ impl Formatter for RunningAsyncRecordFormatter {
 }
 
 /// handle `stopped` async record
+#[derive(Clone)]
 pub struct StopAsyncRecordFormatter;
 
 impl Formatter for StopAsyncRecordFormatter {
@@ -530,6 +538,7 @@ impl Formatter for StopAsyncRecordFormatter {
 }
 
 /// handle generic `stopped` async record (not thread-related)
+#[derive(Clone)]
 pub struct GenericStopAsyncRecordFormatter;
 impl Formatter for GenericStopAsyncRecordFormatter {
     type Transformed = (Option<u64>, Dict);
@@ -552,6 +561,7 @@ impl Formatter for GenericStopAsyncRecordFormatter {
 // pub struct StackListFramesFormatter;
 
 /// handle `-thread-select`
+#[derive(Clone)]
 pub struct ThreadSelectFormatter(u64); // gtid
 impl ThreadSelectFormatter {
     #[allow(unused)]

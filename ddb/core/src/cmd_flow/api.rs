@@ -71,7 +71,7 @@ fn check_prefix(parsed_cmd: &ParsedInputCmd) -> Result<()> {
 }
 
 #[inline]
-fn prepare_to_send<F: DynFormatter + 'static>(
+fn prepare_to_send<F: DynFormatter + 'static + Clone>(
     parsed_cmd: ParsedInputCmd,
     formatter: F,
 ) -> Result<(Command<F>, Target)> {
@@ -174,7 +174,7 @@ pub struct SendWithFormatterBuilder<F: DynFormatter + 'static> {
     formatter: F,
 }
 
-impl<F: DynFormatter + 'static> SendWithFormatterBuilder<F> {
+impl<F: DynFormatter + 'static + Clone> SendWithFormatterBuilder<F> {
     /// Route the command to the specified target with custom formatter (fire-and-forget)
     pub fn to(self, target: Target) -> Result<()> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, self.formatter)?;

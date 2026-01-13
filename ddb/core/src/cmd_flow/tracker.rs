@@ -110,7 +110,7 @@ impl Debug for SessionResponse {
 /// - Public accessor methods (`get_*`) are stable and will not change
 /// - Internal representation may change but is hidden behind accessors
 /// - Used as return value for `Router::send_to_ret` operations
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct FinishedCmd {
     external_token: Option<u64>,
     sid: u64,
