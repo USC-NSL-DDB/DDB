@@ -10,13 +10,9 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::ParsedSessionResponse,
-    common::Config,
-    feature::get_proclet_restore_mgr,
-    state::{
-        get_bkpt_mgr, get_group_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, SessionMeta,
-        SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, STATES,
-    },
+    cmd_flow::ParsedSessionResponse, common::Config, dbg_parser::gdb_parser::MIFormatter, feature::get_proclet_restore_mgr, state::{
+        BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, STATES, SessionMeta, SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, get_bkpt_mgr, get_group_mgr
+    }
 };
 
 use super::{
@@ -240,9 +236,19 @@ impl Handler for BreakInsertHandler {
                 return;
             }
         }
+        
+        match get_bkpt_mgr().get_bkpts_by_id(bkpt_id) {
+            Some(bkpt) => {
+                let out = MIFormatter::format("^", "done", Some(&bkpt.into()), cmd.external_token);
+                println!("{}", out);
+                debug!("output: {}", out);
+            }
+            None => {
+                warn!("Failed to find inserted breakpoint with id {}", bkpt_id);
+            }
+        }
 
         // let results = cmd.send_and_return().to_default_target().await;
-
         // if let Ok(results) = results {
         //     for resp in results.get_responses() {
         //         if resp.get_message() == "done" {

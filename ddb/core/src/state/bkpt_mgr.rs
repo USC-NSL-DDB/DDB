@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64}};
+use std::{collections::HashSet, sync::{Arc, atomic::{AtomicBool, AtomicU64}}};
 
 use dashmap::DashMap;
 
@@ -19,6 +19,16 @@ pub struct SessionBkptTarget {
 pub struct BkptLoc {
     src: String,
     line: u64,
+}
+
+impl BkptLoc {
+    pub fn get_path(&self) -> &str {
+        &self.src
+    }
+    
+    pub fn get_line(&self) -> u64 {
+        self.line
+    }
 }
 
 impl From<[&str; 2]> for BkptLoc {
@@ -67,6 +77,10 @@ impl SessionSubBkpt {
             target_session,
         }
     }
+    
+    pub fn get_target_session(&self) -> u64 {
+        self.target_session
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +104,10 @@ impl GroupSubBkpt {
     
     pub fn remove_local_bkpt(&self, session_id: u64) {
         self.local_ids.remove(&session_id);
+    }
+    
+    pub fn get_target_group(&self) -> GroupId {
+        self.target_group
     }
 }
 
@@ -143,6 +161,14 @@ impl SubBkptMeta {
             },
         }
     }
+    
+    pub fn get_id(&self) -> u64 {
+        self.id
+    }
+    
+    pub fn get_type(&self) -> &SubBkptType {
+        &self.subbkpt_type
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -168,15 +194,45 @@ impl BkptMeta {
         }
     }
     
-    pub fn add_subbkpt(&mut self, subbkpt_type: SubBkptType) {
+    fn add_subbkpt(&mut self, subbkpt_type: SubBkptType) {
         let subbkpt_id = self.sub_bkpt_counter.next();
         let subbkpt = SubBkptMeta::new(subbkpt_id, self.id, subbkpt_type);
-        // get_bkpt_mgr().insert_local_bkpt_id_index(session_id, local_bkpt_id, major_bkpt_id, sub_bkpt_id);
+        match &subbkpt.subbkpt_type {
+            // mark this subbkpt is a group breakpoint
+            SubBkptType::Group(group_subbkpt) => {
+                get_bkpt_mgr().add_grp_bkpt(group_subbkpt.target_group, self.id);
+            },
+            _ => {}
+        }
         self.subbkpts.push(subbkpt);
     }
     
-    pub fn delete_subbkpt(&mut self, subbkpt_id: u64) {
-        self.subbkpts.retain(|sb| sb.id != subbkpt_id);
+    fn delete_subbkpt(&mut self, subbkpt_id: u64) {
+        self.subbkpts.retain(|sb| {
+            if sb.id != subbkpt_id {
+                true
+            } else {
+                match &sb.subbkpt_type {
+                    SubBkptType::Group(group_subbkpt) => {
+                        get_bkpt_mgr().delete_grp_bkpt(group_subbkpt.target_group, self.id);
+                    },
+                    _ => {}
+                }
+                false
+            }
+        });
+    }
+    
+    fn remove_all_subbkpts(&mut self) {
+        for sb in &self.subbkpts {
+            match &sb.subbkpt_type {
+                SubBkptType::Group(group_subbkpt) => {
+                    get_bkpt_mgr().delete_grp_bkpt(group_subbkpt.target_group, self.id);
+                },
+                _ => {}
+            }
+        }
+        self.subbkpts.clear();
     }
     
     pub fn enable(&self) {
@@ -202,6 +258,14 @@ impl BkptMeta {
     pub fn get_loc(&self) -> &BkptLoc {
         &self.loc
     }
+    
+    pub fn get_id(&self) -> u64 {
+        self.id
+    }
+    
+    pub fn get_subbkpts(&self) -> &Vec<SubBkptMeta> {
+        &self.subbkpts
+    }
 
     // pub fn get_cmd(&self) -> &String {
     //     // &self.orig_cmd
@@ -217,6 +281,9 @@ pub struct BreakpointMgr {
     
     // reverse index from (session_id, local_bkpt_id) to (global_bkpt_id, sub_bkpt_id)
     local_bkpt_to_global: DashMap<(SessionId, u64), (u64, u64)>,
+    
+    // maps from group id to bkpt IDs, manages all breakpoints set in a group
+    group_bkpt: DashMap<GroupId, HashSet<u64>>,
 
     // bkpts that are pending for adding confirmation
     // pending_bkpts: DashMap<u64, BkptMeta>,
@@ -227,6 +294,7 @@ impl BreakpointMgr {
         BreakpointMgr {
             bkpts: DashMap::new(),
             local_bkpt_to_global: DashMap::new(),
+            group_bkpt: DashMap::new(),
             // pending_bkpts: DashMap::new(),
         }
     }
@@ -260,6 +328,9 @@ impl BreakpointMgr {
         self.bkpts.remove(&bkpt_id);
     }
     
+    // pub fn update_bkpt(&self, bkpt_id: u64) {
+    // }
+
     pub fn add_subbkpt(&self, bkpt_id: u64, subbkpt_type: SubBkptType) {
         if let Some(mut bkpt_entry) = self.bkpts.get_mut(&bkpt_id) {
             bkpt_entry.value_mut().add_subbkpt(subbkpt_type);
@@ -272,7 +343,19 @@ impl BreakpointMgr {
         }
     }
     
-    pub fn insert_local_bkpt_id_index(
+    fn add_grp_bkpt(&self, grp_id: GroupId, bkpt_id: u64) {
+        self.group_bkpt.entry(grp_id)
+            .or_default()
+            .insert(bkpt_id);
+    }
+    
+    fn delete_grp_bkpt(&self, grp_id: GroupId, bkpt_id: u64) {
+        if let Some(mut entry) = self.group_bkpt.get_mut(&grp_id) {
+            entry.value_mut().remove(&bkpt_id);
+        }
+    }
+    
+    fn insert_local_bkpt_id_index(
         &self,
         session_id: SessionId,
         local_bkpt_id: u64,
@@ -283,6 +366,30 @@ impl BreakpointMgr {
             (session_id, local_bkpt_id),
             (major_bkpt_id, sub_bkpt_id),
         );
+    }
+    
+    pub fn get_bkpts_by_grp_id(&self, grp_id: GroupId) -> Vec<BkptMeta> {
+        let mut res = Vec::new();
+        if let Some(entry) = self.group_bkpt.get(&grp_id) {
+            for bkpt_id in entry.iter() {
+                if let Some(bkpt_entry) = self.bkpts.get(bkpt_id) {
+                    res.push(bkpt_entry.value().clone());
+                }
+            }
+        }
+        res
+    }
+    
+    pub fn update_subbkpts_with<F: Fn(&mut SubBkptMeta)>(&self, bkpt_id: u64, f: F) {
+        self.bkpts.entry(bkpt_id).and_modify(|bkpt| {
+            for sb in bkpt.subbkpts.iter_mut() {
+                f(sb);
+            }
+        });
+    }
+    
+    pub fn get_bkpts_by_id(&self, bkpt_id: u64) -> Option<BkptMeta> {
+        self.bkpts.get(&bkpt_id).map(|entry| entry.value().clone())
     }
 
     // pub fn add(&self, grp_id: GroupId, bkpt: BkptMeta) {

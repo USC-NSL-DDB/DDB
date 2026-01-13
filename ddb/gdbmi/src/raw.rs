@@ -83,6 +83,12 @@ impl From<HashMap<String, Value>> for Value {
     }
 }
 
+impl From<HashMap<&str, Value>> for Value {
+    fn from(map: HashMap<&str, Value>) -> Self {
+        Self::Dict(Dict::from(map))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct Dict(pub HashMap<String, Value>);
 
@@ -95,6 +101,12 @@ impl From<Vec<(String, Value)>> for Dict {
 impl From<HashMap<String, Value>> for Dict {
     fn from(map: HashMap<String, Value>) -> Self {
         Self(map)
+    }
+}
+
+impl From<HashMap<&str, Value>> for Dict {
+    fn from(map: HashMap<&str, Value>) -> Self {
+        Self(map.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
 }
 

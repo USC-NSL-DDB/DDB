@@ -1,11 +1,16 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use gdbmi::{
     self,
     raw::{Dict, List},
 };
+use rumqttc::tokio_rustls::rustls::crypto::hash::Hash;
 use tracing::error;
 
 use gdbmi::parser::Message;
+
+use crate::state::BkptMeta;
 
 pub struct GdbParser;
 
@@ -105,6 +110,58 @@ impl MIFormatter {
             .unwrap_or_default();
 
         format!("{}{}{}{}", token, task_sym, msg, payload)
+    }
+}
+
+impl From<BkptMeta> for Dict {
+    fn from(bkpt: BkptMeta) -> Self {
+        let bkpt_loc = bkpt.get_loc();
+        let subbkpts: Vec<gdbmi::raw::Value> = bkpt
+            .get_subbkpts()
+            .iter()
+            .map(|subbkpt| {
+                let bkpt_type: String;
+                let target_id: u64;
+                match subbkpt.get_type() {
+                    crate::state::SubBkptType::Group(grp_bkpt) => {
+                        bkpt_type = "group".to_string();
+                        target_id = grp_bkpt.get_target_group();
+                    }
+                    crate::state::SubBkptType::Session(s_bkpt) => {
+                        bkpt_type = "session".to_string();
+                        target_id = s_bkpt.get_target_session();
+                    }
+                }
+                HashMap::from([
+                    ("id", subbkpt.get_id().to_string().into()),
+                    ("type", bkpt_type.into()),
+                    ("target_id", target_id.to_string().into()),
+                ])
+                .into()
+            })
+            .collect();
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "bkpt",
+            HashMap::from([
+                ("id", bkpt.get_id().to_string().into()),
+                (
+                    "enabled",
+                    if bkpt.is_enabled() {
+                        "y".to_string()
+                    } else {
+                        "n".to_string()
+                    }
+                    .into(),
+                ),
+                ("fullname", bkpt_loc.get_path().into()),
+                ("line", bkpt_loc.get_line().to_string().into()),
+            ])
+            .into(),
+        );
+        map.insert("subbkpt", subbkpts.into());
+        Dict::from(map)
     }
 }
 

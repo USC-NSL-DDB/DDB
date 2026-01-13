@@ -125,27 +125,29 @@ impl DbgSession {
     /// have the latest updates, a.k.a., the current session is added to
     /// the group.
     pub async fn sync_state(&self) -> Result<()> {
-        if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
-            // insert existing breakpoints
-            if let Some(bkpts) = crate::state::get_bkpt_mgr().get(grp_id) {
-                debug!("Inserting existing breakpoints: {:?}", bkpts);
-                let bkpts_cmd = bkpts
-                    .iter()
-                    .map(|bkpt| bkpt.get_cmd().trim())
-                    .collect::<Vec<_>>();
-                let bkpts_cmd = bkpts_cmd.join("\n");
-                let bkpts_cmd = if !bkpts_cmd.ends_with('\n') {
-                    format!("{}\n", bkpts_cmd)
-                } else {
-                    bkpts_cmd
-                };
-                debug!("breakpoints commands: {:?}", bkpts_cmd);
-                self.write(bkpts_cmd)
-                    .await
-                    .context("failed to write commands when inserting bkpts.")?;
-            }
-        }
-        Ok(())
+        // TODO: Finished this function
+        
+        // if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
+        //     // insert existing breakpoints
+        //     if let Some(bkpts) = crate::state::get_bkpt_mgr().get(grp_id) {
+        //         debug!("Inserting existing breakpoints: {:?}", bkpts);
+        //         let bkpts_cmd = bkpts
+        //             .iter()
+        //             .map(|bkpt| bkpt.get_cmd().trim())
+        //             .collect::<Vec<_>>();
+        //         let bkpts_cmd = bkpts_cmd.join("\n");
+        //         let bkpts_cmd = if !bkpts_cmd.ends_with('\n') {
+        //             format!("{}\n", bkpts_cmd)
+        //         } else {
+        //             bkpts_cmd
+        //         };
+        //         debug!("breakpoints commands: {:?}", bkpts_cmd);
+        //         self.write(bkpts_cmd)
+        //             .await
+        //             .context("failed to write commands when inserting bkpts.")?;
+        //     }
+        // }
+        // Ok(())
     }
 
     /// Setup GDB logging configuration
