@@ -40,6 +40,7 @@ use clap::Parser;
 use console_subscriber;
 use rust_embed::Embed;
 use tokio::io::{self, AsyncBufReadExt};
+use tracing::error;
 use tracing::{debug, info};
 
 #[derive(Embed)]
@@ -60,7 +61,14 @@ fn init_console_subscriber() {
 
 async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
     // wait for all components to be up to receive input
-    status::get_rt_status().wait_for_up().await;
+    // Or immediately exit if stop signal is received
+    tokio::select! {
+        _ = stop_sig.changed() => {
+            debug!("Exiting command loop before starting, stop signal received.");
+            return;
+        }
+        _ = status::get_rt_status().wait_for_up() => {}
+    }
 
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin).lines();
@@ -119,12 +127,8 @@ pub fn get_dbg_mgr() -> &'static Arc<DbgManager> {
 fn main() -> Result<()> {
     // init_console_subscriber();
     let args = arg::Args::parse();
-    // FIXME: we can remove this unsafe block with
-    // OnceLock or lazy_static
     let logging_settings = LoggingSettings::from_args(&args);
-    unsafe {
-        Config::init_global(args.config)?;
-    }
+    Config::init_global(args.config)?;
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
     get_shutdown_ctrl().setup_signal_handling();
@@ -190,10 +194,17 @@ fn main() -> Result<()> {
         runtime.block_on(async {
             let dbg_mgr = DbgManager::new().await;
             init_dbg_mgr(|| Arc::new(dbg_mgr));
-            get_dbg_mgr().start().await;
-
-            get_rt_status().up(Component::DbgMgr);
-
+            match get_dbg_mgr().start().await {
+                Ok(_) => {
+                    debug!("DbgManager started successfully.");
+                    get_rt_status().up(Component::DbgMgr);
+                }
+                Err(e) => {
+                    error!("Failed to start DbgManager: {:?}", e);
+                    get_shutdown_ctrl()
+                        .trigger_once(ShutdownCause::DbgMgrInitFailure);
+                }
+            }
             ShutdownCtrl::wait_for_exit().await;
             get_shutdown_ctrl()
                 .shutdown_cleanup(async {
@@ -209,16 +220,11 @@ fn main() -> Result<()> {
     let main_loop = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .thread_name("ddb-main-loop")
+            .thread_name("ddb-cmd-loop")
             .build()
             .unwrap();
         rt.block_on(async {
-            let cmd_loop_handler = tokio::spawn(run_cmd_loop(get_shutdown_ctrl().subscribe()));
-
-            tokio::select! {
-                _ = cmd_loop_handler => {}
-                _ = ShutdownCtrl::wait_for_exit() => {}
-            }
+            run_cmd_loop(get_shutdown_ctrl().subscribe()).await;
         });
         // Seems like tokio has trouble shutting down the IO reader properly
         // so we need to manually shutdown the runtime

@@ -1,14 +1,14 @@
 use super::default_vals;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::{fs, sync::OnceLock};
 use std::path::Path;
 use tracing::debug;
 
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterMatchType};
 
 // Global configuration instance
-static mut GLOBAL_CONFIG: Option<Config> = None;
+static GLOBAL_CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -319,12 +319,6 @@ impl Config {
 
     /// Initialize the global configuration with a file path
     ///
-    /// # Safety
-    ///
-    /// This function should only be called once during program initialization
-    /// before any other threads are spawned. It is unsafe because it modifies
-    /// a global mutable static variable.
-    ///
     /// # Arguments
     ///
     /// * `path` - An optional file path from which to load the configuration.
@@ -337,28 +331,27 @@ impl Config {
     /// # Example
     ///
     /// ```rust
-    /// unsafe {
-    ///     Config::init_global(Some("/path/to/config.yaml")).expect("Failed to initialize global config");
-    /// }
+    /// Config::init_global(Some("/path/to/config.yaml")).expect("Failed to initialize global config");
     /// ```
-    pub unsafe fn init_global<P: AsRef<Path>>(path: Option<P>) -> Result<()> {
+    pub fn init_global<P: AsRef<Path>>(path: Option<P>) -> Result<Config> {
         let config = match path {
             Some(p) => Self::from_file(p)?,
             None => Self::default(),
         };
         debug!("Initializing global config: {:?}", config);
-        GLOBAL_CONFIG = Some(config);
-        Ok(())
+        match GLOBAL_CONFIG.set(config.clone()) {
+            Ok(_) => (),
+            Err(_) => {
+                bail!("Global config has already been initialized.");
+            }
+        }
+        Ok(config)
     }
 
     /// Get a reference to the global configuration
     /// SAFETY: This is safe to call only after init_global has been called
     #[allow(static_mut_refs)]
     pub fn global() -> &'static Config {
-        // SAFETY: This is safe because:
-        // 1. We know init_global was called first
-        // 2. We never modify GLOBAL_CONFIG after initialization
-        // 3. All accesses are read-only
-        unsafe { GLOBAL_CONFIG.as_ref().unwrap() }
+        GLOBAL_CONFIG.get().expect("Global config is not properly initialized.")
     }
 }

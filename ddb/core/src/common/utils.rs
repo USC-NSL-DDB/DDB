@@ -176,40 +176,44 @@ pub mod gdb {
     }
 }
 
-pub fn run_command<const VERBOSE: bool>(cmd: &str, args: &[&str]) -> Result<()> {
+pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(cmd: &str, args: &[&str]) -> Result<()> {
     use tracing::debug;
     let full_cmd = format!("{} {}", cmd, args.join(" "));
     let child = Command::new(cmd)
         .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(if WAIT_RESULT { Stdio::piped() } else { Stdio::null() })
+        .stderr(if WAIT_RESULT { Stdio::piped() } else { Stdio::null() })
         .spawn()?;
-    let output = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if output.status.success() {
-        if VERBOSE {
-            debug!(
-                "Command {} success with stdout: {}, stderr: {}",
+    if WAIT_RESULT {
+        let output = child.wait_with_output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.success() {
+            if VERBOSE {
+                debug!(
+                    "Command {} succeeded with stdout: {}, stderr: {}",
+                    full_cmd, stdout, stderr
+                );
+            }
+            return Ok(());
+        } else {
+            let msg = format!(
+                "Command {} failed with stdout: {}, stderr: {}",
                 full_cmd, stdout, stderr
             );
+            if VERBOSE {
+                debug!(msg);
+            }
+            bail!(msg);
         }
-        return Ok(());
     } else {
-        let msg = format!(
-            "Command {} success with stdout: {}, stderr: {}",
-            full_cmd, stdout, stderr
-        );
-        if VERBOSE {
-            debug!(msg);
-        }
-        bail!(msg);
+        Ok(())
     }
 }
 
 #[allow(unused)]
 pub fn run_command_quite(cmd: &str, args: &[&str]) -> Result<()> {
-    run_command::<false>(cmd, args)
+    run_command::<false, true>(cmd, args)
 }
 
 pub fn expand_path(path: &str) -> PathBuf {
