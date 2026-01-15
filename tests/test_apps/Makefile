@@ -1,7 +1,7 @@
 # Makefile for test applications
 
 CXX = g++
-INCLUDE_DIRS = -I../../connector/include/
+INCLUDE_DIRS = -I../../connector/include/ -Iinc
 LDFLAGS = -L$(HOME)/.local/lib -lpaho-mqtt3c -lpthread
 CXXFLAGS = -std=c++20 -Wall -O0 -g
 BINDIR = bin
