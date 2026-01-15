@@ -378,8 +378,8 @@ impl Handler for BreakDeleteHandler {
                 }
             }
             if modified {
-                if let Some(has_subbkpt) = get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
-                    if has_subbkpt {
+                if let Some(empty) = get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
+                    if !empty {
                         // still has other sub-breakpoints, emit breakpoint-modified event
                         if let Some(bkpt) = get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
                             let out = MIFormatter::format("^", "done", None, cmd.external_token);
