@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use crate::{
     dbg_parser::gdb_parser::MIFormatter,
     discovery::discovery_message_producer::ServiceMeta,
-    state::{get_group_mgr, STATES},
+    state::{get_bkpt_mgr, get_group_mgr, STATES},
 };
 
 use super::{FinishedCmd, ParsedSessionResponse};
@@ -495,6 +495,30 @@ impl Formatter for StopAsyncRecordFormatter {
         let resp = responses.get_responses().first().unwrap();
         let mut payload = resp.get_payload().unwrap().clone();
         let sid = resp.get_sid();
+
+        if payload
+            .get("reason")
+            .and_then(|r| r.expect_string_ref().ok())
+            .map_or("none", |s| s)
+            == "breakpoint-hit"
+        {
+            let local_bkpt_id = match &payload["bkptno"] {
+                Value::String(s) => s.parse::<u64>().unwrap(),
+                _ => unreachable!(),
+            };
+            if let Some((bkpt_id, subbkpt_id)) =
+                get_bkpt_mgr().get_bkpt_ids_by_local_bkpt_id(sid, local_bkpt_id)
+            {
+                payload.insert(
+                    "bkptno".into(),
+                    bkpt_id.to_string().into(),
+                );
+                payload.insert(
+                    "subbkptno".into(),
+                    subbkpt_id.to_string().into(),
+                );
+            }
+        }
 
         let gtid = {
             let tid = match &payload["thread-id"] {

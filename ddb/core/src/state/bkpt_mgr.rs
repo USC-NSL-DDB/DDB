@@ -345,23 +345,6 @@ impl BreakpointMgr {
         }
     }
 
-    // used when DDB initiate a breakpoint insertion
-    // This breakpoint is not yet considered as a valid one
-    // until the dbg end confirm it, e.g. emitting breakpoint event.
-    // pub fn pending_add(&self, id: u64, cmd: String) {
-    //     let bkpt = BkptMeta::new(cmd);
-    //     self.pending_bkpts.insert(id, bkpt);
-    // }
-
-    // pub fn confirm_add(&self, id: u64, sid: u64) {
-    //     if let Some(grp_id) = get_group_mgr().get_group_id_by_sid(sid) {
-    //         if let Some((_, bkpt)) = self.pending_bkpts.remove(&id) {
-    //             self.add(&grp_id, bkpt);
-    //         }
-    //     }
-    // }
-    //
-
     pub fn is_bkpt_empty(&self, bkpt_id: u64) -> Option<bool> {
         // Return None when there is no bkpt
         // Return Some(true) when the bkpt has no subbkpts
@@ -387,9 +370,6 @@ impl BreakpointMgr {
             bkpt.remove_all_subbkpts();
         }
     }
-
-    // pub fn update_bkpt(&self, bkpt_id: u64) {
-    // }
 
     pub fn add_subbkpt(&self, bkpt_id: u64, subbkpt_type: SubBkptType) {
         if let Some(mut bkpt_entry) = self.bkpts.get_mut(&bkpt_id) {
@@ -597,5 +577,15 @@ impl BreakpointMgr {
         for key in local_keys {
             self.local_bkpt_to_global.remove(&key);
         }
+    }
+    
+    pub fn get_bkpt_ids_by_local_bkpt_id(
+        &self,
+        sid: SessionId,
+        local_bkpt_id: u64,
+    ) -> Option<(u64, u64)> {
+        self.local_bkpt_to_global
+            .get(&(sid, local_bkpt_id))
+            .map(|entry| *entry.value())
     }
 }
