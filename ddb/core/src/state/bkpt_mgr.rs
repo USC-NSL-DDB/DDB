@@ -481,8 +481,6 @@ impl BreakpointMgr {
     
     pub fn clean_bkpts_for_terminated_session(
         &self,
-        // bkpt_id: u64,
-        // grp_id: GroupId,
         sid: SessionId,
     ) {
         let grp_id = get_group_mgr().get_grp_id_by_sid(sid);

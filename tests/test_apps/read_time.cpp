@@ -11,7 +11,7 @@
 
 int main(int argc, char* argv[]) {
     Args args = parse_args(argc, argv);
-    auto proc_alias = "segfault_app";
+    auto proc_alias = "read_time_app";
     if (args.enable_ddb) {
         auto cfg = DDB::Config::get_default("127.0.0.1")
                        .with_alias(proc_alias)
