@@ -7,13 +7,13 @@ use std::{
 };
 
 use dashmap::DashMap;
-use tracing::{warn, debug};
+use tracing::{debug, warn};
 
 use super::{get_group_mgr, GroupId};
 use crate::{
     common::counter::SimpleCounter,
-    dbg_parser::gdb_parser::{MIFormatter, bkpt_deleted_payload},
-    state::{SessionId, get_bkpt_mgr},
+    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
+    state::{get_bkpt_mgr, SessionId},
 };
 
 #[derive(Debug, Clone)]
@@ -87,6 +87,10 @@ impl SessionSubBkpt {
     pub fn get_target_session(&self) -> u64 {
         self.target_session
     }
+
+    pub fn get_local_bkpt_id(&self) -> u64 {
+        self.local_id
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +118,14 @@ impl GroupSubBkpt {
 
     pub fn get_target_group(&self) -> GroupId {
         self.target_group
+    }
+
+    pub fn get_local_ids(&self) -> Vec<(u64, u64)> {
+        let mut res = Vec::new();
+        for entry in self.local_ids.iter() {
+            res.push((*entry.key(), *entry.value()));
+        }
+        res
     }
 }
 
@@ -220,9 +232,17 @@ impl BkptMeta {
             } else {
                 match &sb.subbkpt_type {
                     SubBkptType::Group(group_subbkpt) => {
+                        for (session_id, local_bkpt_id) in group_subbkpt.get_local_ids() {
+                            get_bkpt_mgr().remove_local_bkpt_id_index(session_id, local_bkpt_id);
+                        }
                         get_bkpt_mgr().delete_grp_bkpt(group_subbkpt.target_group, self.id);
                     }
-                    _ => {}
+                    SubBkptType::Session(sess_subbkpt) => {
+                        get_bkpt_mgr().remove_local_bkpt_id_index(
+                            sess_subbkpt.get_target_session(),
+                            sess_subbkpt.get_local_bkpt_id(),
+                        );
+                    }
                 }
                 false
             }
@@ -233,9 +253,17 @@ impl BkptMeta {
         for sb in &self.subbkpts {
             match &sb.subbkpt_type {
                 SubBkptType::Group(group_subbkpt) => {
+                    for (session_id, local_bkpt_id) in group_subbkpt.get_local_ids() {
+                        get_bkpt_mgr().remove_local_bkpt_id_index(session_id, local_bkpt_id);
+                    }
                     get_bkpt_mgr().delete_grp_bkpt(group_subbkpt.target_group, self.id);
                 }
-                _ => {}
+                SubBkptType::Session(sess_subbkpt) => {
+                    get_bkpt_mgr().remove_local_bkpt_id_index(
+                        sess_subbkpt.get_target_session(),
+                        sess_subbkpt.get_local_bkpt_id(),
+                    );
+                }
             }
         }
         self.subbkpts.clear();
@@ -332,6 +360,18 @@ impl BreakpointMgr {
     //         }
     //     }
     // }
+    //
+
+    pub fn is_bkpt_empty(&self, bkpt_id: u64) -> Option<bool> {
+        // Return None when there is no bkpt
+        // Return Some(true) when the bkpt has no subbkpts
+        // Return Some(false) when the bkpt has subbkpts
+        if let Some(bkpt_entry) = self.bkpts.get(&bkpt_id) {
+            Some(bkpt_entry.value().subbkpts.is_empty())
+        } else {
+            None
+        }
+    }
 
     pub fn add_bkpt(&self, loc: BkptLoc) -> u64 {
         let bkpt = BkptMeta::new(loc);
@@ -343,7 +383,9 @@ impl BreakpointMgr {
     }
 
     pub fn delete_bkpt(&self, bkpt_id: u64) {
-        self.bkpts.remove(&bkpt_id);
+        if let Some((_, mut bkpt)) = self.bkpts.remove(&bkpt_id) {
+            bkpt.remove_all_subbkpts();
+        }
     }
 
     // pub fn update_bkpt(&self, bkpt_id: u64) {
@@ -353,6 +395,17 @@ impl BreakpointMgr {
         if let Some(mut bkpt_entry) = self.bkpts.get_mut(&bkpt_id) {
             bkpt_entry.value_mut().add_subbkpt(subbkpt_type);
         }
+    }
+
+    pub fn get_subbkpt(&self, bkpt_id: u64, sub_bkpt_id: u64) -> Option<SubBkptMeta> {
+        if let Some(bkpt_entry) = self.bkpts.get(&bkpt_id) {
+            for sb in &bkpt_entry.value().subbkpts {
+                if sb.id == sub_bkpt_id {
+                    return Some(sb.clone());
+                }
+            }
+        }
+        None
     }
 
     pub fn delete_subbkpt(&self, bkpt_id: u64, subbkpt_id: u64) {
@@ -380,6 +433,11 @@ impl BreakpointMgr {
     ) {
         self.local_bkpt_to_global
             .insert((session_id, local_bkpt_id), (major_bkpt_id, sub_bkpt_id));
+    }
+
+    pub fn remove_local_bkpt_id_index(&self, session_id: SessionId, local_bkpt_id: u64) {
+        self.local_bkpt_to_global
+            .remove(&(session_id, local_bkpt_id));
     }
 
     pub fn get_bkpts_by_grp_id(&self, grp_id: GroupId) -> Vec<BkptMeta> {
@@ -417,8 +475,11 @@ impl BreakpointMgr {
     pub fn get_bkpt_by_id(&self, bkpt_id: u64) -> Option<BkptMeta> {
         self.bkpts.get(&bkpt_id).map(|entry| entry.value().clone())
     }
-    
-    pub fn get_bkpt_by_id_ref(&self, bkpt_id: u64) -> Option<dashmap::mapref::one::Ref<'_, u64, BkptMeta>> {
+
+    pub fn get_bkpt_by_id_ref(
+        &self,
+        bkpt_id: u64,
+    ) -> Option<dashmap::mapref::one::Ref<'_, u64, BkptMeta>> {
         self.bkpts.get(&bkpt_id)
     }
 
@@ -432,17 +493,6 @@ impl BreakpointMgr {
         }
         res
     }
-
-    // pub fn update_grp_bkpt_in_bkpt<F: Fn(&GroupSubBkpt)>(
-    //     &self,
-    //     bkpt_id: u64,
-    //     grp_id: GroupId,
-    //     f: F,
-    // ) {
-    //     if let Some(bkpt_entry) = self.bkpts.get(&bkpt_id) {
-    //         bkpt_entry.value().update_grp_bkpt(grp_id, f);
-    //     }
-    // }
 
     pub fn setup_grp_bkpt_for_new_session(
         &self,
@@ -478,11 +528,8 @@ impl BreakpointMgr {
             }
         }
     }
-    
-    pub fn clean_bkpts_for_terminated_session(
-        &self,
-        sid: SessionId,
-    ) {
+
+    pub fn clean_bkpts_for_terminated_session(&self, sid: SessionId) {
         let grp_id = get_group_mgr().get_grp_id_by_sid(sid);
         let bkpt_ids: Vec<u64> = self.bkpts.iter().map(|entry| *entry.key()).collect();
         for bkpt_id in bkpt_ids {
@@ -490,38 +537,45 @@ impl BreakpointMgr {
             let mut should_remove_bkpt = false;
             if let Some(mut bkpt_entry) = self.bkpts.get_mut(&bkpt_id) {
                 let bkpt = bkpt_entry.value_mut();
-                bkpt.subbkpts.retain_mut(|subbkpt| match &mut subbkpt.subbkpt_type {
-                    SubBkptType::Session(sess_subbkpt) => {
-                        if sess_subbkpt.target_session == sid {
-                            updated = true;
-                            false
-                        } else {
+                bkpt.subbkpts
+                    .retain_mut(|subbkpt| match &mut subbkpt.subbkpt_type {
+                        SubBkptType::Session(sess_subbkpt) => {
+                            if sess_subbkpt.target_session == sid {
+                                updated = true;
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                        SubBkptType::Group(group_subbkpt) => {
+                            let match_group =
+                                grp_id.map_or(true, |gid| group_subbkpt.target_group == gid);
+                            if match_group && group_subbkpt.remove_local_bkpt(sid).is_some() {
+                                updated = true;
+                            }
                             true
                         }
-                    }
-                    SubBkptType::Group(group_subbkpt) => {
-                        let match_group =
-                            grp_id.map_or(true, |gid| group_subbkpt.target_group == gid);
-                        if match_group && group_subbkpt.remove_local_bkpt(sid).is_some() {
-                            updated = true;
-                        }
-                        true
-                    }
-                });
+                    });
                 if bkpt.subbkpts.is_empty() {
                     should_remove_bkpt = true;
                 }
             }
             if should_remove_bkpt {
-                self.bkpts.remove(&bkpt_id);
-                let out = MIFormatter::format("=", "breakpoint-deleted", Some(&bkpt_deleted_payload(bkpt_id)), None);
+                self.delete_bkpt(bkpt_id);
+                let out = MIFormatter::format(
+                    "=",
+                    "breakpoint-deleted",
+                    Some(&bkpt_deleted_payload(bkpt_id)),
+                    None,
+                );
                 println!("{}", out);
                 debug!("output: {}", out);
                 continue;
             }
             if updated {
                 if let Some(bkpt) = self.get_bkpt_by_id(bkpt_id) {
-                    let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
+                    let out =
+                        MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
                     println!("{}", out);
                     debug!("output: {}", out);
                 } else {
@@ -544,36 +598,4 @@ impl BreakpointMgr {
             self.local_bkpt_to_global.remove(&key);
         }
     }
-
-    // pub fn add(&self, grp_id: GroupId, bkpt: BkptMeta) {
-    //     self.bkpts.entry(grp_id).or_default().insert(bkpt);
-    // }
-
-    // pub fn add_by_sid(&self, sid: u64, bkpt: BkptMeta) {
-    //     if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(sid) {
-    //         self.add(grp_id, bkpt);
-    //     }
-    // }
-
-    // pub fn get(&self, grp_id: GroupId) -> Option<HashSet<BkptMeta>> {
-    //     self.bkpts.get(&grp_id).map(|v| v.clone())
-    // }
-
-    // pub fn get_by_sid(&self, sid: u64) -> Option<HashSet<BkptMeta>> {
-    //     let grp_id = get_group_mgr().get_grp_id_by_sid(sid);
-    //     grp_id.map(|id| self.get(id)).flatten()
-    // }
-
-    // This function holds a mutable reference to the entry.
-    // Thus, the operation closure should not contain any await point.
-    // Otherwise, it will cause a deadlock.
-    // If this is a concern, we can consider swicth the data struct.
-    // pub fn modify<F>(&self, grp_id: GroupId, op: F)
-    // where
-    //     F: FnOnce(&mut HashSet<BkptMeta>),
-    // {
-    //     if let Some(mut entry) = self.bkpts.get_mut(&grp_id) {
-    //         op(&mut entry.value_mut());
-    //     }
-    // }
 }

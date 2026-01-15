@@ -16,7 +16,7 @@ use tracing::{debug, error, warn};
 use crate::{
     cmd_flow::ParsedSessionResponse,
     common::Config,
-    dbg_parser::gdb_parser::MIFormatter,
+    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
     state::{
         get_bkpt_mgr, get_group_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, SessionMeta,
@@ -170,8 +170,14 @@ impl BreakInsertHandler {
 #[async_trait]
 impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        if !matches!(cmd.target, Target::Session(_) | Target::Group(_) | Target::Multiple(_)) {
-            warn!("Unsupported target for BreakInsertHandler: {:?}", cmd.target);
+        if !matches!(
+            cmd.target,
+            Target::Session(_) | Target::Group(_) | Target::Multiple(_)
+        ) {
+            warn!(
+                "Unsupported target for BreakInsertHandler: {:?}",
+                cmd.target
+            );
             return;
         }
 
@@ -255,20 +261,6 @@ impl Handler for BreakInsertHandler {
                 warn!("Failed to find inserted breakpoint with id {}", bkpt_id);
             }
         }
-
-        // let results = cmd.send_and_return().to_default_target().await;
-        // if let Ok(results) = results {
-        //     for resp in results.get_responses() {
-        //         if resp.get_message() == "done" {
-        //             get_bkpt_mgr().add_by_sid(resp.get_sid(), BkptMeta::new(full_cmd.clone()));
-        //         } else {
-        //             warn!("Failed to insert breakpoint from dbg: {:?}", resp);
-        //         }
-        //     }
-        //     emit_static(results, PlainFormatter);
-        // } else {
-        //     error!("Failed to insert breakpoint: {:?}", results);
-        // }
     }
 }
 
@@ -279,23 +271,179 @@ impl BreakDeleteHandler {
     }
 }
 
+impl BreakDeleteHandler {
+    async fn delete_local_bkpt(sid: u64, local_bkpt_id: u64) -> Result<()> {
+        let ret = api::send_and_return(&format!("-break-delete {}", local_bkpt_id))
+            .unwrap()
+            .to(Target::Session(sid))
+            .await?;
+        let response = ret.get_responses().first().unwrap();
+        if response.get_message() == "done" {
+            get_bkpt_mgr().remove_local_bkpt_id_index(sid, local_bkpt_id);
+            Ok(())
+        } else {
+            warn!(
+                "Failed to delete local breakpoint {} from session {}: {:?}",
+                local_bkpt_id, sid, response
+            );
+            bail!(
+                "Failed to delete local breakpoint {} from session {}",
+                local_bkpt_id,
+                sid
+            );
+        }
+    }
+
+    async fn delete_subbkpt(bkpt_id: u64, subbkpt_id: u64) -> Result<()> {
+        if let Some(subbkpt) = get_bkpt_mgr().get_subbkpt(bkpt_id, subbkpt_id) {
+            match subbkpt.get_type() {
+                SubBkptType::Session(sess_subbkpt) => {
+                    let sid = sess_subbkpt.get_target_session();
+                    let local_bkpt_id = sess_subbkpt.get_local_bkpt_id();
+                    let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
+                    match ret {
+                        Ok(_) => {
+                            get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            bail!(
+                                "Failed to delete breakpoint {} from session {}. Error: {}",
+                                local_bkpt_id,
+                                sid,
+                                e
+                            );
+                        }
+                    }
+                }
+                SubBkptType::Group(group_subbkpt) => {
+                    let mut error = false;
+                    for (sid, local_bkpt_id) in group_subbkpt.get_local_ids() {
+                        let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
+                        match ret {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error = true;
+                                error!(
+                                    "Failed to delete breakpoint {} from session {}: {}",
+                                    local_bkpt_id, sid, e
+                                );
+                            }
+                        }
+                    }
+                    if error {
+                        bail!(
+                            "Failed to delete some breakpoints from group sub-breakpoint {}",
+                            subbkpt_id
+                        );
+                    } else {
+                        get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
+                        return Ok(());
+                    }
+                }
+            }
+        } else {
+            bail!(
+                "No sub-breakpoint found for deletion with bkpt_id {} and subbkpt_id {}",
+                bkpt_id,
+                subbkpt_id
+            );
+        }
+    }
+}
+
 #[async_trait]
 impl Handler for BreakDeleteHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        // let full_cmd = cmd.full_cmd();
-        // let results = cmd.send_and_return().to_default_target().await;
-        // if let Ok(results) = results {
-        //     for resp in results.get_responses() {
-        //         if resp.get_message() == "done" {
-        //             get_bkpt_mgr().add_by_sid(resp.get_sid(), BkptMeta::new(full_cmd.clone()));
-        //         } else {
-        //             warn!("Failed to delete breakpoint from dbg: {:?}", resp);
-        //         }
-        //     }
-        //     emit_static(results, PlainFormatter);
-        // } else {
-        //     error!("Failed to delete breakpoint: {:?}", results);
-        // }
+        let args = cmd.args.trim();
+        if args.is_empty() {
+            warn!("No breakpoint id provided for deletion.");
+            return;
+        }
+
+        let bkpt_id: u64;
+        if let Some((bkpt_id_str, subbkpt_id_str)) = args.split_once(char::is_whitespace) {
+            let mut modified = false;
+            bkpt_id = bkpt_id_str.parse::<u64>().unwrap();
+            let subbkpt_id = subbkpt_id_str.parse::<u64>().unwrap();
+            match Self::delete_subbkpt(bkpt_id, subbkpt_id).await {
+                Ok(_) => {
+                    modified = true;
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to delete sub-breakpoint {} of breakpoint {}: {:?}",
+                        subbkpt_id, bkpt_id, e
+                    );
+                }
+            }
+            if modified {
+                if let Some(has_subbkpt) = get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
+                    if has_subbkpt {
+                        // still has other sub-breakpoints, emit breakpoint-modified event
+                        if let Some(bkpt) = get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
+                            let out = MIFormatter::format("^", "done", None, cmd.external_token);
+                            println!("{}", out);
+                            debug!("output: {}", out);
+
+                            let out = MIFormatter::format(
+                                "=",
+                                "breakpoint-modified",
+                                Some(&bkpt.into()),
+                                None,
+                            );
+                            println!("{}", out);
+                            debug!("output: {}", out);
+                        }
+                    } else {
+                        get_bkpt_mgr().delete_bkpt(bkpt_id);
+                        let out = MIFormatter::format("^", "done", None, cmd.external_token);
+                        println!("{}", out);
+                        debug!("output: {}", out);
+                        let out = MIFormatter::format(
+                            "=",
+                            "breakpoint-deleted",
+                            Some(&bkpt_deleted_payload(bkpt_id)),
+                            None,
+                        );
+                        println!("{}", out);
+                        debug!("output: {}", out);
+                    }
+                }
+            }
+        } else {
+            let mut modified = false;
+            bkpt_id = args.parse::<u64>().unwrap();
+            for (sid, local_bkpt_id) in get_bkpt_mgr().get_local_bkpt_ids(bkpt_id) {
+                match Self::delete_local_bkpt(sid, local_bkpt_id).await {
+                    Ok(_) => {
+                        // TODO: make it more robost on partial failure.
+                        modified = true;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to delete local breakpoint {} from session {}: {:?}",
+                            local_bkpt_id, sid, e
+                        );
+                    }
+                }
+            }
+
+            if modified {
+                get_bkpt_mgr().delete_bkpt(bkpt_id);
+                let out = MIFormatter::format("^", "done", None, cmd.external_token);
+                println!("{}", out);
+                debug!("output: {}", out);
+                let out = MIFormatter::format(
+                    "=",
+                    "breakpoint-deleted",
+                    Some(&bkpt_deleted_payload(bkpt_id)),
+                    None,
+                );
+                println!("{}", out);
+                debug!("output: {}", out);
+            }
+        }
     }
 }
 
