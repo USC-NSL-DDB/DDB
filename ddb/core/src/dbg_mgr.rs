@@ -112,6 +112,7 @@ impl ServiceDiscover {
                     }
                     _ => {}
                 }
+                dbg_session.post_start().await.unwrap();
 
                 // Put it in the manager's DashMap
                 sessions.insert(new_sid, dbg_session);

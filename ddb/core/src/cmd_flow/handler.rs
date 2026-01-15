@@ -1,4 +1,8 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -10,9 +14,14 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::ParsedSessionResponse, common::Config, dbg_parser::gdb_parser::MIFormatter, feature::get_proclet_restore_mgr, state::{
-        BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, STATES, SessionMeta, SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, get_bkpt_mgr, get_group_mgr
-    }
+    cmd_flow::ParsedSessionResponse,
+    common::Config,
+    dbg_parser::gdb_parser::MIFormatter,
+    feature::get_proclet_restore_mgr,
+    state::{
+        get_bkpt_mgr, get_group_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, SessionMeta,
+        SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, STATES,
+    },
 };
 
 use super::{
@@ -78,15 +87,10 @@ impl Handler for DefaultHandler {
     }
 }
 
-pub struct BreakInsertHandler {
-    base: DefaultHandler,
-}
-
+pub struct BreakInsertHandler;
 impl BreakInsertHandler {
     pub fn new() -> Self {
-        BreakInsertHandler {
-            base: DefaultHandler::new(),
-        }
+        BreakInsertHandler
     }
 }
 
@@ -166,6 +170,11 @@ impl BreakInsertHandler {
 #[async_trait]
 impl Handler for BreakInsertHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        if !matches!(cmd.target, Target::Session(_) | Target::Group(_) | Target::Multiple(_)) {
+            warn!("Unsupported target for BreakInsertHandler: {:?}", cmd.target);
+            return;
+        }
+
         let full_cmd = cmd.full_cmd();
         let args = &cmd.args;
         // Assumption: the args contains the breakpoint loc at the last place.
@@ -174,7 +183,7 @@ impl Handler for BreakInsertHandler {
         let bkpt_loc_parts = args
             .trim()
             .rsplit_once(char::is_whitespace)
-            .unwrap()
+            .unwrap_or(("", args))
             .1
             .split_once(":")
             .unwrap();
@@ -196,24 +205,23 @@ impl Handler for BreakInsertHandler {
                 // 3. drop other targets, only support for session and group targets.
                 // result: deduped Vec<Target>
                 // let mut deduped_targets: Vec<Target> = Vec::new();
-                let groupped_sids = targets.iter().filter_map(|ele| {
-                    match ele {
-                        Target::Group(gid) => {
-                            get_group_mgr().get_grp_by_id(*gid).map(|grp| {
-                                grp.get_sids().clone()
-                            })
-                        },
+                let groupped_sids = targets
+                    .iter()
+                    .filter_map(|ele| match ele {
+                        Target::Group(gid) => get_group_mgr()
+                            .get_grp_by_id(*gid)
+                            .map(|grp| grp.get_sids().clone()),
                         _ => None,
-                    }
-                }).flatten().collect::<HashSet<u64>>();
-                let dedupped_targets = targets.iter().filter(|target| {
-                    match target {
-                        Target::Session(sid) => {
-                            !groupped_sids.contains(sid)
-                        },
+                    })
+                    .flatten()
+                    .collect::<HashSet<u64>>();
+                let dedupped_targets = targets
+                    .iter()
+                    .filter(|target| match target {
+                        Target::Session(sid) => !groupped_sids.contains(sid),
                         _ => true,
-                    }
-                }).collect::<Vec<&Target>>();
+                    })
+                    .collect::<Vec<&Target>>();
                 for t in dedupped_targets {
                     match *t {
                         Target::Session(sid) => {
@@ -236,7 +244,7 @@ impl Handler for BreakInsertHandler {
                 return;
             }
         }
-        
+
         match get_bkpt_mgr().get_bkpts_by_id(bkpt_id) {
             Some(bkpt) => {
                 let out = MIFormatter::format("^", "done", Some(&bkpt.into()), cmd.external_token);
@@ -264,15 +272,10 @@ impl Handler for BreakInsertHandler {
     }
 }
 
-pub struct BreakDeleteHandler {
-    base: DefaultHandler,
-}
-
+pub struct BreakDeleteHandler;
 impl BreakDeleteHandler {
     pub fn new() -> Self {
-        BreakDeleteHandler {
-            base: DefaultHandler::new(),
-        }
+        BreakDeleteHandler
     }
 }
 

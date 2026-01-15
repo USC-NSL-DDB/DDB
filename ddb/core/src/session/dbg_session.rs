@@ -5,11 +5,11 @@ use bytes::{Bytes, BytesMut};
 use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
-use crate::cmd_flow::{get_router, SessionResponse};
+use crate::cmd_flow::{api, get_router, SessionResponse, Target};
 use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
-use crate::state::{get_group_mgr, STATES};
+use crate::state::{STATES, get_bkpt_mgr, get_group_mgr};
 use crate::{cmd_flow, common};
 use crate::{
     common::default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME},
@@ -108,7 +108,7 @@ impl DbgSession {
         if let Some(meta) = &self.config.service_meta {
             get_group_mgr().add_session(&meta.hash, meta.alias.clone(), self.sid);
         }
-        self.sync_state().await?;
+        // self.sync_state().await?;
         // update router with input sender
         get_router().add_session(self.sid, sender.clone());
         let output_rx = self.output_rx.clone().unwrap();
@@ -118,36 +118,59 @@ impl DbgSession {
         Ok(sender)
     }
 
+    pub async fn post_start(&self) -> Result<()> {
+        // Sync state after starting the session
+        self.sync_bkpts_state().await
+    }
+
     /// Sync the state of the session with the binary group if any.
     /// For example, existing breakpoints are automatically inserted.
     ///
     /// Note: When this function is called, the group manager should
     /// have the latest updates, a.k.a., the current session is added to
     /// the group.
-    pub async fn sync_state(&self) -> Result<()> {
+    pub async fn sync_bkpts_state(&self) -> Result<()> {
         // TODO: Finished this function
-        
-        // if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
-        //     // insert existing breakpoints
-        //     if let Some(bkpts) = crate::state::get_bkpt_mgr().get(grp_id) {
-        //         debug!("Inserting existing breakpoints: {:?}", bkpts);
-        //         let bkpts_cmd = bkpts
-        //             .iter()
-        //             .map(|bkpt| bkpt.get_cmd().trim())
-        //             .collect::<Vec<_>>();
-        //         let bkpts_cmd = bkpts_cmd.join("\n");
-        //         let bkpts_cmd = if !bkpts_cmd.ends_with('\n') {
-        //             format!("{}\n", bkpts_cmd)
-        //         } else {
-        //             bkpts_cmd
-        //         };
-        //         debug!("breakpoints commands: {:?}", bkpts_cmd);
-        //         self.write(bkpts_cmd)
-        //             .await
-        //             .context("failed to write commands when inserting bkpts.")?;
-        //     }
-        // }
-        // Ok(())
+        if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
+            // insert existing breakpoints
+            let bkpts = get_bkpt_mgr().get_bkpts_by_grp_id(grp_id);
+            for bkpt in &bkpts{
+                let loc = bkpt.get_loc();
+                debug!("Inserting existing breakpoint at location: {:?}", loc);
+                let bkpt_path = loc.to_bkpt_path();
+                let response = api::send_and_return(&format! {"-break-insert {}", bkpt_path})?
+                    .to(Target::Session(self.sid))
+                    .await
+                    .context(format!(
+                        "Failed to send insert breakpoint at location: {}",
+                        bkpt_path
+                    ))?;
+                let bkpt_info = response
+                    .get_responses()
+                    .first()
+                    .unwrap()
+                    .get_payload()
+                    .unwrap()
+                    .get("bkpt")
+                    .unwrap()
+                    .expect_dict_ref()
+                    .unwrap();
+                let local_bkpt_id = bkpt_info
+                    .get("number")
+                    .unwrap()
+                    .expect_string_ref()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+                get_bkpt_mgr().setup_grp_bkpt_for_new_session(
+                    bkpt.get_id(),
+                    grp_id,
+                    self.sid,
+                    local_bkpt_id,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Setup GDB logging configuration

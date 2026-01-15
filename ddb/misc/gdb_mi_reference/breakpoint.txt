@@ -1,0 +1,15 @@
+-break-insert read_time.cpp:11
+^done,bkpt={number="1",type="breakpoint",disp="keep",enabled="y",addr="0x0000000000001204",func="main()",file="read_time.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/read_time.cpp",line="11",thread-groups=["i1"],times="0",original-location="read_time.cpp:11"}
+
+=breakpoint-modified,bkpt={number="1",type="breakpoint",disp="keep",enabled="y",addr="0x0000555555555204",func="main()",file="read_time.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/read_time.cpp",line="11",thread-groups=["i1"],times="1",original-location="read_time.cpp:11"}
+
+*stopped,reason="breakpoint-hit",disp="keep",bkptno="1",frame={addr="0x0000555555555204",func="main",args=[],file="read_time.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/read_time.cpp",line="11",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="17"
+
+-break-info
+^done,BreakpointTable={nr_rows="1",nr_cols="6",hdr=[{width="7",alignment="-1",col_name="number",colhdr="Num"},{width="14",alignment="-1",col_name="type",colhdr="Type"},{width="4",alignment="-1",col_name="disp",colhdr="Disp"},{width="3",alignment="-1",col_name="enabled",colhdr="Enb"},{width="18",alignment="-1",col_name="addr",colhdr="Address"},{width="40",alignment="2",col_name="what",colhdr="What"}],body=[bkpt={number="2",type="breakpoint",disp="keep",enabled="y",addr="0x00005555555551f5",func="main()",file="read_time.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/read_time.cpp",line="9",thread-groups=["i1"],times="0",original-location="main"}]}
+
+-break-info
+^done,BreakpointTable={nr_rows="2",nr_cols="6",hdr=[{width="7",alignment="-1",col_name="number",colhdr="Num"},{width="14",alignment="-1",col_name="type",colhdr="Type"},{width="4",alignment="-1",col_name="disp",colhdr="Disp"},{width="3",alignment="-1",col_name="enabled",colhdr="Enb"},{width="18",alignment="-1",col_name="addr",colhdr="Address"},{width="40",alignment="2",col_name="what",colhdr="What"}],body=[bkpt={number="2",type="breakpoint",disp="keep",enabled="y",addr="0x00005555555551f5",func="main()",file="read_time.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/read_time.cpp",line="9",thread-groups=["i1"],times="0",original-location="main"},bkpt={number="3",type="breakpoint",disp="keep",enabled="y",addr="0x000055555555549d",func="std::this_thread::sleep_for<long, std::ratio<1l, 1l> >(std::chrono::duration<long, std::ratio<1l, 1l> > const&)",file="/usr/include/c++/13/bits/this_thread_sleep.h",fullname="/usr/include/c++/13/bits/this_thread_sleep.h",line="68",thread-groups=["i1"],times="0",original-location="sleep_for"}]}
+
+-break-delete 1
+^done
