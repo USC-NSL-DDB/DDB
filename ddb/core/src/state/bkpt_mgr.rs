@@ -12,8 +12,8 @@ use tracing::{warn, debug};
 use super::{get_group_mgr, GroupId};
 use crate::{
     common::counter::SimpleCounter,
-    dbg_parser::gdb_parser::MIFormatter,
-    state::{get_bkpt_mgr, SessionId},
+    dbg_parser::gdb_parser::{MIFormatter, bkpt_deleted_payload},
+    state::{SessionId, get_bkpt_mgr},
 };
 
 #[derive(Debug, Clone)]
@@ -108,8 +108,8 @@ impl GroupSubBkpt {
         self.local_ids.insert(session_id, local_bkpt_id);
     }
 
-    pub fn remove_local_bkpt(&self, session_id: u64) {
-        self.local_ids.remove(&session_id);
+    pub fn remove_local_bkpt(&self, session_id: u64) -> Option<u64> {
+        self.local_ids.remove(&session_id).map(|(_, v)| v)
     }
 
     pub fn get_target_group(&self) -> GroupId {
@@ -476,6 +476,74 @@ impl BreakpointMgr {
                     bkpt_id
                 );
             }
+        }
+    }
+    
+    pub fn clean_bkpts_for_terminated_session(
+        &self,
+        // bkpt_id: u64,
+        // grp_id: GroupId,
+        sid: SessionId,
+    ) {
+        let grp_id = get_group_mgr().get_grp_id_by_sid(sid);
+        let bkpt_ids: Vec<u64> = self.bkpts.iter().map(|entry| *entry.key()).collect();
+        for bkpt_id in bkpt_ids {
+            let mut updated = false;
+            let mut should_remove_bkpt = false;
+            if let Some(mut bkpt_entry) = self.bkpts.get_mut(&bkpt_id) {
+                let bkpt = bkpt_entry.value_mut();
+                bkpt.subbkpts.retain_mut(|subbkpt| match &mut subbkpt.subbkpt_type {
+                    SubBkptType::Session(sess_subbkpt) => {
+                        if sess_subbkpt.target_session == sid {
+                            updated = true;
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    SubBkptType::Group(group_subbkpt) => {
+                        let match_group =
+                            grp_id.map_or(true, |gid| group_subbkpt.target_group == gid);
+                        if match_group && group_subbkpt.remove_local_bkpt(sid).is_some() {
+                            updated = true;
+                        }
+                        true
+                    }
+                });
+                if bkpt.subbkpts.is_empty() {
+                    should_remove_bkpt = true;
+                }
+            }
+            if should_remove_bkpt {
+                self.bkpts.remove(&bkpt_id);
+                let out = MIFormatter::format("=", "breakpoint-deleted", Some(&bkpt_deleted_payload(bkpt_id)), None);
+                println!("{}", out);
+                debug!("output: {}", out);
+                continue;
+            }
+            if updated {
+                if let Some(bkpt) = self.get_bkpt_by_id(bkpt_id) {
+                    let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
+                    println!("{}", out);
+                    debug!("output: {}", out);
+                } else {
+                    warn!(
+                        "Failed to find bkpt {} when cleaning bkpts for terminated session",
+                        bkpt_id
+                    );
+                }
+            }
+        }
+
+        let mut local_keys = Vec::new();
+        for entry in self.local_bkpt_to_global.iter() {
+            let ((sess_id, local_bkpt_id), _) = entry.pair();
+            if *sess_id == sid {
+                local_keys.push((*sess_id, *local_bkpt_id));
+            }
+        }
+        for key in local_keys {
+            self.local_bkpt_to_global.remove(&key);
         }
     }
 

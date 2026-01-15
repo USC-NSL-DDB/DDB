@@ -355,10 +355,12 @@ impl DbgSession {
         STATES.update_session_status_off(self.sid).await;
 
         // Update all relevant states
-        // 1. remove from router
-        // 2. remove from the group manager
-        // 3. remove from state manager
-        // 4. shutdown the connection
+        // - remove breakpoints associated with this session from the group breakpoint manager
+        // - remove from router
+        // - remove from the group manager
+        // - remove from state manager
+        // - shutdown the connection
+        get_bkpt_mgr().clean_bkpts_for_terminated_session(self.sid);
         get_router().remove_session(self.sid);
         get_group_mgr().remove_session(self.sid);
         STATES.remove_session(self.sid).await;

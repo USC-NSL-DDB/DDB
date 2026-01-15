@@ -165,6 +165,14 @@ impl From<BkptMeta> for Dict {
     }
 }
 
+pub fn bkpt_deleted_payload(bkpt_id: u64) -> Dict {
+    HashMap::from([(
+        "bkpt",
+        HashMap::from([("id", bkpt_id.to_string().into())]).into(),
+    )])
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
