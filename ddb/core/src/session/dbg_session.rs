@@ -6,6 +6,7 @@ use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{api, get_router, SessionResponse, Target};
+use crate::common::Config;
 use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
@@ -119,8 +120,18 @@ impl DbgSession {
     }
 
     pub async fn post_start(&self) -> Result<()> {
-        // Sync state after starting the session
-        self.sync_bkpts_state().await
+        // Sync state after starting the session.
+        self.sync_bkpts_state().await?;
+        
+        // Instruct debuggee to continue if service discovery is enabled.
+        let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
+        if Config::global().service_discovery.is_some() {
+            // Broker is enabled. We need to handle the SIG40 signal.
+            bdr.add(GdbCmd::ConsoleExec("signal SIG40".to_string()));
+        }
+        let all_cmds = bdr.build().join("");
+        self.write(all_cmds).await?;
+        Ok(())
     }
 
     /// Sync the state of the session with the binary group if any.
@@ -289,11 +300,6 @@ impl DbgSession {
                 bdr.add(GdbCmd::TargetAttach(*pid));
             }
             _ => return Err(anyhow::anyhow!("Invalid mode for remote attach")),
-        }
-
-        if Config::global().service_discovery.is_some() {
-            // Broker is enabled. We need to handle the SIG40 signal.
-            bdr.add(GdbCmd::ConsoleExec("signal SIG40".to_string()));
         }
 
         for cmd in &self.config.postrun_gdb_cmds {

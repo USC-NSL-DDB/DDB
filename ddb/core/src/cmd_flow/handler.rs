@@ -245,7 +245,7 @@ impl Handler for BreakInsertHandler {
             }
         }
 
-        match get_bkpt_mgr().get_bkpts_by_id(bkpt_id) {
+        match get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
             Some(bkpt) => {
                 let out = MIFormatter::format("^", "done", Some(&bkpt.into()), cmd.external_token);
                 println!("{}", out);

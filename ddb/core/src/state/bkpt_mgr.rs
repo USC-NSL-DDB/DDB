@@ -7,10 +7,12 @@ use std::{
 };
 
 use dashmap::DashMap;
+use tracing::{warn, debug};
 
 use super::{get_group_mgr, GroupId};
 use crate::{
     common::counter::SimpleCounter,
+    dbg_parser::gdb_parser::MIFormatter,
     state::{get_bkpt_mgr, SessionId},
 };
 
@@ -404,7 +406,7 @@ impl BreakpointMgr {
         res
     }
 
-    pub fn update_subbkpts_with<F: Fn(&mut SubBkptMeta)>(&self, bkpt_id: u64, f: F) {
+    pub fn update_subbkpts_with<F: FnMut(&mut SubBkptMeta)>(&self, bkpt_id: u64, mut f: F) {
         self.bkpts.entry(bkpt_id).and_modify(|bkpt| {
             for sb in bkpt.subbkpts.iter_mut() {
                 f(sb);
@@ -412,8 +414,12 @@ impl BreakpointMgr {
         });
     }
 
-    pub fn get_bkpts_by_id(&self, bkpt_id: u64) -> Option<BkptMeta> {
+    pub fn get_bkpt_by_id(&self, bkpt_id: u64) -> Option<BkptMeta> {
         self.bkpts.get(&bkpt_id).map(|entry| entry.value().clone())
+    }
+    
+    pub fn get_bkpt_by_id_ref(&self, bkpt_id: u64) -> Option<dashmap::mapref::one::Ref<'_, u64, BkptMeta>> {
+        self.bkpts.get(&bkpt_id)
     }
 
     pub fn get_local_bkpt_ids(&self, bkpt_id: u64) -> Vec<(SessionId, u64)> {
@@ -445,23 +451,32 @@ impl BreakpointMgr {
         sid: SessionId,
         local_bkpt_id: u64,
     ) {
+        let mut updated = false;
         self.update_subbkpts_with(bkpt_id, |subbkpt| {
             match &mut subbkpt.subbkpt_type {
                 SubBkptType::Group(group_subbkpt) => {
                     if group_subbkpt.target_group == grp_id {
                         group_subbkpt.add_local_bkpt(sid, local_bkpt_id);
                         // register the local bkpt id index
-                        self.insert_local_bkpt_id_index(
-                            sid,
-                            local_bkpt_id,
-                            bkpt_id,
-                            subbkpt.id,
-                        );
+                        self.insert_local_bkpt_id_index(sid, local_bkpt_id, bkpt_id, subbkpt.id);
+                        updated = true;
                     }
                 }
                 _ => {}
             }
         });
+        if updated {
+            if let Some(bkpt) = self.get_bkpt_by_id(bkpt_id) {
+                let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
+                println!("{}", out);
+                debug!("output: {}", out);
+            } else {
+                warn!(
+                    "Failed to find bkpt {} when setting up group bkpt for new session",
+                    bkpt_id
+                );
+            }
+        }
     }
 
     // pub fn add(&self, grp_id: GroupId, bkpt: BkptMeta) {

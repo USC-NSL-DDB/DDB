@@ -112,12 +112,16 @@ impl ServiceDiscover {
                     }
                     _ => {}
                 }
-                dbg_session.post_start().await.unwrap();
-
-                // Put it in the manager's DashMap
-                sessions.insert(new_sid, dbg_session);
-
-                debug!("Session {} started successfully.", new_sid);
+                match dbg_session.post_start().await {
+                    Ok(_) => {
+                        // Put it in the manager's DashMap
+                        sessions.insert(new_sid, dbg_session);
+                        debug!("Session {} started successfully.", new_sid);
+                    }
+                    Err(e) => {
+                        error!("Post-start actions for session {} failed: {:?}", new_sid, e);
+                    }
+                }
             }
             Err(e) => {
                 // If failure, remove from global state
@@ -268,12 +272,10 @@ impl DbgManager {
                     .await
                     .unwrap();
 
-                self.sd.lock()
-                    .await
-                    .replace(ServiceDiscover::new(
-                        Box::new(serviceweaver_producer),
-                        producer_rx,
-                    ));
+                self.sd.lock().await.replace(ServiceDiscover::new(
+                    Box::new(serviceweaver_producer),
+                    producer_rx,
+                ));
             }
             _ => {
                 panic!("Unsupported framework adapter for now.");
