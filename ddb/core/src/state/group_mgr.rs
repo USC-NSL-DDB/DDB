@@ -91,11 +91,11 @@ impl GroupMgr {
 
     #[inline]
     pub fn add_session(&self, bin_id: &str, alias: String, sid: u64) {
-        let grp_id = next_group_id();
         self.sid_to_grp.insert(sid, bin_id.to_string());
         self.hash_to_grp
             .entry(bin_id.to_string())
             .or_insert_with(|| {
+                let grp_id = next_group_id();
                 self.id_to_hash
                     .insert(grp_id, bin_id.to_string());
                 GroupMeta::new(grp_id, bin_id.to_string(), alias) 
