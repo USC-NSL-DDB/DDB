@@ -14,7 +14,6 @@ use tokio::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::ParsedSessionResponse,
     common::Config,
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
@@ -25,7 +24,7 @@ use crate::{
 };
 
 use super::{
-    api, emit_static, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
+    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
     router::Target, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
     ProcessReadableFormatter, ThreadInfoFormatter,
 };

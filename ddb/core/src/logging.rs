@@ -1,11 +1,10 @@
 use anyhow::Result;
-use std::str::FromStr;
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
 };
 use tracing_subscriber::{
-    EnvFilter, Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt
+    EnvFilter, Layer, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt
 };
 
 pub fn setup_logging(

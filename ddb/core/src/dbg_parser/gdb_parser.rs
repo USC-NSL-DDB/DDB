@@ -5,7 +5,6 @@ use gdbmi::{
     self,
     raw::{Dict, List},
 };
-use rumqttc::tokio_rustls::rustls::crypto::hash::Hash;
 use tracing::error;
 
 use gdbmi::parser::Message;

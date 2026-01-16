@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use axum::{
     extract::Query,
     http::StatusCode,
@@ -15,7 +13,7 @@ use tracing::{debug, info};
 
 use crate::{
     cmd_flow::{FinishedCmd, api as cmd_flow_api, router::Target},
-    state::{GroupHash, GroupId, GroupMeta, SessionId},
+    state::GroupMeta,
 };
 
 #[derive(Deserialize, Debug, Clone)]
