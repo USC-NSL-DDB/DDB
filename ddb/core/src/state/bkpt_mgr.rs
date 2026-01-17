@@ -302,6 +302,10 @@ impl BkptMeta {
     pub fn get_subbkpts(&self) -> &Vec<SubBkptMeta> {
         &self.subbkpts
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.subbkpts.is_empty()
+    }
 
     pub fn update_grp_bkpt<F: Fn(&GroupSubBkpt)>(&self, grp_id: GroupId, f: F) {
         for sb in &self.subbkpts {
@@ -316,6 +320,24 @@ impl BkptMeta {
                 _ => {}
             }
         }
+    }
+    
+    pub fn delete_local_bkpt(&mut self, subbkpt_id: u64, sid: u64) {
+        self.subbkpts.retain_mut(|subbkpt| {
+            if subbkpt.id == subbkpt_id {
+                match &subbkpt.subbkpt_type {
+                    SubBkptType::Group(group_subbkpt) => {
+                        group_subbkpt.remove_local_bkpt(sid);
+                        true
+                    }
+                    SubBkptType::Session(_) => {
+                        false 
+                    }
+                }
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -350,7 +372,7 @@ impl BreakpointMgr {
         // Return Some(true) when the bkpt has no subbkpts
         // Return Some(false) when the bkpt has subbkpts
         if let Some(bkpt_entry) = self.bkpts.get(&bkpt_id) {
-            Some(bkpt_entry.value().subbkpts.is_empty())
+            Some(bkpt_entry.value().is_empty())
         } else {
             None
         }
@@ -587,5 +609,33 @@ impl BreakpointMgr {
         self.local_bkpt_to_global
             .get(&(sid, local_bkpt_id))
             .map(|entry| *entry.value())
+    }
+    
+    pub fn delete_local_bkpt(&self, sid: SessionId, local_bkpt_id: u64) {
+        if let Some((_, (bkpt_id, subbkpt_id))) = self.local_bkpt_to_global.remove(&(sid, local_bkpt_id)) {
+            self.bkpts.entry(bkpt_id).and_modify(|bkpt| {
+                bkpt.delete_local_bkpt(subbkpt_id, sid);
+            });
+            
+            if let Some(bkpt) = self.get_bkpt_by_id(bkpt_id) {
+                if bkpt.is_empty() {
+                    // bkpt becomes empty, so here it is removed.
+                    let out = MIFormatter::format(
+                        "=",
+                        "breakpoint-deleted",
+                        Some(&bkpt_deleted_payload(bkpt.get_id())),
+                        None,
+                    );
+                    println!("{}", out);
+                    debug!("output: {}", out);
+                    self.bkpts.remove(&bkpt_id);
+                    return;
+                }
+                // bkpt is still not empty, but it has changed.
+                let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
+                println!("{}", out);
+                debug!("output: {}", out);
+            }
+        }
     }
 }

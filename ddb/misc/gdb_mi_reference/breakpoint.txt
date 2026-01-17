@@ -13,3 +13,8 @@
 
 -break-delete 1
 ^done
+
+-break-insert -f -t /home/ybyan/projs/DDB/tests/test_apps/hello_world.cpp:48
+^done,bkpt={number="2",type="breakpoint",disp="del",enabled="y",addr="0x00000000000050fe",func="main(int, char**)",file="hello_world.cpp",fullname="/home/ybyan/projs/DDB/tests/test_apps/hello_world.cpp",line="48",thread-groups=["i1"],times="0",original-location="/home/ybyan/projs/DDB/tests/test_apps/hello_world.cpp:48"}
+
+=breakpoint-deleted,id="1"

@@ -23,7 +23,9 @@
                 "${workspaceFolder}/core/configs/dbg_auto_discovery.yaml",
                 "--console-log",
                 "--console-level",
-                "debug"
+                "debug",
+                "--file-level",
+                "trace"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": ["rust"]

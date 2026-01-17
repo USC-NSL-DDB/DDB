@@ -18,7 +18,7 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     dbg_parser::gdb_parser::{GdbParser, MIFormatter},
     get_dbg_mgr,
-    state::{ThreadStatus, STATES},
+    state::{get_bkpt_mgr, ThreadStatus, STATES},
 };
 
 use super::{
@@ -404,6 +404,24 @@ impl Tracker {
     async fn handle_notify(&self, token: Option<Token>, message: String, payload: Dict, sid: u64) {
         let token = token.map(|t| t.0 as u64);
         match message.as_str() {
+            "breakpoint-modified" => {
+                // no-op for now
+            }
+            "breakpoint-deleted" => {
+                // seems like this path will only be trigged when a temporary breakpoint is deleted.
+                // manually and explicitly removing a breakpoint will not trigger this notification.
+                let local_bkpt_id = payload
+                    .get("id")
+                    .and_then(|id_val| Some(id_val.expect_string_repr::<u64>().unwrap()));
+                if let Some(local_bkpt_id) = local_bkpt_id {
+                    get_bkpt_mgr().delete_local_bkpt(sid, local_bkpt_id);
+                } else {
+                    warn!(
+                        "breakpoint-deleted notification missing id field: {:?}",
+                        payload
+                    );
+                }
+            }
             "thread-created" => {
                 let tgid = payload["group-id"].expect_string_ref().unwrap();
                 let tid = payload["id"].expect_string_repr::<u64>().unwrap();
