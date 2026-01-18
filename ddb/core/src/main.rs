@@ -20,6 +20,7 @@ mod status;
 
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::Weak;
 
 use app::App;
 use cmd_flow::framework_adapter::*;
@@ -112,16 +113,20 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-static DBG_MGR: OnceLock<Arc<DbgManager>> = OnceLock::new();
+static DBG_MGR: OnceLock<Weak<DbgManager>> = OnceLock::new();
 pub fn init_dbg_mgr<F>(f: F)
 where
-    F: FnOnce() -> Arc<DbgManager>,
+    F: FnOnce() -> Weak<DbgManager>,
 {
     DBG_MGR.get_or_init(f);
 }
 
-pub fn get_dbg_mgr() -> &'static Arc<DbgManager> {
-    DBG_MGR.get().expect("DbgManager is not initialized.")
+pub fn get_dbg_mgr() -> Arc<DbgManager> {
+    // DBG_MGR.get().expect("DbgManager is not initialized.")
+    DBG_MGR
+        .get()
+        .and_then(|weak_mgr| weak_mgr.upgrade())
+        .expect("DbgManager is not initialized.")
 }
 
 fn main() -> Result<()> {
@@ -192,8 +197,8 @@ fn main() -> Result<()> {
             .unwrap();
 
         runtime.block_on(async {
-            let dbg_mgr = DbgManager::new().await;
-            init_dbg_mgr(|| Arc::new(dbg_mgr));
+            let dbg_mgr = Arc::new(DbgManager::new().await);
+            init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
             match get_dbg_mgr().start().await {
                 Ok(_) => {
                     debug!("DbgManager started successfully.");
@@ -232,11 +237,11 @@ fn main() -> Result<()> {
     });
 
     get_shutdown_ctrl().wait_for_shutdown();
-
+    
     app.join();
     main_loop.join().unwrap();
-    dbg_handle.join().unwrap();
     cmd_flow_handle.join().unwrap();
+    dbg_handle.join().unwrap();
 
     debug!("Exiting due to {:?}", get_shutdown_ctrl().cause());
     info!("Bye!");

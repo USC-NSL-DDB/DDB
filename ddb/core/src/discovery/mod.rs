@@ -19,7 +19,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/conf/mosquitto.conf");
         assert!(config_path.exists());
 
-        let broker = MosquittoBroker::new(config_path.into_os_string().into_string().unwrap());
+        let mut broker = MosquittoBroker::new(config_path.into_os_string().into_string().unwrap());
         broker
             .start(
                 &BrokerInfo {
