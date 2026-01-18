@@ -146,7 +146,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         // 1. Start the broker if we manage it
-        if let Some(broker) = &self.managed_broker {
+        if let Some(broker) = &mut self.managed_broker {
             info!("Starting managed broker...");
             let sd_config = &self
                 .config
@@ -235,7 +235,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         }
 
         // 3. Stop broker if we own it
-        if let Some(broker) = &self.managed_broker {
+        if let Some(broker) = &mut self.managed_broker {
             debug!("Stopping managed broker…");
             broker.stop().context("Failed to stop managed broker")?;
         }

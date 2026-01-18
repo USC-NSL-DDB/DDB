@@ -52,8 +52,8 @@ pub struct BrokerInfo {
 }
 
 pub trait MessageBroker: Send + Sync {
-    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()>;
-    fn stop(&self) -> Result<()>;
+    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()>;
+    fn stop(&mut self) -> Result<()>;
 }
 
 // Mosquitto implementation
@@ -68,7 +68,7 @@ impl MosquittoBroker {
 }
 
 impl MessageBroker for MosquittoBroker {
-    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
+    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
         // Write configuration
         write_config(broker_info, config_path)?;
 
@@ -95,7 +95,7 @@ impl MessageBroker for MosquittoBroker {
         }
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&mut self) -> Result<()> {
         // Try with sudo first, fall back to regular pkill if sudo is not available
         let kill_result = if Command::new("which").arg("sudo").status().is_ok() {
             Command::new("sudo")
@@ -120,11 +120,13 @@ impl MessageBroker for MosquittoBroker {
     }
 }
 
-pub struct EMQXBroker;
+pub struct EMQXBroker {
+    temp_config_file: Option<NamedTempFile>,
+}
 
 impl EMQXBroker {
     pub fn new() -> Self {
-        Self {}
+        Self { temp_config_file: None }
     }
 }
 
@@ -148,7 +150,7 @@ fn extract_embedded_file_content(content: &[u8]) -> Result<NamedTempFile> {
 }
 
 impl MessageBroker for EMQXBroker {
-    fn start(&self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
+    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
         use crate::common::utils::run_command;
 
         // Write configuration
@@ -156,6 +158,7 @@ impl MessageBroker for EMQXBroker {
 
         let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
         let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+        self.temp_config_file = Some(temp_conf_file);
 
         // Stop and remove the existing `emqx` container
         run_command::<true, true>("docker", &["rm", "-f", "emqx"]).ok();
@@ -172,7 +175,7 @@ impl MessageBroker for EMQXBroker {
             String::from_utf8(gid)?.trim()
         );
 
-        let conf_path = temp_conf_file.path().to_str().unwrap();
+        let conf_path = self.temp_config_file.as_ref().unwrap().path().to_str().unwrap();
 
         // Start the new EMQX container
         run_command::<true, true>(
@@ -206,7 +209,7 @@ impl MessageBroker for EMQXBroker {
         Ok(())
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&mut self) -> Result<()> {
         use crate::common::utils::run_command;
         let start = std::time::Instant::now(); 
         match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
