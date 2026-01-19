@@ -123,7 +123,20 @@ impl ThreadInfoHandler {
 #[async_trait]
 impl Handler for ThreadInfoHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = cmd.send().with(ThreadInfoFormatter).to_default_target();
+        match cmd.target {
+            Target::Thread(tid) => {
+                // args can only be "--thread <local_tid>" in this case.
+                let (_, ltid) = cmd.args.split_once(char::is_whitespace).unwrap();
+                let thrd_info_cmd = format!("-thread-info {}", ltid);
+                let _ = api::send(&thrd_info_cmd)
+                    .unwrap()
+                    .with(ThreadInfoFormatter)
+                    .to(Target::Thread(tid));
+            }
+            _ => {
+                let _ = cmd.send().with(ThreadInfoFormatter).to_default_target();
+            }
+        }
     }
 }
 
