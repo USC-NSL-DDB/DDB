@@ -586,7 +586,7 @@ impl DistributeBacktraceHandler {
         let stack = Self::get_stack_ref_mut(responses);
         for (i, frame) in stack.iter_mut().enumerate() {
             let frame = frame.expect_dict_ref_mut().unwrap();
-            frame.insert("level".to_string(), (i as u64).to_string().into());
+            frame.insert("level-reordered".to_string(), (i as u64).to_string().into());
         }
     }
 }
