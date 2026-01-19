@@ -582,11 +582,11 @@ impl DistributeBacktraceHandler {
             .expect_list()
             .unwrap()
     }
-    fn update_frame_levels<'a>(responses: &'a mut FinishedCmd) {
+    fn add_reordered_frame_levels<'a>(responses: &'a mut FinishedCmd) {
         let stack = Self::get_stack_ref_mut(responses);
         for (i, frame) in stack.iter_mut().enumerate() {
             let frame = frame.expect_dict_ref_mut().unwrap();
-            frame.insert("level".to_string(), (i as u64).to_string().into());
+            frame.insert("level_reordered".to_string(), (i as u64).to_string().into());
         }
     }
 }
@@ -749,9 +749,9 @@ impl Handler for DistributeBacktraceHandler {
                         .unwrap();
                 }
             }
-            // finally, update frame levels
-            // This ensures the levels are incrementally increased from 0..n
-            Self::update_frame_levels(&mut out_result);
+            // finally, add a reordered frame levels
+            // This ensures the reordered levels are incrementally increased from 0..n
+            Self::add_reordered_frame_levels(&mut out_result);
             output::emit_static(out_result, PlainFormatter);
         }
     }
