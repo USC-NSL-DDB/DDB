@@ -127,7 +127,13 @@ impl Handler for ThreadInfoHandler {
             Target::Thread(tid) => {
                 // args can only be "--thread <local_tid>" in this case.
                 let (_, ltid) = cmd.args.split_once(char::is_whitespace).unwrap();
-                let thrd_info_cmd = format!("-thread-info {}", ltid);
+                let thrd_info_cmd = format!(
+                    "{}-thread-info {}",
+                    cmd.external_token
+                        .map(|token| { token.to_string() })
+                        .unwrap_or("".to_string()),
+                    ltid
+                );
                 let _ = api::send(&thrd_info_cmd)
                     .unwrap()
                     .with(ThreadInfoFormatter)
