@@ -123,7 +123,7 @@ impl ThreadInfoHandler {
 #[async_trait]
 impl Handler for ThreadInfoHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = cmd.send().with(ThreadInfoFormatter).to(Target::Broadcast);
+        let _ = cmd.send().with(ThreadInfoFormatter).to_default_target();
     }
 }
 
