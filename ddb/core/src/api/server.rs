@@ -210,12 +210,17 @@ async fn get_sessions() -> impl IntoResponse {
         let sid = s_meta.sid;
         let tag = s_meta.tag.clone();
         let status: &str = s_meta.status.clone().into();
+        let grp_info = crate::state::get_group_mgr().get_grp_info_by_sid(sid);
         let session = json!({
             "sid": sid,
             "tag": tag,
             "alias": service_meta.map(|x| x.alias.clone()).unwrap_or("UNKNOWN".to_string()),
             "status": status,
-            "groupId": crate::state::get_group_mgr().get_grp_hash_by_sid(sid).unwrap_or("UNKNOWN".to_string()),
+            "group": {
+                "valid": grp_info.is_some(),
+                "id": grp_info.as_ref().map(|(id, _)| *id).unwrap_or(0),
+                "hash": grp_info.as_ref().map(|(_, hash)| hash).unwrap_or(&"UNKNOWN".to_string()),
+            }
         });
         results.push(session);
     }

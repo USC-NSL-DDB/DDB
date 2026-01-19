@@ -116,6 +116,16 @@ impl GroupMgr {
     pub fn get_grp_id_by_hash(&self, hash: &str) -> Option<GroupId> {
         self.hash_to_grp.get(hash).map(|s| s.id)
     }
+    
+    #[inline]
+    pub fn get_grp_info_by_sid(&self, sid: u64) -> Option<(GroupId, GroupHash)> {
+        if let Some(group_hash) = self.get_grp_hash_by_sid(sid) {
+            if let Some(group_id) = self.get_grp_id_by_sid(sid) {
+                return Some((group_id, group_hash));
+            }
+        }
+        None
+    }
 
     #[inline]
     pub fn get_grp_hash_by_sid(&self, sid: u64) -> Option<GroupHash> {
