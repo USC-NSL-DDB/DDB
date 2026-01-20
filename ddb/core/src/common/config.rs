@@ -228,6 +228,14 @@ impl Default for BrokerType {
 pub struct ManagedBrokerConfig {
     #[serde(rename = "type", default)]
     pub broker_type: BrokerType,
+    #[serde(rename = "emqx_flags", default)]
+    pub emqx_flags: Vec<String>,
+    #[serde(rename = "emqx_image", default = "default_emqx_image")]
+    pub emqx_image: String,
+}
+
+fn default_emqx_image() -> String {
+    "emqx/emqx:5.8.4".to_string()
 }
 
 fn default_ssh_user() -> String {

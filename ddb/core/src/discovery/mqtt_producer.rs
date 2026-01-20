@@ -157,6 +157,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
             let broker_info = BrokerInfo {
                 hostname: broker_config.hostname.clone(),
                 port: broker_config.port,
+                broker_config: broker_config.managed.clone(),
             };
 
             broker

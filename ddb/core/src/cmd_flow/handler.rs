@@ -7,9 +7,13 @@ use tokio::{sync::RwLockWriteGuard, task::JoinHandle};
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::emit_error, common::Config, feature::get_proclet_restore_mgr, state::{
-        BkptMeta, LocalThreadId, STATES, SessionMeta, SessionRef, ThreadContext, ThreadStatus, get_bkpt_mgr, get_state_mgr
-    }
+    cmd_flow::emit_error,
+    common::Config,
+    feature::get_proclet_restore_mgr,
+    state::{
+        get_bkpt_mgr, get_state_mgr, BkptMeta, LocalThreadId, SessionMeta, SessionRef,
+        ThreadContext, ThreadStatus, STATES,
+    },
 };
 
 use super::{
@@ -514,8 +518,8 @@ impl DistributeBacktraceHandler {
             .to_default_target()
             .await?;
 
-        let stack =
-            Self::get_stack_ref_mut(&mut stack_resp).ok_or(anyhow!("Unable to get stack frames from response"))?;
+        let stack = Self::get_stack_ref_mut(&mut stack_resp)
+            .ok_or(anyhow!("Unable to get stack frames from response"))?;
         for frame in stack.iter_mut() {
             let frame = frame.expect_dict_ref_mut().unwrap();
             frame.insert("session".to_string(), sid.to_string().into());
@@ -617,7 +621,10 @@ impl DistributeBacktraceHandler {
         let stack = match Self::get_stack_ref_mut(responses) {
             Some(s) => s,
             None => {
-                debug!("Unable to read stack information for reordering frame levels: {:?}", responses);
+                debug!(
+                    "Unable to read stack information for reordering frame levels: {:?}",
+                    responses
+                );
                 return;
             }
         };
