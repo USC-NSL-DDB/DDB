@@ -206,8 +206,7 @@ fn main() -> Result<()> {
                 }
                 Err(e) => {
                     error!("Failed to start DbgManager: {:?}", e);
-                    get_shutdown_ctrl()
-                        .trigger_once(ShutdownCause::DbgMgrInitFailure);
+                    get_shutdown_ctrl().trigger_once(ShutdownCause::DbgMgrInitFailure);
                 }
             }
             ShutdownCtrl::wait_for_exit().await;
@@ -237,7 +236,7 @@ fn main() -> Result<()> {
     });
 
     get_shutdown_ctrl().wait_for_shutdown();
-    
+
     app.join();
     main_loop.join().unwrap();
     cmd_flow_handle.join().unwrap();

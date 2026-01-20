@@ -1,25 +1,20 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
-use tokio::{
-    sync::{RwLock, RwLockWriteGuard},
-    task::JoinHandle,
-};
+use tokio::{sync::RwLockWriteGuard, task::JoinHandle};
 use tracing::{debug, error, warn};
 
 use crate::{
-    common::Config,
-    feature::get_proclet_restore_mgr,
-    state::{
-        get_bkpt_mgr, BkptMeta, LocalThreadId, SessionMeta, ThreadContext, ThreadStatus, STATES,
-    },
+    cmd_flow::emit_error, common::Config, feature::get_proclet_restore_mgr, state::{
+        BkptMeta, LocalThreadId, STATES, SessionMeta, SessionRef, ThreadContext, ThreadStatus, get_bkpt_mgr, get_state_mgr
+    }
 };
 
 use super::{
     api, emit_static, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
-    router::Target, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
+    router::Target, transaction, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
     ProcessReadableFormatter, ThreadInfoFormatter,
 };
 
@@ -177,15 +172,11 @@ impl ContinueHandler {
                 // Fail to restore the context, skip continue
                 // TODO: maybe auto-retry is desired?
                 session.in_custom_ctx = true;
-                drop(session);
                 bail!("Failed to restore context for session {}", sid);
             } else {
                 // Context restored, continue
                 session.in_custom_ctx = false;
-                // early drop to release the lock, we don't need it to lock the session anymore
-                // for waiting for the continue response.
-                drop(session);
-                Self::cont(Target::Session(sid), cont_cmd);
+                Self::cont(Target::Session(sid), cont_cmd, session);
                 return Ok(());
             }
         }
@@ -194,8 +185,14 @@ impl ContinueHandler {
     }
 
     #[inline]
-    fn cont(target: Target, cont_cmd: ParsedInputCmd) {
+    fn cont(
+        target: Target,
+        cont_cmd: ParsedInputCmd,
+        mut session: RwLockWriteGuard<'_, SessionMeta>,
+    ) {
         let _ = cont_cmd.send().with(PlainFormatter).to(target);
+        // NOTE: assume all-stop mode here.
+        session.update_all_status(ThreadStatus::RUNNING);
     }
 
     #[inline]
@@ -229,14 +226,14 @@ impl Handler for ContinueHandler {
                         let sid = sid.clone();
                         let cmd = cmd.clone();
                         tokio::spawn(async move {
-                            let s = s.write().await;
+                            let s = s.meta.write().await;
                             if s.sid == sid {
                                 if s.in_custom_ctx {
                                     // need to restore context before continue
                                     Self::switch_context_and_cont(cmd, s).await?
                                 } else {
                                     // no need to restore context, just continue
-                                    Self::cont(Target::Session(sid), cmd);
+                                    Self::cont(Target::Session(sid), cmd, s);
                                 }
                             }
                             Ok(())
@@ -255,13 +252,13 @@ impl Handler for ContinueHandler {
                         let s = s.clone();
                         let cmd = cmd.clone();
                         tokio::spawn(async move {
-                            let s = s.write().await;
+                            let s = s.meta.write().await;
                             if s.in_custom_ctx {
                                 // need to restore context before continue
                                 Self::switch_context_and_cont(cmd, s).await?
                             } else {
                                 // no need to restore context, just continue
-                                Self::cont(Target::Session(s.sid), cmd);
+                                Self::cont(Target::Session(s.sid), cmd, s);
                             }
                             Ok(())
                         })
@@ -457,15 +454,13 @@ impl DistributeBacktraceHandler {
         Ok(ThreadContext { ctx, tid: gtid })
     }
 
-    async fn check_thread_status(
-        s: &Arc<RwLock<SessionMeta>>,
-    ) -> Result<RwLockWriteGuard<'_, SessionMeta>> {
+    async fn check_thread_status(s: &SessionRef) -> Result<RwLockWriteGuard<'_, SessionMeta>> {
         // set deadline to 1s
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         // busy wait for the interrupt to take effect for sure
         // e.g. the thread status is changed to STOPPED
         loop {
-            let write_guard = s.write().await;
+            let write_guard = s.meta.write().await;
             debug!("check thread status for {}", write_guard.tag);
             if write_guard
                 .t_status
@@ -494,14 +489,34 @@ impl DistributeBacktraceHandler {
 impl DistributeBacktraceHandler {
     async fn get_bt_and_caller_meta(&self, gtid: u64) -> Result<BacktraceData> {
         // ------------ [BEGIN] get backtrace for the current thread ------------
-        // `ParsedInputCmd` already swapped the gtid with local tid.
+        let (sid, _) = get_state_mgr().get_ltid_by_gtid(gtid).unwrap().into();
+
+        // Acquire transaction lock for exclusive command sequence access
+        let tx = transaction::begin(sid)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        // Send interrupt command
+        // let _ = api::send_and_return(&"-exec-interrupt")
+        //     .unwrap()
+        //     .to(Target::Thread(gtid))
+        //     .await?;
+
+        // Update thread status with short-lived lock
+        // {
+        //     let mut write_guard = tx.session().meta.write().await;
+        //     write_guard.update_all_status(ThreadStatus::STOPPED);
+        // }
+
+        // Get stack frames
         let mut stack_resp = api::send_and_return(&format!("-stack-list-frames --thread {}", gtid))
             .unwrap()
             .to_default_target()
             .await?;
 
-        let (sid, _) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-        for frame in Self::get_stack_ref_mut(&mut stack_resp).iter_mut() {
+        let stack =
+            Self::get_stack_ref_mut(&mut stack_resp).ok_or(anyhow!("Unable to get stack frames from response"))?;
+        for frame in stack.iter_mut() {
             let frame = frame.expect_dict_ref_mut().unwrap();
             frame.insert("session".to_string(), sid.to_string().into());
             frame.insert("thread".to_string(), gtid.to_string().into());
@@ -516,6 +531,8 @@ impl DistributeBacktraceHandler {
             .to(Target::Thread(gtid))
             .await
             .unwrap(); // TODO: better error handling.
+
+        // Transaction lock (tx) is released here when it goes out of scope
 
         let remote_bt_parent_meta = match self
             .extract_remote_metadata(resp.get_responses().first().unwrap().get_payload().unwrap())
@@ -576,33 +593,34 @@ impl DistributeBacktraceHandler {
             .unwrap()
     }
 
-    fn get_stack_ref_mut<'a>(response: &'a mut FinishedCmd) -> &'a mut Vec<Value> {
+    fn get_stack_ref_mut<'a>(response: &'a mut FinishedCmd) -> Option<&'a mut Vec<Value>> {
         response
             .get_responses_mut()
-            .first_mut()
-            .unwrap()
-            .get_payload_mut()
-            .unwrap()
-            .get_mut("stack")
-            .unwrap()
+            .first_mut()?
+            .get_payload_mut()?
+            .get_mut("stack")?
             .expect_list_ref_mut()
-            .unwrap()
+            .ok()
     }
 
-    fn get_stack_owned(mut response: FinishedCmd) -> Vec<Value> {
+    fn get_stack_owned(mut response: FinishedCmd) -> Option<Vec<Value>> {
         response
             .get_responses_mut()
-            .first_mut()
-            .unwrap()
-            .get_payload_mut()
-            .unwrap()
-            .remove("stack")
-            .unwrap()
+            .first_mut()?
+            .get_payload_mut()?
+            .remove("stack")?
             .expect_list()
-            .unwrap()
+            .ok()
     }
+
     fn add_reordered_frame_levels<'a>(responses: &'a mut FinishedCmd) {
-        let stack = Self::get_stack_ref_mut(responses);
+        let stack = match Self::get_stack_ref_mut(responses) {
+            Some(s) => s,
+            None => {
+                debug!("Unable to read stack information for reordering frame levels: {:?}", responses);
+                return;
+            }
+        };
         for (i, frame) in stack.iter_mut().enumerate() {
             let frame = frame.expect_dict_ref_mut().unwrap();
             frame.insert("level_reordered".to_string(), (i as u64).to_string().into());
@@ -613,11 +631,6 @@ impl DistributeBacktraceHandler {
 #[async_trait]
 impl Handler for DistributeBacktraceHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        // let all_sessions = STATES.get_all_sessions();
-        // for session in all_sessions {
-        //     let session_guard = session.read().await;
-        //     println!("session tag: {}", session_guard.tag);
-        // }
         if let Target::Thread(gtid) = &cmd.target {
             let mut out_result: FinishedCmd;
             let mut inspect_gtid = *gtid;
@@ -632,7 +645,12 @@ impl Handler for DistributeBacktraceHandler {
                     data.parent_meta
                 }
                 Err(e) => {
-                    error!("Failed to get backtrace (not suppose to happen), break the call chain: {:?}", e);
+                    let err_msg = format!(
+                        "Failed to get backtrace for thread {}, break the call chain: {:?}",
+                        inspect_gtid, e
+                    );
+                    error!(err_msg);
+                    emit_error(&err_msg, cmd.external_token);
                     return;
                 }
             };
@@ -652,7 +670,7 @@ impl Handler for DistributeBacktraceHandler {
                     // and get backtrace and caller meta (if exists) for the parent thread
                     let parent_id = parent_meta.get("id").unwrap().expect_string_ref().unwrap();
                     let parent_s = STATES.get_session_by_tag(parent_id).await.unwrap();
-                    let parent_s_guard = parent_s.read().await;
+                    let parent_s_guard = parent_s.meta.read().await;
                     let parent_sid = parent_s_guard.sid;
                     let parent_in_custom_ctx = parent_s_guard.in_custom_ctx;
                     drop(parent_s_guard);
@@ -661,6 +679,12 @@ impl Handler for DistributeBacktraceHandler {
                     // ------------ [BEGIN] interrupt the parent thread ------------
                     if !parent_in_custom_ctx {
                         debug!("try to swap context for {}", parent_sid);
+
+                        // TODO: Refactor this section to use transaction::begin(parent_sid)
+                        // instead of check_thread_status returning a write guard held across .await points.
+                        // The current pattern holds RwLock across multiple awaits which can cause issues.
+                        // See get_bt_and_caller_meta for the proper pattern using SessionTransaction.
+
                         // interrupt, switch context, get backtrace
                         let intr_resp = api::send_and_return(&format!(
                             "-exec-interrupt --session {}",
@@ -731,7 +755,13 @@ impl Handler for DistributeBacktraceHandler {
                     parent_meta = match bt_data {
                         Ok(data) => {
                             // move the backtrace to the output payload
-                            let frames = Self::get_stack_owned(data.bt);
+                            let frames = match Self::get_stack_owned(data.bt) {
+                                Some(frames) => frames,
+                                None => {
+                                    error!("Failed to get backtrace, break the call chain.");
+                                    break;
+                                }
+                            };
                             let (sid, _) = STATES.get_ltid_by_gtid(inspect_gtid).unwrap().into();
                             let boundary_frame: gdbmi::raw::Value = HashMap::from([
                                 ("line".to_string(), "0".into()),
@@ -745,8 +775,12 @@ impl Handler for DistributeBacktraceHandler {
                                 ("boundary_frame".to_string(), "1".into()),
                             ])
                             .into();
-                            Self::get_stack_ref_mut(&mut out_result).push(boundary_frame);
-                            Self::get_stack_ref_mut(&mut out_result).extend(frames);
+                            Self::get_stack_ref_mut(&mut out_result)
+                                .unwrap()
+                                .push(boundary_frame);
+                            Self::get_stack_ref_mut(&mut out_result)
+                                .unwrap()
+                                .extend(frames);
 
                             if let Some(parent_meta) = data.parent_meta {
                                 parent_meta

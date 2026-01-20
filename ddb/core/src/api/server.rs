@@ -207,7 +207,7 @@ async fn get_sessions() -> impl IntoResponse {
     let mut results = vec![];
     let ss = crate::state::STATES.get_all_sessions();
     for s in ss {
-        let s_meta = s.read().await;
+        let s_meta = s.meta.read().await;
         let service_meta = s_meta.service_meta.as_ref();
         let sid = s_meta.sid;
         let tag = s_meta.tag.clone();

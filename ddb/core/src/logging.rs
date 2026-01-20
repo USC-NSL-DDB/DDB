@@ -5,7 +5,8 @@ use tracing_appender::{
     rolling::{RollingFileAppender, Rotation},
 };
 use tracing_subscriber::{
-    EnvFilter, Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt
+    filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
+    EnvFilter, Layer,
 };
 
 pub fn setup_logging(
@@ -17,11 +18,11 @@ pub fn setup_logging(
 ) -> Result<WorkerGuard> {
     let mut layers = Vec::new();
 
-    let file_filter = EnvFilter::from_default_env()
-        .add_directive(format!("ddb={}", file_level).parse()?);
+    let file_filter =
+        EnvFilter::from_default_env().add_directive(format!("ddb={}", file_level).parse()?);
 
-    let console_filter = EnvFilter::from_default_env()
-        .add_directive(format!("ddb={}", console_level).parse()?);
+    let console_filter =
+        EnvFilter::from_default_env().add_directive(format!("ddb={}", console_level).parse()?);
 
     // Create a non-blocking writer (async log writing) for file logging
     let file_appender =
@@ -53,7 +54,7 @@ pub fn setup_logging(
             .with_filter(console_filter)
             .boxed();
         layers.push(console_layer);
-    } 
+    }
 
     tracing_subscriber::registry().with(layers).try_init()?;
     Ok(guard)

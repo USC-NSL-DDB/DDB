@@ -224,7 +224,7 @@ impl StateMgr {
     #[inline]
     pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
         if let Some(s_meta) = self.get_session(sid) {
-            let s_meta = s_meta.read().await;
+            let s_meta = s_meta.meta.read().await;
             return s_meta.service_meta.clone();
         } else {
             return None;
@@ -321,6 +321,7 @@ impl StateMgr {
         let tag = self
             .session_states
             .get_session(sid)?
+            .meta
             .read()
             .await
             .tag

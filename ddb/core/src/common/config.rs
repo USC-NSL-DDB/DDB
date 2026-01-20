@@ -1,8 +1,8 @@
 use super::default_vals;
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs, sync::OnceLock};
 use std::path::Path;
+use std::{fs, sync::OnceLock};
 use tracing::debug;
 
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterMatchType};
@@ -352,6 +352,8 @@ impl Config {
     /// SAFETY: This is safe to call only after init_global has been called
     #[allow(static_mut_refs)]
     pub fn global() -> &'static Config {
-        GLOBAL_CONFIG.get().expect("Global config is not properly initialized.")
+        GLOBAL_CONFIG
+            .get()
+            .expect("Global config is not properly initialized.")
     }
 }

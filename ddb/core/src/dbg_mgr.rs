@@ -267,12 +267,10 @@ impl DbgManager {
                     .await
                     .unwrap();
 
-                self.sd.lock()
-                    .await
-                    .replace(ServiceDiscover::new(
-                        Box::new(serviceweaver_producer),
-                        producer_rx,
-                    ));
+                self.sd.lock().await.replace(ServiceDiscover::new(
+                    Box::new(serviceweaver_producer),
+                    producer_rx,
+                ));
             }
             _ => {
                 panic!("Unsupported framework adapter for now.");

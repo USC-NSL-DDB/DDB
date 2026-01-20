@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, collections::HashMap};
 
 use gdbmi::raw::{Dict, Value};
 use tracing::{debug, error};
@@ -600,4 +600,12 @@ pub fn emit(finished: FinishedCmd, formatter: Box<dyn DynFormatter>) {
     let formatted = formatter.format_dyn(&transformed);
     println!("{}", formatted);
     debug!("output: {}", formatted);
+}
+
+#[inline]
+pub fn emit_error(err_msg: &str, token: Option<u64>) {
+    let payload: Dict = HashMap::from([("msg".to_string(), err_msg.to_string().into())]).into();
+    let output = MIFormatter::format("^", "error", Some(&payload), token);
+    println!("{}", output);
+    debug!("output: {}", output);
 }

@@ -126,7 +126,9 @@ pub struct EMQXBroker {
 
 impl EMQXBroker {
     pub fn new() -> Self {
-        Self { temp_config_file: None }
+        Self {
+            temp_config_file: None,
+        }
     }
 }
 
@@ -175,7 +177,13 @@ impl MessageBroker for EMQXBroker {
             String::from_utf8(gid)?.trim()
         );
 
-        let conf_path = self.temp_config_file.as_ref().unwrap().path().to_str().unwrap();
+        let conf_path = self
+            .temp_config_file
+            .as_ref()
+            .unwrap()
+            .path()
+            .to_str()
+            .unwrap();
 
         // Start the new EMQX container
         run_command::<true, true>(
@@ -211,7 +219,7 @@ impl MessageBroker for EMQXBroker {
 
     fn stop(&mut self) -> Result<()> {
         use crate::common::utils::run_command;
-        let start = std::time::Instant::now(); 
+        let start = std::time::Instant::now();
         match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
             Ok(_) => {
                 debug!("EMQX broker stopped successfully!");
