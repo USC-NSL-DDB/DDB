@@ -7,6 +7,7 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 use tracing::{debug, error, info};
 
+use crate::common::config::ManagedBrokerConfig;
 use crate::common::sd_defaults;
 use crate::Asset;
 
@@ -49,6 +50,7 @@ fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
 pub struct BrokerInfo {
     pub hostname: String,
     pub port: u16,
+    pub broker_config: Option<ManagedBrokerConfig>,
 }
 
 pub trait MessageBroker: Send + Sync {
@@ -126,7 +128,9 @@ pub struct EMQXBroker {
 
 impl EMQXBroker {
     pub fn new() -> Self {
-        Self { temp_config_file: None }
+        Self {
+            temp_config_file: None,
+        }
     }
 }
 
@@ -175,43 +179,54 @@ impl MessageBroker for EMQXBroker {
             String::from_utf8(gid)?.trim()
         );
 
-        let conf_path = self.temp_config_file.as_ref().unwrap().path().to_str().unwrap();
+        let conf_path = self
+            .temp_config_file
+            .as_ref()
+            .unwrap()
+            .path()
+            .to_str()
+            .unwrap();
+        let conf_mount = format!("{}:/opt/emqx/etc/emqx.conf", conf_path);
+
+        let mut docker_cmds = vec![
+            "run",
+            "-d",
+            "--name",
+            "emqx",
+            "-p",
+            "10101:10101",
+            "-p",
+            "8083:8083",
+            "-p",
+            "8084:8084",
+            "-p",
+            "8883:8883",
+            "-p",
+            "18083:18083",
+            "-v",
+            "/tmp/ddb/emqx/data:/opt/emqx/data",
+            "-v",
+            "/tmp/ddb/emqx/logs:/opt/emqx/log",
+            "-v",
+            &conf_mount,
+            "--user",
+            &user,
+        ];
+        if let Some(broker_conf) = &broker_info.broker_config {
+            docker_cmds.extend(broker_conf.emqx_flags.iter().map(String::as_str));
+            docker_cmds.push(&broker_conf.emqx_image);
+        } else {
+            docker_cmds.push("emqx/emqx:5.8.4");
+        }
 
         // Start the new EMQX container
-        run_command::<true, true>(
-            "docker",
-            &[
-                "run",
-                "-d",
-                "--name",
-                "emqx",
-                "-p",
-                "10101:10101",
-                "-p",
-                "8083:8083",
-                "-p",
-                "8084:8084",
-                "-p",
-                "8883:8883",
-                "-p",
-                "18083:18083",
-                "-v",
-                "/tmp/ddb/emqx/data:/opt/emqx/data",
-                "-v",
-                "/tmp/ddb/emqx/logs:/opt/emqx/log",
-                "-v",
-                &format!("{}:/opt/emqx/etc/emqx.conf", conf_path),
-                "--user",
-                &user,
-                "emqx/emqx:5.8.4",
-            ],
-        )?;
+        run_command::<true, true>("docker", &docker_cmds)?;
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
         use crate::common::utils::run_command;
-        let start = std::time::Instant::now(); 
+        let start = std::time::Instant::now();
         match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
             Ok(_) => {
                 debug!("EMQX broker stopped successfully!");

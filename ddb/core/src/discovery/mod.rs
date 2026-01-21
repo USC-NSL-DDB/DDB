@@ -25,6 +25,7 @@ mod tests {
                 &BrokerInfo {
                     hostname: "localhost".to_string(),
                     port: 10101,
+                    broker_config: None,
                 },
                 "/tmp/ddb/service_discovery/config",
             )

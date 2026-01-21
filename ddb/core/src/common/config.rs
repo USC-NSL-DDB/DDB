@@ -1,8 +1,8 @@
 use super::default_vals;
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs, sync::OnceLock};
 use std::path::Path;
+use std::{fs, sync::OnceLock};
 use tracing::debug;
 
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterMatchType};
@@ -228,6 +228,14 @@ impl Default for BrokerType {
 pub struct ManagedBrokerConfig {
     #[serde(rename = "type", default)]
     pub broker_type: BrokerType,
+    #[serde(rename = "emqx_flags", default)]
+    pub emqx_flags: Vec<String>,
+    #[serde(rename = "emqx_image", default = "default_emqx_image")]
+    pub emqx_image: String,
+}
+
+fn default_emqx_image() -> String {
+    "emqx/emqx:5.8.4".to_string()
 }
 
 fn default_ssh_user() -> String {
@@ -352,6 +360,8 @@ impl Config {
     /// SAFETY: This is safe to call only after init_global has been called
     #[allow(static_mut_refs)]
     pub fn global() -> &'static Config {
-        GLOBAL_CONFIG.get().expect("Global config is not properly initialized.")
+        GLOBAL_CONFIG
+            .get()
+            .expect("Global config is not properly initialized.")
     }
 }

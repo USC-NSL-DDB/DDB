@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 use crate::discovery::discovery_message_producer::ServiceMeta;
 
@@ -208,7 +208,24 @@ impl SessionMeta {
     }
 }
 
-pub type SessionMetaRef = Arc<RwLock<SessionMeta>>;
+/// Wrapper containing session metadata and transaction lock.
+///
+/// The `meta` field holds the actual session state protected by RwLock.
+/// The `tx_lock` provides exclusive access for command transaction sequences.
+#[derive(Debug)]
+pub struct SessionWrapper {
+    /// Session metadata protected by read-write lock
+    pub meta: RwLock<SessionMeta>,
+    /// Transaction lock - acquire for exclusive command sequence access.
+    /// Uses Arc to support OwnedMutexGuard.
+    pub tx_lock: Arc<TokioMutex<()>>,
+}
+
+/// Reference to a session wrapper
+pub type SessionRef = Arc<SessionWrapper>;
+
+/// Backward compatibility alias
+pub type SessionMetaRef = SessionRef;
 
 pub struct SessionStateMgr {
     // sessions: DashMap<u64, SessionMeta>,
@@ -216,7 +233,7 @@ pub struct SessionStateMgr {
     // enter `.await` point while holding the reference to one or
     // more session meta, which cause deadlock in DashMap.
     // sessions: RwLock<HashMap<u64, SessionMeta>>,
-    sessions: ShardMap<u64, SessionMetaRef>,
+    sessions: ShardMap<u64, SessionRef>,
 }
 
 impl SessionStateMgr {
@@ -239,11 +256,10 @@ impl SessionStateMgr {
         let sessions = self.sessions.pin();
         sessions.insert(
             sid,
-            Arc::new(RwLock::new(SessionMeta::new(
-                sid,
-                tag.to_string(),
-                service_meta,
-            ))),
+            Arc::new(SessionWrapper {
+                meta: RwLock::new(SessionMeta::new(sid, tag.to_string(), service_meta)),
+                tx_lock: Arc::new(TokioMutex::new(())),
+            }),
         );
     }
 
@@ -251,7 +267,7 @@ impl SessionStateMgr {
     pub async fn update_session_status(&self, sid: u64, status: SessionStatus) {
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.update_session_status(status);
+            session.meta.write().await.update_session_status(status);
         }
     }
 
@@ -356,9 +372,10 @@ impl SessionStateMgr {
                 let v = v.clone();
                 let tag = tag.to_string();
                 tokio::spawn(async move {
-                    let session = v.read().await;
+                    let session = v.meta.read().await;
                     if session.tag == tag {
-                        Some(v.clone())
+                        drop(session);
+                        Some(v)
                     } else {
                         None
                     }
@@ -496,7 +513,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.add_thread_group(tgid);
+            session.meta.write().await.add_thread_group(tgid);
         }
     }
 
@@ -514,7 +531,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.create_thread(tid, tgid);
+            session.meta.write().await.create_thread(tid, tgid);
         }
     }
 
@@ -534,7 +551,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.remove_thread_group(tgid)
+            session.meta.write().await.remove_thread_group(tgid)
         } else {
             HashSet::new()
         }
@@ -554,7 +571,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.start_thread_group(tgid, pid);
+            session.meta.write().await.start_thread_group(tgid, pid);
         }
     }
 
@@ -572,7 +589,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.exit_thread_group(tgid);
+            session.meta.write().await.exit_thread_group(tgid);
         }
     }
 
@@ -590,7 +607,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.update_t_status(tid, status);
+            session.meta.write().await.update_t_status(tid, status);
         }
     }
 
@@ -608,7 +625,15 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.update_all_status(new_status);
+            session.meta.write().await.update_all_status(new_status);
+        }
+    }
+
+    #[inline]
+    pub async fn update_session_with<F: FnOnce(&mut SessionMeta)>(&self, sid: u64, f: F) {
+        if let Some(session) = self.sessions.pin_owned().get(&sid) {
+            let mut session_guard = session.meta.write().await;
+            f(&mut session_guard);
         }
     }
 
@@ -624,7 +649,7 @@ impl SessionStateMgr {
 
         let sessions = self.sessions.pin_owned();
         if let Some(session) = sessions.get(&sid) {
-            session.write().await.set_curr_tid(tid);
+            session.meta.write().await.set_curr_tid(tid);
         }
     }
 

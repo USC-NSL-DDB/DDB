@@ -123,8 +123,8 @@ pub mod gdb {
     }
 
     pub fn setup_proclet_ext_script() -> Result<PathBuf> {
-        let script_content =
-            Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH).context("Failed to get embedded proclet.py")?;
+        let script_content = Asset::get(EMBEDED_PROCLET_GDB_EXT_PATH)
+            .context("Failed to get embedded proclet.py")?;
         let path = Path::new(DEFAULT_GDB_EXT_DIR);
         let file_path = path.join(PROCLET_GDB_EXT_NAME);
         Ok(write_gdb_ext_script(&file_path, &script_content.data)?)
@@ -176,13 +176,24 @@ pub mod gdb {
     }
 }
 
-pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(cmd: &str, args: &[&str]) -> Result<()> {
+pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
+    cmd: &str,
+    args: &[&str],
+) -> Result<()> {
     use tracing::debug;
     let full_cmd = format!("{} {}", cmd, args.join(" "));
     let child = Command::new(cmd)
         .args(args)
-        .stdout(if WAIT_RESULT { Stdio::piped() } else { Stdio::null() })
-        .stderr(if WAIT_RESULT { Stdio::piped() } else { Stdio::null() })
+        .stdout(if WAIT_RESULT {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if WAIT_RESULT {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .spawn()?;
     if WAIT_RESULT {
         let output = child.wait_with_output()?;
