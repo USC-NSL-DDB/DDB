@@ -12,7 +12,8 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{FinishedCmd, api as cmd_flow_api, router::Target},
+    cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
+    notification,
     state::{GroupId, GroupMeta},
 };
 
@@ -84,7 +85,20 @@ impl ApiServer {
             .route("/src_to_grps", get(resolve_src_to_groups))
             .route("/send", post(send_cmd))
             .route("/groups", get(get_groups))
-            .route("/group", get(get_group));
+            .route("/group", get(get_group))
+            .route(
+                "/notifications/subscribe",
+                get(notification::notification_subscribe_handler),
+            )
+            .route(
+                "/notifications/status",
+                get(notification::notification_status_handler),
+            )
+            .route(
+                "/notifications/test",
+                post(notification::test_notification_handler),
+            )
+            .with_state(notification::get_notif_mgr());
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone())
             .await

@@ -19,6 +19,7 @@ pub enum Component {
     CmdFlow,
     DbgMgr,
     Api,
+    Notification,
 }
 
 pub struct RuntimeStatus {
@@ -33,7 +34,7 @@ impl RuntimeStatus {
         let (tx, rx) = tokio::sync::watch::channel(false);
 
         let mut monitor = HashMap::new();
-        for component in &[Component::CmdFlow, Component::DbgMgr] {
+        for component in &[Component::CmdFlow, Component::DbgMgr, Component::Notification] {
             monitor.insert(*component, false);
         }
 

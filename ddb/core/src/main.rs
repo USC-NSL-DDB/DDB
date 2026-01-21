@@ -12,6 +12,7 @@ mod discovery;
 mod feature;
 mod global;
 mod logging;
+mod notification;
 mod session;
 mod setup;
 mod shutdown;
@@ -137,7 +138,12 @@ fn main() -> Result<()> {
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
     get_shutdown_ctrl().setup_signal_handling();
-    get_shutdown_ctrl().register_acks(&[Component::CmdFlow, Component::DbgMgr, Component::Api]);
+    get_shutdown_ctrl().register_acks(&[
+        Component::CmdFlow,
+        Component::DbgMgr,
+        Component::Api,
+        Component::Notification,
+    ]);
 
     // Keep the guard to ensure the async logger is running.
     let _guard = SetupProcedure::new()
@@ -147,6 +153,9 @@ fn main() -> Result<()> {
 
     let mut app = App::new(Config::global().conf.api_server_port);
     app.run(get_shutdown_ctrl().subscribe());
+
+    // Initialize notification manager
+    notification::init_notification_mgr();
 
     init_cmd_handler(|| {
         let adapter: Arc<dyn FrameworkCommandAdapter> = match Config::global().framework {
@@ -219,6 +228,29 @@ fn main() -> Result<()> {
         });
     });
 
+    // Start NotificationManager in a separate thread
+    let notif_handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .thread_name("notif-mgr")
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            let mgr = notification::get_notif_mgr();
+            mgr.start().await;
+            get_rt_status().up(Component::Notification);
+
+            ShutdownCtrl::wait_for_exit().await;
+            get_shutdown_ctrl()
+                .shutdown_cleanup(async {
+                    mgr.shutdown().await;
+                })
+                .await;
+            get_shutdown_ctrl().ack_shutdown(Component::Notification);
+        });
+    });
+
     // schedule cmd loop in the same thread
     // the main thread is sit idle and wait for the signal to stop
     let main_loop = std::thread::spawn(move || {
@@ -241,6 +273,7 @@ fn main() -> Result<()> {
     main_loop.join().unwrap();
     cmd_flow_handle.join().unwrap();
     dbg_handle.join().unwrap();
+    notif_handle.join().unwrap();
 
     debug!("Exiting due to {:?}", get_shutdown_ctrl().cause());
     info!("Bye!");
