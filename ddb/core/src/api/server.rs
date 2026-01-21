@@ -13,7 +13,7 @@ use tracing::{debug, info};
 
 use crate::{
     cmd_flow::{FinishedCmd, api as cmd_flow_api, router::Target},
-    state::GroupMeta,
+    state::{GroupId, GroupMeta},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -45,7 +45,7 @@ struct SourceResolver {
 
 #[derive(Serialize)]
 struct GroupIdsResponse {
-    grp_ids: Vec<String>,
+    grp_ids: Vec<GroupId>,
 }
 
 #[derive(Serialize)]
@@ -128,8 +128,7 @@ async fn resolve_src_to_group_ids(Query(src): Query<SourceResolver>) -> impl Int
 
     let grp_ids = grp_ids
         .unwrap_or_default()
-        .iter()
-        .map(|s| s.to_string())
+        .into_iter()
         .collect::<Vec<_>>();
     (StatusCode::OK, Json(GroupIdsResponse { grp_ids: grp_ids }))
 }
