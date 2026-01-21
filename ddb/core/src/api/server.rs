@@ -33,6 +33,12 @@ struct SendCommandResponse {
 }
 
 #[derive(Deserialize)]
+struct GetGroupQuery {
+    grp_id: Option<u64>,
+    grp_hash: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SourceResolver {
     src: String,
 }
@@ -77,7 +83,8 @@ impl ApiServer {
             .route("/src_to_grp_ids", get(resolve_src_to_group_ids))
             .route("/src_to_grps", get(resolve_src_to_groups))
             .route("/send", post(send_cmd))
-            .route("/groups", get(get_groups));
+            .route("/groups", get(get_groups))
+            .route("/group", get(get_group));
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone())
             .await
@@ -249,4 +256,32 @@ async fn get_groups() -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
     let result: Vec<GroupMeta> = group_mgr.get_all_grp_meta();
     (StatusCode::OK, Json(result))
+}
+
+async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
+    let group_mgr = crate::state::get_group_mgr();
+    if let Some(grp_id) = query.grp_id {
+        if let Some(group_meta) = group_mgr.get_grp_by_id(grp_id) {
+            (StatusCode::OK, Json(json!(group_meta)))
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Group not found"})),
+            )
+        }
+    } else if let Some(grp_hash) = query.grp_hash {
+        if let Some(group_meta) = group_mgr.get_grp_by_hash(&grp_hash) {
+            (StatusCode::OK, Json(json!(group_meta)))
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Group not found"})),
+            )
+        }
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Either grp_id or grp_hash must be provided"})),
+        )
+    }
 }
