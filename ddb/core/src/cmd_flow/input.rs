@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use dashmap::DashMap;
 use tracing::{debug, error};
 
@@ -18,7 +18,10 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Command<F: DynFormatter + 'static> where F: Clone {
+pub struct Command<F: DynFormatter + 'static>
+where
+    F: Clone,
+{
     pub external_token: Option<u64>,
     pub internal_token: u64,
     pub raw_cmd: String,
@@ -129,7 +132,10 @@ impl ParsedInputCmd {
     }
 
     #[inline]
-    pub fn to_command<F: DynFormatter + 'static + Clone>(self, formatter: F) -> (Target, Command<F>) {
+    pub fn to_command<F: DynFormatter + 'static + Clone>(
+        self,
+        formatter: F,
+    ) -> (Target, Command<F>) {
         let raw_cmd = self.full_cmd();
         (
             self.target,
@@ -227,7 +233,10 @@ impl InputCmdParser {
             // --thread for targeting a specific thread
             if index < rest.len() - 1 {
                 if let Ok(gtid) = rest[index + 1].parse::<u64>() {
-                    let (_, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
+                    let (_, tid) = STATES
+                        .get_ltid_by_gtid(gtid)
+                        .ok_or(anyhow!("Unable to extract local tid correctly by gtid for command: {}", raw_cmd))?
+                        .into();
                     let target = Target::Thread(gtid);
                     return Ok((
                         target,
@@ -266,7 +275,7 @@ impl InputCmdParser {
                 return Ok((target, prefix, rest.join(" ").trim().to_string()));
             }
         }
-        
+
         if let Some(index) = rest.iter().position(|s| *s == "--group") {
             // --group for targeting a specific group
             if index < rest.len() - 1 {
@@ -285,7 +294,7 @@ impl InputCmdParser {
 
         if let Some(index) = rest.iter().position(|s| *s == "--multiple") {
             // --multiple for multiple targets (mixed of sessions and groups, no threads yet)
-            // Syntax example: --multiple g1,g2,s1,s2 
+            // Syntax example: --multiple g1,g2,s1,s2
             // where s=session, g=group, comma separated, but no spaces
             if index < rest.len() - 1 {
                 let target_list = rest[index + 1]
