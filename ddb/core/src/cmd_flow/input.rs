@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dashmap::DashMap;
 use tracing::{debug, error};
 
@@ -14,7 +14,7 @@ use crate::{
         get_router,
     },
     handlers_map,
-    state::STATES,
+    state::{get_state_mgr, STATES},
 };
 
 #[derive(Debug, Clone)]
@@ -211,7 +211,10 @@ impl InputCmdParser {
     fn prepare_cmd(&self, raw_cmd: String) -> Result<(Target, String, String)> {
         let parts = raw_cmd.splitn(2, char::is_whitespace).collect::<Vec<_>>();
         let prefix = {
-            let _prefix = *parts.first().expect("command prefix is present");
+            let _prefix = *parts.first().ok_or(anyhow!(
+                "command prefix is missing for command: {}",
+                raw_cmd
+            ))?;
             if _prefix.is_empty() {
                 bail!("Empty command prefix");
             }
@@ -232,40 +235,40 @@ impl InputCmdParser {
         if let Some(index) = rest.iter().position(|s| *s == "--thread") {
             // --thread for targeting a specific thread
             if index < rest.len() - 1 {
-                if let Ok(gtid) = rest[index + 1].parse::<u64>() {
-                    let (_, tid) = STATES
-                        .get_ltid_by_gtid(gtid)
-                        .ok_or(anyhow!("Unable to extract local tid correctly by gtid for command: {}", raw_cmd))?
-                        .into();
-                    let target = Target::Thread(gtid);
-                    return Ok((
-                        target,
-                        prefix,
-                        format!(
-                            "{} {} {}",
-                            rest[..=index].join(" "),
-                            tid,
-                            rest[index + 2..].join(" ")
-                        )
-                        .trim()
-                        .to_string(),
-                    ));
-                } else {
-                    error!(
-                        "Invalid gtid {} provided for --thread flag",
-                        rest[index + 1]
-                    );
-                    return Ok((Target::default(), "".to_string(), "".to_string()));
-                }
+                let gtid = rest[index + 1].parse::<u64>().context(format!(
+                    "Invalid gtid provided for --thread flag. Command: {}",
+                    raw_cmd
+                ))?;
+                let (_, tid) = get_state_mgr()
+                    .get_ltid_by_gtid(gtid)
+                    .ok_or(anyhow!(
+                        "Unable to extract local tid correctly by gtid for command: {}",
+                        raw_cmd
+                    ))?
+                    .into();
+                let target = Target::Thread(gtid);
+                return Ok((
+                    target,
+                    prefix,
+                    format!(
+                        "{} {} {}",
+                        rest[..=index].join(" "),
+                        tid,
+                        rest[index + 2..].join(" ")
+                    )
+                    .trim()
+                    .to_string(),
+                ));
             }
         }
 
         if let Some(index) = rest.iter().position(|s| *s == "--session") {
             // --session for targeting a specific session
             if index < rest.len() - 1 {
-                let sid = rest[index + 1]
-                    .parse::<u64>()
-                    .expect("valid sid when use --session flag");
+                let sid = rest[index + 1].parse::<u64>().context(format!(
+                    "invalid sid when use --session flag. Command: {}",
+                    raw_cmd
+                ))?;
                 let target = Target::Session(sid);
                 let mut rest = rest.clone();
                 // remove the `--session` and its argument from the rest.
@@ -279,9 +282,10 @@ impl InputCmdParser {
         if let Some(index) = rest.iter().position(|s| *s == "--group") {
             // --group for targeting a specific group
             if index < rest.len() - 1 {
-                let gid = rest[index + 1]
-                    .parse::<u64>()
-                    .expect("valid gid when use --group flag");
+                let gid = rest[index + 1].parse::<u64>().context(format!(
+                    "invalid gid when use --group flag. Command: {}",
+                    raw_cmd
+                ))?;
                 let target = Target::Group(gid);
                 let mut rest = rest.clone();
                 // remove the `--group` and its argument from the rest.
@@ -297,24 +301,28 @@ impl InputCmdParser {
             // Syntax example: --multiple g1,g2,s1,s2
             // where s=session, g=group, comma separated, but no spaces
             if index < rest.len() - 1 {
-                let target_list = rest[index + 1]
-                    .split(',')
-                    .map(|t| {
-                        if t.starts_with('s') {
-                            let sid = t[1..]
-                                .parse::<u64>()
-                                .expect("valid sid when use --multiple flag");
-                            Target::Session(sid)
-                        } else if t.starts_with('g') {
-                            let gid = t[1..]
-                                .parse::<u64>()
-                                .expect("valid gid when use --multiple flag");
-                            Target::Group(gid)
-                        } else {
-                            panic!("Invalid target {} in --multiple flag", t);
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let mut target_list = Vec::new();
+                for ele in rest[index + 1].split(',') {
+                    if ele.starts_with('s') {
+                        let sid = ele[1..].parse::<u64>().context(format!(
+                            "invalid sid when use --multiple flag. Command: {}",
+                            raw_cmd
+                        ))?;
+                        target_list.push(Target::Session(sid));
+                    } else if ele.starts_with('g') {
+                        let gid = ele[1..].parse::<u64>().context(format!(
+                            "invalid gid when use --multiple flag. Command: {}",
+                            raw_cmd
+                        ))?;
+                        target_list.push(Target::Group(gid));
+                    } else {
+                        bail!(
+                            "Invalid target {} in --multiple flag. Command: {}",
+                            ele,
+                            raw_cmd
+                        );
+                    }
+                }
                 let target = Target::Multiple(target_list);
                 let mut rest = rest.clone();
                 // remove the `--group` and its argument from the rest.
@@ -325,7 +333,7 @@ impl InputCmdParser {
             }
         }
 
-        if let Some(gtid) = STATES.get_curr_gtid() {
+        if let Some(gtid) = get_state_mgr().get_curr_gtid() {
             // if there is a current global thread selected, use it as the target
             return Ok((Target::Thread(gtid), prefix, rest.join(" ")));
         }
