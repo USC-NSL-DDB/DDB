@@ -10,7 +10,7 @@ use crate::common::Config;
 use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
-use crate::state::{STATES, get_bkpt_mgr, get_group_mgr};
+use crate::state::{STATES, get_bkpt_mgr, get_group_mgr, get_state_mgr};
 use crate::{cmd_flow, common};
 use crate::{
     common::default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME},
@@ -352,7 +352,7 @@ impl DbgSession {
         debug!("Cleaning up session with config: {:?}", self.config);
 
         // Indicate that the session is closing. Used in API server.
-        STATES.update_session_status_off(self.sid).await;
+        get_state_mgr().update_session_status_off(self.sid).await;
 
         // Update all relevant states
         // - remove breakpoints associated with this session from the group breakpoint manager
@@ -363,7 +363,7 @@ impl DbgSession {
         get_bkpt_mgr().clean_bkpts_for_terminated_session(self.sid);
         get_router().remove_session(self.sid);
         get_group_mgr().remove_session(self.sid);
-        STATES.remove_session(self.sid).await;
+        get_state_mgr().remove_session(self.sid).await;
         let ctrl = &self.config.gdb_controller;
         if ctrl.is_open() {
             match common::config::Config::global().conf.on_exit {

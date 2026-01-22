@@ -12,8 +12,9 @@ use tracing::{debug, error, info};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
+use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::shutdown::get_shutdown_ctrl;
-use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
+use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr};
 use crate::{
     common::{self, config::Framework},
     discovery::DiscoveryMessageProducer,
@@ -62,6 +63,8 @@ impl ServiceDiscover {
             handle: None,
         }
     }
+
+    // async fn notify_new_session()
 
     /// Handles creation of a new debug session for a discovered service.
     /// Called by the consumer loop that reads from a unified channel of `ServiceInfo<T>`.
@@ -122,11 +125,15 @@ impl ServiceDiscover {
                         error!("Post-start actions for session {} failed: {:?}", new_sid, e);
                     }
                 }
+                let notification = Notification::new(NotificationPayload::SessionListChanged);
+                get_notif_mgr().broadcast(notification).await;
             }
             Err(e) => {
                 // If failure, remove from global state
                 error!("Failed to start session {}: {:?}", new_sid, e);
-                crate::state::STATES.remove_session(new_sid).await;
+                // best-effort clean up for a broken session.
+                let _ = dbg_session.cleanup().await;
+                get_state_mgr().remove_session(new_sid).await;
             }
         }
     }
@@ -173,6 +180,9 @@ impl DbgManager {
         if let Some((_, mut s)) = self.sessions.remove(&sid) {
             let _ = s.cleanup().await;
         }
+
+        let notification = Notification::new(NotificationPayload::SessionListChanged);
+        get_notif_mgr().broadcast(notification).await;
 
         if self.sessions.is_empty() {
             debug!("No more sessions in DbgManager. Possibly shutting down…");

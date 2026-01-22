@@ -30,6 +30,7 @@ impl Notification {
 pub enum NotificationPayload {
     BreakpointChanged(BreakpointChangeEvent),
     SessionStatusChanged(SessionStatusEvent),
+    SessionListChanged,
     Custom(CustomEvent),
 }
 
