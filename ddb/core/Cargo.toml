@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = [ "lazy_source_map" ]
 lazy_source_map = []
+profile = []
 
 [[bin]]
 name = "ddb"
@@ -43,4 +44,5 @@ kube = { version = "0.98.0", features = ["runtime", "derive","client","ws"] }
 k8s-openapi = { version = "0.24.0", features = ["latest"] }
 gethostname = "0.5"
 uuid = { version = "1.11", features = ["v4", "serde"] }
+tower-http = "0.6.8"
 [dev-dependencies]

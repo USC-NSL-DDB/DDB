@@ -1,3 +1,4 @@
+use anyhow::Result;
 use axum::{
     extract::Query,
     http::StatusCode,
@@ -5,10 +6,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
 use crate::{
@@ -33,13 +33,13 @@ struct SendCommandResponse {
     payload: Option<FinishedCmd>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct GetGroupQuery {
     grp_id: Option<u64>,
     grp_hash: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct SourceResolver {
     src: String,
 }
@@ -98,7 +98,10 @@ impl ApiServer {
                 "/notifications/test",
                 post(notification::test_notification_handler),
             )
-            .with_state(notification::get_notif_mgr());
+            .with_state(notification::get_notif_mgr())
+            .layer(
+                TraceLayer::new_for_http()
+            );
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone())
             .await
@@ -124,12 +127,14 @@ impl Default for ApiServer {
 }
 
 // Root handler
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn root_handler() -> Json<ApiResponse> {
     Json(ApiResponse {
         message: "Welcome to the Axum API server!".to_string(),
     })
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn resolve_src_to_group_ids(Query(src): Query<SourceResolver>) -> impl IntoResponse {
     let src = src.src;
     #[cfg(feature = "lazy_source_map")]
@@ -140,13 +145,11 @@ async fn resolve_src_to_group_ids(Query(src): Query<SourceResolver>) -> impl Int
     #[cfg(not(feature = "lazy_source_map"))]
     let grp_ids = crate::state::get_source_mgr().resolve_src_to_group_ids(&src);
 
-    let grp_ids = grp_ids
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let grp_ids = grp_ids.unwrap_or_default().into_iter().collect::<Vec<_>>();
     (StatusCode::OK, Json(GroupIdsResponse { grp_ids: grp_ids }))
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn resolve_src_to_groups(Query(src): Query<SourceResolver>) -> impl IntoResponse {
     let src = src.src;
     #[cfg(feature = "lazy_source_map")]
@@ -161,6 +164,7 @@ async fn resolve_src_to_groups(Query(src): Query<SourceResolver>) -> impl IntoRe
     (StatusCode::OK, Json(GroupsResponse { grps: grps }))
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     debug!("Received command: {:?}", send_cmd);
 
@@ -206,6 +210,7 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     }
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_status() -> impl IntoResponse {
     let is_up = crate::status::get_rt_status().is_up();
     if is_up {
@@ -218,6 +223,7 @@ async fn get_status() -> impl IntoResponse {
     }
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_sessions() -> impl IntoResponse {
     // if it has performance issues, we can probably parallelize this
     // or maybe do it in parallel conditionally when the size
@@ -248,6 +254,7 @@ async fn get_sessions() -> impl IntoResponse {
     (StatusCode::OK, Json(json!(results)))
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_pending_commands() -> impl IntoResponse {
     let mut results = vec![];
     let cmds = crate::cmd_flow::get_cmd_tracker().get_inflight_cmds_copy();
@@ -265,12 +272,14 @@ async fn get_pending_commands() -> impl IntoResponse {
     (StatusCode::OK, Json(json!(results)))
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_groups() -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
     let result: Vec<GroupMeta> = group_mgr.get_all_grp_meta();
     (StatusCode::OK, Json(result))
 }
 
+#[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
     if let Some(grp_id) = query.grp_id {
