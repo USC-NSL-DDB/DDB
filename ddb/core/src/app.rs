@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::api::server::ApiServer;
-use crate::shutdown::get_shutdown_ctrl;
+use crate::shutdown::{get_shutdown_ctrl, ShutdownCause};
 use crate::status::Component;
 
 pub struct App {
@@ -32,6 +32,7 @@ impl App {
             runtime.block_on(async {
                 if let Err(error) = server.run(shutdown_rx).await {
                     error!("Error running server: {}", error);
+                    get_shutdown_ctrl().trigger_once(ShutdownCause::ApiServerInitFailure);
                 }
                 info!("API server stopped");
                 get_shutdown_ctrl().ack_shutdown(Component::Api);

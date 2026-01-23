@@ -36,6 +36,7 @@ pub enum ShutdownCause {
     StdinError,
     NoSessions,
     DbgMgrInitFailure,
+    ApiServerInitFailure,
     Other,
 }
 

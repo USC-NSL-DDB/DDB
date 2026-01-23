@@ -99,14 +99,10 @@ impl ApiServer {
                 post(notification::test_notification_handler),
             )
             .with_state(notification::get_notif_mgr())
-            .layer(
-                TraceLayer::new_for_http()
-            );
+            .layer(TraceLayer::new_for_http());
 
-        let listener = tokio::net::TcpListener::bind(self.addr.clone())
-            .await
-            .unwrap();
-        info!("API Server listening on {}", listener.local_addr().unwrap());
+        let listener = tokio::net::TcpListener::bind(self.addr.clone()).await?;
+        info!("API Server listening on {}", listener.local_addr()?);
 
         let shutdown = async move {
             let _ = shutdown_rx.changed().await;
@@ -114,8 +110,7 @@ impl ApiServer {
 
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown)
-            .await
-            .unwrap();
+            .await?;
         Ok(())
     }
 }
