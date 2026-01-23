@@ -360,8 +360,20 @@ impl Handler for BreakDeleteHandler {
         let bkpt_id: u64;
         if let Some((bkpt_id_str, subbkpt_id_str)) = args.split_once(char::is_whitespace) {
             let mut modified = false;
-            bkpt_id = bkpt_id_str.parse::<u64>().unwrap();
-            let subbkpt_id = subbkpt_id_str.parse::<u64>().unwrap();
+            bkpt_id = match bkpt_id_str.parse::<u64>() {
+                Ok(id) => id,
+                Err(e) => {
+                    emit_error(&format!("Invalid breakpoint id {}: {:?}", bkpt_id_str, e), cmd.external_token);
+                    return;
+                }
+            };
+            let subbkpt_id = match subbkpt_id_str.parse::<u64>() {
+                Ok(id) => id,
+                Err(e) => {
+                    emit_error(&format!("Invalid sub-breakpoint id {}: {:?}", subbkpt_id_str, e), cmd.external_token);
+                    return;
+                }
+            };
             match Self::delete_subbkpt(bkpt_id, subbkpt_id).await {
                 Ok(_) => {
                     modified = true;
@@ -409,7 +421,13 @@ impl Handler for BreakDeleteHandler {
             }
         } else {
             let mut modified = false;
-            bkpt_id = args.parse::<u64>().unwrap();
+            bkpt_id = match args.parse::<u64>() {
+                Ok(id) => id,
+                Err(e) => {
+                    emit_error(&format!("Invalid breakpoint id {}: {:?}", args, e), cmd.external_token);
+                    return;
+                }
+            };
             for (sid, local_bkpt_id) in get_bkpt_mgr().get_local_bkpt_ids(bkpt_id) {
                 match Self::delete_local_bkpt(sid, local_bkpt_id).await {
                     Ok(_) => {
@@ -427,9 +445,6 @@ impl Handler for BreakDeleteHandler {
 
             if modified {
                 get_bkpt_mgr().delete_bkpt(bkpt_id);
-                let out = MIFormatter::format("^", "done", None, cmd.external_token);
-                println!("{}", out);
-                debug!("output: {}", out);
                 let out = MIFormatter::format(
                     "=",
                     "breakpoint-deleted",
@@ -439,6 +454,9 @@ impl Handler for BreakDeleteHandler {
                 println!("{}", out);
                 debug!("output: {}", out);
             }
+            let out = MIFormatter::format("^", "done", None, cmd.external_token);
+            println!("{}", out);
+            debug!("output: {}", out);
         }
     }
 }
