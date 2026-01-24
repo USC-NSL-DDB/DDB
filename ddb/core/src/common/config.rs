@@ -207,6 +207,8 @@ pub struct BrokerConfig {
     pub port: u16,
     #[serde(default)]
     pub managed: Option<ManagedBrokerConfig>,
+    #[serde(default)]
+    pub max_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -232,6 +234,8 @@ pub struct ManagedBrokerConfig {
     pub emqx_flags: Vec<String>,
     #[serde(rename = "emqx_image", default = "default_emqx_image")]
     pub emqx_image: String,
+    #[serde(rename = "config_path", default)]
+    pub config_path: Option<String>,
 }
 
 fn default_emqx_image() -> String {

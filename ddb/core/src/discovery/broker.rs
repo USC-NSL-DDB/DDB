@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use std::fs::{self};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tracing::{debug, error, info};
 
 use crate::common::config::ManagedBrokerConfig;
 use crate::Asset;
+use crate::common::utils::run_command;
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
@@ -66,30 +67,24 @@ impl MosquittoBroker {
 }
 
 impl MessageBroker for MosquittoBroker {
-    fn start(&mut self, _broker_info: &BrokerInfo) -> Result<()> {
-        let conf = Asset::get("conf/mosquitto.conf").context("Failed to get Mosquitto config file")?;
-        let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
-        self.temp_config_file = Some(temp_conf_file);
+    fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
+        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
+            brker_conf.config_path.as_ref()
+        });
         
-        let mqtt_conf_path = self
-            .temp_config_file
-            .as_ref()
-            .unwrap()
-            .path()
-            .to_str()
-            .unwrap();
+        let mqtt_conf_path = match config_path {
+            Some(path) => path,
+            None => {
+                let conf = Asset::get("conf/mosquitto.conf").context("Failed to get Mosquitto config file")?;
+                let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+                self.temp_config_file = Some(temp_conf_file);
+                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+            }
+        };
         
         fs::create_dir_all("/tmp/ddb/brokers/mosquitto")?;
-
-        // Start broker
-        match Command::new("mosquitto")
-            .arg("-c")
-            .arg(mqtt_conf_path)
-            .arg("-d")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+        let result = run_command::<true, true>("mosquitto", &["-c", mqtt_conf_path, "-d"]);
+        match result {
             Ok(_) => {
                 info!("Mosquitto broker started successfully!");
                 Ok(())
@@ -145,11 +140,18 @@ impl EMQXBroker {
 
 impl MessageBroker for EMQXBroker {
     fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
-        use crate::common::utils::run_command;
-
-        let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
-        let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
-        self.temp_config_file = Some(temp_conf_file);
+        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
+            brker_conf.config_path.as_ref()
+        });
+        let mqtt_conf_path = match config_path {
+            Some(path) => path,
+            None => {
+                let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
+                let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+                self.temp_config_file = Some(temp_conf_file);
+                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+            }
+        };
 
         // Stop and remove the existing `emqx` container
         run_command::<true, true>("docker", &["rm", "-f", "emqx"]).ok();
@@ -166,15 +168,7 @@ impl MessageBroker for EMQXBroker {
             String::from_utf8(gid)?.trim()
         );
 
-        let conf_path = self
-            .temp_config_file
-            .as_ref()
-            .unwrap()
-            .path()
-            .to_str()
-            .unwrap();
-        let conf_mount = format!("{}:/opt/emqx/etc/emqx.conf", conf_path);
-
+        let conf_mount = format!("{}:/opt/emqx/etc/emqx.conf", mqtt_conf_path);
         let mut docker_cmds = vec![
             "run",
             "-d",
@@ -207,12 +201,24 @@ impl MessageBroker for EMQXBroker {
         }
 
         // Start the new EMQX container
-        run_command::<true, true>("docker", &docker_cmds)?;
-        Ok(())
+        let result = run_command::<true, true>("docker", &docker_cmds);
+        match result {
+            Ok(_) => {
+                info!("EMQX broker started successfully!");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                error!("EMQX program not found. Please make sure it is installed.");
+                Err(BrokerError::BrokerNotFound("emqx".to_string()).into())
+            }
+            Err(e) => {
+                error!("Failed to start EMQX broker: {}", e);
+                Err(BrokerError::StartError(e.to_string()).into())
+            }
+        }
     }
 
     fn stop(&mut self) -> Result<()> {
-        use crate::common::utils::run_command;
         let start = std::time::Instant::now();
         match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
             Ok(_) => {

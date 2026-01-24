@@ -108,6 +108,10 @@ impl ShutdownCtrl {
         let _ = self.tx.lock().unwrap().send(true);
         true
     }
+    
+    pub fn should_shutdown(&self) -> bool {
+        *self.rx.lock().unwrap().borrow()
+    }
 
     /// Returns the cause of shutdown, or `None` if shutdown has not been triggered.
     pub fn cause(&self) -> Option<ShutdownCause> {
