@@ -19,7 +19,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/conf/mosquitto.conf");
         assert!(config_path.exists());
 
-        let mut broker = MosquittoBroker::new(config_path.into_os_string().into_string().unwrap());
+        let mut broker = MosquittoBroker::new();
         broker
             .start(
                 &BrokerInfo {
@@ -27,7 +27,6 @@ mod tests {
                     port: 10101,
                     broker_config: None,
                 },
-                "/tmp/ddb/service_discovery/config",
             )
             .expect("Failed to start broker");
 

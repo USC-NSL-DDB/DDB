@@ -188,8 +188,7 @@ impl DbgManager {
                 if let Some(managed_broker_conf) = sd.broker.managed.as_ref() {
                     let b: Box<dyn MessageBroker> = match managed_broker_conf.broker_type {
                         common::config::BrokerType::Mosquitto => {
-                            // TODO: need some refactoring here to make sure Mosquitto works here.
-                            Box::new(MosquittoBroker::new("".to_string()))
+                            Box::new(MosquittoBroker::new())
                         }
                         common::config::BrokerType::Emqx => Box::new(EMQXBroker::new()),
                         _ => {
