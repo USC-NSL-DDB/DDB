@@ -7,6 +7,8 @@ use tokio::{
 };
 use tracing::{debug, error};
 
+use crate::{common::Config, shutdown::get_shutdown_ctrl};
+
 pub struct AsyncDiscoverClient {
     client: rumqttc::AsyncClient,
     el: rumqttc::EventLoop,
@@ -28,7 +30,14 @@ impl AsyncDiscoverClient {
 
     pub async fn check_broker_online(&mut self) -> Result<()> {
         let start_time = Instant::now();
-        let timeout = Duration::from_secs(30);
+        let user_defined_timeout = Config::global()
+            .service_discovery
+            .as_ref()
+            .and_then(|sd_cfg| sd_cfg.broker.max_timeout_secs);
+        let timeout = match user_defined_timeout {
+            Some(secs) => Duration::from_secs(secs),
+            None => Duration::from_secs(30),
+        };
 
         loop {
             // Try connecting and poll for events
@@ -39,6 +48,11 @@ impl AsyncDiscoverClient {
                 _ => {
                     debug!("Broker is offline, retrying...");
                 }
+            }
+
+            if get_shutdown_ctrl().should_shutdown() {
+                return Err(anyhow::anyhow!("Expect shutdown."))
+                    .context("Aborting broker connection attempts due to shutdown signal.");
             }
 
             if start_time.elapsed() >= timeout {

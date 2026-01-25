@@ -1,15 +1,14 @@
 use anyhow::{Context, Result};
-use std::fs::{self, File};
+use std::fs::{self};
 use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tracing::{debug, error, info};
 
 use crate::common::config::ManagedBrokerConfig;
-use crate::common::sd_defaults;
 use crate::Asset;
+use crate::common::utils::run_command;
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
@@ -23,29 +22,6 @@ pub enum BrokerError {
     StopError(String),
 }
 
-fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
-    let path = Path::new(config_path);
-    debug!("Writing broker config to {:?}", path);
-
-    // Create parent directory if it doesn't exist
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut file = File::create(path)?;
-
-    writeln!(
-        file,
-        "{}://{}:{}\n{}\n",
-        sd_defaults::BROKER_MSG_TRANSPORT,
-        broker.hostname,
-        broker.port,
-        sd_defaults::T_SERVICE_DISCOVERY
-    )?;
-
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub struct BrokerInfo {
     pub hostname: String,
@@ -54,34 +30,61 @@ pub struct BrokerInfo {
 }
 
 pub trait MessageBroker: Send + Sync {
-    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()>;
+    fn start(&mut self, broker_info: &BrokerInfo) -> Result<()>;
     fn stop(&mut self) -> Result<()>;
+}
+
+#[inline]
+fn extract_embedded_file_content(content: &[u8]) -> Result<NamedTempFile> {
+    // Create temporary file
+    let mut temp_file = NamedTempFile::new().context("Failed to create temporary file")?;
+
+    temp_file
+        .write_all(content)
+        .context("Failed to write script content")?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(temp_file.path(), fs::Permissions::from_mode(0o755))
+            .context("Failed to set script permissions")?;
+    }
+    Ok(temp_file)
 }
 
 // Mosquitto implementation
 pub struct MosquittoBroker {
-    config_path: String,
+    temp_config_file: Option<NamedTempFile>,
 }
 
 impl MosquittoBroker {
-    pub fn new(config_path: String) -> Self {
-        Self { config_path }
+    pub fn new() -> Self {
+        Self {
+            temp_config_file: None,
+        }
     }
 }
 
 impl MessageBroker for MosquittoBroker {
-    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
-        // Write configuration
-        write_config(broker_info, config_path)?;
-
-        // Start broker
-        match Command::new("mosquitto")
-            .arg("-c")
-            .arg(&self.config_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+    fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
+        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
+            brker_conf.config_path.as_ref()
+        });
+        
+        let mqtt_conf_path = match config_path {
+            Some(path) => path,
+            None => {
+                let conf = Asset::get("conf/mosquitto.conf").context("Failed to get Mosquitto config file")?;
+                let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+                self.temp_config_file = Some(temp_conf_file);
+                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+            }
+        };
+        
+        fs::create_dir_all("/tmp/ddb/brokers/mosquitto")?;
+        let result = run_command::<true, true>("mosquitto", &["-c", mqtt_conf_path, "-d"]);
+        match result {
             Ok(_) => {
                 info!("Mosquitto broker started successfully!");
                 Ok(())
@@ -99,16 +102,16 @@ impl MessageBroker for MosquittoBroker {
 
     fn stop(&mut self) -> Result<()> {
         // Try with sudo first, fall back to regular pkill if sudo is not available
-        let kill_result = if Command::new("which").arg("sudo").status().is_ok() {
-            Command::new("sudo")
-                .args(["pkill", "-9", "mosquitto"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-        } else {
-            Command::new("pkill").args(["-9", "mosquitto"]).status()
-        };
-
+        // let kill_result = if Command::new("which").arg("sudo").status().is_ok() {
+        //     Command::new("sudo")
+        //         .args(["pkill", "-9", "mosquitto"])
+        //         .stdout(Stdio::null())
+        //         .stderr(Stdio::null())
+        //         .status()
+        // } else {
+        //     Command::new("pkill").args(["-9", "mosquitto"]).status()
+        // };
+        let kill_result = Command::new("pkill").args(["-9", "mosquitto"]).status();
         match kill_result {
             Ok(_) => {
                 debug!("Mosquitto broker terminated successfully!");
@@ -134,41 +137,27 @@ impl EMQXBroker {
     }
 }
 
-#[inline]
-fn extract_embedded_file_content(content: &[u8]) -> Result<NamedTempFile> {
-    // Create temporary file
-    let mut temp_file = NamedTempFile::new().context("Failed to create temporary file")?;
-
-    temp_file
-        .write_all(content)
-        .context("Failed to write script content")?;
-
-    // Make executable on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(temp_file.path(), fs::Permissions::from_mode(0o755))
-            .context("Failed to set script permissions")?;
-    }
-    Ok(temp_file)
-}
 
 impl MessageBroker for EMQXBroker {
-    fn start(&mut self, broker_info: &BrokerInfo, config_path: &str) -> Result<()> {
-        use crate::common::utils::run_command;
-
-        // Write configuration
-        write_config(broker_info, config_path)?;
-
-        let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
-        let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
-        self.temp_config_file = Some(temp_conf_file);
+    fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
+        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
+            brker_conf.config_path.as_ref()
+        });
+        let mqtt_conf_path = match config_path {
+            Some(path) => path,
+            None => {
+                let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
+                let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+                self.temp_config_file = Some(temp_conf_file);
+                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+            }
+        };
 
         // Stop and remove the existing `emqx` container
         run_command::<true, true>("docker", &["rm", "-f", "emqx"]).ok();
 
-        fs::create_dir_all("/tmp/ddb/emqx/data")?;
-        fs::create_dir_all("/tmp/ddb/emqx/logs")?;
+        fs::create_dir_all("/tmp/ddb/brokers/emqx/data")?;
+        fs::create_dir_all("/tmp/ddb/brokers/emqx/logs")?;
 
         let uid = Command::new("id").arg("-u").output()?.stdout;
         let gid = Command::new("id").arg("-g").output()?.stdout;
@@ -179,15 +168,7 @@ impl MessageBroker for EMQXBroker {
             String::from_utf8(gid)?.trim()
         );
 
-        let conf_path = self
-            .temp_config_file
-            .as_ref()
-            .unwrap()
-            .path()
-            .to_str()
-            .unwrap();
-        let conf_mount = format!("{}:/opt/emqx/etc/emqx.conf", conf_path);
-
+        let conf_mount = format!("{}:/opt/emqx/etc/emqx.conf", mqtt_conf_path);
         let mut docker_cmds = vec![
             "run",
             "-d",
@@ -204,9 +185,9 @@ impl MessageBroker for EMQXBroker {
             "-p",
             "18083:18083",
             "-v",
-            "/tmp/ddb/emqx/data:/opt/emqx/data",
+            "/tmp/ddb/brokers/emqx/data:/opt/emqx/data",
             "-v",
-            "/tmp/ddb/emqx/logs:/opt/emqx/log",
+            "/tmp/ddb/brokers/emqx/logs:/opt/emqx/log",
             "-v",
             &conf_mount,
             "--user",
@@ -220,12 +201,24 @@ impl MessageBroker for EMQXBroker {
         }
 
         // Start the new EMQX container
-        run_command::<true, true>("docker", &docker_cmds)?;
-        Ok(())
+        let result = run_command::<true, true>("docker", &docker_cmds);
+        match result {
+            Ok(_) => {
+                info!("EMQX broker started successfully!");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                error!("EMQX program not found. Please make sure it is installed.");
+                Err(BrokerError::BrokerNotFound("emqx".to_string()).into())
+            }
+            Err(e) => {
+                error!("Failed to start EMQX broker: {}", e);
+                Err(BrokerError::StartError(e.to_string()).into())
+            }
+        }
     }
 
     fn stop(&mut self) -> Result<()> {
-        use crate::common::utils::run_command;
         let start = std::time::Instant::now();
         match run_command::<true, true>("docker", &["rm", "-f", "emqx"]) {
             Ok(_) => {

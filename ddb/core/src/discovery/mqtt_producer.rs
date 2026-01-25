@@ -1,4 +1,10 @@
-use std::{collections::HashMap, net::Ipv4Addr};
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::Write,
+    net::Ipv4Addr,
+    path::Path,
+};
 
 use anyhow::{Context, Result};
 use flume::Sender;
@@ -15,6 +21,29 @@ use crate::{
     common::sd_defaults, connection::ssh_client::SSHCred, dbg_ctrl::SSHAttachController,
     discovery::subscriber::AsyncDiscoverClient,
 };
+
+fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
+    let path = Path::new(config_path);
+    debug!("Writing broker config to {:?}", path);
+
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = File::create(path)?;
+
+    writeln!(
+        file,
+        "{}://{}:{}\n{}\n",
+        sd_defaults::BROKER_MSG_TRANSPORT,
+        broker.hostname,
+        broker.port,
+        sd_defaults::T_SERVICE_DISCOVERY
+    )?;
+
+    Ok(())
+}
 
 /// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
 /// `ServiceInfo` events and send them through a channel.
@@ -152,7 +181,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
                 .config
                 .service_discovery
                 .as_ref()
-                .expect("ERROR: broker is not specified.");
+                .context("ERROR: broker is not specified.")?;
             let broker_config = &sd_config.broker;
             let broker_info = BrokerInfo {
                 hostname: broker_config.hostname.clone(),
@@ -160,8 +189,12 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
                 broker_config: broker_config.managed.clone(),
             };
 
+            // write broker config file, so that client (debuggee DDB connector)
+            // can read it and figure out how to connect to the broker.
+            write_config(&broker_info, &sd_config.config_path)?;
+
             broker
-                .start(&broker_info, &sd_config.config_path)
+                .start(&broker_info)
                 .context("Failed to start managed broker")?;
         }
 

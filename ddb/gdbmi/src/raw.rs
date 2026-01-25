@@ -268,7 +268,6 @@ impl Value {
                 Error::ExpectedDifferentPayload
             })
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -277,7 +276,6 @@ impl Value {
         if let Self::String(val) = self {
             Ok(val)
         } else {
-            error!("Expected string, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -286,7 +284,6 @@ impl Value {
         if let Self::String(val) = self {
             Ok(val)
         } else {
-            error!("Expected string, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -308,7 +305,6 @@ impl Value {
         if let Self::Dict(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -317,7 +313,6 @@ impl Value {
         if let Self::Dict(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -326,7 +321,6 @@ impl Value {
         if let Self::Dict(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -335,7 +329,6 @@ impl Value {
         if let Self::List(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -344,7 +337,6 @@ impl Value {
         if let Self::List(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -353,7 +345,6 @@ impl Value {
         if let Self::List(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }
     }
@@ -362,7 +353,6 @@ impl Value {
         let val = if let Self::String(val) = self {
             Ok(val)
         } else {
-            error!("Expected dict, got: {:?}", self);
             Err(Error::ExpectedDifferentPayload)
         }?;
 

@@ -1,8 +1,6 @@
 use anyhow::{bail, Result};
 use std::{
-    fs,
-    path::PathBuf,
-    process::{Command, Stdio},
+    fs, io, path::PathBuf, process::{Command, Stdio}
 };
 
 pub mod mqtt {
@@ -179,7 +177,7 @@ pub mod gdb {
 pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
     cmd: &str,
     args: &[&str],
-) -> Result<()> {
+) -> Result<(), io::Error> {
     use tracing::debug;
     let full_cmd = format!("{} {}", cmd, args.join(" "));
     let child = Command::new(cmd)
@@ -215,7 +213,7 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
             if VERBOSE {
                 debug!(msg);
             }
-            bail!(msg);
+            return Err(io::Error::new(io::ErrorKind::Other, msg));
         }
     } else {
         Ok(())
@@ -223,7 +221,7 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
 }
 
 #[allow(unused)]
-pub fn run_command_quite(cmd: &str, args: &[&str]) -> Result<()> {
+pub fn run_command_quite(cmd: &str, args: &[&str]) -> Result<(), io::Error> {
     run_command::<false, true>(cmd, args)
 }
 

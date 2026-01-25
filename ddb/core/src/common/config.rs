@@ -105,12 +105,18 @@ impl Default for GdbConf {
     }
 }
 
+fn default_auto_shutdown() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Conf {
     #[serde(default)]
     pub sudo: bool,
     #[serde(default)]
     pub on_exit: OnExit,
+    #[serde(default = "default_auto_shutdown")]
+    pub auto_shutdown: bool, // whether to auto shutdown the DDB when all debuggee processes exit.
     #[serde(default = "default_api_svr_port")]
     pub api_server_port: u16,
     #[serde(default = "default_log_dir")]
@@ -128,6 +134,7 @@ impl Default for Conf {
         Self {
             sudo: false,
             on_exit: OnExit::default(),
+            auto_shutdown: true,
             api_server_port: default_vals::DEFAULT_API_SVR_PORT,
             log_dir: default_vals::DEFAULT_LOG_DIR.to_string(),
             base_dir: default_vals::DEFAULT_BASE_DIR.to_string(),
@@ -207,6 +214,8 @@ pub struct BrokerConfig {
     pub port: u16,
     #[serde(default)]
     pub managed: Option<ManagedBrokerConfig>,
+    #[serde(default)]
+    pub max_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -232,6 +241,8 @@ pub struct ManagedBrokerConfig {
     pub emqx_flags: Vec<String>,
     #[serde(rename = "emqx_image", default = "default_emqx_image")]
     pub emqx_image: String,
+    #[serde(rename = "config_path", default)]
+    pub config_path: Option<String>,
 }
 
 fn default_emqx_image() -> String {
