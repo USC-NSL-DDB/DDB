@@ -186,7 +186,8 @@ impl Handler for BreakInsertHandler {
             .trim()
             .rsplit_once(char::is_whitespace)
             .unwrap_or(("", args))
-            .1
+            .1 // the result is like "file_path:line_no", including the quotes.
+            .trim_matches(['"', '\''])
             .split_once(":")
             .unwrap();
         _bkpt_loc = [bkpt_loc_parts.0, bkpt_loc_parts.1];
