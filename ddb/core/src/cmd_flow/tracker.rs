@@ -461,14 +461,31 @@ impl Tracker {
             "stopped" => {
                 let payload = payload.clone();
                 if let Some(reason) = payload.get("reason") {
-                    if reason.expect_string_ref().unwrap().contains("exit") {
+                    if let Some(reason_str) = reason.expect_string_ref().ok() {
                         // clean up the session via DbgMgr. As per the current design,
                         // it will
                         // 1. remove from router.
                         // 2. shutdown the connection.
                         // 3. remove from all related states.
-                        get_dbg_mgr().remove_session(sid).await;
-                        return;
+                        if reason_str.contains("exit") {
+                            get_dbg_mgr().remove_session(sid).await;
+                            return;
+                        }
+                    }
+                    if let Some(reason_list) = reason.expect_list_ref().ok() {
+                        // This can happen when gdb is configured to 
+                        // use `pass` and `nostop` for some signals
+                        // e.g., `handle SIGINT pass nostop`
+                        // In this case, the reason will be a list of reasons.
+                        // e.g., List([String("signal-received"), String("exited-signalled")])
+                        for r in reason_list {
+                            if let Some(r_str) = r.expect_string_ref().ok() {
+                                if r_str.contains("exit") {
+                                    get_dbg_mgr().remove_session(sid).await;
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
 
