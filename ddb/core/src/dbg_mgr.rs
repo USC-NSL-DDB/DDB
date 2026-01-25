@@ -169,9 +169,12 @@ impl DbgManager {
             let _ = s.cleanup().await;
         }
 
-        if self.sessions.is_empty() {
-            debug!("No more sessions in DbgManager. Possibly shutting down…");
-            get_shutdown_ctrl().trigger_once(crate::shutdown::ShutdownCause::NoSessions);
+        let config = crate::common::config::Config::global();
+        if config.conf.auto_shutdown {
+            if self.sessions.is_empty() {
+                debug!("No more sessions in DbgManager. Possibly shutting down…");
+                get_shutdown_ctrl().trigger_once(crate::shutdown::ShutdownCause::NoSessions);
+            }
         }
     }
 
