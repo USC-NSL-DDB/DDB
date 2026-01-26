@@ -338,9 +338,7 @@ impl Tracker {
                     );
                 }
             },
-            OutputSource::DISCARD => {
-                warn!("Discarding the output of the command, should not see this in production");
-            }
+            OutputSource::DISCARD => {}
             OutputSource::STDOUT => {
                 emit(finished_cmd, cmd.formatter);
             }
@@ -491,7 +489,7 @@ impl Tracker {
                         }
                     }
                     if let Some(reason_list) = reason.expect_list_ref().ok() {
-                        // This can happen when gdb is configured to 
+                        // This can happen when gdb is configured to
                         // use `pass` and `nostop` for some signals
                         // e.g., `handle SIGINT pass nostop`
                         // In this case, the reason will be a list of reasons.
@@ -629,9 +627,10 @@ impl Tracker {
                     if cmd.recv_response(&resp) {
                         // To avoid UB (or deadlock potentially?), drop the mutable reference before removing the entry
                         drop(cmd);
-                        let removed_cmd = self.inflight_cmds.remove(&token).unwrap();
-                        trace!("Command {:?} is ready", removed_cmd.1);
-                        Self::handle_finished_cmd(removed_cmd.1);
+                        if let Some(removed_cmd) = self.inflight_cmds.remove(&token) {
+                            trace!("Command {:?} is ready", removed_cmd.1);
+                            Self::handle_finished_cmd(removed_cmd.1);
+                        }
                     }
                 }
             }

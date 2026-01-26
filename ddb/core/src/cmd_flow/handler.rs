@@ -16,8 +16,8 @@ use crate::{
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
     state::{
-        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId,
-        SessionMeta, SessionRef, SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext,
+        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, GroupSubBkpt, LocalThreadId,
+        SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext,
         ThreadStatus, STATES,
     },
 };
@@ -1305,6 +1305,23 @@ impl Handler for ExecJumpHandler {
             }
             _ => {
                 error!("exec-jump command should specify a session");
+            }
+        }
+    }
+}
+
+pub struct SendSignalHandler;
+
+#[async_trait]
+impl Handler for SendSignalHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        match cmd.target {
+            Target::Session(_) => {
+                let _ = cmd.send().with(PlainFormatter).to_default_target();
+            }
+            _ => {
+                error!("-send-signal command should specify a session");
+                emit_error("-send-signal command should specify a session", cmd.external_token);
             }
         }
     }

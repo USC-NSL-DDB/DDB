@@ -11,12 +11,9 @@ use super::{
     DynFormatter, FinishedCmd, OutputSource, PlainFormatter, Tracker,
 };
 use crate::{
-    dbg_ctrl::InputSender,
-    get_dbg_mgr,
-    state::{
-        get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_source_mgr, GroupId, LocalThreadId,
-        STATES,
-    },
+    cmd_flow::NullFormatter, dbg_ctrl::InputSender, get_dbg_mgr, state::{
+        GroupId, LocalThreadId, STATES, get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_source_mgr
+    }
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -99,16 +96,16 @@ impl Router {
 
     pub fn send_to<F: DynFormatter + Clone>(&self, target: Target, cmd: Command<F>) {
         match target {
-            Target::Session(sid) => self.send_to_session(sid, cmd),
-            Target::Thread(gtid) => self.send_to_thread(gtid, cmd),
-            Target::CurrThread => self.send_to_current_thread(cmd),
-            Target::CurrSession => self.send_to_current_session(cmd),
-            Target::Broadcast => self.broadcast(cmd),
-            Target::First => self.send_to_first(cmd),
-            Target::SessionSet(sids) => self.send_to_session_set(&sids, cmd),
-            Target::Group(gid) => self.send_to_group(gid, cmd),
+            Target::Session(sid) => self.send_to_session::<F, false>(sid, cmd),
+            Target::Thread(gtid) => self.send_to_thread::<F, false>(gtid, cmd),
+            Target::CurrThread => self.send_to_current_thread::<F, false>(cmd),
+            Target::CurrSession => self.send_to_current_session::<F, false>(cmd),
+            Target::Broadcast => self.broadcast::<F, false>(cmd),
+            Target::First => self.send_to_first::<F, false>(cmd),
+            Target::SessionSet(sids) => self.send_to_session_set::<F, false>(&sids, cmd),
+            Target::Group(gid) => self.send_to_group::<F, false>(gid, cmd),
             Target::Multiple(targets) => {
-                self.send_to_multiple(targets, cmd);
+                self.send_to_multiple::<F, false>(targets, cmd);
             }
         }
     }
@@ -130,10 +127,32 @@ impl Router {
             Target::Multiple(targets) => self.send_to_multiple_ret(targets, cmd).await,
         }
     }
+
+    pub fn send_to_and_forget(&self, target: Target, cmd: Command<NullFormatter>) {
+        type F = NullFormatter;
+        match target {
+            Target::Session(sid) => self.send_to_session::<F, true>(sid, cmd),
+            Target::Thread(gtid) => self.send_to_thread::<F, true>(gtid, cmd),
+            Target::CurrThread => self.send_to_current_thread::<F, true>(cmd),
+            Target::CurrSession => self.send_to_current_session::<F, true>(cmd),
+            Target::Broadcast => self.broadcast::<F, true>(cmd),
+            Target::First => self.send_to_first::<F, true>(cmd),
+            Target::SessionSet(sids) => self.send_to_session_set::<F, true>(&sids, cmd),
+            Target::Group(gid) => self.send_to_group::<F, true>(gid, cmd),
+            Target::Multiple(targets) => {
+                self.send_to_multiple::<F, true>(targets, cmd);
+            }
+        }
+    }
     
-    pub fn send_to_multiple<F: DynFormatter + Clone>(&self, targets: Vec<Target>, cmd: Command<F>) {
+    pub fn send_to_multiple<F: DynFormatter + Clone, const FORGET: bool>(&self, targets: Vec<Target>, cmd: Command<F>)
+    {
         for target in targets {
-            self.send_to(target, cmd.clone());
+            if FORGET {
+                self.send_to_and_forget(target, cmd.clone().into_null_formatter_cmd());
+            } else {
+                self.send_to(target, cmd.clone());
+            }
         }
     }
 
@@ -160,9 +179,9 @@ impl Router {
         Ok(head_cmd)
     }
 
-    pub fn send_to_group<F: DynFormatter + Clone>(&self, gid: GroupId, cmd: Command<F>) {
+    pub fn send_to_group<F: DynFormatter + Clone, const FORGET: bool>(&self, gid: GroupId, cmd: Command<F>) {
         if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
-            self.send_to_session_set(grp.get_sids(), cmd);
+            self.send_to_session_set::<F, FORGET>(grp.get_sids(), cmd);
         } else {
             warn!("Group (id: {}) doesn't exist", gid);
         }
@@ -180,17 +199,23 @@ impl Router {
         }
     }
 
-    pub fn send_to_session_set<F: DynFormatter + Clone>(&self, sids: &HashSet<u64>, cmd: Command<F>) {
+    pub fn send_to_session_set<F: DynFormatter + Clone, const FORGET: bool>(&self, sids: &HashSet<u64>, cmd: Command<F>) {
         // perform some sanity checks to remove all non-existent sessions
         let sids = sids
             .iter()
             .filter(|sid| self.sessions.contains_key(sid))
             .collect::<Vec<_>>();
-
-        let out_src = OutputSource::STDOUT;
+        
+        let out_src = if FORGET {
+            OutputSource::DISCARD
+        } else {
+            OutputSource::STDOUT
+        };
 
         let (out_meta, cmd) = cmd.prepare_to_send(sids.len() as u32, out_src);
-        self.tracker.add_cmd(out_meta);
+        if !FORGET {
+            self.tracker.add_cmd(out_meta);
+        }
 
         for sid in sids {
             self.write_to(*sid, cmd.clone());
@@ -219,12 +244,17 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_session<F: DynFormatter + Clone>(&self, sid: u64, cmd: Command<F>) {
+    pub fn send_to_session<F: DynFormatter + Clone, const FORGET: bool>(&self, sid: u64, cmd: Command<F>) {
         STATES.set_curr_session(sid);
-
-        let out_src = OutputSource::STDOUT;
+        let out_src = if FORGET {
+            OutputSource::DISCARD
+        } else {
+            OutputSource::STDOUT
+        };
         let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-        self.tracker.add_cmd(out_meta);
+        if !FORGET {
+            self.tracker.add_cmd(out_meta);
+        }
         self.write_to(sid, cmd);
     }
 
@@ -243,12 +273,18 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_thread<F: DynFormatter + Clone>(&self, gtid: u64, cmd: Command<F>) {
+    pub fn send_to_thread<F: DynFormatter + Clone, const FORGET: bool>(&self, gtid: u64, cmd: Command<F>) {
         if let Some(LocalThreadId(sid, tid)) = STATES.get_ltid_by_gtid(gtid) {
             STATES.set_curr_session(sid);
-            let out_src = OutputSource::STDOUT;
+            let out_src = if FORGET {
+                OutputSource::DISCARD
+            } else {
+                OutputSource::STDOUT
+            };
             let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-            self.tracker.add_cmd(out_meta);
+            if !FORGET {
+                self.tracker.add_cmd(out_meta);
+            }
             self.write_to(sid, format!("-thread-select {}\n{}", tid, cmd));
         } else {
             warn!("Thread (gtid: {}) is not in a session group", gtid);
@@ -274,9 +310,9 @@ impl Router {
         }
     }
 
-    pub fn send_to_current_thread<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
+    pub fn send_to_current_thread<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
         if let Some(gtid) = STATES.get_curr_gtid() {
-            self.send_to_thread(gtid, cmd);
+            self.send_to_thread::<F, FORGET>(gtid, cmd);
         } else {
             println!("use -thread-select #gtid to select the thread first.");
         }
@@ -293,9 +329,9 @@ impl Router {
         }
     }
 
-    pub fn send_to_current_session<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
+    pub fn send_to_current_session<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
         if let Some(sid) = STATES.get_curr_session() {
-            self.send_to_session(sid, cmd);
+            self.send_to_session::<F, FORGET>(sid, cmd);
         }
     }
 
@@ -309,11 +345,17 @@ impl Router {
         bail!("No current session selected.");
     }
 
-    pub fn broadcast<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
+    pub fn broadcast<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
         let num_sessions = self.sessions.len() as u32;
-        let out_src = OutputSource::STDOUT;
+        let out_src = if FORGET {
+            OutputSource::DISCARD
+        } else {
+            OutputSource::STDOUT
+        };
         let (out_meta, cmd) = cmd.prepare_to_send(num_sessions, out_src);
-        self.tracker.add_cmd(out_meta);
+        if !FORGET {
+            self.tracker.add_cmd(out_meta);
+        }
         self.write_to_all(cmd);
     }
 
@@ -327,11 +369,11 @@ impl Router {
         Ok(rx.await?)
     }
 
-    pub fn send_to_first<F: DynFormatter + Clone>(&self, cmd: Command<F>) {
+    pub fn send_to_first<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
         if let Some(s) = self.sessions.iter().next() {
             let sid = s.key().clone();
             drop(s);
-            self.send_to_session(sid, cmd);
+            self.send_to_session::<F, FORGET>(sid, cmd);
         } else {
             error!("No session available.");
         }
@@ -398,7 +440,7 @@ impl Router {
             let parsed: Result<ParsedInputCmd> = cmd_to_send.clone().try_into();
             if let Ok(parsed) = parsed {
                 let (_, cmd) = parsed.to_command(PlainFormatter);
-                self.send_to_session(sid, cmd);
+                self.send_to_session::<PlainFormatter, false>(sid, cmd);
             } else {
                 warn!("Failed to parse command: {:?}", cmd);
             }

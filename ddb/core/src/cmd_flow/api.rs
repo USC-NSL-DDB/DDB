@@ -134,6 +134,38 @@ impl SendBuilder {
     }
 }
 
+/// Builder for sending a command by discarding results directly (DISCARD path)
+pub struct SendAndForgetBuilder {
+    parsed_cmd: ParsedInputCmd,
+}
+
+impl SendAndForgetBuilder {
+    /// Route the command to the specified target
+    pub fn to(self, target: Target) -> Result<()> {
+        let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+        get_router().send_to_and_forget(target, cmd_to_send);
+        Ok(())
+    }
+
+    /// Route the command to the target specified in the command itself.
+    /// If the command does not specify a target, it defaults to the default target.
+    pub fn to_default_target(self) -> Result<()> {
+        let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
+        get_router().send_to_and_forget(target, cmd_to_send);
+        Ok(())
+    }
+
+    /// Route the command to the specified target or, if not specified,
+    /// to the target in the original command.
+    pub fn to_or_default(self, target: Option<Target>) -> Result<()> {
+        if let Some(target) = target {
+            self.to(target)
+        } else {
+            self.to_default_target()
+        }
+    }
+}
+
 /// Builder for sending a command and returning results
 pub struct SendAndReturnBuilder {
     parsed_cmd: ParsedInputCmd,
@@ -213,6 +245,12 @@ impl Into<SendAndReturnBuilder> for ParsedInputCmd {
     }
 }
 
+impl Into<SendAndForgetBuilder> for ParsedInputCmd {
+    fn into(self) -> SendAndForgetBuilder {
+        SendAndForgetBuilder { parsed_cmd: self }
+    }
+}
+
 /// Send a command without waiting for results (output to STDOUT directly)
 ///
 /// # Arguments
@@ -221,6 +259,25 @@ impl Into<SendAndReturnBuilder> for ParsedInputCmd {
 /// # Returns
 /// A builder that requires calling `.to(target)` to execute
 pub fn send(command: &str) -> Result<SendBuilder> {
+    let parsed_cmd: ParsedInputCmd = command
+        .try_into()
+        .context(format!("Failed to parse command: {}", command))?;
+    Ok(parsed_cmd.into())
+}
+
+/// Send a command by discarding results (DISCARD path)
+///
+/// # Arguments
+/// * `command` - The GDB/MI command (e.g., "-exec-continue" or "-thread-info --thread 1" or "38-thread-info")
+///
+/// # Returns
+/// A builder that requires calling `.to(target)` to execute
+/// 
+/// # Note
+/// This function is different from `send` in that it discards any output from the command.
+/// `send` routes the command and outputs results to STDOUT directly (after applying formatter).
+/// Both `send` and `send_and_forget` are fire-and-forget; they do not await results.
+pub fn send_and_forget(command: &str) -> Result<SendAndForgetBuilder> {
     let parsed_cmd: ParsedInputCmd = command
         .try_into()
         .context(format!("Failed to parse command: {}", command))?;

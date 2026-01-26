@@ -10,11 +10,10 @@ use super::{
 };
 use crate::{
     cmd_flow::{
-        api::{SendAndReturnBuilder, SendBuilder},
-        get_router,
+        NullFormatter, api::{SendAndForgetBuilder, SendAndReturnBuilder, SendBuilder}, get_router
     },
     handlers_map,
-    state::{get_state_mgr, STATES},
+    state::get_state_mgr,
 };
 
 #[derive(Debug, Clone)]
@@ -111,6 +110,18 @@ where
     }
 }
 
+impl<F: DynFormatter + 'static + Clone> Command<F> {
+    #[inline]
+    pub fn into_null_formatter_cmd(self) -> Command<NullFormatter> {
+        Command {
+            external_token: self.external_token,
+            internal_token: self.internal_token,
+            raw_cmd: self.raw_cmd,
+            formatter: NullFormatter,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedInputCmd {
     pub external_token: Option<u64>,
@@ -151,6 +162,11 @@ impl ParsedInputCmd {
     #[inline]
     pub fn send_and_return(self) -> SendAndReturnBuilder {
         Into::<SendAndReturnBuilder>::into(self)
+    }
+
+    #[inline]
+    pub fn send_and_forget(self) -> SendAndForgetBuilder {
+        Into::<SendAndForgetBuilder>::into(self)
     }
 }
 
@@ -411,6 +427,7 @@ impl CmdHandler {
             "-record-time-and-step" => ExecStepHandler::new(),
             "-record-time-and-finish" => ExecFinishHandler::new(),
             "-exec-jump" => ExecJumpHandler,
+            "-send-signal" => SendSignalHandler,
         };
 
         Arc::new(CmdHandler {
