@@ -477,7 +477,6 @@ impl Handler for BreakDeleteHandler {
                 }
             }
         } else {
-            let mut modified = false;
             bkpt_id = match args.parse::<u64>() {
                 Ok(id) => id,
                 Err(e) => {
@@ -490,30 +489,26 @@ impl Handler for BreakDeleteHandler {
             };
             for (sid, local_bkpt_id) in get_bkpt_mgr().get_local_bkpt_ids(bkpt_id) {
                 match Self::delete_local_bkpt(sid, local_bkpt_id).await {
-                    Ok(_) => {
-                        // TODO: make it more robost on partial failure.
-                        modified = true;
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         warn!(
-                            "Failed to delete local breakpoint {} from session {}: {:?}",
-                            local_bkpt_id, sid, e
+                            "Failed to delete local breakpoint {} from session {}: {}",
+                            local_bkpt_id, sid, e.to_string()
                         );
                     }
                 }
             }
 
-            if modified {
-                get_bkpt_mgr().delete_bkpt(bkpt_id);
-                let out = MIFormatter::format(
-                    "=",
-                    "breakpoint-deleted",
-                    Some(&bkpt_deleted_payload(bkpt_id)),
-                    None,
-                );
-                println!("{}", out);
-                debug!("output: {}", out);
-            }
+            get_bkpt_mgr().delete_bkpt(bkpt_id);
+            let out = MIFormatter::format(
+                "=",
+                "breakpoint-deleted",
+                Some(&bkpt_deleted_payload(bkpt_id)),
+                None,
+            );
+            println!("{}", out);
+            debug!("output: {}", out);
+
             let out = MIFormatter::format("^", "done", None, cmd.external_token);
             println!("{}", out);
             debug!("output: {}", out);
