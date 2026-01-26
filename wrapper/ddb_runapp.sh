@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 # Handle version flag
 if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then

@@ -3,7 +3,7 @@
 # This typically requires passwordless sudo configuration for "ddb_runapp" or the current user,
 # which has significant security implications.
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 # Handle version flag
 if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
