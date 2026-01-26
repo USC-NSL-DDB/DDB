@@ -5,7 +5,7 @@ import time
 import struct
 import platform
 import inspect
-
+import signal
 import gdb  # type: ignore
 
 # try:
@@ -522,6 +522,63 @@ class GetRemoteBTInfo(gdb.MICommand):
         }
 
 
+class ListSignalsMICommand(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-list-signals")
+
+    def invoke(self, arguments) -> dict[str, object]:
+        try:
+            signals_list = self._get_all_signals()
+            return {"signals": signals_list}
+        except Exception as e:
+            raise gdb.GdbError(str(e))
+            
+    def convert_bool_str(self, val: str) -> str:
+        """
+        Docstring for convert_bool_str
+        
+        :param val: "Yes" or "No" string
+        :type val: str
+        :return: "true" or "false" as str
+        :rtype: str
+        """
+        return "true" if val.strip().lower() == "yes" else "false"
+
+    def _get_all_signals(self):
+        """Extract ALL signals from GDB's info signals output"""
+        signals_list = []
+
+        # Get the complete signal list from GDB
+        output = gdb.execute("info signals", to_string=True)
+
+        for line in output.splitlines():
+            # print(line)
+            line = line.strip()
+            if (
+                not line
+                or line.startswith("Signal")
+                or ((not line.startswith("SIG")) and (not line.startswith("EXC")))
+            ):
+                continue
+
+            # Parse signal line
+            # Format can be:
+            # SIGNAME    Stop  Print  Pass  Description
+            # Or for some signals:
+            # SIGxx      Stop  Print  Pass  Description
+            parts = line.split(None, -1)
+            if len(parts) >= 4:
+                signals_list.append(
+                    {
+                        "name": parts[0].strip(),
+                        "stop": self.convert_bool_str(parts[1]),
+                        "print": self.convert_bool_str(parts[2]),
+                        "pass": self.convert_bool_str(parts[3]),
+                        "desc": parts[4].strip() if len(parts) > 4 else "",
+                    }
+                )
+        return signals_list
+
 class GetLockStateMI(gdb.MICommand):
     """A custom command to fetch the lock state (MI)"""
 
@@ -959,6 +1016,8 @@ RecordTimeAndContinueCommand()
 RecordTimeAndNextMiCommand()
 RecordTimeAndStepMiCommand()
 RecordTimeAndFinishMiCommand()
+
+ListSignalsMICommand()
 
 # Check if FAKETIME environment variable is present
 # check_faketime_present()
