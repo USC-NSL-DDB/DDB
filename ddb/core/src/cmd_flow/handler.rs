@@ -13,17 +13,19 @@ use tracing::{debug, error, warn};
 use crate::{
     cmd_flow::{emit_error, transaction},
     common::Config,
-    dbg_parser::gdb_parser::{MIFormatter, bkpt_deleted_payload},
+    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
     state::{
-        BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId, STATES, SessionMeta, SessionRef, SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext, ThreadStatus, get_bkpt_mgr, get_group_mgr, get_state_mgr
+        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, BkptMeta, GroupSubBkpt, LocalThreadId,
+        SessionMeta, SessionRef, SessionSubBkpt, SubBkptMeta, SubBkptType, ThreadContext,
+        ThreadStatus, STATES,
     },
 };
 
 use super::{
-    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output,
-    router::Target, FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter,
-    ProcessReadableFormatter, ThreadInfoFormatter,
+    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output, router::Target,
+    FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
+    ThreadInfoFormatter,
 };
 
 /// Handler trait for processing parsed commands with routing and formatting logic
@@ -91,48 +93,63 @@ impl BreakInsertHandler {
 }
 
 impl BreakInsertHandler {
-    async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) {
+    async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) -> Result<()> {
         let grp_bkpt = GroupSubBkpt::new(gid);
-        let ret = api::send_and_return(cmd)
-            .unwrap()
-            .to(Target::Group(gid))
-            .await
-            .unwrap();
-        for resp in ret.get_responses() {
-            let bkpt_info = resp
-                .get_payload()
+
+        // Check if group exists and has active sessions
+        let grp = match get_group_mgr().get_grp_by_id(gid) {
+            Some(g) => g,
+            None => {
+                warn!("Group {} does not exist", gid);
+                return Err(anyhow!("Group {} does not exist", gid));
+            }
+        };
+        let sids = grp.get_sids();
+
+        // Only send breakpoint command if group has active sessions
+        // If empty, the breakpoint will be applied later when sessions join via sync_bkpts_state()
+        if !sids.is_empty() {
+            let ret = api::send_and_return(cmd)
                 .unwrap()
-                .get("bkpt")
-                .unwrap()
-                .expect_dict_ref()
-                .unwrap();
-            let local_bkpt_id = bkpt_info
-                .get("number")
-                .unwrap()
-                .expect_string_ref()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap();
-            let times = bkpt_info
-                .get("times")
-                .unwrap()
-                .expect_string_ref()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap();
-            // TODO: work out how to store `times` information.
-            grp_bkpt.add_local_bkpt(resp.get_sid(), local_bkpt_id);
+                .to(Target::Group(gid))
+                .await?;
+            for resp in ret.get_responses() {
+                let bkpt_info = resp
+                    .get_payload()
+                    .unwrap()
+                    .get("bkpt")
+                    .unwrap()
+                    .expect_dict_ref()
+                    .unwrap();
+                let local_bkpt_id = bkpt_info
+                    .get("number")
+                    .unwrap()
+                    .expect_string_ref()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+                let times = bkpt_info
+                    .get("times")
+                    .unwrap()
+                    .expect_string_ref()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+                // TODO: work out how to store `times` information.
+                grp_bkpt.add_local_bkpt(resp.get_sid(), local_bkpt_id);
+            }
         }
+
         let subbkpt = SubBkptType::Group(grp_bkpt);
         get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+        Ok(())
     }
 
-    async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) {
+    async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) -> Result<()> {
         let ret = api::send_and_return(cmd)
             .unwrap()
             .to(Target::Session(sid))
-            .await
-            .unwrap();
+            .await?;
         let bkpt_info = ret
             .get_responses()
             .first()
@@ -160,6 +177,7 @@ impl BreakInsertHandler {
         // TODO: work out how to store `times` information.
         let subbkpt = SubBkptType::Session(SessionSubBkpt::new(local_bkpt_id, sid));
         get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+        Ok(())
     }
 }
 
@@ -196,10 +214,26 @@ impl Handler for BreakInsertHandler {
 
         match cmd.target {
             Target::Session(sid) => {
-                Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await;
+                if let Err(e) = Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await {
+                    let err_msg = format!(
+                        "Failed to insert breakpoint into session {}: {}",
+                        sid,
+                        e.to_string()
+                    );
+                    emit_error(&err_msg, cmd.external_token);
+                    return;
+                }
             }
             Target::Group(gid) => {
-                Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await;
+                if let Err(e) = Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await {
+                    let err_msg = format!(
+                        "Failed to insert breakpoint into group {}: {}",
+                        gid,
+                        e.to_string()
+                    );
+                    emit_error(&err_msg, cmd.external_token);
+                    return;
+                }
             }
             Target::Multiple(targets) => {
                 // dedup to ensure:
@@ -228,10 +262,26 @@ impl Handler for BreakInsertHandler {
                 for t in dedupped_targets {
                     match *t {
                         Target::Session(sid) => {
-                            Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await;
+                            if let Err(e) =
+                                Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await
+                            {
+                                warn!(
+                                    "Failed to insert breakpoint into session {}: {}",
+                                    sid,
+                                    e.to_string()
+                                );
+                            }
                         }
                         Target::Group(gid) => {
-                            Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await;
+                            if let Err(e) =
+                                Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await
+                            {
+                                warn!(
+                                    "Failed to insert breakpoint into group {}: {}",
+                                    gid,
+                                    e.to_string()
+                                );
+                            }
                         }
                         _ => {
                             // skip other target types
@@ -364,14 +414,20 @@ impl Handler for BreakDeleteHandler {
             bkpt_id = match bkpt_id_str.parse::<u64>() {
                 Ok(id) => id,
                 Err(e) => {
-                    emit_error(&format!("Invalid breakpoint id {}: {:?}", bkpt_id_str, e), cmd.external_token);
+                    emit_error(
+                        &format!("Invalid breakpoint id {}: {:?}", bkpt_id_str, e),
+                        cmd.external_token,
+                    );
                     return;
                 }
             };
             let subbkpt_id = match subbkpt_id_str.parse::<u64>() {
                 Ok(id) => id,
                 Err(e) => {
-                    emit_error(&format!("Invalid sub-breakpoint id {}: {:?}", subbkpt_id_str, e), cmd.external_token);
+                    emit_error(
+                        &format!("Invalid sub-breakpoint id {}: {:?}", subbkpt_id_str, e),
+                        cmd.external_token,
+                    );
                     return;
                 }
             };
@@ -425,7 +481,10 @@ impl Handler for BreakDeleteHandler {
             bkpt_id = match args.parse::<u64>() {
                 Ok(id) => id,
                 Err(e) => {
-                    emit_error(&format!("Invalid breakpoint id {}: {:?}", args, e), cmd.external_token);
+                    emit_error(
+                        &format!("Invalid breakpoint id {}: {:?}", args, e),
+                        cmd.external_token,
+                    );
                     return;
                 }
             };

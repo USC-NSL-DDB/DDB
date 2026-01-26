@@ -233,8 +233,8 @@ impl Router {
         sid: u64,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
+        self.sessions.get(&sid).ok_or_else(|| anyhow::anyhow!("Session {} does not exist", sid))?;
         STATES.set_curr_session(sid);
-
         let (tx, rx) = tokio::sync::oneshot::channel();
         let out_src = OutputSource::RETURN(tx);
         let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
