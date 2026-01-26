@@ -1,0 +1,4 @@
+set environment LD_PRELOAD=/home/ubuntu/DDB/libfaketime/src/libfaketimeMT.so.1
+set environment FAKETIME_NO_CACHE=1
+set environment FAKETIME=-00000000000000000
+source /tmp/ddb/gdb_ext/runtime-gdb.py

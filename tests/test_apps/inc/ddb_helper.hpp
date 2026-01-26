@@ -27,9 +27,9 @@ static inline Args parse_args(int argc, char* argv[]) {
             print_usage(argv[0]);
             exit(0);
         } else {
-            std::cerr << "Unknown option: " << argv[i] << "\n";
-            print_usage(argv[0]);
-            exit(1);
+            // std::cerr << "Unknown option: " << argv[i] << "\n";
+            // print_usage(argv[0]);
+            // exit(1);
         }
     }
     return args;

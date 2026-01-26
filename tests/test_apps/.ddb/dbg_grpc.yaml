@@ -1,0 +1,22 @@
+---
+Framework: grpc
+
+FrameFilter:
+  filter_preset:
+    - "cpp-stdlib"
+    - "grpc"
+    - "protobuf-gen"
+    - "ddb-runtime"
+
+PrerunGdbCommands:
+  - name: "Pretty Print for CPP"
+    command: "-enable-pretty-printing"
+
+ServiceDiscovery:
+  Broker:
+    hostname: 127.0.0.1
+    managed:
+      type: emqx 
+
+Conf:
+  on_exit: kill

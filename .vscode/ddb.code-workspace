@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../ddb/core/assets/gdb_ext",
+		},
+		{
+			"path": "../libfaketime",
 		}
 	],
 	"settings": {

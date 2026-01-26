@@ -1,0 +1,16 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "ddb",
+			"request": "launch",
+			"name": "Attach DDB",
+			// "ddbpath": "${env:HOME}/.cargo/bin/ddb",
+			"ddbpath": "/home/ybyan/projs/DDB/ddb/target/debug/ddb",
+			"configFilePath":"${workspaceFolder}/.ddb/dbg_grpc.yaml",
+			"debugger_args": [ "--console-log", "--console-level", "error", "--file-level", "debug" ],
+			"valuesFormatting": "prettyPrinters",
+			"debugServer": 4712
+		}, 
+	],
+}
