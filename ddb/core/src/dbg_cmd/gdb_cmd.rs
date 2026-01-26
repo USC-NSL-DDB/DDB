@@ -112,6 +112,7 @@ pub enum GdbCmd {
     // By default, frame filter only applies to console commands.
     // https://sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-Stack-Manipulation.html#GDB_002fMI-Stack-Manipulation
     EnableFrameFilter,
+    Interrupt,
 }
 
 impl From<GdbCommand> for GdbCmd {
@@ -149,6 +150,7 @@ impl DbgCmdGenerator for GdbCmd {
                 format!("{} {}", DDB_FILTER_CONFIG_CMD, ff_cmd.to_str())
             }
             GdbCmd::EnableFrameFilter => "-enable-frame-filters".to_string(),
+            GdbCmd::Interrupt => "-exec-interrupt".to_string(),
         };
 
         // GDB command needs to be ended with '\n'

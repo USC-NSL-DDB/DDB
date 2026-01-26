@@ -5,6 +5,7 @@ pub mod session_mgr;
 pub mod source_mgr;
 pub mod state_mgr;
 pub mod thread_mgr;
+pub mod signal_mgr;
 
 use std::sync::OnceLock;
 
@@ -15,8 +16,10 @@ pub use session_mgr::*;
 pub use source_mgr::*;
 pub use state_mgr::*;
 pub use thread_mgr::*;
+pub use signal_mgr::*;
 
 use lazy_static::lazy_static;
+
 
 lazy_static! {
     pub static ref STATES: StateMgr = StateMgr::new();
@@ -26,6 +29,7 @@ static GROUPS: OnceLock<GroupMgr> = OnceLock::new();
 static SOURCES: OnceLock<SourceMgr> = OnceLock::new();
 static BKPTS: OnceLock<BreakpointMgr> = OnceLock::new();
 static PROCLETS: OnceLock<ProcletMgr> = OnceLock::new();
+static SIGNALS: OnceLock<SignalMgr> = OnceLock::new();
 
 pub fn get_state_mgr() -> &'static StateMgr {
     &STATES
@@ -45,4 +49,8 @@ pub fn get_bkpt_mgr() -> &'static BreakpointMgr {
 
 pub fn get_proclet_mgr() -> &'static ProcletMgr {
     PROCLETS.get_or_init(ProcletMgr::new)
+}
+
+pub fn get_signal_mgr() -> &'static SignalMgr {
+    SIGNALS.get_or_init(SignalMgr::new)
 }

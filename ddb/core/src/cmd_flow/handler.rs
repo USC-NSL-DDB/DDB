@@ -13,12 +13,11 @@ use tracing::{debug, error, warn};
 use crate::{
     cmd_flow::{emit_error, transaction},
     common::Config,
-    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
+    dbg_cmd::{DbgCmdGenerator, GdbCmd},
+    dbg_parser::gdb_parser::{MIFormatter, bkpt_deleted_payload},
     feature::get_proclet_restore_mgr,
     state::{
-        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, GroupSubBkpt, LocalThreadId,
-        SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext,
-        ThreadStatus, STATES,
+        BkptLoc, GroupSubBkpt, LocalThreadId, STATES, SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext, ThreadStatus, get_bkpt_mgr, get_group_mgr, get_signal_mgr, get_state_mgr
     },
 };
 
@@ -493,7 +492,9 @@ impl Handler for BreakDeleteHandler {
                     Err(e) => {
                         warn!(
                             "Failed to delete local breakpoint {} from session {}: {}",
-                            local_bkpt_id, sid, e.to_string()
+                            local_bkpt_id,
+                            sid,
+                            e.to_string()
                         );
                     }
                 }
@@ -1315,13 +1316,84 @@ pub struct SendSignalHandler;
 #[async_trait]
 impl Handler for SendSignalHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        if cmd.args.trim().is_empty() {
+            error!("-send-signal command requires a signal argument");
+            return;
+        }
+
         match cmd.target {
-            Target::Session(_) => {
-                let _ = cmd.send().with(PlainFormatter).to_default_target();
+            Target::Session(sid) => {
+                // TODO: use signal mgr to check if the signal is valid or not.
+                
+                // Signal can only be delivered when the process is stopped in gdb.
+                // So first send an interrupt to stop the process.
+                api::send_and_return(&GdbCmd::Interrupt.generate())
+                    .unwrap()
+                    .to(Target::Session(sid))
+                    .await
+                    .unwrap();
+
+                let signal_cmd =
+                    GdbCmd::ConsoleExec(format!("signal {}", cmd.args.trim())).generate();
+                if let Ok(sender) = api::send_and_forget(&signal_cmd) {
+                    match sender.to(cmd.target) {
+                        Ok(_) => {
+                            debug!("-send-signal command sent: {}", signal_cmd);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to send -send-signal command. raw: {}, err: {}",
+                                signal_cmd, e
+                            );
+                        }
+                    }
+                } else {
+                    error!("Failed to send -send-signal command. raw: {}", signal_cmd);
+                }
             }
             _ => {
                 error!("-send-signal command should specify a session");
-                emit_error("-send-signal command should specify a session", cmd.external_token);
+            }
+        }
+    }
+}
+
+pub struct ListSignalsHandler;
+
+#[async_trait]
+impl Handler for ListSignalsHandler {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        if !cmd.args.trim().is_empty() {
+            error!("-list-signals command needs no argument. raw: {}", cmd.args);
+            return;
+        }
+
+        match cmd.target {
+            Target::Session(_) => {
+                // TODO: use signal mgr to cache results?
+                // so that we can directly return if it is cached already.
+                let list_signal_cmd = "-list-signals".to_string();
+                if let Ok(sender) = api::send(&list_signal_cmd) {
+                    match sender.to::<false>(cmd.target) {
+                        Ok(_) => {
+                            debug!("-list-signals command sent: {}", list_signal_cmd);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to send -list-signals command. raw: {}, err: {}",
+                                list_signal_cmd, e
+                            );
+                        }
+                    }
+                } else {
+                    error!(
+                        "Failed to send -list-signals command. raw: {}",
+                        list_signal_cmd
+                    );
+                }
+            }
+            _ => {
+                error!("-list-signals command should specify a session");
             }
         }
     }

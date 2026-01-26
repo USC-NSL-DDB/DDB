@@ -428,6 +428,7 @@ impl CmdHandler {
             "-record-time-and-finish" => ExecFinishHandler::new(),
             "-exec-jump" => ExecJumpHandler,
             "-send-signal" => SendSignalHandler,
+            "-list-signals" => ListSignalsHandler,
         };
 
         Arc::new(CmdHandler {
