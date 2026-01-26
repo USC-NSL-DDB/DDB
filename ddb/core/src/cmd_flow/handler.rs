@@ -14,10 +14,12 @@ use crate::{
     cmd_flow::{emit_error, transaction},
     common::Config,
     dbg_cmd::{DbgCmdGenerator, GdbCmd},
-    dbg_parser::gdb_parser::{MIFormatter, bkpt_deleted_payload},
+    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
     state::{
-        BkptLoc, GroupSubBkpt, LocalThreadId, STATES, SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext, ThreadStatus, get_bkpt_mgr, get_group_mgr, get_signal_mgr, get_state_mgr
+        get_bkpt_mgr, get_group_mgr, get_signal_mgr, get_state_mgr, BkptLoc, GroupSubBkpt,
+        LocalThreadId, SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext,
+        ThreadStatus, STATES,
     },
 };
 
@@ -1324,7 +1326,7 @@ impl Handler for SendSignalHandler {
         match cmd.target {
             Target::Session(sid) => {
                 // TODO: use signal mgr to check if the signal is valid or not.
-                
+
                 // Signal can only be delivered when the process is stopped in gdb.
                 // So first send an interrupt to stop the process.
                 api::send_and_return(&GdbCmd::Interrupt.generate())
@@ -1372,7 +1374,10 @@ impl Handler for ListSignalsHandler {
             Target::Session(_) => {
                 // TODO: use signal mgr to cache results?
                 // so that we can directly return if it is cached already.
-                let list_signal_cmd = "-list-signals".to_string();
+                let list_signal_cmd = format!(
+                    "{}-list-signals",
+                    cmd.external_token.map(|token| token.to_string()).unwrap_or("".to_string())
+                );
                 if let Ok(sender) = api::send(&list_signal_cmd) {
                     match sender.to::<false>(cmd.target) {
                         Ok(_) => {
