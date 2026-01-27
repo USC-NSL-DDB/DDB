@@ -478,6 +478,10 @@ impl BreakpointMgr {
         self.bkpts.get(&bkpt_id).map(|entry| entry.value().clone())
     }
 
+    pub fn get_all_bkpts(&self) -> Vec<BkptMeta> {
+        self.bkpts.iter().map(|entry| entry.value().clone()).collect()
+    }
+
     pub fn get_bkpt_by_id_ref(
         &self,
         bkpt_id: u64,

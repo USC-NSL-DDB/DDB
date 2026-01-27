@@ -12,9 +12,9 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
+    cmd_flow::{FinishedCmd, api as cmd_flow_api, router::Target},
     notification,
-    state::{GroupId, GroupMeta},
+    state::{BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType, get_bkpt_mgr},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -60,6 +60,72 @@ struct ApiResponse {
     message: String,
 }
 
+// Breakpoint API response types
+#[derive(Serialize)]
+struct BkptLocJson {
+    src: String,
+    line: u64,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum SubBkptJson {
+    #[serde(rename = "session")]
+    Session { id: u64, target_session: u64 },
+    #[serde(rename = "group")]
+    Group { id: u64, target_group: u64 },
+}
+
+#[derive(Serialize)]
+struct BkptJson {
+    id: u64,
+    location: BkptLocJson,
+    enabled: bool,
+    times: u64,
+    subbkpts: Vec<SubBkptJson>,
+}
+
+#[derive(Serialize)]
+struct BkptsResponse {
+    bkpts: Vec<BkptJson>,
+}
+
+impl From<&BkptLoc> for BkptLocJson {
+    fn from(loc: &BkptLoc) -> Self {
+        BkptLocJson {
+            src: loc.get_path().to_string(),
+            line: loc.get_line(),
+        }
+    }
+}
+
+impl From<&SubBkptMeta> for SubBkptJson {
+    fn from(subbkpt: &SubBkptMeta) -> Self {
+        match subbkpt.get_type() {
+            SubBkptType::Session(s) => SubBkptJson::Session {
+                id: subbkpt.get_id(),
+                target_session: s.get_target_session(),
+            },
+            SubBkptType::Group(g) => SubBkptJson::Group {
+                id: subbkpt.get_id(),
+                target_group: g.get_target_group(),
+            },
+        }
+    }
+}
+
+impl From<&BkptMeta> for BkptJson {
+    fn from(bkpt: &BkptMeta) -> Self {
+        BkptJson {
+            id: bkpt.get_id(),
+            location: bkpt.get_loc().into(),
+            enabled: bkpt.is_enabled(),
+            times: bkpt.get_times(),
+            subbkpts: bkpt.get_subbkpts().iter().map(|s| s.into()).collect(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ApiServer {
     addr: String,
@@ -86,6 +152,7 @@ impl ApiServer {
             .route("/send", post(send_cmd))
             .route("/groups", get(get_groups))
             .route("/group", get(get_group))
+            .route("/bkpts", get(get_bkpts))
             .route(
                 "/notifications/subscribe",
                 get(notification::notification_subscribe_handler),
@@ -301,4 +368,14 @@ async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
             Json(json!({"error": "Either grp_id or grp_hash must be provided"})),
         )
     }
+}
+
+#[cfg_attr(feature = "profile", tracing::instrument)]
+async fn get_bkpts() -> impl IntoResponse {
+    let bkpts: Vec<BkptJson> = get_bkpt_mgr()
+        .get_all_bkpts()
+        .iter()
+        .map(|bkpt| bkpt.into())
+        .collect();
+    (StatusCode::OK, Json(BkptsResponse { bkpts }))
 }
