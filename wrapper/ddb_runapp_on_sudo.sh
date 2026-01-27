@@ -3,17 +3,17 @@
 # This typically requires passwordless sudo configuration for "ddb_runapp" or the current user,
 # which has significant security implications.
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 
 # Handle version flag
 if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "ddb_runapp_on_sudo v${VERSION}"
-    exit 0
+  echo "ddb_runapp_on_sudo v${VERSION}"
+  exit 0
 fi
 
 PREFIX=$HOME/.local/bin
 
-echo "[$(date)] DDB runapp sudo wrapper called with args: $@" >> /tmp/ddb-runapp-sudo-wrapper.log
+echo "[$(date)] DDB runapp sudo wrapper called with args: $@" >>/tmp/ddb-runapp-sudo-wrapper.log
 
 DDB_RUNAPP_PATH="$PREFIX/ddb_runapp" # Or /path/to/your/ddb_runapp
 
