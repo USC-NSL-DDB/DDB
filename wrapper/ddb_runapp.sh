@@ -46,7 +46,7 @@ esac
 
 program="$1"
 shift
-args=($@)
+args=("$@")
 
 if [ -z "$program" ]; then
   echo "Error: No program specified."
