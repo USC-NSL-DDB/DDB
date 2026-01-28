@@ -61,23 +61,23 @@ struct ApiResponse {
 }
 
 // Breakpoint API response types
-#[derive(Serialize)]
-struct BkptLocJson {
+#[derive(Serialize, Debug, Clone)]
+pub struct BkptLocJson {
     src: String,
     line: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type")]
-enum SubBkptJson {
+pub enum SubBkptJson {
     #[serde(rename = "session")]
     Session { id: u64, target_session: u64 },
     #[serde(rename = "group")]
     Group { id: u64, target_group: u64 },
 }
 
-#[derive(Serialize)]
-struct BkptJson {
+#[derive(Serialize, Debug, Clone)]
+pub struct BkptJson {
     id: u64,
     location: BkptLocJson,
     enabled: bool,
@@ -85,7 +85,7 @@ struct BkptJson {
     subbkpts: Vec<SubBkptJson>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct BkptsResponse {
     bkpts: Vec<BkptJson>,
 }

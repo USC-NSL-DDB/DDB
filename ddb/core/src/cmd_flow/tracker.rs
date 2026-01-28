@@ -404,6 +404,7 @@ impl Tracker {
         match message.as_str() {
             "breakpoint-modified" => {
                 // no-op for now
+                // TODO: update bkpt hit count here.
             }
             "breakpoint-deleted" => {
                 // seems like this path will only be trigged when a temporary breakpoint is deleted.
@@ -412,7 +413,7 @@ impl Tracker {
                     .get("id")
                     .and_then(|id_val| Some(id_val.expect_string_repr::<u64>().unwrap()));
                 if let Some(local_bkpt_id) = local_bkpt_id {
-                    get_bkpt_mgr().delete_local_bkpt(sid, local_bkpt_id);
+                    get_bkpt_mgr().delete_local_bkpt(sid, local_bkpt_id).await;
                 } else {
                     warn!(
                         "breakpoint-deleted notification missing id field: {:?}",
