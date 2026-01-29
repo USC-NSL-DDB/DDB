@@ -14,7 +14,7 @@ pushd $HOME/.ddb_src
 # Download VSCode extension for DDB
 rm -rf *.zip || true
 rm -rf *.vsix || true
-wget https://github.com/USC-NSL-DDB/vscode-adapter/releases/download/v0.0.7-alpha/ddb-debugger-vsix.zip
+wget https://github.com/USC-NSL-DDB/vscode-adapter/releases/download/v0.0.8-alpha/ddb-debugger-vsix.zip
 unzip ddb-debugger-vsix.zip
 rm -rf *.zip
 
