@@ -6,11 +6,11 @@ use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{api, get_router, SessionResponse, Target};
-use crate::common::Config;
 use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
+use crate::common::Config;
 use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
-use crate::state::{STATES, get_bkpt_mgr, get_group_mgr, get_state_mgr};
+use crate::state::{get_bkpt_mgr, get_group_mgr, get_state_mgr, STATES};
 use crate::{cmd_flow, common};
 use crate::{
     common::default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME},
@@ -122,7 +122,7 @@ impl DbgSession {
     pub async fn post_start(&self) -> Result<()> {
         // Sync state after starting the session.
         self.sync_bkpts_state().await?;
-        
+
         // Instruct debuggee to continue if service discovery is enabled.
         let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
         if Config::global().service_discovery.is_some() {
@@ -141,11 +141,10 @@ impl DbgSession {
     /// have the latest updates, a.k.a., the current session is added to
     /// the group.
     pub async fn sync_bkpts_state(&self) -> Result<()> {
-        // TODO: Finished this function
         if let Some(grp_id) = get_group_mgr().get_grp_id_by_sid(self.sid) {
             // insert existing breakpoints
             let bkpts = get_bkpt_mgr().get_bkpts_by_grp_id(grp_id);
-            for bkpt in &bkpts{
+            for bkpt in &bkpts {
                 let loc = bkpt.get_loc();
                 debug!("Inserting existing breakpoint at location: {:?}", loc);
                 let bkpt_path = loc.to_bkpt_path();
@@ -173,12 +172,9 @@ impl DbgSession {
                     .unwrap()
                     .parse::<u64>()
                     .unwrap();
-                get_bkpt_mgr().setup_grp_bkpt_for_new_session(
-                    bkpt.get_id(),
-                    grp_id,
-                    self.sid,
-                    local_bkpt_id,
-                );
+                get_bkpt_mgr()
+                    .setup_grp_bkpt_for_new_session(bkpt.get_id(), grp_id, self.sid, local_bkpt_id)
+                    .await;
             }
         }
         Ok(())
@@ -360,7 +356,7 @@ impl DbgSession {
         // - remove from the group manager
         // - remove from state manager
         // - shutdown the connection
-        get_bkpt_mgr().clean_bkpts_for_terminated_session(self.sid);
+        get_bkpt_mgr().clean_bkpts_for_terminated_session(self.sid).await;
         get_router().remove_session(self.sid);
         get_group_mgr().remove_session(self.sid);
         get_state_mgr().remove_session(self.sid).await;

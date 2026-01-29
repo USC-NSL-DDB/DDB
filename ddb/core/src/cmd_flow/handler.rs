@@ -16,6 +16,7 @@ use crate::{
     dbg_cmd::{DbgCmdGenerator, GdbCmd},
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     feature::get_proclet_restore_mgr,
+    notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
     state::{
         get_bkpt_mgr, get_group_mgr, get_signal_mgr, get_state_mgr, BkptLoc, GroupSubBkpt,
         LocalThreadId, SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext,
@@ -301,9 +302,15 @@ impl Handler for BreakInsertHandler {
 
         match get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
             Some(bkpt) => {
-                let out = MIFormatter::format("^", "done", Some(&bkpt.into()), cmd.external_token);
+                let out = MIFormatter::format("^", "done", Some(&bkpt.clone().into()), cmd.external_token);
                 println!("{}", out);
                 debug!("output: {}", out);
+
+                get_notif_mgr()
+                    .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
+                        BreakpointChangeEvent::Added((&bkpt).into()),
+                    )))
+                    .await;
             }
             None => {
                 warn!("Failed to find inserted breakpoint with id {}", bkpt_id);
@@ -455,11 +462,19 @@ impl Handler for BreakDeleteHandler {
                             let out = MIFormatter::format(
                                 "=",
                                 "breakpoint-modified",
-                                Some(&bkpt.into()),
+                                Some(&bkpt.clone().into()),
                                 None,
                             );
                             println!("{}", out);
                             debug!("output: {}", out);
+
+                            get_notif_mgr()
+                                .broadcast(Notification::new(
+                                    NotificationPayload::BreakpointChanged(
+                                        BreakpointChangeEvent::Updated((&bkpt).into()),
+                                    ),
+                                ))
+                                .await;
                         }
                     } else {
                         get_bkpt_mgr().delete_bkpt(bkpt_id);
@@ -474,6 +489,12 @@ impl Handler for BreakDeleteHandler {
                         );
                         println!("{}", out);
                         debug!("output: {}", out);
+
+                        get_notif_mgr()
+                            .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
+                                BreakpointChangeEvent::Removed(bkpt_id),
+                            )))
+                            .await;
                     }
                 }
             }
@@ -515,6 +536,12 @@ impl Handler for BreakDeleteHandler {
             let out = MIFormatter::format("^", "done", None, cmd.external_token);
             println!("{}", out);
             debug!("output: {}", out);
+
+            get_notif_mgr()
+                .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
+                    BreakpointChangeEvent::Removed(bkpt_id),
+                )))
+                .await;
         }
     }
 }
@@ -1376,7 +1403,9 @@ impl Handler for ListSignalsHandler {
                 // so that we can directly return if it is cached already.
                 let list_signal_cmd = format!(
                     "{}-list-signals",
-                    cmd.external_token.map(|token| token.to_string()).unwrap_or("".to_string())
+                    cmd.external_token
+                        .map(|token| token.to_string())
+                        .unwrap_or("".to_string())
                 );
                 if let Ok(sender) = api::send(&list_signal_cmd) {
                     match sender.to::<false>(cmd.target) {

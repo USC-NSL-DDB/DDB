@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::server::BkptJson;
+
 /// Notification envelope - versioned for extensibility
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Notification {
     pub version: u32,
     pub timestamp: i64,
@@ -25,7 +27,7 @@ impl Notification {
 }
 
 /// Extensible notification types using tagged enum
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum NotificationPayload {
     BreakpointChanged(BreakpointChangeEvent),
@@ -34,12 +36,27 @@ pub enum NotificationPayload {
     Custom(CustomEvent),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct BreakpointChangeEvent {
-    pub session_id: u64,
-    pub action: String,
-    pub file: String,
-    pub line: u32,
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "type", content = "data")]
+pub enum BreakpointChangeEvent {
+    // Target group or session might changed.
+    // The u64 is the bkpt id.
+    // Consumer may need to refresh groups or sessions associated with the breakpoint.
+    // Possible cases:
+    // - target group's session list has changed.
+    TargetChanged(u64),
+    // Breakpoint removed.
+    // The u64 is the bkpt id.
+    // Consumer may need to remove the breakpoint from its list.
+    Removed(u64),
+    // Breakpoint added.
+    Added(BkptJson),
+    // Breakpoint updated.
+    // Possible cases:
+    // - condition changed
+    // - hit count changed
+    // - subbkpt changed (added/removed/updated)
+    Updated(BkptJson),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
