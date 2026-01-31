@@ -11,3 +11,8 @@ pub const FILE_LOG_LEVEL: &str = "info";
 #[allow(unused)]
 #[deprecated(since = "0.1.0", note = "Please use the program flags instead.")]
 pub const ENABLE_CONSOLE_LOGGING: bool = true;
+
+#[inline]
+pub fn get_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}

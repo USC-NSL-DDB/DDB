@@ -1,6 +1,5 @@
 use crate::{
-    common::{self, config::Config, default_vals, utils},
-    logging,
+    arg, common::{self, config::Config, default_vals, utils}, logging
 };
 
 use anyhow::{Context, Result};
@@ -137,6 +136,9 @@ pub struct LoggingSettings {
     pub file_level: String,
     pub otel_endpoint: String,
     pub otel_level: String,
+    pub enable_otel: bool,
+    pub user_id: Option<String>,
+    pub session_id: Option<String>,
 }
 
 impl Default for LoggingSettings {
@@ -147,6 +149,9 @@ impl Default for LoggingSettings {
             file_level: "info".to_string(),
             otel_endpoint: "http://127.0.0.1:54317".to_string(),
             otel_level: "info".to_string(),
+            enable_otel: true,
+            user_id: None,
+            session_id: None,
         }
     }
 }
@@ -159,6 +164,9 @@ impl LoggingSettings {
             file_level: args.file_level.clone(),
             otel_endpoint: args.otel_endpoint.clone(),
             otel_level: args.otel_level.clone(),
+            enable_otel: args.enable_otel,
+            user_id: args.user_id.clone(),
+            session_id: args.session_id.clone(),
         }
     }
 }
@@ -186,7 +194,7 @@ impl SetupProcedure {
         self.logging_settings = logging_settings;
         self
     }
-
+    
     pub fn run(&mut self) -> Result<TracingGuards> {
         // Create directories
         self.app_dir_config.create_dirs()?;
@@ -212,11 +220,7 @@ impl SetupProcedure {
         let guards = logging::setup_logging(
             crate::global::APP_NAME,
             self.app_dir_config.get_log_dir(),
-            self.logging_settings.console_log,
-            &self.logging_settings.console_level,
-            &self.logging_settings.file_level,
-            &self.logging_settings.otel_endpoint,
-            &self.logging_settings.otel_level,
+            &self.logging_settings,
         )?;
 
         // print out some heads-up
