@@ -199,6 +199,13 @@ impl SetupProcedure {
         // Create directories
         self.app_dir_config.create_dirs()?;
 
+        // Setup logging with OpenTelemetry tracing
+        let guards = logging::setup_logging(
+            crate::global::APP_NAME,
+            self.app_dir_config.get_log_dir(),
+            &self.logging_settings,
+        )?;
+
         // Write gdb ext script
         // NOTE: this function returns the path to the script file
         // However, the return value is currently not used
@@ -216,23 +223,12 @@ impl SetupProcedure {
             info!("feature: [DISABLED] proclet migration.");
         }
 
-        // Setup logging with OpenTelemetry tracing
-        let guards = logging::setup_logging(
-            crate::global::APP_NAME,
-            self.app_dir_config.get_log_dir(),
-            &self.logging_settings,
-        )?;
 
         // print out some heads-up
         #[cfg(feature = "lazy_source_map")]
         info!("[FEATURE]: (ENABLED) lazy source map");
         #[cfg(not(feature = "lazy_source_map"))]
         info!("[FEATURE]: (DISABLED) lazy source map");
-
-        info!(
-            "OpenTelemetry tracing enabled, exporting to: {}",
-            self.logging_settings.otel_endpoint
-        );
 
         Ok(guards)
     }

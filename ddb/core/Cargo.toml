@@ -47,6 +47,7 @@ gethostname = "0.5"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 tower-http = "0.6.8"
 arrayvec = "0.7.6"
+directories = "5.0"
 
 # Otel Support
 opentelemetry = { version = "0.31.0", features = ["trace", "logs"] }

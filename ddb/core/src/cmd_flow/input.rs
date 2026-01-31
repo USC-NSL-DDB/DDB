@@ -501,7 +501,6 @@ impl CmdHandler {
     #[inline]
     // handle a raw command string, directly from user inputs
     pub async fn handle_cmd(&self, cmd: String) {
-        info!("Handling input command: {}", cmd);
         let cmd = cmd.trim();
         if cmd.starts_with(&":") {
             get_router().handle_internal_cmd(&cmd[1..]);

@@ -3,6 +3,7 @@ use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider, Resource};
+use tracing::info;
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
@@ -87,12 +88,20 @@ fn init_otel(
     layers: &mut Vec<Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>>,
 ) -> Result<OtelGuards> {
     if log_settings.enable_otel {
-        
-        let user_id = log_settings.user_id.as_deref().unwrap_or("unknown");
-        let session_id = log_settings.session_id.as_deref().unwrap_or("unknown");
+        let user_id = match &log_settings.user_id {
+            Some(id) => id,
+            None => &crate::global::get_user_id(),
+        };
+        let session_id: &String = match &log_settings.session_id {
+            Some(id) => id,
+            None => {
+                use uuid::Uuid;
+                &Uuid::new_v4().to_string()
+            }
+        };
         let resource = get_resource(global::APP_NAME, global::get_version(), user_id, session_id);
 
-        // Initialize OpenTelemetry tracer and add the layer
+        // Tracer
         let tracer_provider = init_otel_tracer(&log_settings.otel_endpoint, &resource)?;
         let tracer = tracer_provider.tracer("ddb");
         let otel_trace_filter = EnvFilter::new(format!("ddb={}", log_settings.otel_level))
@@ -105,11 +114,9 @@ fn init_otel(
             .boxed();
         layers.push(otel_trace_layer);
 
-        // Initialize OpenTelemetry logger and add the bridge layer
+        // Logger
         let logger_provider = init_otel_logger(&log_settings.otel_endpoint, &resource)?;
-        let otel_level = &log_settings.otel_level;
-        // Filter to prevent telemetry-induced-telemetry loops (hyper/tonic/h2 are used by OTLP exporter)
-        let otel_log_filter = EnvFilter::new(format!("ddb={}", otel_level))
+        let otel_log_filter = EnvFilter::new(format!("ddb={}", log_settings.otel_level))
             .add_directive("hyper=off".parse()?)
             .add_directive("tonic=off".parse()?)
             .add_directive("h2=off".parse()?)
@@ -176,8 +183,29 @@ pub fn setup_logging(
     }
 
     let otel_guards = init_otel(log_settings, &mut layers)?;
-
     tracing_subscriber::registry().with(layers).try_init()?;
+    match &otel_guards.tracer_provider {
+        Some(_) => {
+            info!(
+                "OpenTelemetry tracing enabled. Exporting to {}",
+                log_settings.otel_endpoint
+            );
+        }
+        None => {
+            info!("OpenTelemetry tracing disabled.");
+        }
+    }
+    match &otel_guards.logger_provider {
+        Some(_) => {
+            info!(
+                "OpenTelemetry logging enabled. Exporting to {}",
+                log_settings.otel_endpoint
+            );
+        }
+        None => {
+            tracing::info!("OpenTelemetry logging disabled.");
+        }
+    }
 
     Ok(TracingGuards {
         file_guard: guard,
