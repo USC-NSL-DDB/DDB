@@ -1,7 +1,8 @@
 use anyhow::Result;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig};
+use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider, Resource};
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
@@ -17,16 +18,24 @@ pub struct TracingGuards {
     #[allow(dead_code)]
     file_guard: WorkerGuard,
     tracer_provider: SdkTracerProvider,
+    logger_provider: SdkLoggerProvider,
 }
 
 impl TracingGuards {
-    /// Gracefully shutdown the OpenTelemetry tracer provider.
-    /// This ensures all pending spans are flushed before the application exits.
+    /// Gracefully shutdown the OpenTelemetry tracer and logger providers.
+    /// This ensures all pending spans and logs are flushed before the application exits.
     pub fn shutdown(self) {
         if let Err(e) = self.tracer_provider.shutdown() {
             eprintln!("Error shutting down tracer provider: {:?}", e);
         }
+        if let Err(e) = self.logger_provider.shutdown() {
+            eprintln!("Error shutting down logger provider: {:?}", e);
+        }
     }
+}
+
+fn get_resource() -> Resource {
+    Resource::builder().with_service_name("ddb").build()
 }
 
 fn init_otel_tracer(endpoint: &str) -> Result<SdkTracerProvider> {
@@ -35,10 +44,22 @@ fn init_otel_tracer(endpoint: &str) -> Result<SdkTracerProvider> {
         .with_endpoint(endpoint)
         .build()?;
 
-    let resource = Resource::builder().with_service_name("ddb").build();
-
     let provider = SdkTracerProvider::builder()
-        .with_resource(resource)
+        .with_resource(get_resource())
+        .with_batch_exporter(exporter)
+        .build();
+
+    Ok(provider)
+}
+
+fn init_otel_logger(endpoint: &str) -> Result<SdkLoggerProvider> {
+    let exporter = LogExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()?;
+
+    let provider = SdkLoggerProvider::builder()
+        .with_resource(get_resource())
         .with_batch_exporter(exporter)
         .build();
 
@@ -52,6 +73,7 @@ pub fn setup_logging(
     console_level: &str,
     file_level: &str,
     otel_endpoint: &str,
+    otel_level: &str,
 ) -> Result<TracingGuards> {
     let mut layers = Vec::new();
 
@@ -96,15 +118,35 @@ pub fn setup_logging(
     // Initialize OpenTelemetry tracer and add the layer
     let tracer_provider = init_otel_tracer(otel_endpoint)?;
     let tracer = tracer_provider.tracer("ddb");
-    let otel_layer = OpenTelemetryLayer::new(tracer)
-        .with_filter(EnvFilter::new("ddb=info"))
+    let otel_trace_filter = EnvFilter::new(format!("ddb={}", otel_level))
+        .add_directive("hyper=off".parse()?)
+        .add_directive("tonic=off".parse()?)
+        .add_directive("h2=off".parse()?)
+        .add_directive("reqwest=off".parse()?);
+    let otel_trace_layer = OpenTelemetryLayer::new(tracer)
+        .with_filter(otel_trace_filter)
         .boxed();
-    layers.push(otel_layer);
+    layers.push(otel_trace_layer);
+
+    // Initialize OpenTelemetry logger and add the bridge layer
+    let logger_provider = init_otel_logger(otel_endpoint)?;
+    let otel_level = otel_level;
+    // Filter to prevent telemetry-induced-telemetry loops (hyper/tonic/h2 are used by OTLP exporter)
+    let otel_log_filter = EnvFilter::new(format!("ddb={}", otel_level))
+        .add_directive("hyper=off".parse()?)
+        .add_directive("tonic=off".parse()?)
+        .add_directive("h2=off".parse()?)
+        .add_directive("reqwest=off".parse()?);
+    let otel_log_layer = OpenTelemetryTracingBridge::new(&logger_provider)
+        .with_filter(otel_log_filter)
+        .boxed();
+    layers.push(otel_log_layer);
 
     tracing_subscriber::registry().with(layers).try_init()?;
 
     Ok(TracingGuards {
         file_guard: guard,
         tracer_provider,
+        logger_provider,
     })
 }

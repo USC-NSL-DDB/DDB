@@ -136,6 +136,7 @@ pub struct LoggingSettings {
     pub console_level: String,
     pub file_level: String,
     pub otel_endpoint: String,
+    pub otel_level: String,
 }
 
 impl Default for LoggingSettings {
@@ -145,6 +146,7 @@ impl Default for LoggingSettings {
             console_level: "info".to_string(),
             file_level: "info".to_string(),
             otel_endpoint: "http://127.0.0.1:54317".to_string(),
+            otel_level: "info".to_string(),
         }
     }
 }
@@ -156,6 +158,7 @@ impl LoggingSettings {
             console_level: args.console_level.clone(),
             file_level: args.file_level.clone(),
             otel_endpoint: args.otel_endpoint.clone(),
+            otel_level: args.otel_level.clone(),
         }
     }
 }
@@ -213,6 +216,7 @@ impl SetupProcedure {
             &self.logging_settings.console_level,
             &self.logging_settings.file_level,
             &self.logging_settings.otel_endpoint,
+            &self.logging_settings.otel_level,
         )?;
 
         // print out some heads-up
