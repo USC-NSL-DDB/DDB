@@ -1,0 +1,53 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:54317
+      http:
+        endpoint: 127.0.0.1:54318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+  # Ref: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/resourcedetectionprocessor/README.md
+  resourcedetection:
+    detectors: [env, system] # include ec2 for AWS, gcp for GCP and azure for Azure.
+    # Using OTEL_RESOURCE_ATTRIBUTES envvar, env detector adds custom labels.
+    timeout: 2s
+    system:
+      hostname_sources: [os] # alternatively, use [dns,os] for setting FQDN as host.name and os as fallback
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:53131
+  zpages:
+    endpoint: 127.0.0.1:53132
+
+exporters:
+  otlp:
+    endpoint: "ruby1.nsl.usc.edu:4317"
+    tls:
+      insecure: true
+  debug:
+    # verbosity of the logging export: detailed, normal, basic
+    verbosity: basic
+
+service:
+  telemetry:
+    logs:
+      level: "info"
+  extensions: [health_check, zpages]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]

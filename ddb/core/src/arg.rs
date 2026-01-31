@@ -20,6 +20,10 @@ pub struct Args {
 
     #[arg(long, default_value = "info")]
     pub file_level: String,
+
+    /// OpenTelemetry collector gRPC endpoint
+    #[arg(long, default_value = "http://127.0.0.1:54317")]
+    pub otel_endpoint: String,
 }
 
 fn parse_path(path: &str) -> Result<PathBuf, io::Error> {

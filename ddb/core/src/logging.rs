@@ -1,11 +1,49 @@
 use anyhow::Result;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
 };
+use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
-    EnvFilter, Layer, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt
+    fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
 };
+
+/// Guards that must be kept alive for the duration of the application.
+/// Dropping these will flush and shutdown the respective logging/tracing systems.
+pub struct TracingGuards {
+    #[allow(dead_code)]
+    file_guard: WorkerGuard,
+    tracer_provider: SdkTracerProvider,
+}
+
+impl TracingGuards {
+    /// Gracefully shutdown the OpenTelemetry tracer provider.
+    /// This ensures all pending spans are flushed before the application exits.
+    pub fn shutdown(self) {
+        if let Err(e) = self.tracer_provider.shutdown() {
+            eprintln!("Error shutting down tracer provider: {:?}", e);
+        }
+    }
+}
+
+fn init_otel_tracer(endpoint: &str) -> Result<SdkTracerProvider> {
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()?;
+
+    let resource = Resource::builder().with_service_name("ddb").build();
+
+    let provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    Ok(provider)
+}
 
 pub fn setup_logging(
     app_name: &str,
@@ -13,7 +51,8 @@ pub fn setup_logging(
     enable_console_logging: bool,
     console_level: &str,
     file_level: &str,
-) -> Result<WorkerGuard> {
+    otel_endpoint: &str,
+) -> Result<TracingGuards> {
     let mut layers = Vec::new();
 
     let file_filter =
@@ -54,6 +93,18 @@ pub fn setup_logging(
         layers.push(console_layer);
     }
 
+    // Initialize OpenTelemetry tracer and add the layer
+    let tracer_provider = init_otel_tracer(otel_endpoint)?;
+    let tracer = tracer_provider.tracer("ddb");
+    let otel_layer = OpenTelemetryLayer::new(tracer)
+        .with_filter(EnvFilter::new("ddb=info"))
+        .boxed();
+    layers.push(otel_layer);
+
     tracing_subscriber::registry().with(layers).try_init()?;
-    Ok(guard)
+
+    Ok(TracingGuards {
+        file_guard: guard,
+        tracer_provider,
+    })
 }

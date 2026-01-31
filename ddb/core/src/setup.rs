@@ -5,7 +5,7 @@ use crate::{
 
 use anyhow::{Context, Result};
 use tracing::{debug, info};
-use tracing_appender::non_blocking::WorkerGuard;
+use crate::logging::TracingGuards;
 
 #[derive(Debug)]
 pub struct AppDirConfig {
@@ -131,11 +131,22 @@ impl AppDirConfigBuilder {
     }
 }
 
-#[derive(Default)]
 pub struct LoggingSettings {
     pub console_log: bool,
     pub console_level: String,
     pub file_level: String,
+    pub otel_endpoint: String,
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        LoggingSettings {
+            console_log: false,
+            console_level: "info".to_string(),
+            file_level: "info".to_string(),
+            otel_endpoint: "http://127.0.0.1:54317".to_string(),
+        }
+    }
 }
 
 impl LoggingSettings {
@@ -144,6 +155,7 @@ impl LoggingSettings {
             console_log: args.console_log,
             console_level: args.console_level.clone(),
             file_level: args.file_level.clone(),
+            otel_endpoint: args.otel_endpoint.clone(),
         }
     }
 }
@@ -172,7 +184,7 @@ impl SetupProcedure {
         self
     }
 
-    pub fn run(&mut self) -> Result<WorkerGuard> {
+    pub fn run(&mut self) -> Result<TracingGuards> {
         // Create directories
         self.app_dir_config.create_dirs()?;
 
@@ -193,13 +205,14 @@ impl SetupProcedure {
             info!("feature: [DISABLED] proclet migration.");
         }
 
-        // Setup logging
-        let guard = logging::setup_logging(
+        // Setup logging with OpenTelemetry tracing
+        let guards = logging::setup_logging(
             crate::global::APP_NAME,
             self.app_dir_config.get_log_dir(),
             self.logging_settings.console_log,
             &self.logging_settings.console_level,
             &self.logging_settings.file_level,
+            &self.logging_settings.otel_endpoint,
         )?;
 
         // print out some heads-up
@@ -208,7 +221,12 @@ impl SetupProcedure {
         #[cfg(not(feature = "lazy_source_map"))]
         info!("[FEATURE]: (DISABLED) lazy source map");
 
-        Ok(guard)
+        info!(
+            "OpenTelemetry tracing enabled, exporting to: {}",
+            self.logging_settings.otel_endpoint
+        );
+
+        Ok(guards)
     }
 }
 

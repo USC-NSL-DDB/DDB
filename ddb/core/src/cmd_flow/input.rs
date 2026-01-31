@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use dashmap::DashMap;
-use tracing::{debug, error};
+use tracing::{debug, error, info, trace};
 
 use super::{
     framework_adapter::FrameworkCommandAdapter, handler::*, router::Target, DynFormatter,
@@ -497,9 +497,11 @@ impl CmdHandler {
         }
     }
 
+    #[tracing::instrument(skip(self), fields(cmd = %cmd))]
     #[inline]
     // handle a raw command string, directly from user inputs
     pub async fn handle_cmd(&self, cmd: String) {
+        info!("Handling input command: {}", cmd);
         let cmd = cmd.trim();
         if cmd.starts_with(&":") {
             get_router().handle_internal_cmd(&cmd[1..]);
