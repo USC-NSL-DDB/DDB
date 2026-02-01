@@ -90,7 +90,7 @@ impl<'a> MqttProducer<'a> {
                 .await
             {
                 if let Err(e) = client.handle(sender, stop_rx).await {
-                    error!("Client handler error: {}", e);
+                    error!("Client handler error: {}. WARN: Service Discovery has been stopped.", e);
                 }
             } else {
                 debug!(

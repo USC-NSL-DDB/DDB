@@ -89,6 +89,7 @@ impl AsyncDiscoverClient {
         sender: flume::Sender<rumqttc::Event>,
         mut sig_stop: watch::Receiver<bool>,
     ) -> Result<()> {
+        let mut failure_count: u32 = 0;
         loop {
             tokio::select! {
                 event = self.el.poll() => {
@@ -97,7 +98,11 @@ impl AsyncDiscoverClient {
                             sender.send_async(event).await?;
                         },
                         Err(e) => {
+                            failure_count += 1;
                             error!("Error to poll from broker: {:?}", e);
+                            if failure_count >= 5 {
+                                return Err(anyhow::anyhow!("Exceeded maximum poll failures."));
+                            }
                         }
                     }
                 },
