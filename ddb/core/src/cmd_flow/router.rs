@@ -286,9 +286,7 @@ impl Router {
                 self.tracker.add_cmd(out_meta);
             }
             self.write_to(sid, format!("-thread-select {}\n{}", tid, cmd));
-        } else {
-            warn!("Thread (gtid: {}) is not in a session group", gtid);
-        }
+        } 
     }
 
     pub async fn send_to_thread_ret<F: DynFormatter + Clone>(

@@ -10,7 +10,8 @@ use super::{
 };
 use crate::{
     cmd_flow::{
-        NullFormatter, api::{SendAndForgetBuilder, SendAndReturnBuilder, SendBuilder}, get_router
+        api::{SendAndForgetBuilder, SendAndReturnBuilder, SendBuilder},
+        get_router, NullFormatter,
     },
     handlers_map,
     state::get_state_mgr,
@@ -501,16 +502,28 @@ impl CmdHandler {
     #[inline]
     // handle a raw command string, directly from user inputs
     pub async fn handle_cmd(&self, cmd: String) {
+        #[cfg(feature = "profile")]
+        use crate::common::utils::Timer;
+
+        #[cfg(feature = "profile")]
+        let timer = Timer::start();
+
         let cmd = cmd.trim();
         if cmd.starts_with(&":") {
             get_router().handle_internal_cmd(&cmd[1..]);
+            #[cfg(feature = "profile")]
+            {
+                timer.log_command_handle_lat(&cmd[1..]);
+                crate::common::utils::Counter::log_command_count(&cmd[1..]);
+            }
             return;
         }
 
         let parsed: Result<ParsedInputCmd> = cmd.try_into();
         match parsed {
             Ok(parsed) => {
-                let handler = self.handlers.get(parsed.prefix.as_str());
+                let prefix = parsed.prefix.clone();
+                let handler = self.handlers.get(&prefix);
                 match handler {
                     Some(handler) => {
                         handler.process_cmd(parsed).await;
@@ -519,9 +532,14 @@ impl CmdHandler {
                         self.default_handler.process_cmd(parsed).await;
                     }
                 }
+                #[cfg(feature = "profile")]
+                {
+                    timer.log_command_handle_lat(&prefix);
+                    crate::common::utils::Counter::log_command_count(&prefix);
+                }
             }
             Err(e) => {
-                error!("Failed to parse input command: {}", e);
+                debug!("Failed to parse input command: {}", e);
             }
         }
     }
