@@ -2,9 +2,9 @@ receivers:
   otlp:
     protocols:
       grpc:
-        endpoint: 127.0.0.1:54317
+        endpoint: 0.0.0.0:54317
       http:
-        endpoint: 127.0.0.1:54318
+        endpoint: 0.0.0.0:54318
 
 processors:
   batch:
@@ -20,13 +20,13 @@ processors:
 
 extensions:
   health_check:
-    endpoint: 127.0.0.1:53131
+    endpoint: 0.0.0.0:53131
   zpages:
-    endpoint: 127.0.0.1:53132
+    endpoint: 0.0.0.0:53132
 
 exporters:
   otlp:
-    endpoint: "ruby1.nsl.usc.edu:4317"
+    endpoint: "127.0.0.1:4317"
     tls:
       insecure: true
   debug:
