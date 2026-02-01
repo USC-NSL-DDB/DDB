@@ -498,7 +498,6 @@ impl CmdHandler {
         }
     }
 
-    #[tracing::instrument(skip(self), fields(cmd = %cmd))]
     #[inline]
     // handle a raw command string, directly from user inputs
     pub async fn handle_cmd(&self, cmd: String) {
