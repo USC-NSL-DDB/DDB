@@ -726,6 +726,7 @@ impl InterruptHandler {
 #[async_trait]
 impl Handler for InterruptHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
+        let cmd = cmd.with_prefix("-exec-interrupt-if-running");
         match cmd.target {
             Target::Session(sid) => {
                 let ss = STATES.get_session(sid);

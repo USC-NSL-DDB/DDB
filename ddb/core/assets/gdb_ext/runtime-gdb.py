@@ -532,11 +532,11 @@ class ListSignalsMICommand(gdb.MICommand):
             return {"signals": signals_list}
         except Exception as e:
             raise gdb.GdbError(str(e))
-            
+
     def convert_bool_str(self, val: str) -> str:
         """
         Docstring for convert_bool_str
-        
+
         :param val: "Yes" or "No" string
         :type val: str
         :return: "true" or "false" as str
@@ -578,6 +578,7 @@ class ListSignalsMICommand(gdb.MICommand):
                     }
                 )
         return signals_list
+
 
 class GetLockStateMI(gdb.MICommand):
     """A custom command to fetch the lock state (MI)"""
@@ -852,6 +853,31 @@ class RecordTimeAndContinueCommand(gdb.Command):
         record_time_and_continue_mi.invoke([argument] if argument else [])
 
 
+class InterruptIfRunningMICommand(gdb.MICommand):
+    def __init__(self):
+        super(InterruptIfRunningMICommand, self).__init__("-exec-interrupt-if-running")
+
+    def invoke(self, arguments) -> dict[str, object]:
+        # Here, we assume:
+        #   1. all stop mode is used.
+        #   2. only one inferior (process) is being debugged.
+        try:
+            inferiors = gdb.selected_inferior()
+            if not inferiors:
+                return {"message": "No inferior found"}
+            threads = inferiors.threads()
+            running = (
+                threads[0].is_running() if (threads and len(threads) > 0) else False
+            )
+            if running:
+                result = gdb.execute_mi("-exec-interrupt", *arguments)
+                return {"message": "Interrupted", "result": result}
+            else:
+                return {"message": "Process not running, no interrupt sent"}
+        except Exception as e:
+            return {"error": str(e)}
+
+
 def find_environ_ptr():
     try:
         # Try direct symbol access first
@@ -1018,6 +1044,7 @@ RecordTimeAndStepMiCommand()
 RecordTimeAndFinishMiCommand()
 
 ListSignalsMICommand()
+InterruptIfRunningMICommand()
 
 # Check if FAKETIME environment variable is present
 # check_faketime_present()

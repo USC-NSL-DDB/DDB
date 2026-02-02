@@ -141,6 +141,11 @@ impl ParsedInputCmd {
     pub fn with_target(self, target: Target) -> Self {
         ParsedInputCmd { target, ..self }
     }
+    
+    #[inline]
+    pub fn with_prefix(self, prefix: &str) -> Self {
+        ParsedInputCmd { prefix: prefix.to_string(), ..self }
+    }
 
     #[inline]
     pub fn to_command<F: DynFormatter + 'static + Clone>(
