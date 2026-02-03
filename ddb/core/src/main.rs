@@ -45,6 +45,10 @@ use tokio::io::{self, AsyncBufReadExt};
 use tracing::error;
 use tracing::{debug, info};
 
+#[cfg(feature = "profile")]
+use tracing::instrument;
+use tracing::Level;
+
 #[derive(Embed)]
 #[folder = "assets/"]
 struct Asset;
@@ -130,27 +134,8 @@ pub fn get_dbg_mgr() -> Arc<DbgManager> {
         .expect("DbgManager is not initialized.")
 }
 
-fn main() -> Result<()> {
-    // init_console_subscriber();
-    let args = arg::Args::parse();
-    let logging_settings = LoggingSettings::from_args(&args);
-    Config::init_global(args.config)?;
-    let app_dir_conf = AppDirConfig::from_config(Config::global());
-
-    get_shutdown_ctrl().setup_signal_handling();
-    get_shutdown_ctrl().register_acks(&[
-        Component::CmdFlow,
-        Component::DbgMgr,
-        Component::Api,
-        Component::Notification,
-    ]);
-
-    // Keep the guard to ensure the async logger is running.
-    let _guard = SetupProcedure::new()
-        .with_app_dir_config(app_dir_conf)
-        .with_logging_settings(logging_settings)
-        .run()?;
-
+#[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
+async fn run_main() -> Result<()> {
     let mut app = App::new(Config::global().conf.api_server_port);
     app.run(get_shutdown_ctrl().subscribe());
 
@@ -267,13 +252,43 @@ fn main() -> Result<()> {
         rt.shutdown_background();
     });
 
-    get_shutdown_ctrl().wait_for_shutdown();
+    get_shutdown_ctrl().wait_for_shutdown().await;
 
     app.join();
     main_loop.join().unwrap();
     cmd_flow_handle.join().unwrap();
     dbg_handle.join().unwrap();
     notif_handle.join().unwrap();
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // init_console_subscriber();
+    let args = arg::Args::parse();
+    let logging_settings = LoggingSettings::from_args(&args);
+    Config::init_global(args.config)?;
+    let app_dir_conf = AppDirConfig::from_config(Config::global());
+
+    get_shutdown_ctrl().setup_signal_handling();
+    get_shutdown_ctrl().register_acks(&[
+        Component::CmdFlow,
+        Component::DbgMgr,
+        Component::Api,
+        Component::Notification,
+    ]);
+
+    // Keep the guards to ensure the async logger and OTEL tracer are running.
+    // The guards will be used for graceful shutdown at the end.
+    let tracing_guards = SetupProcedure::new()
+        .with_app_dir_config(app_dir_conf)
+        .with_logging_settings(logging_settings)
+        .run()?;
+    
+    run_main().await?;
+
+    // Gracefully shutdown the OpenTelemetry tracer to flush pending spans
+    tracing_guards.shutdown();
 
     debug!("Exiting due to {:?}", get_shutdown_ctrl().cause());
     info!("Bye!");

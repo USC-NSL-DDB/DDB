@@ -1,4 +1,3 @@
-use nix::sys::signal::{pthread_sigmask, SigSet, SigmaskHow, Signal};
 use std::{
     collections::HashMap,
     future::IntoFuture,
@@ -6,6 +5,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
+    signal::unix::{signal, SignalKind},
     sync::{oneshot, watch},
     time::timeout,
 };
@@ -45,7 +45,6 @@ pub struct ShutdownCtrl {
     rx: Mutex<watch::Receiver<bool>>,
     state: Mutex<Option<ShutdownCause>>, // None until first trigger
     shutdown_ack_pending: Mutex<Vec<(Component, oneshot::Receiver<()>)>>,
-    signal_handling_thrd: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl ShutdownCtrl {
@@ -57,7 +56,6 @@ impl ShutdownCtrl {
             rx: Mutex::new(rx),
             state: Mutex::new(None),
             shutdown_ack_pending: Mutex::new(vec![]),
-            signal_handling_thrd: Mutex::new(None),
         }
     }
 
@@ -142,36 +140,24 @@ impl ShutdownCtrl {
 
     /// Sets up signal handling for SIGINT and SIGTERM.
     ///
-    /// Blocks these signals in the current thread and spawns a dedicated thread to handle them.
+    /// Spawns a Tokio task that awaits signals asynchronously.
     /// When a signal is received, it triggers shutdown with the appropriate cause.
     pub fn setup_signal_handling(&self) {
-        // block signals in this thread (propagates to children); dedicated signal thread will wait on them
-        let mut sigset = SigSet::empty();
-        sigset.add(Signal::SIGINT);
-        sigset.add(Signal::SIGTERM);
-        pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&sigset), None)
-            .expect("failed to block signals");
+        tokio::spawn(async {
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
 
-        // start dedicated signal waiter thread
-        let sigset_for_thread = sigset.clone();
-
-        *self.signal_handling_thrd.lock().unwrap() = Some(std::thread::spawn(move || loop {
-            match sigset_for_thread.wait() {
-                Ok(Signal::SIGINT) => {
+            tokio::select! {
+                _ = sigint.recv() => {
                     get_shutdown_ctrl().trigger_once(ShutdownCause::SigInt);
-                    break;
                 }
-                Ok(Signal::SIGTERM) => {
+                _ = sigterm.recv() => {
                     get_shutdown_ctrl().trigger_once(ShutdownCause::SigTerm);
-                    break;
-                }
-                Ok(_) => continue,
-                Err(_) => {
-                    get_shutdown_ctrl().trigger_once(ShutdownCause::Other);
-                    break;
                 }
             }
-        }));
+        });
     }
 
     /// Runs a cleanup function with a timeout.
@@ -188,31 +174,32 @@ impl ShutdownCtrl {
     ///
     /// Each component has `SHUTDOWN_TIMEOUT` to respond. This function uses a dedicated runtime
     /// and blocks the current thread until all acknowledgments are received or timeouts occur.
-    pub fn wait_for_shutdown(&self) {
+    pub async fn wait_for_shutdown(&self) {
         // wait for all components to ack or timeout using a small runtime.
-        let wait_rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        wait_rt.block_on(async {
-            let mut shutdown_sig = self.subscribe();
-            match shutdown_sig.changed().await {
-                Ok(_) => {
-                    info!("Shutdown signal received, waiting for components to ack...");
-                    for (comp, rx) in self.shutdown_ack_pending.lock().unwrap().drain(..) {
-                        let res = timeout(SHUTDOWN_TIMEOUT, rx).await;
-                        match res {
-                            Ok(Ok(())) => debug!("Received shutdown ack from {:?}", comp),
-                            Ok(Err(_)) => warn!("Shutdown ack dropped for {:?}", comp),
-                            Err(_) => warn!("Timed out waiting for shutdown ack from {:?}", comp),
-                        }
+        // let wait_rt = tokio::runtime::Builder::new_current_thread()
+        //     .enable_all()
+        //     .build()
+        //     .unwrap();
+        // wait_rt.block_on(async {
+        // });
+
+        let mut shutdown_sig = self.subscribe();
+        match shutdown_sig.changed().await {
+            Ok(_) => {
+                info!("Shutdown signal received, waiting for components to ack...");
+                for (comp, rx) in self.shutdown_ack_pending.lock().unwrap().drain(..) {
+                    let res = timeout(SHUTDOWN_TIMEOUT, rx).await;
+                    match res {
+                        Ok(Ok(())) => debug!("Received shutdown ack from {:?}", comp),
+                        Ok(Err(_)) => warn!("Shutdown ack dropped for {:?}", comp),
+                        Err(_) => warn!("Timed out waiting for shutdown ack from {:?}", comp),
                     }
                 }
-                Err(_) => {
-                    warn!("Shutdown signal channel closed unexpectedly");
-                }
             }
-        });
+            Err(_) => {
+                warn!("Shutdown signal channel closed unexpectedly");
+            }
+        }
     }
 }
 

@@ -207,6 +207,7 @@ impl StateMgr {
 
     /// Get all session meta data
     /// This function get copies of all session meta data
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     #[inline]
     pub fn get_all_sessions(&self) -> Vec<SessionMetaRef> {
         self.session_states.get_all_sessions()
@@ -215,6 +216,7 @@ impl StateMgr {
     /// Get session meta data
     /// This function get a shallow copy of session meta data
     #[inline]
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
         self.session_states.get_session(sid)
     }

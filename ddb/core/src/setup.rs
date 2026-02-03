@@ -1,11 +1,10 @@
 use crate::{
-    common::{self, config::Config, default_vals, utils},
-    logging,
+    arg, common::{self, config::Config, default_vals, utils}, logging
 };
 
 use anyhow::{Context, Result};
 use tracing::{debug, info};
-use tracing_appender::non_blocking::WorkerGuard;
+use crate::logging::TracingGuards;
 
 #[derive(Debug)]
 pub struct AppDirConfig {
@@ -131,11 +130,31 @@ impl AppDirConfigBuilder {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone)]
 pub struct LoggingSettings {
     pub console_log: bool,
     pub console_level: String,
     pub file_level: String,
+    pub otel_endpoint: String,
+    pub otel_level: String,
+    pub enable_otel: bool,
+    pub user_id: Option<String>,
+    pub session_id: Option<String>,
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        LoggingSettings {
+            console_log: false,
+            console_level: "info".to_string(),
+            file_level: "info".to_string(),
+            otel_endpoint: "http://127.0.0.1:54317".to_string(),
+            otel_level: "info".to_string(),
+            enable_otel: true,
+            user_id: None,
+            session_id: None,
+        }
+    }
 }
 
 impl LoggingSettings {
@@ -144,6 +163,11 @@ impl LoggingSettings {
             console_log: args.console_log,
             console_level: args.console_level.clone(),
             file_level: args.file_level.clone(),
+            otel_endpoint: args.otel_endpoint.clone(),
+            otel_level: args.otel_level.clone(),
+            enable_otel: args.enable_otel,
+            user_id: args.user_id.clone(),
+            session_id: args.session_id.clone(),
         }
     }
 }
@@ -171,10 +195,17 @@ impl SetupProcedure {
         self.logging_settings = logging_settings;
         self
     }
-
-    pub fn run(&mut self) -> Result<WorkerGuard> {
+    
+    pub fn run(&mut self) -> Result<TracingGuards> {
         // Create directories
         self.app_dir_config.create_dirs()?;
+
+        // Setup logging with OpenTelemetry tracing
+        let guards = logging::setup_logging(
+            crate::global::APP_NAME,
+            self.app_dir_config.get_log_dir(),
+            &self.logging_settings,
+        )?;
 
         // Write gdb ext script
         // NOTE: this function returns the path to the script file
@@ -193,14 +224,6 @@ impl SetupProcedure {
             info!("feature: [DISABLED] proclet migration.");
         }
 
-        // Setup logging
-        let guard = logging::setup_logging(
-            crate::global::APP_NAME,
-            self.app_dir_config.get_log_dir(),
-            self.logging_settings.console_log,
-            &self.logging_settings.console_level,
-            &self.logging_settings.file_level,
-        )?;
 
         // print out some heads-up
         #[cfg(feature = "lazy_source_map")]
@@ -208,7 +231,7 @@ impl SetupProcedure {
         #[cfg(not(feature = "lazy_source_map"))]
         info!("[FEATURE]: (DISABLED) lazy source map");
 
-        Ok(guard)
+        Ok(guards)
     }
 }
 

@@ -1,0 +1,47 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:54317
+      http:
+        endpoint: 0.0.0.0:54318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+  # Ref: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/resourcedetectionprocessor/README.md
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:53131
+  zpages:
+    endpoint: 0.0.0.0:53132
+
+exporters:
+  otlp:
+    endpoint: "127.0.0.1:4317"
+    tls:
+      insecure: true
+  debug:
+    # verbosity of the logging export: detailed, normal, basic
+    verbosity: basic
+
+service:
+  telemetry:
+    logs:
+      level: "info"
+  extensions: [health_check, zpages]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]

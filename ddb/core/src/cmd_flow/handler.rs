@@ -8,6 +8,7 @@ use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
 use tokio::{sync::RwLockWriteGuard, task::JoinHandle};
+use tracing::{Level, instrument};
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -68,10 +69,11 @@ use super::{
 /// }
 /// ```
 #[async_trait]
-pub trait Handler: Send + Sync {
+pub trait Handler: Send + Sync + std::fmt::Debug {
     async fn process_cmd(&self, cmd: ParsedInputCmd);
 }
 
+#[derive(Debug)]
 pub struct DefaultHandler;
 
 impl DefaultHandler {
@@ -82,11 +84,13 @@ impl DefaultHandler {
 
 #[async_trait]
 impl Handler for DefaultHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let _ = cmd.send().with(PlainFormatter).to_default_target();
     }
 }
 
+#[derive(Debug)]
 pub struct BreakInsertHandler;
 impl BreakInsertHandler {
     pub fn new() -> Self {
@@ -185,6 +189,7 @@ impl BreakInsertHandler {
 
 #[async_trait]
 impl Handler for BreakInsertHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if !matches!(
             cmd.target,
@@ -302,7 +307,12 @@ impl Handler for BreakInsertHandler {
 
         match get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
             Some(bkpt) => {
-                let out = MIFormatter::format("^", "done", Some(&bkpt.clone().into()), cmd.external_token);
+                let out = MIFormatter::format(
+                    "^",
+                    "done",
+                    Some(&bkpt.clone().into()),
+                    cmd.external_token,
+                );
                 println!("{}", out);
                 debug!("output: {}", out);
 
@@ -319,6 +329,7 @@ impl Handler for BreakInsertHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct BreakDeleteHandler;
 impl BreakDeleteHandler {
     pub fn new() -> Self {
@@ -409,6 +420,7 @@ impl BreakDeleteHandler {
 
 #[async_trait]
 impl Handler for BreakDeleteHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let args = cmd.args.trim();
         if args.is_empty() {
@@ -546,6 +558,7 @@ impl Handler for BreakDeleteHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ThreadInfoHandler;
 
 impl ThreadInfoHandler {
@@ -556,6 +569,7 @@ impl ThreadInfoHandler {
 
 #[async_trait]
 impl Handler for ThreadInfoHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         match cmd.target {
             Target::Thread(tid) => {
@@ -580,6 +594,7 @@ impl Handler for ThreadInfoHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ContinueHandler;
 
 impl ContinueHandler {
@@ -589,6 +604,7 @@ impl ContinueHandler {
 }
 
 impl ContinueHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument)]
     async fn switch_context_and_cont(
         cont_cmd: ParsedInputCmd,
         mut session: RwLockWriteGuard<'_, SessionMeta>,
@@ -624,6 +640,7 @@ impl ContinueHandler {
     }
 
     #[inline]
+    #[cfg_attr(feature = "profile", tracing::instrument)]
     fn cont(
         target: Target,
         cont_cmd: ParsedInputCmd,
@@ -648,11 +665,14 @@ impl ContinueHandler {
 
 #[async_trait]
 impl Handler for ContinueHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let ss = STATES.get_all_sessions();
+        let ss = get_state_mgr().get_all_sessions();
 
-        // reset all proclet cache and clean up restored proclet heap.
-        get_proclet_restore_mgr().reset().await;
+        if Config::global().conf.support_migration {
+            // reset all proclet cache and clean up restored proclet heap.
+            get_proclet_restore_mgr().reset().await;
+        }
 
         let tasks = match &cmd.target {
             Target::Session(sid) => {
@@ -715,6 +735,7 @@ impl Handler for ContinueHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct InterruptHandler;
 
 impl InterruptHandler {
@@ -725,6 +746,7 @@ impl InterruptHandler {
 
 #[async_trait]
 impl Handler for InterruptHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let cmd = cmd.with_prefix("-exec-interrupt-if-running");
         match cmd.target {
@@ -744,6 +766,7 @@ impl Handler for InterruptHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ListHandler;
 
 impl ListHandler {
@@ -754,6 +777,7 @@ impl ListHandler {
 
 #[async_trait]
 impl Handler for ListHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
@@ -762,6 +786,7 @@ impl Handler for ListHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ThreadSelectHandler;
 
 impl ThreadSelectHandler {
@@ -772,6 +797,7 @@ impl ThreadSelectHandler {
 
 #[async_trait]
 impl Handler for ThreadSelectHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
         if !parts.is_empty() {
@@ -788,6 +814,7 @@ impl Handler for ThreadSelectHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ListGroupsHandler;
 
 impl ListGroupsHandler {
@@ -798,6 +825,7 @@ impl ListGroupsHandler {
 
 #[async_trait]
 impl Handler for ListGroupsHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         let _ = cmd
             .send()
@@ -811,6 +839,7 @@ struct BacktraceData {
     parent_meta: Option<Dict>,
 }
 
+#[derive(Debug)]
 pub struct DistributeBacktraceHandler {
     adapter: Arc<dyn FrameworkCommandAdapter>,
 }
@@ -1073,6 +1102,7 @@ impl DistributeBacktraceHandler {
 
 #[async_trait]
 impl Handler for DistributeBacktraceHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(gtid) = &cmd.target {
             let mut out_result: FinishedCmd;
@@ -1253,6 +1283,7 @@ impl Handler for DistributeBacktraceHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ExecNextHandler;
 
 impl ExecNextHandler {
@@ -1263,19 +1294,8 @@ impl ExecNextHandler {
 
 #[async_trait]
 impl Handler for ExecNextHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        // let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
-        // if !parts.is_empty() {
-        //     let gtid = parts.last().unwrap().parse::<u64>().unwrap();
-        //     // let (sid, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
-        //     // let target = Target::Session(sid);
-        //     let target = Target::Thread(gtid);
-        //     self.router.send_to(target, cmd.to_command(PlainFormatter).1);
-        // } else {
-        //     warn!("exec-next command should specify a thread id");
-        // }
-        //
-        //
         if let Target::Thread(_) = &cmd.target {
             let _ = cmd.send().with(NullFormatter).to_default_target();
         } else {
@@ -1284,6 +1304,7 @@ impl Handler for ExecNextHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ExecFinishHandler;
 
 impl ExecFinishHandler {
@@ -1294,6 +1315,7 @@ impl ExecFinishHandler {
 
 #[async_trait]
 impl Handler for ExecFinishHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
             let _ = cmd.send().with(NullFormatter).to_default_target();
@@ -1303,6 +1325,7 @@ impl Handler for ExecFinishHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ExecStepHandler;
 
 impl ExecStepHandler {
@@ -1313,6 +1336,7 @@ impl ExecStepHandler {
 
 #[async_trait]
 impl Handler for ExecStepHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
             let _ = cmd.send().with(NullFormatter).to_default_target();
@@ -1322,10 +1346,12 @@ impl Handler for ExecStepHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ExecJumpHandler;
 
 #[async_trait]
 impl Handler for ExecJumpHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         // Note: `exec-jump` should only be used when session is specified at the moment.
         // otherwise it will be ambiguous which process to jump to.
@@ -1341,10 +1367,12 @@ impl Handler for ExecJumpHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct SendSignalHandler;
 
 #[async_trait]
 impl Handler for SendSignalHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if cmd.args.trim().is_empty() {
             error!("-send-signal command requires a signal argument");
@@ -1388,10 +1416,12 @@ impl Handler for SendSignalHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct ListSignalsHandler;
 
 #[async_trait]
 impl Handler for ListSignalsHandler {
+    #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if !cmd.args.trim().is_empty() {
             error!("-list-signals command needs no argument. raw: {}", cmd.args);
