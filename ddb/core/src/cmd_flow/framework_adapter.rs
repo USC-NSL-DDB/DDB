@@ -3,12 +3,12 @@ use std::net::Ipv4Addr;
 use anyhow::Result;
 use gdbmi::raw::Value;
 
-pub trait FrameworkCommandAdapter: Send + Sync {
+pub trait FrameworkCommandAdapter: Send + Sync + std::fmt::Debug {
     fn get_bt_command_name(&self) -> String;
     fn extract_id_from_metadata(&self, meta: &Value) -> Result<String>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GrpcAdapter;
 
 impl FrameworkCommandAdapter for GrpcAdapter {
@@ -25,7 +25,7 @@ impl FrameworkCommandAdapter for GrpcAdapter {
 }
 
 // for now, seems like Nu shares pretty much same implementation with Grpc
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NuAdapter;
 
 impl FrameworkCommandAdapter for NuAdapter {
@@ -41,7 +41,7 @@ impl FrameworkCommandAdapter for NuAdapter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServiceWeaverAdapter;
 
 impl FrameworkCommandAdapter for ServiceWeaverAdapter {
