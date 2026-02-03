@@ -112,21 +112,21 @@ fn init_otel(
 ) -> Result<OtelGuards> {
     if log_settings.enable_otel {
         let user_id = match &log_settings.user_id {
-            Some(id) => id,
-            None => &crate::global::get_user_id(),
+            Some(id) => id.clone(),
+            None => crate::global::get_user_id().clone(),
         };
-        let session_id: &String = match &log_settings.session_id {
-            Some(id) => id,
+        let session_id: String = match &log_settings.session_id {
+            Some(id) => id.clone(),
             None => {
                 use uuid::Uuid;
-                &Uuid::new_v4().to_string()
+                Uuid::new_v4().to_string()
             }
         };
         let resource = get_resource(
             crate::global::APP_NAME,
             crate::global::get_version(),
-            user_id,
-            session_id,
+            &user_id,
+            &session_id,
         );
 
         // Tracer

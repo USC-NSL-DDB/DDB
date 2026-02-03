@@ -130,6 +130,7 @@ impl AppDirConfigBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LoggingSettings {
     pub console_log: bool,
     pub console_level: String,

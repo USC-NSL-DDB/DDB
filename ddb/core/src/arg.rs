@@ -29,7 +29,7 @@ pub struct Args {
     #[arg(long, default_value = "info")]
     pub otel_level: String,
 
-    #[arg(long, action = clap::ArgAction::SetTrue, default_value_t = true)]
+    #[arg(long, action = clap::ArgAction::SetTrue)]
     pub enable_otel: bool,
 
     #[arg(long, default_value = None)]

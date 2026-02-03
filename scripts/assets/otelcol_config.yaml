@@ -11,12 +11,6 @@ processors:
     send_batch_size: 1000
     timeout: 10s
   # Ref: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/resourcedetectionprocessor/README.md
-  resourcedetection:
-    detectors: [env, system] # include ec2 for AWS, gcp for GCP and azure for Azure.
-    # Using OTEL_RESOURCE_ATTRIBUTES envvar, env detector adds custom labels.
-    timeout: 2s
-    system:
-      hostname_sources: [os] # alternatively, use [dns,os] for setting FQDN as host.name and os as fallback
 
 extensions:
   health_check:

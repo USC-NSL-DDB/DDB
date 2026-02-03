@@ -43,9 +43,11 @@ use console_subscriber;
 use rust_embed::Embed;
 use tokio::io::{self, AsyncBufReadExt};
 use tracing::error;
+use tracing::{debug, info};
+
+#[cfg(feature = "profile")]
 use tracing::instrument;
 use tracing::Level;
-use tracing::{debug, info};
 
 #[derive(Embed)]
 #[folder = "assets/"]
