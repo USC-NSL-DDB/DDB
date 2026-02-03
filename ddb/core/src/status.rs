@@ -49,7 +49,7 @@ impl RuntimeStatus {
     pub fn up(&self, component: Component) {
         let mut status = self.monitor.lock().unwrap();
         status.insert(component, true);
-        debug!("Component {:?} is up.", component);
+        debug!("[{:?}]: Component is up.", component);
 
         let all_up = status.values().all(|&v| v);
         if all_up {
@@ -62,7 +62,7 @@ impl RuntimeStatus {
         let mut rx = self.running.clone();
         loop {
             if *rx.borrow() {
-                info!("Runtime is up.");
+                info!("[Runtime]: is up.");
                 break;
             }
             match rx.changed().await {

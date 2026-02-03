@@ -169,7 +169,7 @@ impl ApiServer {
             .layer(TraceLayer::new_for_http());
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone()).await?;
-        info!("API Server listening on {}", listener.local_addr()?);
+        info!("[API Server]: Listening on {}", listener.local_addr()?);
 
         let shutdown = async move {
             let _ = shutdown_rx.changed().await;

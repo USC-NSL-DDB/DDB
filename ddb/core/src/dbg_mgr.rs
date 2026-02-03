@@ -1,9 +1,9 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Result, anyhow};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flume::Receiver;
 use futures::future::join_all;
-use russh::client::Config;
+use russh::client::Config as RusshClientConfig;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -16,7 +16,7 @@ use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::shutdown::get_shutdown_ctrl;
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr};
 use crate::{
-    common::{self, config::Framework},
+    common::{self, config::Framework, config::Config as DDBConfig},
     discovery::DiscoveryMessageProducer,
 };
 
@@ -26,11 +26,11 @@ pub trait DbgManagable {
     where
         Self: Sized,
     {
-        let gconf = crate::common::config::Config::global();
+        let gconf = DDBConfig::global();
         Self::new_with_config(gconf).await
     }
 
-    async fn new_with_config(config: &'static crate::common::config::Config) -> Self;
+    async fn new_with_config(config: &'static DDBConfig) -> Self;
     async fn start(&self) -> Result<()>;
     async fn cleanup(&self);
 }
@@ -104,7 +104,7 @@ impl ServiceDiscover {
 
                 // Register with proclet manager if needed.
                 // so that we have the mapping between caladan ip and session id.
-                let g_cfg = crate::common::config::Config::global();
+                let g_cfg = DDBConfig::global();
                 match g_cfg.framework {
                     Framework::Nu | Framework::Quicksand => {
                         if g_cfg.conf.support_migration {
@@ -171,7 +171,7 @@ pub struct DbgManager {
     // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
     proclet_ctrl: Option<ProcletCtrlClient>,
 
-    config: &'static crate::common::config::Config,
+    config: &'static DDBConfig,
 }
 
 impl DbgManager {
@@ -184,7 +184,7 @@ impl DbgManager {
         let notification = Notification::new(NotificationPayload::SessionListChanged);
         get_notif_mgr().broadcast(notification).await;
 
-        let config = crate::common::config::Config::global();
+        let config = DDBConfig::global();
         if config.conf.auto_shutdown {
             if self.sessions.is_empty() {
                 debug!("No more sessions in DbgManager. Possibly shutting down…");
@@ -201,7 +201,7 @@ impl DbgManager {
                 let sd = config
                     .service_discovery
                     .as_ref()
-                    .expect("ERROR: broker is not specified when it is needed.");
+                    .ok_or(anyhow!("ERROR: broker is not specified when it is needed."))?;
 
                 if let Some(managed_broker_conf) = sd.broker.managed.as_ref() {
                     let b: Box<dyn MessageBroker> = match managed_broker_conf.broker_type {
@@ -244,7 +244,7 @@ impl DbgManager {
                     .expect("Service weaver config missing for service weaver auto discovery.");
                 let (exited_sender, _exited) = tokio::sync::watch::channel(false);
                 let mut jump_host_session = russh::client::connect(
-                    Arc::new(Config::default()),
+                    Arc::new(RusshClientConfig::default()),
                     (swc.jump_client_host.clone(), swc.jump_client_port),
                     crate::connection::ssh_client_channel::SSHProxyClientHandler(exited_sender),
                 )
@@ -299,7 +299,7 @@ impl DbgManager {
 
 #[async_trait]
 impl DbgManagable for DbgManager {
-    async fn new_with_config(config: &'static crate::common::config::Config) -> Self {
+    async fn new_with_config(config: &'static DDBConfig) -> Self {
         let sessions: SessionsRef = Arc::new(DashMap::new());
 
         let proclet_ctrl = match config.framework {
@@ -312,7 +312,7 @@ impl DbgManagable for DbgManager {
                             .expect("Failed to connect to proclet controller"),
                     )
                 } else {
-                    debug!("Migration support is DISABLED, SKIP initializing proxy proclet controller.");
+                    debug!("[Migration SUPPORT]: DISABLED. SKIP initializing proxy proclet controller.");
                     None
                 }
             }
@@ -328,18 +328,23 @@ impl DbgManagable for DbgManager {
     }
 
     async fn start(&self) -> Result<()> {
-        self.init_sd().await?;
+        if let Some(_) = DDBConfig::global().service_discovery {
+            info!("[Service Discovery]: ENABLED. INIT service discovery...");
+            self.init_sd().await?;
+        } else {
+            info!("[Service Discovery]: DISABLED. SKIP service discovery initialization.");
+        }
         if let Some(sd) = &mut *self.sd.lock().await {
             sd.start(self.sessions.clone());
+            debug!("DbgManager is now listening for discovered services.");
         }
-        debug!("GdbManager is now listening for discovered services.");
         Ok(())
     }
 
     async fn cleanup(&self) {
         // 1) Shutdown the service discovery if it exists
         if let Some(sd) = &mut *self.sd.lock().await {
-            debug!("Shutting down ServiceDiscover…");
+            debug!("Shutting down ServiceDiscovery...");
             sd.shutdown().await;
         }
 
@@ -357,7 +362,7 @@ impl DbgManagable for DbgManager {
         }
 
         join_all(tasks).await;
-        debug!("DbgManager cleanup complete.");
+        debug!("[DbgManager]: Cleanup complete.");
     }
 }
 

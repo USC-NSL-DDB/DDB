@@ -30,7 +30,7 @@ impl NotificationManager {
 
     /// Initialize and start background tasks
     pub async fn start(&self) {
-        info!("Starting NotificationManager");
+        info!("[NotificationManager]: Starting");
         let mut task = self.heartbeat_task.lock().await;
         *task = Some(self.spawn_heartbeat_task());
     }
@@ -135,7 +135,7 @@ impl NotificationManager {
             loop {
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
-                        debug!("Heartbeat task shutting down");
+                        debug!("[NotificationManager]: Heartbeat task shutting down");
                         break;
                     }
                     _ = ticker.tick() => {
@@ -185,7 +185,7 @@ impl NotificationManager {
 
     /// Shutdown the notification manager
     pub async fn shutdown(&self) {
-        info!("Shutting down NotificationManager");
+        info!("[NotificationManager]: Shutting down");
         let _ = self.shutdown_tx.send(true);
 
         // Wait for heartbeat task to finish
@@ -195,7 +195,7 @@ impl NotificationManager {
 
         // Close all subscriber connections
         self.subscribers.clear();
-        info!("NotificationManager shutdown complete");
+        info!("[NotificationManager]: Shutdown complete");
     }
 }
 

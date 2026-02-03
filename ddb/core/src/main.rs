@@ -210,11 +210,11 @@ fn main() -> Result<()> {
             init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
             match get_dbg_mgr().start().await {
                 Ok(_) => {
-                    debug!("DbgManager started successfully.");
+                    debug!("[DbgManager]: Started successfully.");
                     get_rt_status().up(Component::DbgMgr);
                 }
                 Err(e) => {
-                    error!("Failed to start DbgManager: {:?}", e);
+                    error!("[DbgManager]: Failed to start: {:?}", e);
                     get_shutdown_ctrl().trigger_once(ShutdownCause::DbgMgrInitFailure);
                 }
             }

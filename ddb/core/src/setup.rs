@@ -204,9 +204,9 @@ impl SetupProcedure {
 
         // print out some heads-up
         #[cfg(feature = "lazy_source_map")]
-        info!("feature: [ENABLED] lazy source map");
+        info!("[FEATURE]: (ENABLED) lazy source map");
         #[cfg(not(feature = "lazy_source_map"))]
-        info!("feature: [DISABLED] lazy source map");
+        info!("[FEATURE]: (DISABLED) lazy source map");
 
         Ok(guard)
     }
