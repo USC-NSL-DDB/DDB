@@ -1591,6 +1591,14 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
   {
     return -1;
   }
+  
+  clockid_t clk_id = CLOCK_REALTIME;
+  struct timespec ts_now;
+  struct timespec deadline;
+  DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &ts_now));
+  if (result == -1) return result;
+  (void)fake_clock_gettime(clk_id, &ts_now);
+  timespecadd(&ts_now, req, &deadline);
 
 #ifdef MACOS_DYLD_INTERPOSE
   DONT_FAKE_TIME(result = (*nanosleep)(&real_req, rem));
@@ -1600,6 +1608,39 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
   if (result == -1)
   {
     return result;
+  }
+  
+  struct timespec fake_tp_now;
+  DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &fake_tp_now));
+  if (result == -1) return result;
+  (void)fake_clock_gettime(clk_id, &fake_tp_now);
+  bool should_loop = timespeccmp(&fake_tp_now, &deadline, <);
+  struct timespec remaining;
+  timespecsub(&deadline, &fake_tp_now, &remaining);
+  while (should_loop) {
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = remaining;
+    }
+#ifdef MACOS_DYLD_INTERPOSE
+    DONT_FAKE_TIME(result = (*nanosleep)(&real_remaining, rem));
+#else
+    DONT_FAKE_TIME(result = (*real_nanosleep)(&real_remaining, rem));
+#endif
+    if (result == -1)
+      {
+        return result;
+      }
+    DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &fake_tp_now));
+    if (result == -1) return result;
+    (void)fake_clock_gettime(clk_id, &fake_tp_now);
+    should_loop = timespeccmp(&fake_tp_now, &deadline, <);
+    timespecsub(&deadline, &fake_tp_now, &remaining);
   }
 
   /* fake returned parts */
@@ -4468,64 +4509,49 @@ static inline long handle_futex_syscall(long number, uint32_t* uaddr, int futex_
     clk_id = CLOCK_REALTIME;
 
   if (futex_cmd == FUTEX_WAIT_BITSET) {
-    // FUTEX_WAIT_BITSET uses absolute timeout
-    struct timespec real_tp, fake_tp;
+    // FUTEX_WAIT_BITSET uses an absolute timeout in the clock domain selected
+    // by FUTEX_CLOCK_REALTIME (default CLOCK_MONOTONIC). We must translate the
+    // fake abstime (provided by the application) to a real abstime for the
+    // kernel, taking user_rate into account.
 
-    DONT_FAKE_TIME((*real_clock_gettime)(clk_id, &real_tp));
-    fake_tp = real_tp;
-    if (fake_clock_gettime(clk_id, &fake_tp) == -1) {
+    // If monotonic faking is disabled, applications using CLOCK_MONOTONIC will
+    // already be using the real monotonic clock for abstime; pass through.
+    if (clk_id == CLOCK_MONOTONIC) {
+      get_fake_monotonic_setting(&fake_monotonic_clock);
+      if (!fake_monotonic_clock) {
+        return make_futex_syscall(number, uaddr, futex_op, val, timeout, uaddr2, val3, false);
+      }
+    }
+
+    struct timespec real_now;
+    DONT_FAKE_TIME((*real_clock_gettime)(clk_id, &real_now));
+
+    struct timespec fake_now = real_now;
+    if (fake_clock_gettime(clk_id, &fake_now) == -1) {
       goto futex_fallback;
     }
-    // Create a corrected timeout by adjusting with the difference between
-    // real and fake timestamps
-    struct timespec adjusted_timeout, time_diff;
-    timespecsub(&fake_tp, &real_tp, &time_diff);
-    timespecsub(timeout, &time_diff, &adjusted_timeout);
-    long result = make_futex_syscall(number, uaddr, futex_op, val, &adjusted_timeout, uaddr2, val3, false);
-    if (result != 0) {
-      return result;
+
+    // Compute remaining fake time until requested abstime.
+    struct timespec fake_remaining;
+    timespecsub(timeout, &fake_now, &fake_remaining);
+    if (fake_remaining.tv_sec < 0) {
+      fake_remaining.tv_sec = 0;
+      fake_remaining.tv_nsec = 0;
     }
 
-    // Check if the futex timeout has already passed according to fake time
-    struct timespec now_fake;
-    if (fake_clock_gettime(clk_id, &now_fake) != 0) {
-      return result;
+    // Convert fake remaining duration to real remaining duration.
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake) {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    } else {
+      real_remaining = fake_remaining;
     }
 
-    // If the timeout is already passed in fake time, return 0.
-    while (!timespeccmp(&now_fake, timeout, >=)) {
-      // Calculate how much real time we need to wait
-      struct timespec real_now, fake_now, wait_time;
-      DONT_FAKE_TIME((*real_clock_gettime)(clk_id, &real_now));
-      fake_clock_gettime(clk_id, &fake_now);
+    // Convert to absolute real abstime for the kernel.
+    struct timespec real_abstime;
+    timespecadd(&real_now, &real_remaining, &real_abstime);
 
-      // Calculate how much fake time is left until the timeout
-      struct timespec fake_time_left;
-      timespecsub(timeout, &fake_now, &fake_time_left);
-
-      // Scale the fake time left by the user rate if set
-      if (user_rate_set && !dont_fake) {
-        timespecmul(&fake_time_left, 1.0 / user_rate, &wait_time);
-      } else {
-        wait_time = fake_time_left;
-      }
-
-      // Calculate the real timeout by adding the wait time to the current real time
-      struct timespec real_timeout;
-      timespecadd(&real_now, &wait_time, &real_timeout);
-
-      // Call the real syscall with the recalculated timeout
-      result = make_futex_syscall(number, uaddr, futex_op, val, &real_timeout, uaddr2, val3, false);
-      if (result != 0) {
-        return result;
-      }
-
-      // Check if the futex timeout has already passed according to fake time
-      if (fake_clock_gettime(clk_id, &now_fake) != 0) {
-        return result;
-      }
-    }
-    return 0;
+    return make_futex_syscall(number, uaddr, futex_op, val, &real_abstime, uaddr2, val3, false);
   } else if (futex_cmd == FUTEX_WAIT) {
     // FUTEX_WAIT uses relative timeout - scale by time rate
     struct timespec adjusted_timeout;
