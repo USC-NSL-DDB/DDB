@@ -351,6 +351,38 @@ int           read_config_file();
 bool          str_array_contains(const char *haystack, const char *needle);
 void *ft_dlvsym(void *handle, const char *symbol, const char *version, const char *full_name, char *ignore_list, bool should_debug_dlsym);
 
+static inline void ft_timespec_clamp_nonneg(struct timespec *ts)
+{
+  if (ts->tv_sec < 0)
+  {
+    ts->tv_sec = 0;
+    ts->tv_nsec = 0;
+    return;
+  }
+  if (ts->tv_sec == 0 && ts->tv_nsec < 0)
+  {
+    ts->tv_nsec = 0;
+  }
+}
+
+static inline void ft_timespec_ensure_nonzero(struct timespec *ts)
+{
+  if (ts->tv_sec == 0 && ts->tv_nsec == 0)
+  {
+    ts->tv_nsec = 1;
+  }
+}
+
+static inline int ft_get_fake_time(clockid_t clk_id, struct timespec *tp)
+{
+  int result;
+  if (tp == NULL) return -1;
+  if (real_clock_gettime == NULL) return -1;
+  DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, tp));
+  if (result == -1) return result;
+  return fake_clock_gettime(clk_id, tp);
+}
+
 
 typedef struct {
   char name[256];
@@ -1661,82 +1693,82 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
  */
 int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *req, struct timespec *rem)
 {
-  int result;
-  struct timespec real_req;
-
   ftpl_init();
-  if (real_clock_nanosleep == NULL)
-  {
-    return -1;
-  }
-  if (req != NULL)
-  {
-    if (flags & TIMER_ABSTIME) /* sleep until absolute time */
-    {
-      struct timespec tdiff, timeadj;
-      timespecsub(req, &user_faked_time_timespec, &timeadj);
-      if (user_rate_set)
-      {
-        timespecmul(&timeadj, 1.0/user_rate, &tdiff);
-      }
-      else
-      {
-        tdiff = timeadj;
-      }
+  if (real_clock_nanosleep == NULL) return -1;
+  if (req == NULL) return -1;
 
-      if (clock_id == CLOCK_REALTIME)
-      {
-        timespecadd(&ftpl_starttime.real, &tdiff, &real_req);
-      }
-      else if (clock_id == CLOCK_MONOTONIC)
-      {
-        get_fake_monotonic_setting(&fake_monotonic_clock);
-        if (fake_monotonic_clock)
-        {
-          timespecadd(&ftpl_starttime.mon, &tdiff, &real_req);
-        }
-        else
-        { /* leave untouched if CLOCK_MONOTONIC but faking monotonic clock disabled */
-            real_req = *req;
-        }
-      }
-      else /* presumably only CLOCK_PROCESS_CPUTIME_ID, leave untouched */
-      {
-       real_req = *req;
-      }
-    }
-    else /* sleep for a relative time interval */
+  if (dont_fake)
+  {
+    DONT_FAKE_TIME(return (*real_clock_nanosleep)(clock_id, flags, req, rem));
+  }
+
+  /* If monotonic faking is disabled, don't try to enforce fake deadlines. */
+  if (clock_id == CLOCK_MONOTONIC)
+  {
+    get_fake_monotonic_setting(&fake_monotonic_clock);
+    if (!fake_monotonic_clock)
     {
-      if (user_rate_set && !dont_fake && ((clock_id == CLOCK_REALTIME) || (clock_id == CLOCK_MONOTONIC))) /* don't touch CLOCK_PROCESS_CPUTIME_ID */
-      {
-        timespecmul(req, 1.0 / user_rate, &real_req);
-      }
-      else
-      {
-        real_req = *req;
-      }
+      DONT_FAKE_TIME(return (*real_clock_nanosleep)(clock_id, flags, req, rem));
     }
+  }
+
+  struct timespec fake_deadline;
+  if (flags & TIMER_ABSTIME)
+  {
+    fake_deadline = *req;
   }
   else
   {
-    return -1;
+    struct timespec fake_now;
+    if (ft_get_fake_time(clock_id, &fake_now) == -1) return -1;
+    timespecadd(&fake_now, req, &fake_deadline);
   }
 
-  DONT_FAKE_TIME(result = (*real_clock_nanosleep)(clock_id, flags, &real_req, rem));
-  if (result == -1)
+  for (;;)
   {
-    return result;
-  }
-  /* fake returned parts */
-  if ((rem != NULL) && ((rem->tv_sec != 0) || (rem->tv_nsec != 0)))
-  {
-    if (user_rate_set && !dont_fake)
+    struct timespec fake_now;
+    if (ft_get_fake_time(clock_id, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
     {
-      timespecmul(rem, user_rate, rem);
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake && ((clock_id == CLOCK_REALTIME) || (clock_id == CLOCK_MONOTONIC)))
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
+
+    struct timespec real_rem;
+    int rc;
+    DONT_FAKE_TIME(rc = (*real_clock_nanosleep)(clock_id, 0, &real_remaining, rem ? &real_rem : NULL));
+    if (rc != 0)
+    {
+      if ((rem != NULL) && (rc == EINTR) && (real_rem.tv_sec != 0 || real_rem.tv_nsec != 0))
+      {
+        /* Best-effort: convert remaining real duration back to fake duration. */
+        if (user_rate_set && !dont_fake)
+        {
+          timespecmul(&real_rem, user_rate, rem);
+        }
+        else
+        {
+          *rem = real_rem;
+        }
+      }
+      return rc;
     }
   }
-  /* return the result to the caller */
-  return result;
 }
 #endif
 
@@ -1749,46 +1781,68 @@ int macos_usleep(useconds_t usec)
 int usleep(useconds_t usec)
 #endif
 {
-  int result;
-
   ftpl_init();
-  if (user_rate_set && !dont_fake)
+  if (dont_fake)
   {
-    struct timespec real_req;
-
-    if (real_nanosleep == NULL)
-    {
-      /* fall back to usleep() */
-      if (real_usleep == NULL)
-      {
-        return -1;
-      }
 #ifdef MACOS_DYLD_INTERPOSE
-      DONT_FAKE_TIME(result = (*usleep)((1.0 / user_rate) * usec));
+    DONT_FAKE_TIME(return (*usleep)(usec));
 #else
-      DONT_FAKE_TIME(result = (*real_usleep)((1.0 / user_rate) * usec));
+    DONT_FAKE_TIME(return (*real_usleep)(usec));
 #endif
-      return result;
+  }
+
+  struct timespec fake_req = {(time_t)(usec / 1000000), (long)((usec % 1000000) * 1000)};
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  timespecadd(&fake_now, &fake_req, &fake_deadline);
+
+  for (;;)
+  {
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
+    {
+      return 0;
     }
 
-    real_req.tv_sec = usec / 1000000;
-    real_req.tv_nsec = (usec % 1000000) * 1000;
-    timespecmul(&real_req, 1.0 / user_rate, &real_req);
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
+
+    if (real_nanosleep != NULL)
+    {
+      int result;
 #ifdef MACOS_DYLD_INTERPOSE
-    DONT_FAKE_TIME(result = (*nanosleep)(&real_req, NULL));
+      DONT_FAKE_TIME(result = (*nanosleep)(&real_remaining, NULL));
 #else
-    DONT_FAKE_TIME(result = (*real_nanosleep)(&real_req, NULL));
+      DONT_FAKE_TIME(result = (*real_nanosleep)(&real_remaining, NULL));
 #endif
-  }
-  else
-  {
+      if (result == -1) return result;
+    }
+    else
+    {
+      if (real_usleep == NULL) return -1;
+      useconds_t real_usec = (useconds_t)(real_remaining.tv_sec * 1000000ULL + (real_remaining.tv_nsec + 999) / 1000);
+      int result;
 #ifdef MACOS_DYLD_INTERPOSE
-    DONT_FAKE_TIME(result = (*usleep)(usec));
+      DONT_FAKE_TIME(result = (*usleep)(real_usec));
 #else
-    DONT_FAKE_TIME(result = (*real_usleep)(usec));
+      DONT_FAKE_TIME(result = (*real_usleep)(real_usec));
 #endif
+      if (result == -1) return result;
+    }
   }
-  return result;
 }
 
 /*
@@ -1801,57 +1855,87 @@ unsigned int sleep(unsigned int seconds)
 #endif
 {
   ftpl_init();
-  if (user_rate_set && !dont_fake)
+  if (seconds == 0) return 0;
+
+  if (dont_fake)
   {
-    if (real_nanosleep == NULL)
-    {
-      /* fall back to sleep */
-      unsigned int ret;
-      if (real_sleep == NULL)
-      {
-        return 0;
-      }
 #ifdef MACOS_DYLD_INTERPOSE
-      DONT_FAKE_TIME(ret = (*sleep)((1.0 / user_rate) * seconds));
+    unsigned int ret;
+    DONT_FAKE_TIME(ret = (*sleep)(seconds));
+    return ret;
 #else
-      DONT_FAKE_TIME(ret = (*real_sleep)((1.0 / user_rate) * seconds));
+    if (real_sleep == NULL) return 0;
+    unsigned int ret;
+    DONT_FAKE_TIME(ret = (*real_sleep)(seconds));
+    return ret;
 #endif
-      return (user_rate_set && !dont_fake)?(user_rate * ret):ret;
+  }
+
+  struct timespec fake_req = {(time_t)seconds, 0};
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return 0;
+  timespecadd(&fake_now, &fake_req, &fake_deadline);
+
+  for (;;)
+  {
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return 0;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
+    {
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
     }
     else
     {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
+
+    if (real_nanosleep != NULL)
+    {
       int result;
-      struct timespec real_req = {seconds, 0}, rem;
-      timespecmul(&real_req, 1.0 / user_rate, &real_req);
 #ifdef MACOS_DYLD_INTERPOSE
-      DONT_FAKE_TIME(result = (*nanosleep)(&real_req, &rem));
+      DONT_FAKE_TIME(result = (*nanosleep)(&real_remaining, NULL));
 #else
-      DONT_FAKE_TIME(result = (*real_nanosleep)(&real_req, &rem));
+      DONT_FAKE_TIME(result = (*real_nanosleep)(&real_remaining, NULL));
 #endif
       if (result == -1)
       {
-        return 0;
+        /* Best-effort: return remaining fake seconds. */
+        if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return 0;
+        timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+        ft_timespec_clamp_nonneg(&fake_remaining);
+        return (unsigned int)fake_remaining.tv_sec;
       }
-
-      /* fake returned parts */
-      if ((rem.tv_sec != 0) || (rem.tv_nsec != 0))
-      {
-        timespecmul(&rem, user_rate, &rem);
-      }
-      /* return the result to the caller */
-      return rem.tv_sec;
     }
-  }
-  else
-  {
-    /* no need to fake anything */
-    unsigned int ret;
+    else
+    {
+      if (real_sleep == NULL) return 0;
+      unsigned int real_secs = (unsigned int)real_remaining.tv_sec;
+      if (real_remaining.tv_nsec > 0) real_secs++;
+      unsigned int ret;
 #ifdef MACOS_DYLD_INTERPOSE
-    DONT_FAKE_TIME(ret = (*sleep)(seconds));
+      DONT_FAKE_TIME(ret = (*sleep)(real_secs));
 #else
-    DONT_FAKE_TIME(ret = (*real_sleep)(seconds));
+      DONT_FAKE_TIME(ret = (*real_sleep)(real_secs));
 #endif
-    return ret;
+      if (ret != 0)
+      {
+        if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return ret;
+        timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+        ft_timespec_clamp_nonneg(&fake_remaining);
+        return (unsigned int)fake_remaining.tv_sec;
+      }
+    }
   }
 }
 
@@ -1889,34 +1973,53 @@ unsigned int alarm(unsigned int seconds)
 int ppoll(struct pollfd *fds, nfds_t nfds,
     const struct timespec *timeout_ts, const sigset_t *sigmask)
 {
-  struct timespec real_timeout, *real_timeout_pt;
-  int ret;
-
   ftpl_init();
-  if (real_ppoll == NULL)
+  if (real_ppoll == NULL) return -1;
+
+  if (dont_fake || timeout_ts == NULL || (timeout_ts->tv_sec == 0 && timeout_ts->tv_nsec == 0))
   {
-    return -1;
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_ppoll)(fds, nfds, timeout_ts, sigmask));
+    return ret;
   }
-  if (timeout_ts != NULL)
+
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  timespecadd(&fake_now, timeout_ts, &fake_deadline);
+
+  for (;;)
   {
-    if (user_rate_set && !dont_fake && ((timeout_ts->tv_sec > 0) || (timeout_ts->tv_nsec > 0)))
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
     {
-      timespecmul(timeout_ts, 1.0 / user_rate, &real_timeout);
-      real_timeout_pt = &real_timeout;
+      /* Expired in fake time; emulate timeout. */
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_timeout;
+    if (user_rate_set && !dont_fake && ((fake_remaining.tv_sec > 0) || (fake_remaining.tv_nsec > 0)))
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_timeout);
     }
     else
     {
-      /* cast away constness */
-      real_timeout_pt = (struct timespec *)timeout_ts;
+      real_timeout = fake_remaining;
     }
-  }
-  else
-  {
-    real_timeout_pt = NULL;
-  }
+    ft_timespec_clamp_nonneg(&real_timeout);
+    ft_timespec_ensure_nonzero(&real_timeout);
 
-  DONT_FAKE_TIME(ret = (*real_ppoll)(fds, nfds, real_timeout_pt, sigmask));
-  return ret;
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_ppoll)(fds, nfds, &real_timeout, sigmask));
+    if (ret != 0)
+    {
+      return ret;
+    }
+    /* timed out in real time, re-check fake deadline */
+  }
 }
 
 #ifdef __linux__
@@ -1925,23 +2028,57 @@ int ppoll(struct pollfd *fds, nfds_t nfds,
  */
 int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
 {
-  int ret, real_timeout;
-
   ftpl_init();
   if (real_epoll_wait == NULL)
   {
     return -1;
   }
-  if (user_rate_set && !dont_fake && timeout > 0)
+
+  if (dont_fake || timeout <= 0)
   {
-    real_timeout = (int) timeout * 1.0/user_rate;
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_epoll_wait)(epfd, events, maxevents, timeout));
+    return ret;
   }
-  else
+
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  struct timespec fake_timeout = {(time_t)(timeout / 1000), (long)((timeout % 1000) * 1000000L)};
+  timespecadd(&fake_now, &fake_timeout, &fake_deadline);
+
+  for (;;)
   {
-    real_timeout = timeout;
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
+    {
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+
+    int real_timeout = (int)(real_remaining.tv_sec * 1000LL + (real_remaining.tv_nsec + 999999L) / 1000000L);
+    if (real_timeout <= 0) real_timeout = 1;
+
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_epoll_wait)(epfd, events, maxevents, real_timeout));
+    if (ret != 0)
+    {
+      return ret;
+    }
   }
-  DONT_FAKE_TIME(ret = (*real_epoll_wait)(epfd, events, maxevents, real_timeout));
-  return ret;
 }
 
 /*
@@ -1949,23 +2086,57 @@ int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
  */
 int epoll_pwait(int epfd, struct epoll_event *events, int maxevents, int timeout, const sigset_t *sigmask)
 {
-  int ret, real_timeout;
-
   ftpl_init();
   if (real_epoll_pwait == NULL)
   {
     return -1;
   }
-  if (user_rate_set && !dont_fake && timeout > 0)
+
+  if (dont_fake || timeout <= 0)
   {
-    real_timeout = (int) timeout * 1.0/user_rate;
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_epoll_pwait)(epfd, events, maxevents, timeout, sigmask));
+    return ret;
   }
-  else
+
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  struct timespec fake_timeout = {(time_t)(timeout / 1000), (long)((timeout % 1000) * 1000000L)};
+  timespecadd(&fake_now, &fake_timeout, &fake_deadline);
+
+  for (;;)
   {
-    real_timeout = timeout;
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
+    {
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+
+    int real_timeout = (int)(real_remaining.tv_sec * 1000LL + (real_remaining.tv_nsec + 999999L) / 1000000L);
+    if (real_timeout <= 0) real_timeout = 1;
+
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_epoll_pwait)(epfd, events, maxevents, real_timeout, sigmask));
+    if (ret != 0)
+    {
+      return ret;
+    }
   }
-  DONT_FAKE_TIME(ret = (*real_epoll_pwait)(epfd, events, maxevents, real_timeout, sigmask));
-  return ret;
 }
 #endif
 
@@ -1978,20 +2149,62 @@ int macos_poll(struct pollfd *fds, nfds_t nfds, int timeout)
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 #endif
 {
-  int ret, timeout_real = (user_rate_set && !dont_fake && (timeout > 0))?(timeout / user_rate):timeout;
-
   ftpl_init();
-  if (real_poll == NULL)
+  if (real_poll == NULL) return -1;
+
+  if (dont_fake || timeout <= 0)
   {
-    return -1;
+    int ret;
+#ifdef MACOS_DYLD_INTERPOSE
+    DONT_FAKE_TIME(ret = (*poll)(fds, nfds, timeout));
+#else
+    DONT_FAKE_TIME(ret = (*real_poll)(fds, nfds, timeout));
+#endif
+    return ret;
   }
 
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  struct timespec fake_timeout = {(time_t)(timeout / 1000), (long)((timeout % 1000) * 1000000L)};
+  timespecadd(&fake_now, &fake_timeout, &fake_deadline);
+
+  for (;;)
+  {
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
+    {
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+    }
+    else
+    {
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+
+    int timeout_real = (int)(real_remaining.tv_sec * 1000LL + (real_remaining.tv_nsec + 999999L) / 1000000L);
+    if (timeout_real <= 0) timeout_real = 1;
+
+    int ret;
 #ifdef MACOS_DYLD_INTERPOSE
-  DONT_FAKE_TIME(ret = (*poll)(fds, nfds, timeout_real));
+    DONT_FAKE_TIME(ret = (*poll)(fds, nfds, timeout_real));
 #else
-  DONT_FAKE_TIME(ret = (*real_poll)(fds, nfds, timeout_real));
+    DONT_FAKE_TIME(ret = (*real_poll)(fds, nfds, timeout_real));
 #endif
-  return ret;
+    if (ret != 0)
+    {
+      return ret;
+    }
+  }
 }
 
 /*
@@ -2009,58 +2222,67 @@ int select(int nfds, fd_set *readfds,
            struct timeval *timeout)
 #endif
 {
-  int ret;
-  struct timeval timeout_real;
-
   ftpl_init();
 
-  if (real_select == NULL)
+  if (real_select == NULL) return -1;
+
+  if (dont_fake || timeout == NULL || (timeout->tv_sec == 0 && timeout->tv_usec == 0))
   {
-    return -1;
+    int ret;
+#ifdef MACOS_DYLD_INTERPOSE
+    DONT_FAKE_TIME(ret = (*select)(nfds, readfds, writefds, errorfds, timeout));
+#else
+    DONT_FAKE_TIME(ret = (*real_select)(nfds, readfds, writefds, errorfds, timeout));
+#endif
+    return ret;
   }
 
-  if (timeout != NULL)
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  struct timespec fake_timeout = {timeout->tv_sec, (long)timeout->tv_usec * 1000L};
+  timespecadd(&fake_now, &fake_timeout, &fake_deadline);
+
+  for (;;)
   {
-    if (user_rate_set && !dont_fake && (timeout->tv_sec > 0 || timeout->tv_usec > 0))
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
     {
-      struct timespec ts;
+      timeout->tv_sec = 0;
+      timeout->tv_usec = 0;
+      return 0;
+    }
 
-      ts.tv_sec = timeout->tv_sec;
-      ts.tv_nsec = timeout->tv_usec * 1000;
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
 
-      timespecmul(&ts, 1.0 / user_rate, &ts);
-
-      timeout_real.tv_sec = ts.tv_sec;
-      timeout_real.tv_usec = ts.tv_nsec / 1000;
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
     }
     else
     {
-      timeout_real.tv_sec = timeout->tv_sec;
-      timeout_real.tv_usec = timeout->tv_usec;
+      real_remaining = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
+
+    struct timeval timeout_real;
+    timeout_real.tv_sec = real_remaining.tv_sec;
+    timeout_real.tv_usec = real_remaining.tv_nsec / 1000;
+
+    int ret;
+#ifdef MACOS_DYLD_INTERPOSE
+    DONT_FAKE_TIME(ret = (*select)(nfds, readfds, writefds, errorfds, &timeout_real));
+#else
+    DONT_FAKE_TIME(ret = (*real_select)(nfds, readfds, writefds, errorfds, &timeout_real));
+#endif
+    if (ret != 0)
+    {
+      return ret;
     }
   }
-
-#ifdef MACOS_DYLD_INTERPOSE
-  DONT_FAKE_TIME(ret = (*select)(nfds, readfds, writefds, errorfds, timeout == NULL ? timeout : &timeout_real));
-#else
-  DONT_FAKE_TIME(ret = (*real_select)(nfds, readfds, writefds, errorfds, timeout == NULL ? timeout : &timeout_real));
-#endif
-
-  /* scale timeout back if user rate is set, #382 */
-  if (user_rate_set && (timeout != NULL))
-  {
-    struct timespec ts;
-
-    ts.tv_sec = timeout_real.tv_sec;
-    ts.tv_nsec = timeout_real.tv_usec * 1000;
-
-    timespecmul(&ts, user_rate, &ts);
-
-    timeout->tv_sec = ts.tv_sec;
-    timeout->tv_usec = ts.tv_nsec / 1000;
-  }
-
-  return ret;
 }
 
 #ifdef __linux__
@@ -2073,39 +2295,60 @@ int pselect(int nfds, fd_set *readfds,
             const struct timespec *timeout,
             const sigset_t *sigmask)
 {
-  int ret;
-  struct timespec timeout_real;
-
   ftpl_init();
 
-  if (real_pselect == NULL)
+  if (real_pselect == NULL) return -1;
+
+  if (dont_fake || timeout == NULL || (timeout->tv_sec == 0 && timeout->tv_nsec == 0))
   {
-    return -1;
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_pselect)(nfds, readfds, writefds, errorfds, timeout, sigmask));
+    return ret;
   }
 
-  if (timeout != NULL)
+  struct timespec fake_now, fake_deadline;
+  if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+  timespecadd(&fake_now, timeout, &fake_deadline);
+
+  for (;;)
   {
-    if (user_rate_set && !dont_fake && (timeout->tv_sec > 0 || timeout->tv_nsec > 0))
+    if (ft_get_fake_time(CLOCK_REALTIME, &fake_now) == -1) return -1;
+    if (timespeccmp(&fake_now, &fake_deadline, >=))
     {
-      timespecmul(timeout, 1.0 / user_rate, &timeout_real);
+      return 0;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec timeout_real;
+    if (user_rate_set && !dont_fake && (fake_remaining.tv_sec > 0 || fake_remaining.tv_nsec > 0))
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &timeout_real);
     }
     else
     {
-      timeout_real.tv_sec = timeout->tv_sec;
-      timeout_real.tv_nsec = timeout->tv_nsec;
+      timeout_real = fake_remaining;
+    }
+    ft_timespec_clamp_nonneg(&timeout_real);
+    ft_timespec_ensure_nonzero(&timeout_real);
+
+    int ret;
+    DONT_FAKE_TIME(ret = (*real_pselect)(nfds, readfds, writefds, errorfds, &timeout_real, sigmask));
+    if (ret != 0)
+    {
+      return ret;
     }
   }
-
-  DONT_FAKE_TIME(ret = (*real_pselect)(nfds, readfds, writefds, errorfds, timeout == NULL ? timeout : &timeout_real, sigmask));
-  return ret;
 }
 #endif
 
 int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout)
 {
   int result;
-  struct timespec real_abs_timeout, *real_abs_timeout_pt;
 
+  ftpl_init();
   /* sanity check */
   if (abs_timeout == NULL)
   {
@@ -2114,38 +2357,57 @@ int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout)
 
   if (!CHECK_MISSING_REAL(sem_timedwait)) return -1;
 
-  if (!dont_fake)
+  if (dont_fake)
   {
-    struct timespec tdiff, timeadj;
+    DONT_FAKE_TIME(result = (*real_sem_timedwait)(sem, abs_timeout));
+    return result;
+  }
 
-    timespecsub(abs_timeout, &user_faked_time_timespec, &tdiff);
+  for (;;)
+  {
+    struct timespec real_now;
+    DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_REALTIME, &real_now));
+    if (result == -1) return -1;
 
-    if (user_rate_set)
+    struct timespec fake_now = real_now;
+    if (fake_clock_gettime(CLOCK_REALTIME, &fake_now) == -1) return -1;
+
+    if (timespeccmp(&fake_now, abs_timeout, >=))
     {
-      timespecmul(&tdiff, user_rate, &timeadj);
+      errno = ETIMEDOUT;
+      return -1;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(abs_timeout, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake)
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
     }
     else
     {
-        timeadj = tdiff;
+      real_remaining = fake_remaining;
     }
-    timespecadd(&ftpl_starttime.real, &timeadj, &real_abs_timeout);
-    real_abs_timeout_pt = &real_abs_timeout;
-  }
-  else
-  {
-    /* cast away constness */
-    real_abs_timeout_pt = (struct timespec *)abs_timeout;
-  }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
 
-  DONT_FAKE_TIME(result = (*real_sem_timedwait)(sem, real_abs_timeout_pt));
-  return result;
+    struct timespec real_abstime;
+    timespecadd(&real_now, &real_remaining, &real_abstime);
+
+    DONT_FAKE_TIME(result = (*real_sem_timedwait)(sem, &real_abstime));
+    if (result == 0) return 0;
+    if (errno != ETIMEDOUT) return result;
+    /* real timed out, but fake deadline not reached yet */
+  }
 }
 
 /* EXPERIMENTAL */
 int sem_clockwait(sem_t *sem, clockid_t clockid, const struct timespec *abstime)
 {
   int result;
-  struct timespec real_abstime, *real_abstime_pt;
 
   if ((!fake_monotonic_clock) && (clockid == CLOCK_MONOTONIC))
   {
@@ -2153,6 +2415,7 @@ int sem_clockwait(sem_t *sem, clockid_t clockid, const struct timespec *abstime)
     return result;
   }
 
+  ftpl_init();
   /* sanity check */
   if (abstime == NULL)
   {
@@ -2161,38 +2424,61 @@ int sem_clockwait(sem_t *sem, clockid_t clockid, const struct timespec *abstime)
 
   if (!CHECK_MISSING_REAL(sem_clockwait)) return -1;
 
-  if (!dont_fake)
+  if (dont_fake)
   {
-    struct timespec tdiff, timeadj;
+    DONT_FAKE_TIME(result = (*real_sem_clockwait)(sem, clockid, abstime));
+    return result;
+  }
 
-    timespecsub(abstime, &user_faked_time_timespec, &tdiff);
-
-    if (user_rate_set)
+  /* If monotonic faking is disabled, don't enforce fake deadlines. */
+  if (clockid == CLOCK_MONOTONIC)
+  {
+    get_fake_monotonic_setting(&fake_monotonic_clock);
+    if (!fake_monotonic_clock)
     {
-      timespecmul(&tdiff, 1.0 / user_rate, &timeadj);
+      DONT_FAKE_TIME(result = (*real_sem_clockwait)(sem, clockid, abstime));
+      return result;
+    }
+  }
+
+  for (;;)
+  {
+    struct timespec real_now;
+    DONT_FAKE_TIME(result = (*real_clock_gettime)(clockid, &real_now));
+    if (result == -1) return -1;
+
+    struct timespec fake_now = real_now;
+    if (fake_clock_gettime(clockid, &fake_now) == -1) return -1;
+
+    if (timespeccmp(&fake_now, abstime, >=))
+    {
+      errno = ETIMEDOUT;
+      return -1;
+    }
+
+    struct timespec fake_remaining;
+    timespecsub(abstime, &fake_now, &fake_remaining);
+    ft_timespec_clamp_nonneg(&fake_remaining);
+
+    struct timespec real_remaining;
+    if (user_rate_set && !dont_fake && ((clockid == CLOCK_REALTIME) || (clockid == CLOCK_MONOTONIC)))
+    {
+      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
     }
     else
     {
-        timeadj = tdiff;
+      real_remaining = fake_remaining;
     }
-    if (clockid == CLOCK_REALTIME)
-    {
-      timespecadd(&ftpl_starttime.real, &timeadj, &real_abstime);
-    }
-    if (clockid == CLOCK_MONOTONIC)
-    {
-      timespecadd(&ftpl_starttime.mon, &timeadj, &real_abstime);
-    }
-    real_abstime_pt = &real_abstime;
-  }
-  else
-  {
-    /* cast away constness */
-    real_abstime_pt = (struct timespec *)abstime;
-  }
+    ft_timespec_clamp_nonneg(&real_remaining);
+    ft_timespec_ensure_nonzero(&real_remaining);
 
-  DONT_FAKE_TIME(result = (*real_sem_clockwait)(sem, clockid, real_abstime_pt));
-  return result;
+    struct timespec real_abstime;
+    timespecadd(&real_now, &real_remaining, &real_abstime);
+
+    DONT_FAKE_TIME(result = (*real_sem_clockwait)(sem, clockid, &real_abstime));
+    if (result == 0) return 0;
+    if (errno != ETIMEDOUT) return result;
+  }
 }
 #endif
 
@@ -4123,7 +4409,7 @@ int pthread_cond_timedwait_common(pthread_cond_t *cond, pthread_mutex_t *mutex, 
   struct pthread_cond_monotonic* e;
   char *tmp_env;
   int wait_ms;
-  clockid_t clk_id;
+  clockid_t clk_id = CLOCK_REALTIME;
   int result = 0;
 
   ftpl_init();
@@ -4140,96 +4426,121 @@ int pthread_cond_timedwait_common(pthread_cond_t *cond, pthread_mutex_t *mutex, 
       clk_id = CLOCK_MONOTONIC;
     else
       clk_id = CLOCK_REALTIME;
+  }
 
-    DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &realtime));
-    if (result == -1)
-    {
-      return EINVAL;
-    }
-    faketime = realtime;
-    (void)fake_clock_gettime(clk_id, &faketime);
+  for (;;)
+  {
+    tf = NULL;
+    tmp_env = NULL;
 
-    if ((tmp_env = getenv("FAKETIME_WAIT_MS")) != NULL)
+    if (abstime != NULL)
     {
-      wait_ms = atol(tmp_env);
       DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &realtime));
       if (result == -1)
       {
         return EINVAL;
       }
+      faketime = realtime;
+      (void)fake_clock_gettime(clk_id, &faketime);
 
-      tdiff_actual.tv_sec = wait_ms / 1000;
-      tdiff_actual.tv_nsec = (wait_ms % 1000) * 1000000;
-      timespecadd(&realtime, &tdiff_actual, &tp);
+      if ((tmp_env = getenv("FAKETIME_WAIT_MS")) != NULL)
+      {
+        /* Explicitly wait a fixed amount of real time. */
+        wait_ms = atol(tmp_env);
+        tdiff_actual.tv_sec = wait_ms / 1000;
+        tdiff_actual.tv_nsec = (wait_ms % 1000) * 1000000;
+        timespecadd(&realtime, &tdiff_actual, &tp);
+        tf = &tp;
+      }
+      else
+      {
+        if (!fake_monotonic_clock && clk_id == CLOCK_MONOTONIC)
+        {
+          DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
+          if (result == -1)
+          {
+            return -1;
+          }
+          timespecsub(abstime, &current_monotonic, &tp);
+        }
+        else
+        {
+          timespecsub(abstime, &faketime, &tp);
+        }
+        if (user_rate_set)
+        {
+          timespecmul(&tp, 1.0 / user_rate, &tdiff_actual);
+        }
+        else
+        {
+          tdiff_actual = tp;
+        }
 
-      tf = &tp;
+        /* For CLOCK_MONOTONIC, pthread_cond_timedwait uses clock_gettime internally.
+           Pass an abstime that is consistent with what glibc expects. */
+#ifndef __ARM_ARCH
+#ifndef FORCE_MONOTONIC_FIX
+        if (clk_id == CLOCK_MONOTONIC) {
+          if (!fake_monotonic_clock) {
+            /* When not faking monotonic clock, use real monotonic time as base */
+            DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
+            if (result == -1)
+            {
+              return -1;
+            }
+            timespecadd(&current_monotonic, &tdiff_actual, &tp);
+          }
+          else if (needs_forced_monotonic_fix("pthread_cond_timedwait") == true) {
+            timespecadd(&realtime, &tdiff_actual, &tp);
+          }
+          else {
+            timespecadd(&faketime, &tdiff_actual, &tp);
+          }
+        }
+        else
+#endif
+#endif
+          timespecadd(&realtime, &tdiff_actual, &tp);
+
+        tf = &tp;
+      }
+    }
+
+    switch (compat) {
+    case FT_COMPAT_GLIBC_2_3_2:
+      result = real_pthread_cond_timedwait_232(cond, mutex, tf);
+      break;
+    case FT_COMPAT_GLIBC_2_2_5:
+      result = real_pthread_cond_timedwait_225(cond, mutex, tf);
+      break;
+    }
+
+    if (abstime == NULL) return result;
+    if (result != ETIMEDOUT) return result;
+
+    /* If we're explicitly waiting a fixed real duration, do not re-wait. */
+    if (tmp_env != NULL) return result;
+
+    /* Prevent premature timeout when fake time moved backwards while waiting. */
+    struct timespec now_real;
+    DONT_FAKE_TIME(result = (*real_clock_gettime)(clk_id, &now_real));
+    if (result == -1) return ETIMEDOUT;
+    struct timespec now_app = now_real;
+    if (!fake_monotonic_clock && clk_id == CLOCK_MONOTONIC)
+    {
+      /* leave now_app as real monotonic */
     }
     else
     {
-      if (!fake_monotonic_clock && clk_id == CLOCK_MONOTONIC)
-      {
-        DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
-        if (result == -1)
-        {
-          return -1;
-        }
-        timespecsub(abstime, &current_monotonic, &tp);
-      }
-      else
-      {
-        timespecsub(abstime, &faketime, &tp);
-      }
-      if (user_rate_set)
-      {
-        timespecmul(&tp, 1.0 / user_rate, &tdiff_actual);
-      }
-      else
-      {
-        tdiff_actual = tp;
-      }
+      (void)fake_clock_gettime(clk_id, &now_app);
     }
 
-    /* For CLOCK_MONOTONIC, pthread_cond_timedwait uses clock_gettime
-       internally to calculate the appropriate duration for the
-       waiting time. This already uses the faked functions, hence, the
-       fake time needs to be passed to pthread_cond_timedwait for
-       CLOCK_MONOTONIC. */
-#ifndef __ARM_ARCH
-#ifndef FORCE_MONOTONIC_FIX
-    if (clk_id == CLOCK_MONOTONIC) {
-      if (!fake_monotonic_clock) {
-        /* When not faking monotonic clock, use real monotonic time as base */
-        DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
-        if (result == -1)
-        {
-          return -1;
-        }
-        timespecadd(&current_monotonic, &tdiff_actual, &tp);
-      }
-      else if (needs_forced_monotonic_fix("pthread_cond_timedwait") == true) {
-        timespecadd(&realtime, &tdiff_actual, &tp);
-      }
-      else {
-        timespecadd(&faketime, &tdiff_actual, &tp);
-      }
+    if (timespeccmp(&now_app, abstime, >=))
+    {
+      return ETIMEDOUT;
     }
-    else
-#endif
-#endif
-      timespecadd(&realtime, &tdiff_actual, &tp);
-
-    tf = &tp;
+    /* else: re-wait with updated mapping */
   }
-
-  switch (compat) {
-  case FT_COMPAT_GLIBC_2_3_2:
-    result = real_pthread_cond_timedwait_232(cond, mutex, tf);
-    break;
-  case FT_COMPAT_GLIBC_2_2_5:
-    result = real_pthread_cond_timedwait_225(cond, mutex, tf);
-    break;
-  }
-  return result;
 }
 
 int pthread_cond_timedwait_225(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
@@ -4626,58 +4937,69 @@ long syscall(long number, ...) {
 
     struct timespec real_req;
 
+    /* If monotonic faking is disabled, pass through unchanged. */
+    if (clk_id == CLOCK_MONOTONIC)
+    {
+      get_fake_monotonic_setting(&fake_monotonic_clock);
+      if (!fake_monotonic_clock)
+      {
+        return real_syscall(number, clk_id, flags, req, rem);
+      }
+    }
+
+    struct timespec fake_deadline;
     if (flags & TIMER_ABSTIME)
     {
-      /* Sleep until absolute fake time 'req': convert to corresponding real abstime */
-      struct timespec tdiff, timeadj;
-      /* time difference between target fake abstime and fake base */
-      timespecsub(req, &user_faked_time_timespec, &timeadj);
-      if (user_rate_set) {
-        timespecmul(&timeadj, 1.0 / user_rate, &tdiff);
-      } else {
-        tdiff = timeadj;
+      fake_deadline = *req;
+    }
+    else
+    {
+      struct timespec fake_now;
+      if (ft_get_fake_time(clk_id, &fake_now) == -1)
+      {
+        return real_syscall(number, clk_id, flags, req, rem);
+      }
+      timespecadd(&fake_now, req, &fake_deadline);
+    }
+
+    for (;;)
+    {
+      struct timespec fake_now;
+      if (ft_get_fake_time(clk_id, &fake_now) == -1)
+      {
+        return real_syscall(number, clk_id, flags, req, rem);
       }
 
-      if (clk_id == CLOCK_REALTIME)
+      if (timespeccmp(&fake_now, &fake_deadline, >=))
       {
-        timespecadd(&ftpl_starttime.real, &tdiff, &real_req);
-      } else if (clk_id == CLOCK_MONOTONIC)
-      {
-        get_fake_monotonic_setting(&fake_monotonic_clock);
-        if (fake_monotonic_clock) {
-          timespecadd(&ftpl_starttime.mon, &tdiff, &real_req);
-        } else {
-          /* leave untouched if monotonic faking disabled */
-          real_req = *req;
-        }
-      } else {
-        /* other clocks: leave untouched */
-        real_req = *req;
+        return 0;
       }
-    } else
-    {
-      /* Relative sleep: scale by 1/rate for realtime/monotonic when faking */
+
+      struct timespec fake_remaining;
+      timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+      ft_timespec_clamp_nonneg(&fake_remaining);
+
       if (user_rate_set && !dont_fake && ((clk_id == CLOCK_REALTIME) || (clk_id == CLOCK_MONOTONIC)))
       {
-        timespecmul(req, 1.0 / user_rate, &real_req);
-      } else {
-        real_req = *req;
+        timespecmul(&fake_remaining, 1.0 / user_rate, &real_req);
       }
-    }
-
-    long rc = real_syscall(number, clk_id, flags, &real_req, rem);
-    if (rc != 0)
-    {
-      return rc;
-    }
-    if (rem != NULL && (rem->tv_sec != 0 || rem->tv_nsec != 0))
-    {
-      if (user_rate_set && !dont_fake)
+      else
       {
-        timespecmul(rem, user_rate, rem);
+        real_req = fake_remaining;
+      }
+      ft_timespec_clamp_nonneg(&real_req);
+      ft_timespec_ensure_nonzero(&real_req);
+
+      long rc = real_syscall(number, clk_id, 0, &real_req, rem);
+      if (rc != 0)
+      {
+        if (rem != NULL && (rem->tv_sec != 0 || rem->tv_nsec != 0) && user_rate_set && !dont_fake)
+        {
+          timespecmul(rem, user_rate, rem);
+        }
+        return rc;
       }
     }
-    return rc;
   }
 #endif /* __NR_clock_nanosleep */
 #endif /* FAKE_SLEEP */
