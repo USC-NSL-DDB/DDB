@@ -22,7 +22,7 @@ pub struct Args {
     pub file_level: String,
 
     /// OpenTelemetry collector gRPC endpoint
-    #[arg(long, default_value = "http://ruby1.nsl.usc.edu:54317")]
+    #[arg(long, default_value = "http://68.181.216.50:54317")]
     pub otel_endpoint: String,
 
     /// OpenTelemetry level
