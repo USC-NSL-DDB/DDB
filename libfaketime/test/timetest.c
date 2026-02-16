@@ -182,6 +182,48 @@ void* pthread_test(void* args)
   }
   pthread_cond_destroy(&monotonic_cond);
 
+  clock_gettime(CLOCK_REALTIME, &now);
+  time_to_wait.tv_sec = now.tv_sec+1;
+  time_to_wait.tv_nsec = now.tv_nsec;
+
+  printf("pthread_cond_clockwait: CLOCK_REALTIME test\n");
+  printf("(Intentionally sleeping 1 second...)\n");
+  fflush(stdout);
+
+  pthread_cond_init(&monotonic_cond, NULL);
+  pthread_mutex_lock(&fake_mtx);
+  rt = pthread_cond_clockwait(&monotonic_cond, &fake_mtx, CLOCK_REALTIME, &time_to_wait);
+  if (rt != ETIMEDOUT)
+  {
+    printf("pthread_cond_clockwait CLOCK_REALTIME failed (rt=%d)\n", rt);
+    pthread_mutex_unlock(&fake_mtx);
+    exit(EXIT_FAILURE);
+  }
+  pthread_mutex_unlock(&fake_mtx);
+  printf("pthread_cond_clockwait: CLOCK_REALTIME passed\n");
+  pthread_cond_destroy(&monotonic_cond);
+
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  time_to_wait.tv_sec = now.tv_sec+1;
+  time_to_wait.tv_nsec = now.tv_nsec;
+
+  printf("pthread_cond_clockwait: CLOCK_MONOTONIC test\n");
+  printf("(Intentionally sleeping 1 second...)\n");
+  fflush(stdout);
+
+  pthread_cond_init(&monotonic_cond, NULL);
+  pthread_mutex_lock(&fake_mtx);
+  rt = pthread_cond_clockwait(&monotonic_cond, &fake_mtx, CLOCK_MONOTONIC, &time_to_wait);
+  if (rt != ETIMEDOUT)
+  {
+    printf("pthread_cond_clockwait CLOCK_MONOTONIC failed (rt=%d)\n", rt);
+    pthread_mutex_unlock(&fake_mtx);
+    exit(EXIT_FAILURE);
+  }
+  pthread_mutex_unlock(&fake_mtx);
+  printf("pthread_cond_clockwait: CLOCK_MONOTONIC passed\n");
+  pthread_cond_destroy(&monotonic_cond);
+
   return NULL;
 }
 

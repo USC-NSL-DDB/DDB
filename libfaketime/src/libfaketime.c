@@ -251,6 +251,7 @@ static int          (*real_pthread_cond_timedwait_225)  (pthread_cond_t *, pthre
 static int          (*real_pthread_cond_timedwait_232)  (pthread_cond_t *, pthread_mutex_t*, struct timespec *);
 static int          (*real_pthread_cond_init_232) (pthread_cond_t *restrict, const pthread_condattr_t *restrict);
 static int          (*real_pthread_cond_destroy_232) (pthread_cond_t *);
+static int          (*real_pthread_cond_clockwait)   (pthread_cond_t *, pthread_mutex_t *, clockid_t, const struct timespec *);
 static pthread_rwlock_t monotonic_conds_lock;
 #endif
 
@@ -3328,6 +3329,8 @@ static void ftpl_really_init(void)
     real_pthread_cond_destroy_232 =  dlsym(RTLD_NEXT, "pthread_cond_destroy");
   }
 
+  real_pthread_cond_clockwait = dlsym(RTLD_NEXT, "pthread_cond_clockwait");
+
   if (pthread_rwlock_init(&monotonic_conds_lock,NULL) != 0) {
     fprintf(stderr,"monotonic_conds_lock init failed\n");
     exit(-1);
@@ -4563,6 +4566,122 @@ __asm__(".symver pthread_cond_timedwait_232, pthread_cond_timedwait@@GLIBC_2.3.2
 __asm__(".symver pthread_cond_init_232, pthread_cond_init@@GLIBC_2.3.2");
 __asm__(".symver pthread_cond_destroy_232, pthread_cond_destroy@@GLIBC_2.3.2");
 #endif
+
+int pthread_cond_clockwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
+                           clockid_t clock_id, const struct timespec *abstime)
+{
+  struct timespec tp, tdiff_actual, realtime, faketime, current_monotonic;
+  struct timespec *tf = NULL;
+  char *tmp_env;
+  int wait_ms;
+  int result = 0;
+
+  ftpl_init();
+
+  if (real_pthread_cond_clockwait == NULL)
+  {
+    return EINVAL;
+  }
+
+  for (;;)
+  {
+    tf = NULL;
+    tmp_env = NULL;
+
+    if (abstime != NULL)
+    {
+      DONT_FAKE_TIME(result = (*real_clock_gettime)(clock_id, &realtime));
+      if (result == -1)
+      {
+        return EINVAL;
+      }
+      faketime = realtime;
+      (void)fake_clock_gettime(clock_id, &faketime);
+
+      if ((tmp_env = getenv("FAKETIME_WAIT_MS")) != NULL)
+      {
+        wait_ms = atol(tmp_env);
+        tdiff_actual.tv_sec = wait_ms / 1000;
+        tdiff_actual.tv_nsec = (wait_ms % 1000) * 1000000;
+        timespecadd(&realtime, &tdiff_actual, &tp);
+        tf = &tp;
+      }
+      else
+      {
+        if (!fake_monotonic_clock && clock_id == CLOCK_MONOTONIC)
+        {
+          DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
+          if (result == -1)
+          {
+            return -1;
+          }
+          timespecsub(abstime, &current_monotonic, &tp);
+        }
+        else
+        {
+          timespecsub(abstime, &faketime, &tp);
+        }
+        if (user_rate_set)
+        {
+          timespecmul(&tp, 1.0 / user_rate, &tdiff_actual);
+        }
+        else
+        {
+          tdiff_actual = tp;
+        }
+
+#ifndef __ARM_ARCH
+#ifndef FORCE_MONOTONIC_FIX
+        if (clock_id == CLOCK_MONOTONIC) {
+          if (!fake_monotonic_clock) {
+            DONT_FAKE_TIME(result = (*real_clock_gettime)(CLOCK_MONOTONIC, &current_monotonic));
+            if (result == -1)
+            {
+              return -1;
+            }
+            timespecadd(&current_monotonic, &tdiff_actual, &tp);
+          }
+          else if (needs_forced_monotonic_fix("pthread_cond_clockwait") == true) {
+            timespecadd(&realtime, &tdiff_actual, &tp);
+          }
+          else {
+            timespecadd(&faketime, &tdiff_actual, &tp);
+          }
+        }
+        else
+#endif
+#endif
+          timespecadd(&realtime, &tdiff_actual, &tp);
+
+        tf = &tp;
+      }
+    }
+
+    result = real_pthread_cond_clockwait(cond, mutex, clock_id, tf);
+
+    if (abstime == NULL) return result;
+    if (result != ETIMEDOUT) return result;
+
+    if (tmp_env != NULL) return result;
+
+    struct timespec now_real;
+    DONT_FAKE_TIME(result = (*real_clock_gettime)(clock_id, &now_real));
+    if (result == -1) return ETIMEDOUT;
+    struct timespec now_app = now_real;
+    if (!fake_monotonic_clock && clock_id == CLOCK_MONOTONIC)
+    {
+    }
+    else
+    {
+      (void)fake_clock_gettime(clock_id, &now_app);
+    }
+
+    if (timespeccmp(&now_app, abstime, >=))
+    {
+      return ETIMEDOUT;
+    }
+  }
+}
 
 #endif
 
