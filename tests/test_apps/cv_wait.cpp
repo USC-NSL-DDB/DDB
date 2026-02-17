@@ -10,7 +10,7 @@
 
 int main(int argc, char* argv[]) {
     Args args = parse_args(argc, argv);
-    auto proc_alias = "cv_wait_faketime_app";
+    auto proc_alias = "cv_wait_app";
     if (args.enable_ddb) {
         auto cfg = DDB::Config::get_default("127.0.0.1")
                        .with_alias(proc_alias)
@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
     std::mutex mtx;
     std::condition_variable cv;
 
-    auto timeout = std::chrono::milliseconds(3000);
+    auto timeout = std::chrono::milliseconds(5000);
 
     std::cout << "Election timeout set to " << timeout.count() << " ms" << std::endl;
 
