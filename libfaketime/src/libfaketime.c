@@ -4953,46 +4953,84 @@ static inline long handle_futex_syscall(long number, uint32_t* uaddr, int futex_
       }
     }
 
-    struct timespec real_now;
-    DONT_FAKE_TIME((*real_clock_gettime)(clk_id, &real_now));
+    for (;;) {
+      struct timespec real_now;
+      DONT_FAKE_TIME((*real_clock_gettime)(clk_id, &real_now));
 
-    struct timespec fake_now = real_now;
-    if (fake_clock_gettime(clk_id, &fake_now) == -1) {
-      goto futex_fallback;
+      struct timespec fake_now;
+      if (ft_get_fake_time(clk_id, &fake_now) == -1) {
+        goto futex_fallback;
+      }
+
+      if (timespeccmp(&fake_now, timeout, >=)) {
+        errno = ETIMEDOUT;
+        return -1;
+      }
+
+      struct timespec fake_remaining;
+      timespecsub(timeout, &fake_now, &fake_remaining);
+      ft_timespec_clamp_nonneg(&fake_remaining);
+
+      struct timespec real_remaining;
+      if (user_rate_set && !dont_fake) {
+        timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
+      } else {
+        real_remaining = fake_remaining;
+      }
+      ft_timespec_clamp_nonneg(&real_remaining);
+      ft_timespec_ensure_nonzero(&real_remaining);
+
+      struct timespec real_abstime;
+      timespecadd(&real_now, &real_remaining, &real_abstime);
+
+      long result = make_futex_syscall(number, uaddr, futex_op, val, &real_abstime, uaddr2, val3, false);
+      if (result == 0) return 0;
+      if (errno != ETIMEDOUT) return result;
     }
-
-    // Compute remaining fake time until requested abstime.
-    struct timespec fake_remaining;
-    timespecsub(timeout, &fake_now, &fake_remaining);
-    if (fake_remaining.tv_sec < 0) {
-      fake_remaining.tv_sec = 0;
-      fake_remaining.tv_nsec = 0;
-    }
-
-    // Convert fake remaining duration to real remaining duration.
-    struct timespec real_remaining;
-    if (user_rate_set && !dont_fake) {
-      timespecmul(&fake_remaining, 1.0 / user_rate, &real_remaining);
-    } else {
-      real_remaining = fake_remaining;
-    }
-
-    // Convert to absolute real abstime for the kernel.
-    struct timespec real_abstime;
-    timespecadd(&real_now, &real_remaining, &real_abstime);
-
-    return make_futex_syscall(number, uaddr, futex_op, val, &real_abstime, uaddr2, val3, false);
   } else if (futex_cmd == FUTEX_WAIT) {
     // FUTEX_WAIT uses relative timeout - scale by time rate
-    struct timespec adjusted_timeout;
-    
-    if (user_rate_set && !dont_fake && ((clk_id == CLOCK_REALTIME) || (clk_id == CLOCK_MONOTONIC))) {
-      timespecmul(timeout, 1.0 / user_rate, &adjusted_timeout);
-    } else {
-      adjusted_timeout = *timeout;
+    if (clk_id == CLOCK_MONOTONIC) {
+      get_fake_monotonic_setting(&fake_monotonic_clock);
+      if (!fake_monotonic_clock) {
+        return make_futex_syscall(number, uaddr, futex_op, val, timeout, uaddr2, val3, false);
+      }
     }
-    
-    return make_futex_syscall(number, uaddr, futex_op, val, &adjusted_timeout, uaddr2, val3, false);
+
+    struct timespec initial_fake_now;
+    if (ft_get_fake_time(clk_id, &initial_fake_now) == -1) {
+      goto futex_fallback;
+    }
+    struct timespec fake_deadline;
+    timespecadd(&initial_fake_now, timeout, &fake_deadline);
+
+    for (;;) {
+      struct timespec fake_now;
+      if (ft_get_fake_time(clk_id, &fake_now) == -1) {
+        goto futex_fallback;
+      }
+
+      if (timespeccmp(&fake_now, &fake_deadline, >=)) {
+        errno = ETIMEDOUT;
+        return -1;
+      }
+
+      struct timespec fake_remaining;
+      timespecsub(&fake_deadline, &fake_now, &fake_remaining);
+      ft_timespec_clamp_nonneg(&fake_remaining);
+
+      struct timespec adjusted_timeout;
+      if (user_rate_set && !dont_fake && ((clk_id == CLOCK_REALTIME) || (clk_id == CLOCK_MONOTONIC))) {
+        timespecmul(&fake_remaining, 1.0 / user_rate, &adjusted_timeout);
+      } else {
+        adjusted_timeout = fake_remaining;
+      }
+      ft_timespec_clamp_nonneg(&adjusted_timeout);
+      ft_timespec_ensure_nonzero(&adjusted_timeout);
+
+      long result = make_futex_syscall(number, uaddr, futex_op, val, &adjusted_timeout, uaddr2, val3, false);
+      if (result == 0) return 0;
+      if (errno != ETIMEDOUT) return result;
+    }
   } else {
     // Other futex operations - pass through unchanged
     goto futex_fallback;
@@ -5047,6 +5085,8 @@ long syscall(long number, ...) {
     req = va_arg(ap, const struct timespec*);
     rem = va_arg(ap, struct timespec*);
     va_end(ap);
+
+    ftpl_init();
 
     if (req == NULL)
     {
@@ -5139,6 +5179,8 @@ long syscall(long number, ...) {
     uaddr2 = va_arg(ap, uint32_t*);
     val3 = va_arg(ap, uint32_t);
     va_end(ap);
+
+    ftpl_init();
 
     return handle_futex_syscall(number, uaddr, futex_op, val, timeout, uaddr2, val3);
   }
