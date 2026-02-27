@@ -124,8 +124,10 @@ impl DbgSession {
         self.sync_bkpts_state().await?;
 
         // Instruct debuggee to continue if service discovery is enabled.
+        // Skip SIG40 for ServiceWeaver mode — it doesn't use this signal.
         let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
-        if Config::global().service_discovery.is_some() {
+        let cfg = Config::global();
+        if cfg.service_discovery.is_some() && cfg.framework != common::config::Framework::ServiceWeaverKube {
             // Broker is enabled. We need to handle the SIG40 signal.
             bdr.add(GdbCmd::ConsoleExec("signal SIG40".to_string()));
         }

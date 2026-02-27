@@ -239,8 +239,9 @@ impl DbgManager {
             }
             Framework::ServiceWeaverKube => {
                 let swc = config
-                    .service_weaver_conf
+                    .service_discovery
                     .as_ref()
+                    .and_then(|sd| sd.service_weaver_conf.as_ref())
                     .expect("Service weaver config missing for service weaver auto discovery.");
                 let (exited_sender, _exited) = tokio::sync::watch::channel(false);
                 let mut jump_host_session = russh::client::connect(
