@@ -36,8 +36,6 @@ pub struct Config {
     #[serde(rename = "Conf", default)]
     pub conf: Conf,
 
-    #[serde(rename = "ServiceWeaverConf", default)]
-    pub service_weaver_conf: Option<ServiceWeaverConf>,
 
     #[serde(rename = "FrameFilter", default)]
     pub frame_filter: Option<FrameFilterConfig>,
@@ -204,6 +202,8 @@ pub struct ServiceDiscovery {
     pub broker: BrokerConfig,
     #[serde(rename = "ConfigPath", default = "default_sd_config_path")]
     pub config_path: String,
+    #[serde(rename = "ServiceWeaverConf", default)]
+    pub service_weaver_conf: Option<ServiceWeaverConf>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -304,7 +304,6 @@ impl Default for Config {
             ssh: SshConfig::default(),
             service_discovery: None,
             conf: Conf::default(),
-            service_weaver_conf: None,
             frame_filter: None,
         }
     }

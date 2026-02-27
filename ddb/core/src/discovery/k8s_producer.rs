@@ -95,8 +95,9 @@ impl DiscoveryMessageProducer for K8sProducer {
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         let kubeconfig_path = Path::new(
             self.config
-                .service_weaver_conf
+                .service_discovery
                 .as_ref()
+                .and_then(|sd| sd.service_weaver_conf.as_ref())
                 .ok_or_else(|| {
                     anyhow::anyhow!("ServiceWeaver configuration is required but not provided")
                 })?
