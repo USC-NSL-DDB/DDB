@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 HEAD_NODE_INSTALL_SCRIPT="$SCRIPT_DIR/install_deps_head.sh"
 
+# Append ~/.local/bin to PATH in .bashrc on remote nodes (idempotent)
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+PATH_FIX="grep -qxF '$PATH_LINE' ~/.bashrc || echo '$PATH_LINE' >> ~/.bashrc"
+
 if [[ ! -f "$CLUSTER_FILE" ]]; then
   echo "Error: cluster file '$CLUSTER_FILE' not found" >&2
   exit 1
@@ -24,7 +28,7 @@ while IFS= read -r ip || [[ -n "$ip" ]]; do
   [[ -z "$ip" || "$ip" == \#* ]] && continue
 
   echo "[*] Deploying to $ip ..."
-  ssh -o StrictHostKeyChecking=no "$ip" 'bash -s' <"$SCRIPT_DIR/$SCRIPT" &
+  { cat "$SCRIPT_DIR/$SCRIPT"; echo; echo "$PATH_FIX"; } | ssh -o StrictHostKeyChecking=no "$ip" bash -s &
   pids+=($!)
   nodes+=("$ip")
 done <"$CLUSTER_FILE"
