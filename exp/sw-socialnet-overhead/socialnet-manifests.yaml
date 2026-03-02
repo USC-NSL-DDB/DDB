@@ -1,0 +1,2061 @@
+apiVersion: v1
+items:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IStorage.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IStorage."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"scalingmachines-2b058494-d74ea918","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"scalingmachines-2b058494-d74ea918"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IStorage."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"scalingmachines-2b058494-d74ea918","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IStorage"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: scalingmachines-2b058494-d74ea918
+    namespace: default
+    resourceVersion: "179188"
+    uid: c4773045-6cc2-4cd0-996c-4e8b9d00c94a
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: scalingmachines-2b058494-d74ea918
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IStorage.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: scalingmachines-2b058494-d74ea918
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IStorage
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:25Z"
+      lastUpdateTime: "2026-03-02T00:38:12Z"
+      message: ReplicaSet "scalingmachines-2b058494-d74ea918-d5fc64689" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/BackendServicer.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/BackendServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-backendservicer-2b058494-2c45fb39","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-backendservicer-2b058494-2c45fb39"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/BackendServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-backendservicer-2b058494-2c45fb39","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/BackendServicer"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-backendservicer-2b058494-2c45fb39
+    namespace: default
+    resourceVersion: "178964"
+    uid: 7c62cbc3-db74-4d67-afc5-c2fcabd6b078
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-backendservicer-2b058494-2c45fb39
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/BackendServicer.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-backendservicer-2b058494-2c45fb39
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/BackendServicer
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:09Z"
+      message: ReplicaSet "server-backendservicer-2b058494-2c45fb39-65794c8bb8" has
+        successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IHomeTimelineService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IHomeTimelineService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-ihometimelineservice-2b058494-23e2b9c7","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-ihometimelineservice-2b058494-23e2b9c7"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IHomeTimelineService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-ihometimelineservice-2b058494-23e2b9c7","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IHomeTimelineService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-ihometimelineservice-2b058494-23e2b9c7
+    namespace: default
+    resourceVersion: "179160"
+    uid: ddda3db6-d1ce-4118-b2b3-729cffcbe9f8
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-ihometimelineservice-2b058494-23e2b9c7
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IHomeTimelineService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-ihometimelineservice-2b058494-23e2b9c7
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IHomeTimelineService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:12Z"
+      message: ReplicaSet "server-ihometimelineservice-2b058494-23e2b9c7-58dc59f7b6"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IMediaService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IMediaService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-imediaservice-2b058494-71999f34","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-imediaservice-2b058494-71999f34"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IMediaService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-imediaservice-2b058494-71999f34","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IMediaService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-imediaservice-2b058494-71999f34
+    namespace: default
+    resourceVersion: "179192"
+    uid: 06ba38d7-3131-40d4-92af-fb978863ad90
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-imediaservice-2b058494-71999f34
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IMediaService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-imediaservice-2b058494-71999f34
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IMediaService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-imediaservice-2b058494-71999f34-86b9485f9" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/ISocialGraphService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/ISocialGraphService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-isocialgraphservice-2b058494-a3f0a401","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-isocialgraphservice-2b058494-a3f0a401"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/ISocialGraphService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-isocialgraphservice-2b058494-a3f0a401","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/ISocialGraphService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-isocialgraphservice-2b058494-a3f0a401
+    namespace: default
+    resourceVersion: "179194"
+    uid: 41a3d6cf-a5d8-4481-be80-cb9416b78032
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-isocialgraphservice-2b058494-a3f0a401
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/ISocialGraphService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-isocialgraphservice-2b058494-a3f0a401
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/ISocialGraphService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-isocialgraphservice-2b058494-a3f0a401-7dc86b4c76"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/ITextService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/ITextService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-itextservice-2b058494-124437f6","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-itextservice-2b058494-124437f6"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/ITextService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-itextservice-2b058494-124437f6","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/ITextService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-itextservice-2b058494-124437f6
+    namespace: default
+    resourceVersion: "179148"
+    uid: bde9094f-b5ec-419d-a101-84f67f0f27b9
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-itextservice-2b058494-124437f6
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/ITextService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:06-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-itextservice-2b058494-124437f6
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/ITextService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:12Z"
+      message: ReplicaSet "server-itextservice-2b058494-124437f6-59cc5984d5" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IUniqueIdService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IUniqueIdService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iuniqueidservice-2b058494-c5a91808","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-iuniqueidservice-2b058494-c5a91808"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IUniqueIdService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-iuniqueidservice-2b058494-c5a91808","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IUniqueIdService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iuniqueidservice-2b058494-c5a91808
+    namespace: default
+    resourceVersion: "179196"
+    uid: 2a1d7c08-f63d-4169-a36e-50a19edef406
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-iuniqueidservice-2b058494-c5a91808
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IUniqueIdService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-iuniqueidservice-2b058494-c5a91808
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IUniqueIdService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:10Z"
+      lastUpdateTime: "2026-02-27T03:22:10Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-iuniqueidservice-2b058494-c5a91808-6696df7985" has
+        successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IUrlShortenService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IUrlShortenService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iurlshortenservice-2b058494-7353f0d9","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-iurlshortenservice-2b058494-7353f0d9"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IUrlShortenService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-iurlshortenservice-2b058494-7353f0d9","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IUrlShortenService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iurlshortenservice-2b058494-7353f0d9
+    namespace: default
+    resourceVersion: "179014"
+    uid: eb88d951-99a5-45bf-bc9c-40e4a2ffbd82
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-iurlshortenservice-2b058494-7353f0d9
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IUrlShortenService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-iurlshortenservice-2b058494-7353f0d9
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IUrlShortenService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:10Z"
+      message: ReplicaSet "server-iurlshortenservice-2b058494-7353f0d9-fdb9698c7"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IUserMentionService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IUserMentionService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iusermentionservice-2b058494-a5d452fc","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-iusermentionservice-2b058494-a5d452fc"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IUserMentionService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-iusermentionservice-2b058494-a5d452fc","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IUserMentionService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iusermentionservice-2b058494-a5d452fc
+    namespace: default
+    resourceVersion: "179198"
+    uid: 0439d25f-b5fb-4576-8464-0f7022f170b1
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-iusermentionservice-2b058494-a5d452fc
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IUserMentionService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-iusermentionservice-2b058494-a5d452fc
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IUserMentionService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:10Z"
+      lastUpdateTime: "2026-02-27T03:22:10Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-iusermentionservice-2b058494-a5d452fc-f89b56487"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/IUserTimelineService.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/IUserTimelineService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iusertimelineservice-2b058494-463bf2bb","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-iusertimelineservice-2b058494-463bf2bb"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/IUserTimelineService."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-iusertimelineservice-2b058494-463bf2bb","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/IUserTimelineService"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iusertimelineservice-2b058494-463bf2bb
+    namespace: default
+    resourceVersion: "179183"
+    uid: a7e87072-5e62-47b8-8b3c-90bdbae0a9d9
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-iusertimelineservice-2b058494-463bf2bb
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/IUserTimelineService.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-iusertimelineservice-2b058494-463bf2bb
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/IUserTimelineService
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:24Z"
+      lastUpdateTime: "2026-03-02T00:38:12Z"
+      message: ReplicaSet "server-iusertimelineservice-2b058494-463bf2bb-55fbbb49c9"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/MediaStorageServicer.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/MediaStorageServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-mediastorageservicer-2b058494-bd5c03a7","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-mediastorageservicer-2b058494-bd5c03a7"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/MediaStorageServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-mediastorageservicer-2b058494-bd5c03a7","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/MediaStorageServicer"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-mediastorageservicer-2b058494-bd5c03a7
+    namespace: default
+    resourceVersion: "179200"
+    uid: 46da5b6f-e0ca-4836-8906-0d439dc96ab4
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-mediastorageservicer-2b058494-bd5c03a7
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/MediaStorageServicer.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-mediastorageservicer-2b058494-bd5c03a7
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/MediaStorageServicer
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:09Z"
+      lastUpdateTime: "2026-02-27T03:22:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:25Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-mediastorageservicer-2b058494-bd5c03a7-759cb9c767"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/PostStorageServicer.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/PostStorageServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-poststorageservicer-2b058494-36ff9e96","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-poststorageservicer-2b058494-36ff9e96"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/PostStorageServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-poststorageservicer-2b058494-36ff9e96","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/PostStorageServicer"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-poststorageservicer-2b058494-36ff9e96
+    namespace: default
+    resourceVersion: "179020"
+    uid: 0f00124b-d60f-4b25-8957-6a2b2dd40ba8
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-poststorageservicer-2b058494-36ff9e96
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/PostStorageServicer.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-poststorageservicer-2b058494-36ff9e96
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/PostStorageServicer
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T03:22:10Z"
+      lastUpdateTime: "2026-02-27T03:22:10Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:25Z"
+      lastUpdateTime: "2026-03-02T00:38:10Z"
+      message: ReplicaSet "server-poststorageservicer-2b058494-36ff9e96-6f86c7c994"
+        has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components SocialNetwork/server/UserServicer.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components SocialNetwork/server/UserServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-userservicer-2b058494-fec0966c","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"server-userservicer-2b058494-fec0966c"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components SocialNetwork/server/UserServicer."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"server-userservicer-2b058494-fec0966c","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","SocialNetwork/server/UserServicer"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-userservicer-2b058494-fec0966c
+    namespace: default
+    resourceVersion: "179203"
+    uid: 2f3c13d0-58ba-4548-988c-3badc81c7b37
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: server-userservicer-2b058494-fec0966c
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components SocialNetwork/server/UserServicer.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: server-userservicer-2b058494-fec0966c
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - SocialNetwork/server/UserServicer
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:27Z"
+      lastUpdateTime: "2026-02-27T02:05:27Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:25Z"
+      lastUpdateTime: "2026-03-02T00:38:13Z"
+      message: ReplicaSet "server-userservicer-2b058494-fec0966c-6f94469fc8" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      description: This Deployment hosts components github.com/ServiceWeaver/weaver/Main.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{"description":"This Deployment hosts components github.com/ServiceWeaver/weaver/Main."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"weaver-main-2b058494-bf739e4d","namespace":"default"},"spec":{"selector":{"matchLabels":{"serviceweaver/name":"weaver-main-2b058494-bf739e4d"}},"strategy":{},"template":{"metadata":{"annotations":{"description":"This Pod hosts components github.com/ServiceWeaver/weaver/Main."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/name":"weaver-main-2b058494-bf739e4d","serviceweaver/version":"2b058494"},"namespace":"default"},"spec":{"containers":[{"args":["babysitter","/weaver/weaver.toml","/weaver/config.textpb","github.com/ServiceWeaver/weaver/Main"],"image":"h21565897/socialnet-serviceweaver:12345","imagePullPolicy":"IfNotPresent","name":"serviceweaver","ports":[{"containerPort":20000,"name":"apilistener"}],"resources":{},"stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/weaver/weaver.toml","name":"config","subPath":"weaver.toml"},{"mountPath":"/weaver/config.textpb","name":"config","subPath":"config.textpb"}]}],"dnsPolicy":"ClusterFirst","serviceAccountName":"default","volumes":[{"configMap":{"name":"config-2b058494"},"name":"config"}]}}},"status":{}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    generation: 2
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: weaver-main-2b058494-bf739e4d
+    namespace: default
+    resourceVersion: "179185"
+    uid: d98f50a2-5c56-4f68-9f67-84e1e3d8366d
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        serviceweaver/name: weaver-main-2b058494-bf739e4d
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          description: This Pod hosts components github.com/ServiceWeaver/weaver/Main.
+          kubectl.kubernetes.io/restartedAt: "2026-03-01T17:38:07-07:00"
+        labels:
+          serviceweaver/app: server.out
+          serviceweaver/name: weaver-main-2b058494-bf739e4d
+          serviceweaver/version: 2b058494
+        namespace: default
+      spec:
+        containers:
+        - args:
+          - babysitter
+          - /weaver/weaver.toml
+          - /weaver/config.textpb
+          - github.com/ServiceWeaver/weaver/Main
+          image: h21565897/socialnet-serviceweaver:12345
+          imagePullPolicy: IfNotPresent
+          name: serviceweaver
+          ports:
+          - containerPort: 20000
+            name: apilistener
+            protocol: TCP
+          resources: {}
+          stdin: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          tty: true
+          volumeMounts:
+          - mountPath: /weaver/weaver.toml
+            name: config
+            subPath: weaver.toml
+          - mountPath: /weaver/config.textpb
+            name: config
+            subPath: config.textpb
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: default
+        serviceAccountName: default
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: config-2b058494
+          name: config
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:27Z"
+      lastUpdateTime: "2026-02-27T02:05:27Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-27T02:05:25Z"
+      lastUpdateTime: "2026-03-02T00:38:12Z"
+      message: ReplicaSet "weaver-main-2b058494-bf739e4d-dfccf7c67" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 2
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: This Service forwards traffic to the "apilistener" listener.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{"description":"This Service forwards traffic to the \"apilistener\" listener."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/listener":"apilistener","serviceweaver/version":"2b058494"},"name":"apilistener-2b058494","namespace":"default"},"spec":{"ports":[{"port":80,"protocol":"TCP","targetPort":20000}],"selector":{"serviceweaver/name":"weaver-main-2b058494-bf739e4d"},"type":"LoadBalancer"},"status":{"loadBalancer":{}}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/listener: apilistener
+      serviceweaver/version: 2b058494
+    name: apilistener-2b058494
+    namespace: default
+    resourceVersion: "179513"
+    uid: 89494a10-baf5-4f4c-8c9e-9c538ca13622
+  spec:
+    clusterIP: 10.43.148.188
+    clusterIPs:
+    - 10.43.148.188
+    externalTrafficPolicy: Cluster
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - nodePort: 30522
+      port: 80
+      protocol: TCP
+      targetPort: 20000
+    selector:
+      serviceweaver/name: weaver-main-2b058494-bf739e4d
+    sessionAffinity: None
+    type: NodePort
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    creationTimestamp: "2026-02-26T22:45:33Z"
+    labels:
+      component: apiserver
+      provider: kubernetes
+    name: kubernetes
+    namespace: default
+    resourceVersion: "66"
+    uid: 7ee537ee-2a97-4af5-b04f-0de21254dbf7
+  spec:
+    clusterIP: 10.43.0.1
+    clusterIPs:
+    - 10.43.0.1
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: 6443
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+    creationTimestamp: "2026-02-26T22:46:13Z"
+    namespace: default
+    resourceVersion: "735"
+    uid: b8cf07cd-3e90-4c53-bb97-a29bbcffdb6c
+  spec:
+    clusterIP: 10.43.226.232
+    clusterIPs:
+    - 10.43.226.232
+    externalTrafficPolicy: Cluster
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - nodePort: 30024
+      port: 2222
+      protocol: TCP
+      targetPort: 2222
+    selector:
+    sessionAffinity: None
+    type: NodePort
+  status:
+    loadBalancer: {}
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "scalingmachines-2b058494-d74ea918"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"scalingmachines-2b058494-d74ea918\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"scalingmachines-2b058494-d74ea918","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"scalingmachines-2b058494-d74ea918"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: scalingmachines-2b058494-d74ea918
+    namespace: default
+    resourceVersion: "179253"
+    uid: 07e06c5a-b02b-47d9-a895-c212ff4c9184
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: scalingmachines-2b058494-d74ea918
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod scalingmachines-2b058494-d74ea918-d5fc64689-zg72b'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-backendservicer-2b058494-2c45fb39"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-backendservicer-2b058494-2c45fb39\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-backendservicer-2b058494-2c45fb39","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-backendservicer-2b058494-2c45fb39"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-backendservicer-2b058494-2c45fb39
+    namespace: default
+    resourceVersion: "179250"
+    uid: 6495839b-2fab-4260-b8c3-2e9cadf4b68a
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-backendservicer-2b058494-2c45fb39
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-backendservicer-2b058494-2c45fb39-65794c8bb8-xd9rp'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-ihometimelineservice-2b058494-23e2b9c7"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-ihometimelineservice-2b058494-23e2b9c7\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-ihometimelineservice-2b058494-23e2b9c7","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-ihometimelineservice-2b058494-23e2b9c7"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-ihometimelineservice-2b058494-23e2b9c7
+    namespace: default
+    resourceVersion: "179278"
+    uid: c5be4836-cfd5-4d22-9000-7a61280dffba
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-ihometimelineservice-2b058494-23e2b9c7
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-ihometimelineservice-2b058494-23e2b9c7-58dc59f7b6-62rvw'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-imediaservice-2b058494-71999f34"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-imediaservice-2b058494-71999f34\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-imediaservice-2b058494-71999f34","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-imediaservice-2b058494-71999f34"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-imediaservice-2b058494-71999f34
+    namespace: default
+    resourceVersion: "179277"
+    uid: ea3c3b94-23ee-4f19-b57d-aac304a40658
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-imediaservice-2b058494-71999f34
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-imediaservice-2b058494-71999f34-86b9485f9-trtzt'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-isocialgraphservice-2b058494-a3f0a401"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-isocialgraphservice-2b058494-a3f0a401\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-isocialgraphservice-2b058494-a3f0a401","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-isocialgraphservice-2b058494-a3f0a401"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-isocialgraphservice-2b058494-a3f0a401
+    namespace: default
+    resourceVersion: "179247"
+    uid: f6002667-bfbe-450a-a464-c5595290af2c
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-isocialgraphservice-2b058494-a3f0a401
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-isocialgraphservice-2b058494-a3f0a401-7dc86b4c76-72qmv'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-itextservice-2b058494-124437f6"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-itextservice-2b058494-124437f6\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-itextservice-2b058494-124437f6","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-itextservice-2b058494-124437f6"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-itextservice-2b058494-124437f6
+    namespace: default
+    resourceVersion: "179257"
+    uid: c42f5a00-7248-4d69-92e9-95c26c26dbc8
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-itextservice-2b058494-124437f6
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-itextservice-2b058494-124437f6-59cc5984d5-9pf7g'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-iuniqueidservice-2b058494-c5a91808"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-iuniqueidservice-2b058494-c5a91808\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iuniqueidservice-2b058494-c5a91808","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-iuniqueidservice-2b058494-c5a91808"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iuniqueidservice-2b058494-c5a91808
+    namespace: default
+    resourceVersion: "179252"
+    uid: 77263e96-5b9b-47cf-bb07-ee74bf519f94
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-iuniqueidservice-2b058494-c5a91808
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-iuniqueidservice-2b058494-c5a91808-6696df7985-2j9cw'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-iurlshortenservice-2b058494-7353f0d9"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-iurlshortenservice-2b058494-7353f0d9\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iurlshortenservice-2b058494-7353f0d9","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-iurlshortenservice-2b058494-7353f0d9"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iurlshortenservice-2b058494-7353f0d9
+    namespace: default
+    resourceVersion: "179254"
+    uid: b4a9d9ce-1d80-4dca-bacf-7945607bf886
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-iurlshortenservice-2b058494-7353f0d9
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-iurlshortenservice-2b058494-7353f0d9-fdb9698c7-wzrpt'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-iusermentionservice-2b058494-a5d452fc"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-iusermentionservice-2b058494-a5d452fc\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iusermentionservice-2b058494-a5d452fc","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-iusermentionservice-2b058494-a5d452fc"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iusermentionservice-2b058494-a5d452fc
+    namespace: default
+    resourceVersion: "179279"
+    uid: 72c1c366-7c13-488d-a7c6-eb371d0edf8a
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-iusermentionservice-2b058494-a5d452fc
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-iusermentionservice-2b058494-a5d452fc-f89b56487-vc4g6'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-iusertimelineservice-2b058494-463bf2bb"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-iusertimelineservice-2b058494-463bf2bb\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-iusertimelineservice-2b058494-463bf2bb","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-iusertimelineservice-2b058494-463bf2bb"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-iusertimelineservice-2b058494-463bf2bb
+    namespace: default
+    resourceVersion: "179276"
+    uid: 1ea4a0ce-fc72-4f21-a998-35ece3c25f78
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-iusertimelineservice-2b058494-463bf2bb
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-iusertimelineservice-2b058494-463bf2bb-55fbbb49c9-nhqgp'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-mediastorageservicer-2b058494-bd5c03a7"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-mediastorageservicer-2b058494-bd5c03a7\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-mediastorageservicer-2b058494-bd5c03a7","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-mediastorageservicer-2b058494-bd5c03a7"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-mediastorageservicer-2b058494-bd5c03a7
+    namespace: default
+    resourceVersion: "179251"
+    uid: 994d4b00-390f-4afb-995d-e28c4a1a4d43
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-mediastorageservicer-2b058494-bd5c03a7
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-mediastorageservicer-2b058494-bd5c03a7-759cb9c767-gn8wp'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-poststorageservicer-2b058494-36ff9e96"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-poststorageservicer-2b058494-36ff9e96\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-poststorageservicer-2b058494-36ff9e96","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-poststorageservicer-2b058494-36ff9e96"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-poststorageservicer-2b058494-36ff9e96
+    namespace: default
+    resourceVersion: "179258"
+    uid: 8bd860fa-73d0-4874-9645-5178cee9295e
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-poststorageservicer-2b058494-36ff9e96
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-poststorageservicer-2b058494-36ff9e96-6f86c7c994-lhdsv'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "server-userservicer-2b058494-fec0966c"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"server-userservicer-2b058494-fec0966c\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"server-userservicer-2b058494-fec0966c","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"server-userservicer-2b058494-fec0966c"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: server-userservicer-2b058494-fec0966c
+    namespace: default
+    resourceVersion: "179249"
+    uid: 54dc01d6-512d-46ed-bff6-73c532b845e2
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: server-userservicer-2b058494-fec0966c
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod server-userservicer-2b058494-fec0966c-6f94469fc8-9dwpn'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+- apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    annotations:
+      description: This HorizontalPodAutoscaler scales the "weaver-main-2b058494-bf739e4d"
+        Deployment.
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"autoscaling/v2","kind":"HorizontalPodAutoscaler","metadata":{"annotations":{"description":"This HorizontalPodAutoscaler scales the \"weaver-main-2b058494-bf739e4d\" Deployment."},"creationTimestamp":null,"labels":{"serviceweaver/app":"server.out","serviceweaver/version":"2b058494"},"name":"weaver-main-2b058494-bf739e4d","namespace":"default"},"spec":{"maxReplicas":1,"minReplicas":1,"scaleTargetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"weaver-main-2b058494-bf739e4d"}},"status":{"currentMetrics":null,"desiredReplicas":0}}
+    creationTimestamp: "2026-02-27T02:05:24Z"
+    labels:
+      serviceweaver/app: server.out
+      serviceweaver/version: 2b058494
+    name: weaver-main-2b058494-bf739e4d
+    namespace: default
+    resourceVersion: "179275"
+    uid: 922114f9-d9d9-431f-8f5b-083f722deb6b
+  spec:
+    maxReplicas: 1
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 80
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: weaver-main-2b058494-bf739e4d
+  status:
+    conditions:
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: the HPA controller was able to get the target's current scale
+      reason: SucceededGetScale
+      status: "True"
+      type: AbleToScale
+    - lastTransitionTime: "2026-02-27T02:05:39Z"
+      message: 'the HPA was unable to compute the replica count: failed to get cpu
+        utilization: missing request for cpu in container serviceweaver of Pod weaver-main-2b058494-bf739e4d-dfccf7c67-wcfqz'
+      reason: FailedGetResourceMetric
+      status: "False"
+      type: ScalingActive
+    currentMetrics:
+    - type: ""
+    currentReplicas: 1
+    desiredReplicas: 0
+kind: List
+metadata:
+  resourceVersion: ""
