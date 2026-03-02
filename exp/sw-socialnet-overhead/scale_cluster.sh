@@ -147,6 +147,11 @@ remove_nodes() {
 
     if [[ "$removed" -gt 0 ]]; then
         echo ""
+        echo "Restarting deployments to redistribute pods across active nodes..."
+        kubectl get deployments -n default -o name \
+            | grep -v ssh-gateway \
+            | xargs -I {} kubectl rollout restart {} -n default 2>/dev/null
+        echo ""
         wait_for_pods
     fi
 }
