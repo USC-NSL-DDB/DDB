@@ -108,7 +108,7 @@ impl ServiceDiscover {
                 let g_cfg = DDBConfig::global();
                 if get_framework_plugin().should_register_caladan_ip(g_cfg) {
                     if let Some(caladan_ip) = caladan_ip {
-                        get_proclet_mgr().register_caladan_ip(caladan_ip, new_sid);
+                        get_proclet_mgr().register_owner_session(caladan_ip, new_sid);
                     }
                 }
                 match dbg_session.post_start().await {

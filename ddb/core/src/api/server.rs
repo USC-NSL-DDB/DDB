@@ -291,18 +291,26 @@ async fn get_sessions() -> impl IntoResponse {
     // or maybe do it in parallel conditionally when the size
     // is above a certain threshold
     let mut results = vec![];
-    let ss = crate::state::STATES.get_all_sessions();
+    let ss = crate::state::STATES.sessions();
     for s in ss {
-        let s_meta = s.meta.read().await;
-        let service_meta = s_meta.service_meta.as_ref();
-        let sid = s_meta.sid;
-        let tag = s_meta.tag.clone();
-        let status: &str = s_meta.status.clone().into();
-        let grp_info = crate::state::get_group_mgr().get_grp_info_by_sid(sid);
+        let (sid, tag, alias, status) = s
+            .read_with(|s_meta| {
+                (
+                    s_meta.sid(),
+                    s_meta.tag().to_string(),
+                    s_meta
+                        .service_meta()
+                        .map(|x| x.alias.clone())
+                        .unwrap_or("UNKNOWN".to_string()),
+                    s_meta.status().to_string(),
+                )
+            })
+            .await;
+        let grp_info = crate::state::get_group_mgr().group_info_by_session(sid);
         let session = json!({
             "sid": sid,
             "tag": tag,
-            "alias": service_meta.map(|x| x.alias.clone()).unwrap_or("UNKNOWN".to_string()),
+            "alias": alias,
             "status": status,
             "group": {
                 "valid": grp_info.is_some(),
@@ -337,7 +345,7 @@ async fn get_pending_commands() -> impl IntoResponse {
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_groups() -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
-    let result: Vec<GroupMeta> = group_mgr.get_all_grp_meta();
+    let result: Vec<GroupMeta> = group_mgr.groups();
     (StatusCode::OK, Json(result))
 }
 
@@ -345,7 +353,7 @@ async fn get_groups() -> impl IntoResponse {
 async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
     let group_mgr = crate::state::get_group_mgr();
     if let Some(grp_id) = query.grp_id {
-        if let Some(group_meta) = group_mgr.get_grp_by_id(grp_id) {
+        if let Some(group_meta) = group_mgr.group_by_id(grp_id) {
             (StatusCode::OK, Json(json!(group_meta)))
         } else {
             (
@@ -354,7 +362,7 @@ async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
             )
         }
     } else if let Some(grp_hash) = query.grp_hash {
-        if let Some(group_meta) = group_mgr.get_grp_by_hash(&grp_hash) {
+        if let Some(group_meta) = group_mgr.group_by_hash(&grp_hash) {
             (StatusCode::OK, Json(json!(group_meta)))
         } else {
             (

@@ -27,15 +27,23 @@ impl ProcletMgr {
         }
     }
 
-    pub fn register_caladan_ip(&self, caladan_ip: u32, sid: u64) {
+    pub fn register_owner_session(&self, caladan_ip: u32, sid: u64) {
         self.caladan_ip_to_sid.insert(caladan_ip, sid);
         debug!("Registered caladan_ip: {} with sid: {}", caladan_ip, sid);
     }
 
-    pub fn get_sid(&self, caladan_ip: u32) -> Option<u64> {
+    pub fn session_id_for_caladan_ip(&self, caladan_ip: u32) -> Option<u64> {
         self.caladan_ip_to_sid
             .get(&caladan_ip)
             .map(|sid| sid.value().clone())
+    }
+
+    pub fn register_caladan_ip(&self, caladan_ip: u32, sid: u64) {
+        self.register_owner_session(caladan_ip, sid);
+    }
+
+    pub fn get_sid(&self, caladan_ip: u32) -> Option<u64> {
+        self.session_id_for_caladan_ip(caladan_ip)
     }
 }
 
@@ -56,10 +64,10 @@ mod tests {
     fn proclet_manager_registers_and_resolves_caladan_ip() {
         let mgr = ProcletMgr::new();
 
-        mgr.register_caladan_ip(7, 99);
+        mgr.register_owner_session(7, 99);
 
-        assert_eq!(mgr.get_sid(7), Some(99));
-        assert_eq!(mgr.get_sid(8), None);
+        assert_eq!(mgr.session_id_for_caladan_ip(7), Some(99));
+        assert_eq!(mgr.session_id_for_caladan_ip(8), None);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use arrayvec::ArrayVec;
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::DashMap;
 
-type Signals = ArrayVec<Option<Signal>, 128>;
+pub type SignalSet = ArrayVec<Option<Signal>, 128>;
+type Signals = SignalSet;
 
 pub struct SignalListing {
     initialized: bool,
@@ -70,14 +71,23 @@ impl SignalMgr {
     }
 
     #[inline]
-    pub fn insert_signals(&self, sid: u64, signals: Signals) {
+    pub fn replace_signals(&self, sid: u64, signals: Signals) {
         self.signal_map
             .insert(sid, SignalListing::new_with_signals(signals));
     }
 
     #[inline]
-    pub fn lock_signal_listing(&self, sid: u64) -> RefMut<'_, u64, SignalListing> {
-        self.signal_map.entry(sid).or_default()
+    pub fn with_listing_mut<U, F>(&self, sid: u64, f: F) -> U
+    where
+        F: FnOnce(&mut SignalListing) -> U,
+    {
+        let mut listing = self.signal_map.entry(sid).or_default();
+        f(listing.value_mut())
+    }
+
+    #[inline]
+    pub fn insert_signals(&self, sid: u64, signals: Signals) {
+        self.replace_signals(sid, signals);
     }
 }
 
@@ -97,11 +107,10 @@ mod tests {
     fn signal_manager_inserts_and_removes_session_signal_sets() {
         let mgr = SignalMgr::new();
 
-        {
-            let listing = mgr.lock_signal_listing(9);
+        mgr.with_listing_mut(9, |listing| {
             assert!(!listing.is_initialized());
             assert!(listing.get_signals().is_empty());
-        }
+        });
 
         let mut signals = ArrayVec::new();
         signals.push(Some(Signal {
@@ -111,10 +120,9 @@ mod tests {
             pass: true,
             description: "Interrupt".to_string(),
         }));
-        mgr.insert_signals(9, signals);
+        mgr.replace_signals(9, signals);
 
-        {
-            let mut listing = mgr.lock_signal_listing(9);
+        mgr.with_listing_mut(9, |listing| {
             assert!(listing.is_initialized());
             assert_eq!(listing.get_signals().len(), 1);
             assert_eq!(
@@ -126,12 +134,13 @@ mod tests {
 
             listing.set_initialized(false);
             assert!(!listing.is_initialized());
-        }
+        });
 
         mgr.remove_session(9);
 
-        let listing = mgr.lock_signal_listing(9);
-        assert!(!listing.is_initialized());
-        assert!(listing.get_signals().is_empty());
+        mgr.with_listing_mut(9, |listing| {
+            assert!(!listing.is_initialized());
+            assert!(listing.get_signals().is_empty());
+        });
     }
 }

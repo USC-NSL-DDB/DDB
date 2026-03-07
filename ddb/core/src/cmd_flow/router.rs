@@ -199,8 +199,8 @@ impl Router {
         gid: GroupId,
         cmd: Command<F>,
     ) {
-        if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
-            self.send_to_session_set::<F, FORGET>(grp.get_sids(), cmd);
+        if let Some(grp) = get_group_mgr().group_by_id(gid) {
+            self.send_to_session_set::<F, FORGET>(grp.session_ids(), cmd);
         } else {
             warn!("Group (id: {}) doesn't exist", gid);
         }
@@ -211,8 +211,8 @@ impl Router {
         gid: GroupId,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        if let Some(grp) = get_group_mgr().get_grp_by_id(gid) {
-            self.send_to_session_set_ret(grp.get_sids(), cmd).await
+        if let Some(grp) = get_group_mgr().group_by_id(gid) {
+            self.send_to_session_set_ret(grp.session_ids(), cmd).await
         } else {
             bail!("Group (id: {}) doesn't exist", gid);
         }
@@ -434,7 +434,7 @@ impl Router {
 
     pub fn handle_internal_cmd(&self, cmd: &str) {
         if cmd == "p-session-meta" {
-            info!("p-session-meta: {:?}", STATES.get_all_sessions())
+            info!("p-session-meta: {:?}", STATES.sessions())
         }
 
         if cmd == "p-group-mgr" {

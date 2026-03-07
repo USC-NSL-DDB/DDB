@@ -8,12 +8,38 @@ use super::{
     SessionMetaRef,
 };
 
+#[derive(Default)]
+struct SelectionState {
+    curr_session: Mutex<Option<u64>>,
+    selected_gthread: Mutex<Option<u64>>,
+}
+
+impl SelectionState {
+    #[inline]
+    fn set_curr_session(&self, sid: u64) {
+        self.curr_session.lock().unwrap().replace(sid);
+    }
+
+    #[inline]
+    fn get_curr_session(&self) -> Option<u64> {
+        *self.curr_session.lock().unwrap()
+    }
+
+    #[inline]
+    fn set_curr_gtid(&self, gtid: u64) {
+        self.selected_gthread.lock().unwrap().replace(gtid);
+    }
+
+    #[inline]
+    fn get_curr_gtid(&self) -> Option<u64> {
+        *self.selected_gthread.lock().unwrap()
+    }
+}
+
 pub struct StateMgr {
     session_states: session_mgr::SessionStateMgr,
     thread_states: thread_mgr::ThreadStateMgr,
-
-    curr_session: Mutex<Option<u64>>,
-    selected_gthread: Mutex<Option<u64>>,
+    selection: SelectionState,
 }
 
 #[allow(unused)]
@@ -22,9 +48,44 @@ impl StateMgr {
         Self {
             session_states: session_mgr::SessionStateMgr::new(),
             thread_states: thread_mgr::ThreadStateMgr::new(),
+            selection: SelectionState::default(),
+        }
+    }
 
-            curr_session: Mutex::new(None),
-            selected_gthread: Mutex::new(None),
+    #[inline]
+    fn local_thread_id(sid: u64, tid: u64) -> LocalThreadId {
+        LocalThreadId::new(sid, tid)
+    }
+
+    #[inline]
+    fn local_thread_group_id(sid: u64, tgid: &str) -> LocalThreadGroupId {
+        LocalThreadGroupId::new(sid, tgid)
+    }
+
+    #[inline]
+    fn register_thread_group_index(&self, sid: u64, tgid: &str) -> u64 {
+        let gtgid = counter::next_g_inferior_id();
+        self.thread_states
+            .insert_thread_group(&Self::local_thread_group_id(sid, tgid), gtgid);
+        gtgid
+    }
+
+    #[inline]
+    fn register_thread_index(&self, sid: u64, tid: u64) -> u64 {
+        let gtid = counter::next_g_thread_id();
+        self.thread_states
+            .insert_thread(&Self::local_thread_id(sid, tid), gtid);
+        gtid
+    }
+
+    #[inline]
+    fn remove_thread_indexes<I>(&self, sid: u64, tids: I)
+    where
+        I: IntoIterator<Item = u64>,
+    {
+        for tid in tids {
+            self.thread_states
+                .remove_thread(&Self::local_thread_id(sid, tid));
         }
     }
 
@@ -52,7 +113,7 @@ impl StateMgr {
 
     #[inline]
     pub fn get_gtids_by_sid(&self, sid: u64) -> Vec<u64> {
-        self.thread_states.get_gtids_by_sid(sid)
+        self.thread_states.global_thread_ids_for_session(sid)
     }
 
     // Adds a thread group (process) to the state manager.
@@ -65,27 +126,20 @@ impl StateMgr {
     //     int: The global inferior/process/thread group ID assigned to the thread group.
     #[inline]
     pub async fn add_thread_group(&self, sid: u64, tgid: &str) -> u64 {
-        let gtgid = counter::next_g_inferior_id();
-        self.thread_states
-            .insert_tgid(&LocalThreadGroupId::new(sid, tgid), gtgid);
+        let gtgid = self.register_thread_group_index(sid, tgid);
         self.session_states.add_thread_group(sid, tgid).await;
         gtgid
     }
 
     #[inline]
     pub async fn remove_thread_group(&self, sid: u64, tgid: &str) -> Option<u64> {
-        let gtgid = self
-            .thread_states
-            .get_gtgid(&LocalThreadGroupId::new(sid, tgid));
+        let local_group_id = Self::local_thread_group_id(sid, tgid);
+        let gtgid = self.thread_states.global_thread_group_id(&local_group_id);
 
         let tids = self.session_states.remove_thread_group(sid, tgid).await;
-        for tid in tids {
-            let ltid = LocalThreadId::new(sid, tid);
-            self.thread_states.remove_by_ltid(&ltid);
-        }
+        self.remove_thread_indexes(sid, tids);
 
-        self.thread_states
-            .remove_by_ltgid(&LocalThreadGroupId::new(sid, tgid));
+        self.thread_states.remove_thread_group(&local_group_id);
         gtgid
     }
 
@@ -93,14 +147,14 @@ impl StateMgr {
     pub async fn start_thread_group(&self, sid: u64, tgid: &str, pid: u64) -> Option<u64> {
         self.session_states.start_thread_group(sid, tgid, pid).await;
         self.thread_states
-            .get_gtgid(&LocalThreadGroupId::new(sid, tgid))
+            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
     }
 
     #[inline]
     pub async fn exit_thread_group(&self, sid: u64, tgid: &str) -> Option<u64> {
         self.session_states.exit_thread_group(sid, tgid).await;
         self.thread_states
-            .get_gtgid(&LocalThreadGroupId::new(sid, tgid))
+            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
     }
 
     // Creates a new global thread in the state manager by mapping the session specific thread information.
@@ -113,13 +167,11 @@ impl StateMgr {
     //     int: The global thread group id associated with this newly created thread.
     #[inline]
     pub async fn create_thread(&self, sid: u64, tid: u64, tgid: &str) -> (u64, u64) {
-        let gtid = counter::next_g_thread_id();
-        self.thread_states
-            .insert_tid(&LocalThreadId::new(sid, tid), gtid);
+        let gtid = self.register_thread_index(sid, tid);
         self.session_states.create_thread(sid, tid, tgid).await;
         let gtgid = self
             .thread_states
-            .get_gtgid(&LocalThreadGroupId::new(sid, tgid))
+            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
             .unwrap();
         (gtid, gtgid)
     }
@@ -139,201 +191,140 @@ impl StateMgr {
         self.session_states.update_all_status(sid, status).await;
     }
 
-    /// Note: This function sets global select thread id
-    /// and also update the local selected thread id
-    /// for the corresponding session.
-    // pub fn set_curr_tid(&self, sid: u64, tid: u64) {
-    //     self.session_states.set_curr_tid(sid, tid);
-    //     let gtid = self.get_gtid(sid, tid).unwrap();
-    //     self.selected_gthread.lock().unwrap().replace(gtid);
-    // }
-
-    /// Note: This function sets global select thread id
-    /// and also update the local selected thread id
-    /// for the corresponding session.
     #[inline]
     pub async fn set_curr_gtid(&self, gtid: u64) {
         let ltid = self.get_ltid_by_gtid(gtid).unwrap();
         self.set_curr_gtid_by_ltid(ltid.0, ltid.1).await;
     }
 
-    /// Note: This function sets global select thread id
-    /// and also update the local selected thread id
-    /// for the corresponding session.
     #[inline]
     pub async fn set_curr_gtid_by_ltid(&self, sid: u64, tid: u64) {
         self.session_states.set_curr_tid(sid, tid).await;
         let gtid = self.get_gtid(sid, tid).unwrap();
-        self.selected_gthread.lock().unwrap().replace(gtid);
+        self.selection.set_curr_gtid(gtid);
     }
 
     #[inline]
     pub fn get_curr_gtid(&self) -> Option<u64> {
-        self.selected_gthread.lock().unwrap().clone()
+        self.selection.get_curr_gtid()
     }
 
     #[inline]
     pub fn set_curr_session(&self, sid: u64) {
-        self.curr_session.lock().unwrap().replace(sid);
+        self.selection.set_curr_session(sid);
     }
 
     #[inline]
     pub fn get_curr_session(&self) -> Option<u64> {
-        self.curr_session.lock().unwrap().clone()
+        self.selection.get_curr_session()
     }
 
     #[inline]
     pub fn get_gtid(&self, sid: u64, tid: u64) -> Option<u64> {
-        let ltid = LocalThreadId::new(sid, tid);
-        self.thread_states.get_gtid(&ltid)
+        self.thread_states
+            .global_thread_id(&Self::local_thread_id(sid, tid))
     }
 
     #[inline]
     pub fn remove_thread(&self, sid: u64, tid: u64) -> Option<u64> {
-        let ltid = LocalThreadId::new(sid, tid);
-        self.thread_states.remove_by_ltid(&ltid)
+        self.thread_states
+            .remove_thread(&Self::local_thread_id(sid, tid))
     }
 
     #[inline]
     pub fn get_gtgid(&self, sid: u64, tgid: &str) -> Option<u64> {
         self.thread_states
-            .get_gtgid(&LocalThreadGroupId::new(sid, tgid))
+            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
     }
 
     #[inline]
     pub fn get_ltid_by_gtid(&self, gtid: u64) -> Option<LocalThreadId> {
-        self.thread_states.get_ltid(gtid)
+        self.thread_states.local_thread_id(gtid)
     }
 
-    /// Get all session meta data
-    /// This function get copies of all session meta data
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     #[inline]
-    pub fn get_all_sessions(&self) -> Vec<SessionMetaRef> {
-        self.session_states.get_all_sessions()
+    pub fn sessions(&self) -> Vec<SessionMetaRef> {
+        self.session_states.sessions()
     }
 
-    /// Get session meta data
-    /// This function get a shallow copy of session meta data
     #[inline]
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
-        self.session_states.get_session(sid)
+    pub fn session(&self, sid: u64) -> Option<SessionMetaRef> {
+        self.session_states.session(sid)
     }
 
-    /// Get session service meta
-    /// This function get a deep copy of session service meta data
     #[inline]
-    pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
-        if let Some(s_meta) = self.get_session(sid) {
-            let s_meta = s_meta.meta.read().await;
-            return s_meta.service_meta.clone();
-        } else {
-            return None;
-        }
+    pub async fn session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
+        self.session_states
+            .with_session(sid, |session| session.cloned_service_meta())
+            .await
+            .flatten()
     }
 
-    /// Perform a transaction-like operation on a session meta data
-    /// The session meta is locked during the operation (via DashMap internal mechanism)
-    /// The function `f` is called with a mutable reference to the session meta data
-    // pub async fn with_session_mut<U, F>(&self, sid: u64, f: F) -> Option<U>
-    // where
-    //     // F: FnOnce(&mut session_mgr::SessionMeta) -> U,
-    //     F: FnOnce(tokio::sync::RwLockWriteGuard<'_, SessionMeta>) -> U,
-    // {
-    //     self.session_states.with_session_mut(sid, f).await
-    // }
-
-    /// Perform a transaction-like operation on a session meta data
-    /// The session meta is locked during the operation (via DashMap internal mechanism)
-    /// The function `f` is called with a immutable reference to the session meta data
-    // pub async fn with_session<U, F>(&self, sid: u64, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session(sid, f).await
-    // }
-
-    // Get session meta data by tag
-    // This function get a copy of session meta data
     #[inline]
-    pub async fn get_session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
-        self.session_states.get_session_by_tag(tag).await
+    pub fn session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
+        self.session_states.session_by_tag(tag)
     }
 
-    // pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_by_tag(tag, f).await
-    // }
+    #[inline]
+    pub async fn with_session<U, F>(&self, sid: u64, f: F) -> Option<U>
+    where
+        F: FnOnce(&session_mgr::SessionMeta) -> U,
+    {
+        self.session_states.with_session(sid, f).await
+    }
 
-    // pub async fn with_session_by_tag_ref<U, F>(&self, tag: &str, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&mut session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_by_tag_ref(tag, f).await
-    // }
+    #[inline]
+    pub async fn with_session_mut<U, F>(&self, sid: u64, f: F) -> Option<U>
+    where
+        F: FnOnce(&mut session_mgr::SessionMeta) -> U,
+    {
+        self.session_states.with_session_mut(sid, f).await
+    }
 
-    // pub async fn with_session_if<P, U, F>(&self, predicate: P, f: F) -> Option<U>
-    // where
-    //     P: FnMut(&session_mgr::SessionMeta) -> bool,
-    //     F: FnOnce(&session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_if(predicate, f).await
-    // }
-
-    // pub async fn with_session_if_mut<P, U, F>(&self, predicate: P, f: F) -> Option<U>
-    // where
-    //     P: FnMut(&session_mgr::SessionMeta) -> bool,
-    //     F: FnOnce(&mut session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_if_mut(predicate, f).await
-    // }
-
-    // pub async fn with_session_all_if<P, U, F>(&self, predicate: P, f: F) -> Vec<U>
-    // where
-    //     P: FnMut(&session_mgr::SessionMeta) -> bool,
-    //     F: Fn(&session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_all_if(predicate, f).await
-    // }
-
-    // pub async fn with_session_all_if_mut<P, U, F>(&self, predicate: P, f: F) -> Vec<U>
-    // where
-    //     P: FnMut(&session_mgr::SessionMeta) -> bool,
-    //     F: Fn(&mut session_mgr::SessionMeta) -> U,
-    // {
-    //     self.session_states.with_session_all_if_mut(predicate, f).await
-    // }
-
-    // pub async fn all_sessions_ref_mut(&self) -> RwLockWriteGuard<'_, HashMap<u64, SessionMeta>> {
-    //     self.session_states.all_sessions_ref_mut().await
-    // }
-
-    // pub async fn all_sessions_ref(&self) -> RwLockReadGuard<'_, HashMap<u64, SessionMeta>> {
-    //     self.session_states.all_sessions_ref().await
-    // }
+    #[inline]
+    pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
+    where
+        F: FnOnce(&session_mgr::SessionMeta) -> U,
+    {
+        self.session_states.with_session_by_tag(tag, f).await
+    }
 
     #[inline]
     pub async fn get_tag_with_tid_by_gtid(&self, gtid: u64) -> Option<(String, u64)> {
-        let ltid = self.thread_states.get_ltid(gtid)?;
+        let ltid = self.thread_states.local_thread_id(gtid)?;
         let sid = ltid.0;
         let tid = ltid.1;
         let tag = self
-            .session_states
-            .get_session(sid)?
-            .meta
-            .read()
-            .await
-            .tag
-            .clone();
+            .with_session(sid, |session| session.tag().to_string())
+            .await?;
         Some((tag, tid))
     }
 
     #[inline]
     pub async fn get_tag_by_gtid(&self, gtid: u64) -> Option<String> {
         self.get_tag_with_tid_by_gtid(gtid).await.map(|v| v.0)
+    }
+
+    #[inline]
+    pub fn get_all_sessions(&self) -> Vec<SessionMetaRef> {
+        self.sessions()
+    }
+
+    #[inline]
+    pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
+        self.session(sid)
+    }
+
+    #[inline]
+    pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
+        self.session_service_meta(sid).await
+    }
+
+    #[inline]
+    pub fn get_session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
+        self.session_by_tag(tag)
     }
 }
 

@@ -113,12 +113,10 @@ impl MultiSessionTransaction {
 /// ```
 pub async fn begin(sid: u64) -> Result<SessionTransaction, TransactionError> {
     let session = get_state_mgr()
-        .get_session(sid)
+        .session(sid)
         .ok_or(TransactionError::SessionNotFound(sid))?;
 
-    // Clone the Arc<Mutex> so we can get an OwnedMutexGuard
-    let tx_lock = session.tx_lock.clone();
-    let guard = tx_lock.lock_owned().await;
+    let guard = session.lock_transaction_owned().await;
 
     Ok(SessionTransaction {
         sid,
@@ -189,12 +187,10 @@ pub async fn begin_multi(sids: &[u64]) -> Result<MultiSessionTransaction, Transa
 /// * `Err(TransactionError::SessionNotFound)` - If the session doesn't exist
 pub async fn try_begin(sid: u64) -> Result<Option<SessionTransaction>, TransactionError> {
     let session = get_state_mgr()
-        .get_session(sid)
+        .session(sid)
         .ok_or(TransactionError::SessionNotFound(sid))?;
 
-    let tx_lock = session.tx_lock.clone();
-
-    match tx_lock.try_lock_owned() {
+    match session.try_lock_transaction_owned() {
         Ok(guard) => Ok(Some(SessionTransaction {
             sid,
             session,

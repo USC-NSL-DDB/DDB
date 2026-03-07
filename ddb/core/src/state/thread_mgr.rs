@@ -1,13 +1,27 @@
-use std::ops::Deref;
-
 use dashmap::DashMap;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct LocalThreadId(pub u64, pub u64); // session id, thread id
 
 impl LocalThreadId {
+    #[inline]
     pub fn new(sid: u64, tid: u64) -> Self {
         Self(sid, tid)
+    }
+
+    #[inline]
+    pub fn session_id(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    pub fn thread_id(&self) -> u64 {
+        self.1
+    }
+
+    #[inline]
+    pub fn into_parts(self) -> (u64, u64) {
+        (self.0, self.1)
     }
 }
 
@@ -23,20 +37,28 @@ impl From<&LocalThreadId> for (u64, u64) {
     }
 }
 
-impl Deref for LocalThreadId {
-    type Target = (u64, u64);
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const LocalThreadId as *const (u64, u64)) }
-    }
-}
-
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct LocalThreadGroupId(pub u64, pub String);
 
 impl LocalThreadGroupId {
+    #[inline]
     pub fn new(sid: u64, tgid: &str) -> Self {
         Self(sid, tgid.to_string())
+    }
+
+    #[inline]
+    pub fn session_id(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    pub fn thread_group_id(&self) -> &str {
+        &self.1
+    }
+
+    #[inline]
+    pub fn into_parts(self) -> (u64, String) {
+        (self.0, self.1)
     }
 }
 
@@ -49,14 +71,6 @@ impl From<LocalThreadGroupId> for (u64, String) {
 impl From<&LocalThreadGroupId> for (u64, String) {
     fn from(ltgid: &LocalThreadGroupId) -> (u64, String) {
         (ltgid.0, ltgid.1.clone())
-    }
-}
-
-impl Deref for LocalThreadGroupId {
-    type Target = (u64, String);
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const LocalThreadGroupId as *const (u64, String)) }
     }
 }
 
@@ -83,6 +97,64 @@ impl ThreadStateMgr {
         }
     }
 
+    pub fn global_thread_id(&self, local_tid: &LocalThreadId) -> Option<u64> {
+        self.ltid_to_gtid.get(local_tid).map(|v| *v)
+    }
+
+    pub fn local_thread_id(&self, gtid: u64) -> Option<LocalThreadId> {
+        self.gtid_to_ltid.get(&gtid).map(|v| v.clone())
+    }
+
+    pub fn global_thread_group_id(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
+        self.ltgid_to_gtgid.get(local_tgid).map(|v| *v)
+    }
+
+    #[allow(unused)]
+    pub fn local_thread_group_id(&self, gtgid: u64) -> Option<LocalThreadGroupId> {
+        self.gtgid_to_ltgid.get(&gtgid).map(|v| v.clone())
+    }
+
+    pub fn insert_thread(&self, local_tid: &LocalThreadId, gtid: u64) {
+        self.ltid_to_gtid.insert(local_tid.clone(), gtid);
+        self.gtid_to_ltid.insert(gtid, local_tid.clone());
+    }
+
+    pub fn insert_thread_group(&self, local_tgid: &LocalThreadGroupId, gtgid: u64) {
+        self.ltgid_to_gtgid.insert(local_tgid.clone(), gtgid);
+        self.gtgid_to_ltgid.insert(gtgid, local_tgid.clone());
+    }
+
+    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
+        self.ltid_to_gtid
+            .iter()
+            .filter_map(|v| {
+                if v.key().session_id() == sid {
+                    Some(*v.value())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn remove_thread(&self, local_tid: &LocalThreadId) -> Option<u64> {
+        if let Some(gtid) = self.global_thread_id(local_tid) {
+            self.ltid_to_gtid.remove(local_tid);
+            self.gtid_to_ltid.remove(&gtid);
+            return Some(gtid);
+        }
+        None
+    }
+
+    pub fn remove_thread_group(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
+        if let Some(gtgid) = self.global_thread_group_id(local_tgid) {
+            self.ltgid_to_gtgid.remove(local_tgid);
+            self.gtgid_to_ltgid.remove(&gtgid);
+            return Some(gtgid);
+        }
+        None
+    }
+
     pub fn get_gtid(&self, ltid: &LocalThreadId) -> Option<u64> {
         self.ltid_to_gtid.get(ltid).map(|v| *v)
     }
@@ -101,44 +173,23 @@ impl ThreadStateMgr {
     }
 
     pub fn insert_tid(&self, ltid: &LocalThreadId, gtid: u64) {
-        self.ltid_to_gtid.insert(ltid.clone(), gtid);
-        self.gtid_to_ltid.insert(gtid, ltid.clone());
+        self.insert_thread(ltid, gtid);
     }
 
     pub fn insert_tgid(&self, ltgid: &LocalThreadGroupId, gtgid: u64) {
-        self.ltgid_to_gtgid.insert(ltgid.clone(), gtgid);
-        self.gtgid_to_ltgid.insert(gtgid, ltgid.clone());
+        self.insert_thread_group(ltgid, gtgid);
     }
 
     pub fn get_gtids_by_sid(&self, sid: u64) -> Vec<u64> {
-        self.ltid_to_gtid
-            .iter()
-            .filter_map(|v| {
-                if v.key().0 == sid {
-                    Some(*v.value())
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.global_thread_ids_for_session(sid)
     }
 
     pub fn remove_by_ltid(&self, ltid: &LocalThreadId) -> Option<u64> {
-        if let Some(gtid) = self.get_gtid(ltid) {
-            self.ltid_to_gtid.remove(ltid);
-            self.gtid_to_ltid.remove(&gtid);
-            return Some(gtid);
-        }
-        None
+        self.remove_thread(ltid)
     }
 
     pub fn remove_by_ltgid(&self, ltgid: &LocalThreadGroupId) -> Option<u64> {
-        if let Some(gtgid) = self.get_gtgid(ltgid) {
-            self.ltgid_to_gtgid.remove(ltgid);
-            self.gtgid_to_ltgid.remove(&gtgid);
-            return Some(gtgid);
-        }
-        None
+        self.remove_thread_group(ltgid)
     }
 }
 
@@ -147,7 +198,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_thread_ids_support_tuple_conversion_and_deref() {
+    fn local_thread_ids_support_tuple_conversion_and_accessors() {
         let ltid = LocalThreadId::new(7, 9);
         let ltgid = LocalThreadGroupId::new(7, "i1");
         let ltid_owned: (u64, u64) = ltid.clone().into();
@@ -157,11 +208,15 @@ mod tests {
 
         assert_eq!(ltid_owned, (7, 9));
         assert_eq!(ltid_ref, (7, 9));
+        assert_eq!(ltid.session_id(), 7);
+        assert_eq!(ltid.thread_id(), 9);
         assert_eq!(ltid.0, 7);
         assert_eq!(ltid.1, 9);
 
         assert_eq!(ltgid_owned, (7, "i1".to_string()));
         assert_eq!(ltgid_ref, (7, "i1".to_string()));
+        assert_eq!(ltgid.session_id(), 7);
+        assert_eq!(ltgid.thread_group_id(), "i1");
         assert_eq!(ltgid.0, 7);
         assert_eq!(ltgid.1, "i1");
     }

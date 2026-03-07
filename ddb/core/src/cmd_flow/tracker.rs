@@ -425,7 +425,7 @@ impl Tracker {
                 let tgid = payload["group-id"].expect_string_ref().unwrap();
                 let tid = payload["id"].expect_string_repr::<u64>().unwrap();
                 let (gtid, gtgid) = STATES.create_thread(sid, tid, &tgid).await;
-                let service_meta = STATES.get_session_service_meta(sid).await;
+                let service_meta = STATES.session_service_meta(sid).await;
                 debug!("service_meta: {:?}", service_meta);
 
                 let resp = ParsedSessionResponse::new(sid, message, Some(payload));

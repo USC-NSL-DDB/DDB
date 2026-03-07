@@ -1,9 +1,13 @@
+use dashmap::DashMap;
 use papaya::HashMap as ShardMap;
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     sync::Arc,
 };
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+use tokio::sync::{
+    Mutex as TokioMutex, OwnedMutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError,
+};
 
 use crate::discovery::discovery_message_producer::ServiceMeta;
 
@@ -28,14 +32,15 @@ pub struct ThreadContext {
     pub ctx: HashMap<String, u64>,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum SessionStatus {
     ON,
     OFF,
 }
 
-impl Into<&str> for SessionStatus {
-    fn into(self) -> &'static str {
+impl SessionStatus {
+    #[inline]
+    pub fn as_str(self) -> &'static str {
         match self {
             SessionStatus::ON => "ON",
             SessionStatus::OFF => "OFF",
@@ -43,38 +48,163 @@ impl Into<&str> for SessionStatus {
     }
 }
 
+impl fmt::Display for SessionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+struct ThreadGroupMeta {
+    threads: HashSet<u64>,
+    status: ThreadGroupStatus,
+    pid: Option<u64>,
+}
+
+impl Default for ThreadGroupMeta {
+    fn default() -> Self {
+        Self {
+            threads: HashSet::new(),
+            status: ThreadGroupStatus::INIT,
+            pid: None,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Default)]
+struct SessionThreadRegistry {
+    tid_to_per_inferior_tid: HashMap<u64, u64>,
+    tid_to_group: HashMap<u64, String>,
+    groups: HashMap<String, ThreadGroupMeta>,
+}
+
+impl SessionThreadRegistry {
+    #[inline]
+    fn ensure_group(&mut self, tgid: &str) -> &mut ThreadGroupMeta {
+        self.groups.entry(tgid.to_string()).or_default()
+    }
+
+    #[inline]
+    fn add_thread_group(&mut self, tgid: &str) {
+        self.ensure_group(tgid);
+    }
+
+    #[inline]
+    fn create_thread(
+        &mut self,
+        tid: u64,
+        tgid: &str,
+        thread_statuses: &mut HashMap<u64, ThreadStatus>,
+    ) {
+        thread_statuses.insert(tid, ThreadStatus::INIT);
+
+        let per_inferior_tid = {
+            let group = self.ensure_group(tgid);
+            let per_inferior_tid = (group.threads.len() + 1) as u64;
+            group.threads.insert(tid);
+            per_inferior_tid
+        };
+
+        self.tid_to_group.insert(tid, tgid.to_string());
+        self.tid_to_per_inferior_tid.insert(tid, per_inferior_tid);
+    }
+
+    #[inline]
+    fn remove_thread_group(
+        &mut self,
+        tgid: &str,
+        thread_statuses: &mut HashMap<u64, ThreadStatus>,
+    ) -> HashSet<u64> {
+        let Some(group) = self.groups.remove(tgid) else {
+            return HashSet::new();
+        };
+
+        for tid in &group.threads {
+            self.remove_thread_metadata(*tid, thread_statuses);
+        }
+
+        group.threads
+    }
+
+    #[inline]
+    fn start_thread_group(&mut self, tgid: &str, pid: u64) {
+        let group = self.ensure_group(tgid);
+        group.status = ThreadGroupStatus::RUNNING;
+        group.pid = Some(pid);
+    }
+
+    #[inline]
+    fn exit_thread_group(&mut self, tgid: &str, thread_statuses: &mut HashMap<u64, ThreadStatus>) {
+        let group = self.ensure_group(tgid);
+        group.status = ThreadGroupStatus::EXITED;
+
+        let threads = std::mem::take(&mut group.threads);
+        for tid in threads {
+            self.remove_thread_metadata(tid, thread_statuses);
+        }
+    }
+
+    #[allow(unused)]
+    #[inline]
+    fn add_thread_to_group(&mut self, tid: u64, tgid: &str) {
+        self.ensure_group(tgid).threads.insert(tid);
+        self.tid_to_group.insert(tid, tgid.to_string());
+    }
+
+    #[inline]
+    fn remove_thread_metadata(
+        &mut self,
+        tid: u64,
+        thread_statuses: &mut HashMap<u64, ThreadStatus>,
+    ) {
+        self.tid_to_group.remove(&tid);
+        self.tid_to_per_inferior_tid.remove(&tid);
+        thread_statuses.remove(&tid);
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn per_inferior_tid(&self, tid: u64) -> Option<u64> {
+        self.tid_to_per_inferior_tid.get(&tid).copied()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn thread_group_for(&self, tid: u64) -> Option<&str> {
+        self.tid_to_group.get(&tid).map(String::as_str)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn group_threads_len(&self, tgid: &str) -> Option<usize> {
+        self.groups.get(tgid).map(|group| group.threads.len())
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn group_status(&self, tgid: &str) -> Option<ThreadGroupStatus> {
+        self.groups.get(tgid).map(|group| group.status)
+    }
+}
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct SessionMeta {
-    pub tag: String,
-    pub sid: u64,
-    pub curr_tid: Option<u64>,
-    pub t_status: HashMap<u64, ThreadStatus>,
-    pub curr_ctx: Option<ThreadContext>,
-    pub in_custom_ctx: bool,
+    tag: String,
+    sid: u64,
+    curr_tid: Option<u64>,
+    t_status: HashMap<u64, ThreadStatus>,
+    curr_ctx: Option<ThreadContext>,
+    in_custom_ctx: bool,
 
-    pub service_meta: Option<ServiceMeta>,
+    service_meta: Option<ServiceMeta>,
 
     // indicate of the session is connected or not
-    pub status: SessionStatus,
+    status: SessionStatus,
 
-    // maps session unique tid to per inferior tid
-    // for example, if session 1 has:
-    // tg1: { 1, 2, 4 }
-    // tg2: { 3 } then,
-    // self.tid_to_per_inferior_tid = { 1: 1, 2: 1, 3: 2, 4: 1 }
-    tid_to_per_inferior_tid: HashMap<u64, u64>,
-
-    // maps thread_id (int) to its belonging thread_group_id (str)
-    t_to_tg: HashMap<u64, String>,
-
-    // maps thread_group_id (str) to its owning (list of) thread_id (int)
-    tg_to_t: HashMap<String, HashSet<u64>>,
-
-    // maps thread_group_id (str) to ThreadGroupStatus
-    tg_status: HashMap<String, ThreadGroupStatus>,
-
-    // maps thread_group_id (str) to pid that thread group represents
-    tg_to_pid: HashMap<String, u64>,
+    // Stores the per-session thread/group topology and keeps the related
+    // indexes updated together instead of spreading that bookkeeping across
+    // multiple HashMaps in SessionMeta itself.
+    threads: SessionThreadRegistry,
 }
 
 impl SessionMeta {
@@ -89,100 +219,97 @@ impl SessionMeta {
             in_custom_ctx: false,
             service_meta,
             status: SessionStatus::OFF,
-            tid_to_per_inferior_tid: HashMap::new(),
-            t_to_tg: HashMap::new(),
-            tg_to_t: HashMap::new(),
-            tg_status: HashMap::new(),
-            tg_to_pid: HashMap::new(),
+            threads: SessionThreadRegistry::default(),
         }
     }
 
     #[inline]
     pub fn create_thread(&mut self, tid: u64, tgid: &str) {
-        self.t_status.insert(tid, ThreadStatus::INIT);
-        self.t_to_tg.insert(tid, tgid.to_string());
-
-        let num_exist_threads = self
-            .tg_to_t
-            .entry(tgid.to_string())
-            .or_insert(HashSet::new())
-            .len();
-
-        self.tid_to_per_inferior_tid
-            .insert(tid, (num_exist_threads + 1) as u64);
-        self.tg_to_t
-            .entry(tgid.to_string())
-            .or_insert(HashSet::new())
-            .insert(tid);
+        self.threads.create_thread(tid, tgid, &mut self.t_status);
     }
 
     #[inline]
     pub fn add_thread_group(&mut self, tgid: &str) {
-        self.tg_to_t
-            .entry(tgid.to_string())
-            .or_insert(HashSet::new());
-        self.tg_status
-            .insert(tgid.to_string(), ThreadGroupStatus::INIT);
+        self.threads.add_thread_group(tgid);
     }
 
     #[inline]
     pub fn remove_thread_group(&mut self, tgid: &str) -> HashSet<u64> {
-        let associated_threads = self.tg_to_t.get(tgid).cloned().unwrap_or_default();
-
-        for t in &associated_threads {
-            self.t_to_tg.remove(t);
-            self.t_status.remove(t);
-            self.tid_to_per_inferior_tid.remove(t);
-        }
-
-        self.tg_to_t.remove(tgid);
-        self.tg_status.remove(tgid);
-        self.tg_to_pid.remove(tgid);
-
-        associated_threads
+        self.threads.remove_thread_group(tgid, &mut self.t_status)
     }
 
     #[inline]
     pub fn start_thread_group(&mut self, tgid: &str, pid: u64) {
-        self.tg_status
-            .insert(tgid.to_string(), ThreadGroupStatus::RUNNING);
-        self.tg_to_pid.insert(tgid.to_string(), pid);
+        self.threads.start_thread_group(tgid, pid);
     }
 
     #[inline]
     pub fn exit_thread_group(&mut self, tgid: &str) {
-        self.tg_status
-            .insert(tgid.to_string(), ThreadGroupStatus::EXITED);
-
-        if let Some(threads) = self.tg_to_t.get(tgid).cloned() {
-            for t in threads {
-                self.t_to_tg.remove(&t);
-                self.t_status.remove(&t);
-            }
-            if let Some(thread_set) = self.tg_to_t.get_mut(tgid) {
-                thread_set.clear();
-            }
-        }
+        self.threads.exit_thread_group(tgid, &mut self.t_status);
     }
 
     #[allow(unused)]
     #[inline]
     pub fn add_thread_to_group(&mut self, tid: u64, tgid: &str) {
-        if !self.tg_to_t.contains_key(tgid) {
-            self.add_thread_group(tgid);
-        }
-
-        self.tg_to_t
-            .entry(tgid.to_string())
-            .or_insert(HashSet::new())
-            .insert(tid);
-        self.t_to_tg.insert(tid, tgid.to_string());
+        self.threads.add_thread_to_group(tid, tgid);
     }
 
     #[allow(unused)]
     #[inline]
     pub fn get_curr_tid(&self) -> Option<u64> {
         self.curr_tid
+    }
+
+    #[inline]
+    pub fn sid(&self) -> u64 {
+        self.sid
+    }
+
+    #[inline]
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    #[inline]
+    pub fn service_meta(&self) -> Option<&ServiceMeta> {
+        self.service_meta.as_ref()
+    }
+
+    #[inline]
+    pub fn cloned_service_meta(&self) -> Option<ServiceMeta> {
+        self.service_meta.clone()
+    }
+
+    #[inline]
+    pub fn status(&self) -> SessionStatus {
+        self.status
+    }
+
+    #[inline]
+    pub fn current_context(&self) -> Option<&ThreadContext> {
+        self.curr_ctx.as_ref()
+    }
+
+    #[inline]
+    pub fn set_current_context(&mut self, ctx: Option<ThreadContext>) {
+        self.curr_ctx = ctx;
+    }
+
+    #[inline]
+    pub fn is_in_custom_context(&self) -> bool {
+        self.in_custom_ctx
+    }
+
+    #[inline]
+    pub fn set_in_custom_context(&mut self, in_custom_ctx: bool) {
+        self.in_custom_ctx = in_custom_ctx;
+    }
+
+    #[inline]
+    pub fn all_threads_stopped(&self) -> bool {
+        self.t_status
+            .values()
+            .all(|status| *status == ThreadStatus::STOPPED)
     }
 
     #[inline]
@@ -206,7 +333,34 @@ impl SessionMeta {
     pub fn update_session_status(&mut self, status: SessionStatus) {
         self.status = status;
     }
+
+    #[cfg(test)]
+    #[inline]
+    fn per_inferior_tid(&self, tid: u64) -> Option<u64> {
+        self.threads.per_inferior_tid(tid)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn thread_group_for(&self, tid: u64) -> Option<&str> {
+        self.threads.thread_group_for(tid)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn thread_group_len(&self, tgid: &str) -> Option<usize> {
+        self.threads.group_threads_len(tgid)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn thread_group_status(&self, tgid: &str) -> Option<ThreadGroupStatus> {
+        self.threads.group_status(tgid)
+    }
 }
+
+pub type SessionReadGuard<'a> = RwLockReadGuard<'a, SessionMeta>;
+pub type SessionWriteGuard<'a> = RwLockWriteGuard<'a, SessionMeta>;
 
 /// Wrapper containing session metadata and transaction lock.
 ///
@@ -215,10 +369,50 @@ impl SessionMeta {
 #[derive(Debug)]
 pub struct SessionWrapper {
     /// Session metadata protected by read-write lock
-    pub meta: RwLock<SessionMeta>,
+    meta: RwLock<SessionMeta>,
     /// Transaction lock - acquire for exclusive command sequence access.
     /// Uses Arc to support OwnedMutexGuard.
-    pub tx_lock: Arc<TokioMutex<()>>,
+    tx_lock: Arc<TokioMutex<()>>,
+}
+
+impl SessionWrapper {
+    #[inline]
+    pub async fn read(&self) -> SessionReadGuard<'_> {
+        self.meta.read().await
+    }
+
+    #[inline]
+    pub async fn read_with<U, F>(&self, f: F) -> U
+    where
+        F: FnOnce(&SessionMeta) -> U,
+    {
+        let session = self.read().await;
+        f(&session)
+    }
+
+    #[inline]
+    pub async fn write(&self) -> SessionWriteGuard<'_> {
+        self.meta.write().await
+    }
+
+    #[inline]
+    pub async fn write_with<U, F>(&self, f: F) -> U
+    where
+        F: FnOnce(&mut SessionMeta) -> U,
+    {
+        let mut session = self.write().await;
+        f(&mut session)
+    }
+
+    #[inline]
+    pub async fn lock_transaction_owned(&self) -> OwnedMutexGuard<()> {
+        self.tx_lock.clone().lock_owned().await
+    }
+
+    #[inline]
+    pub fn try_lock_transaction_owned(&self) -> Result<OwnedMutexGuard<()>, TryLockError> {
+        self.tx_lock.clone().try_lock_owned()
+    }
 }
 
 /// Reference to a session wrapper
@@ -228,31 +422,22 @@ pub type SessionRef = Arc<SessionWrapper>;
 pub type SessionMetaRef = SessionRef;
 
 pub struct SessionStateMgr {
-    // sessions: DashMap<u64, SessionMeta>,
-    // Note: avoid DashMap as we do need some operations that can
-    // enter `.await` point while holding the reference to one or
-    // more session meta, which cause deadlock in DashMap.
-    // sessions: RwLock<HashMap<u64, SessionMeta>>,
+    // Avoid DashMap here because session operations frequently hold a session
+    // lock across `.await`, which would make shard-locked references unsafe to use.
     sessions: ShardMap<u64, SessionRef>,
+    tag_index: DashMap<String, u64>,
 }
 
 impl SessionStateMgr {
     pub fn new() -> Self {
         Self {
-            // sessions: DashMap::new(),
-            // sessions: RwLock::new(HashMap::new()),
             sessions: ShardMap::new(),
+            tag_index: DashMap::new(),
         }
     }
 
     #[inline]
     pub async fn add_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
-        // self.sessions.write().await.insert(
-        //     sid,
-        //     SessionMeta::new(sid, tag.to_string()),
-        //     // Arc::new(RwLock::new(SessionMeta::new(sid, tag.to_string()))),
-        // );
-
         let sessions = self.sessions.pin();
         sessions.insert(
             sid,
@@ -261,14 +446,13 @@ impl SessionStateMgr {
                 tx_lock: Arc::new(TokioMutex::new(())),
             }),
         );
+        self.tag_index.insert(tag.to_string(), sid);
     }
 
     #[inline]
     pub async fn update_session_status(&self, sid: u64, status: SessionStatus) {
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.update_session_status(status);
-        }
+        self.update_session_with(sid, |session| session.update_session_status(status))
+            .await;
     }
 
     #[inline]
@@ -282,384 +466,121 @@ impl SessionStateMgr {
     }
 
     #[inline]
-    /// Get session meta data
-    /// This function get a copy of session meta data
-    pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
-        // self.sessions.get(&sid).map(|v| v.clone())
-        // self.sessions.read().await.get(&sid).cloned()
-
+    pub fn session(&self, sid: u64) -> Option<SessionRef> {
         let sessions = self.sessions.pin();
         sessions.get(&sid).cloned()
     }
 
     #[inline]
-    /// Get all session meta data
-    /// This function get copies of all session meta data
-    pub fn get_all_sessions(&self) -> Vec<SessionMetaRef> {
-        // self.sessions.iter().map(|v| v.value().clone()).collect()
-
-        // self.sessions
-        //     .read()
-        //     .await
-        //     .iter()
-        //     .map(|v| v.1.clone())
-        //     .collect()
-
+    pub fn sessions(&self) -> Vec<SessionRef> {
         let sessions = self.sessions.pin();
         sessions.iter().map(|v| v.1.clone()).collect()
     }
 
-    /// Perform a transaction-like operation on a session meta data
-    /// The session meta is locked during the operation (via DashMap internal mechanism)
-    /// The function `f` is called with a mutable reference to the session meta data
-    // pub async fn with_session_mut<U, F>(&self, sid: u64, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&mut SessionMetaRef) -> U,
-    //     // F: FnOnce(tokio::sync::RwLockWriteGuard<'_, SessionMeta>) -> U,
-    // {
-    //     // self.sessions.get_mut(&sid).map(|mut v| f(v.value_mut()))
-
-    //     // self.sessions.write().await.get_mut(&sid).map(|v| f(v))
-
-    //     let sessions = self.sessions.pin();
-    //     sessions.get(&sid).cloned();
-    // }
-
-    /// Perform a transaction-like operation on a session meta data
-    /// The session meta is locked during the operation (via DashMap internal mechanism)
-    /// The function `f` is called with a immutable reference to the session meta data
-    // pub async fn with_session<U, F>(&self, sid: u64, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&SessionMeta) -> U,
-    // {
-    //     // loop {
-    //     //     match self.sessions.try_get(&sid) {
-    //     //         TryResult::Absent => return None,
-    //     //         TryResult::Locked => continue,
-    //     //         TryResult::Present(v) => {
-    //     //             return Some(f(v.value()));
-    //     //         }
-    //     //     }
-    //     // }
-    //     // self.sessions.get(&sid).map(|v| f(v.value()))
-    //     self.sessions.read().await.get(&sid).map(|v| f(v))
-    // }
-
     #[inline]
-    // Get session meta data by tag
-    // This function get a copy of session meta data
-    pub async fn get_session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
-        // self.sessions
-        //     .iter()
-        //     .find(|v| v.value().tag == tag)
-        //     .map(|v| v.value().clone())
-
-        // self.sessions
-        //     .read()
-        //     .await
-        //     .iter()
-        //     .find(|v| v.1.tag == tag)
-        //     .map(|v| v.1.clone())
-
-        let sessions = self.sessions.pin_owned();
-        // Caveats:
-        // Try to optimize for large session HashMap to avoid linear iteration.
-        // However, this can be a problem sometimes, as it creates many
-        // unnecessary tasks that can potentially slow down the scheduler...
-        let tasks: Vec<_> = sessions
-            .iter()
-            .map(|(_, v)| {
-                let v = v.clone();
-                let tag = tag.to_string();
-                tokio::spawn(async move {
-                    let session = v.meta.read().await;
-                    if session.tag == tag {
-                        drop(session);
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-
-        for result in futures::future::join_all(tasks).await {
-            if let Ok(Some(session)) = result {
-                return Some(session);
-            }
-        }
-        None
+    pub fn session_by_tag(&self, tag: &str) -> Option<SessionRef> {
+        self.tag_index
+            .get(tag)
+            .and_then(|sid| self.session(*sid.value()))
     }
-
-    // pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&SessionMeta) -> U,
-    // {
-    //     // self.sessions
-    //     //     .iter()
-    //     //     .find(|v| v.value().tag == tag)
-    //     //     .map(|v| f(v.value()))
-
-    //     // self.sessions
-    //     //     .read()
-    //     //     .await
-    //     //     .iter()
-    //     //     .find(|v| v.1.tag == tag)
-    //     //     .map(|v| f(v.1))
-    // }
-
-    // pub async fn with_session_by_tag_ref<U, F>(&self, tag: &str, f: F) -> Option<U>
-    // where
-    //     F: FnOnce(&mut SessionMeta) -> U,
-    // {
-    //     // self.sessions
-    //     //     .iter_mut()
-    //     //     .find(|v| v.value().tag == tag)
-    //     //     .map(|mut v| f(v.value_mut()))
-    //     self.sessions
-    //         .write()
-    //         .await
-    //         .iter_mut()
-    //         .find(|v| v.1.tag == tag)
-    //         .map(|v| f(v.1))
-    // }
-
-    // pub async fn with_session_if<P, U, F>(&self, mut predicate: P, f: F) -> Option<U>
-    // where
-    //     P: FnMut(&SessionMeta) -> bool,
-    //     F: FnOnce(&SessionMeta) -> U,
-    // {
-    //     // self.sessions
-    //     //     .iter()
-    //     //     .find(|v| predicate(v.value()))
-    //     //     .map(|v| f(v.value()))
-    //     self.sessions
-    //         .read()
-    //         .await
-    //         .iter()
-    //         .find(|v| predicate(v.1))
-    //         .map(|v| f(v.1))
-    // }
-
-    // pub async fn with_session_if_mut<P, U, F>(&self, mut predicate: P, f: F) -> Option<U>
-    // where
-    //     P: FnMut(&SessionMeta) -> bool,
-    //     F: FnOnce(&mut SessionMeta) -> U,
-    // {
-    //     // self.sessions
-    //     //     .iter_mut()
-    //     //     .find(|v| predicate(v.value()))
-    //     //     .map(|mut v| f(v.value_mut()))
-    //     self.sessions
-    //         .write()
-    //         .await
-    //         .iter_mut()
-    //         .find(|v| predicate(v.1))
-    //         .map(|v| f(v.1))
-    // }
-
-    // pub async fn with_session_all_if<P, U, F>(&self, mut predicate: P, f: F) -> Vec<U>
-    // where
-    //     P: FnMut(&SessionMeta) -> bool,
-    //     F: Fn(&SessionMeta) -> U,
-    // {
-    //     // self.sessions
-    //     //     .iter()
-    //     //     .filter(|v| predicate(v.value()))
-    //     //     .map(|v| f(v.value()))
-    //     //     .collect()
-    //     self.sessions
-    //         .read()
-    //         .await
-    //         .iter()
-    //         .filter(|v| predicate(v.1))
-    //         .map(|v| f(v.1))
-    //         .collect()
-    // }
-
-    // pub async fn with_session_all_if_mut<P, U, F>(&self, mut predicate: P, f: F) -> Vec<U>
-    // where
-    //     P: FnMut(&SessionMeta) -> bool,
-    //     F: Fn(&mut SessionMeta) -> U,
-    // {
-    //     self.sessions
-    //         .write()
-    //         .await
-    //         .iter_mut()
-    //         .filter(|v| predicate(v.1))
-    //         .map(|v| f(v.1))
-    //         .collect()
-    // }
 
     #[inline]
     pub async fn remove_session(&self, sid: u64) {
-        // self.sessions.write().await.remove(&sid);
-
+        let tag = if let Some(session) = self.session(sid) {
+            Some(session.read_with(|meta| meta.tag().to_string()).await)
+        } else {
+            None
+        };
         let sessions = self.sessions.pin();
         sessions.remove(&sid);
+        drop(sessions);
+        if let Some(tag) = tag {
+            self.tag_index.remove(&tag);
+        } else {
+            self.tag_index.retain(|_, indexed_sid| *indexed_sid != sid);
+        }
     }
 
     #[inline]
     pub async fn add_thread_group(&self, sid: u64, tgid: &str) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.add_thread_group(tgid));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.add_thread_group(tgid));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.add_thread_group(tgid);
-        }
+        self.update_session_with(sid, |session| session.add_thread_group(tgid))
+            .await;
     }
 
     #[inline]
     pub async fn create_thread(&self, sid: u64, tid: u64, tgid: &str) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.create_thread(tid, tgid));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.create_thread(tid, tgid));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.create_thread(tid, tgid);
-        }
+        self.update_session_with(sid, |session| session.create_thread(tid, tgid))
+            .await;
     }
 
     #[inline]
     pub async fn remove_thread_group(&self, sid: u64, tgid: &str) -> HashSet<u64> {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.remove_thread_group(tgid))
-        //     .unwrap_or_default()
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.remove_thread_group(tgid))
-        //     .unwrap_or_default()
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.remove_thread_group(tgid)
-        } else {
-            HashSet::new()
-        }
+        self.with_session_mut(sid, |session| session.remove_thread_group(tgid))
+            .await
+            .unwrap_or_default()
     }
 
     #[inline]
     pub async fn start_thread_group(&self, sid: u64, tgid: &str, pid: u64) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.start_thread_group(tgid, pid));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.start_thread_group(tgid, pid));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.start_thread_group(tgid, pid);
-        }
+        self.update_session_with(sid, |session| session.start_thread_group(tgid, pid))
+            .await;
     }
 
     #[inline]
     pub async fn exit_thread_group(&self, sid: u64, tgid: &str) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.exit_thread_group(tgid));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.exit_thread_group(tgid));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.exit_thread_group(tgid);
-        }
+        self.update_session_with(sid, |session| session.exit_thread_group(tgid))
+            .await;
     }
 
     #[inline]
     pub async fn update_t_status(&self, sid: u64, tid: u64, status: ThreadStatus) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.update_t_status(tid, status));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.update_t_status(tid, status));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.update_t_status(tid, status);
-        }
+        self.update_session_with(sid, |session| session.update_t_status(tid, status))
+            .await;
     }
 
     #[inline]
     pub async fn update_all_status(&self, sid: u64, new_status: ThreadStatus) {
-        // self.sessions
-        //     .get_mut(&sid)
-        //     .map(|mut v| v.update_all_status(new_status));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.update_all_status(new_status));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.update_all_status(new_status);
-        }
+        self.update_session_with(sid, |session| session.update_all_status(new_status))
+            .await;
     }
 
     #[inline]
     pub async fn update_session_with<F: FnOnce(&mut SessionMeta)>(&self, sid: u64, f: F) {
-        if let Some(session) = self.sessions.pin_owned().get(&sid) {
-            let mut session_guard = session.meta.write().await;
-            f(&mut session_guard);
-        }
+        let _ = self.with_session_mut(sid, f).await;
     }
 
     #[inline]
     pub async fn set_curr_tid(&self, sid: u64, tid: u64) {
-        // self.sessions.get_mut(&sid).map(|mut v| v.set_curr_tid(tid));
-
-        // self.sessions
-        //     .write()
-        //     .await
-        //     .get_mut(&sid)
-        //     .map(|v| v.set_curr_tid(tid));
-
-        let sessions = self.sessions.pin_owned();
-        if let Some(session) = sessions.get(&sid) {
-            session.meta.write().await.set_curr_tid(tid);
-        }
+        self.update_session_with(sid, |session| session.set_curr_tid(tid))
+            .await;
     }
 
-    // pub async fn all_sessions_ref_mut(&self) -> RwLockWriteGuard<'_, HashMap<u64, SessionMeta>> {
-    //     self.sessions.write().await
-    // }
+    #[inline]
+    pub async fn with_session<U, F>(&self, sid: u64, f: F) -> Option<U>
+    where
+        F: FnOnce(&SessionMeta) -> U,
+    {
+        let session = self.session(sid)?;
+        Some(session.read_with(f).await)
+    }
 
-    // pub async fn all_sessions_ref(&self) -> RwLockReadGuard<'_, HashMap<u64, SessionMeta>> {
-    //     self.sessions.read().await
-    // }
+    #[inline]
+    pub async fn with_session_mut<U, F>(&self, sid: u64, f: F) -> Option<U>
+    where
+        F: FnOnce(&mut SessionMeta) -> U,
+    {
+        let session = self.session(sid)?;
+        Some(session.write_with(f).await)
+    }
+
+    #[inline]
+    pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
+    where
+        F: FnOnce(&SessionMeta) -> U,
+    {
+        let session = self.session_by_tag(tag)?;
+        Some(session.read_with(f).await)
+    }
 }
 
 #[cfg(test)]
@@ -678,17 +599,17 @@ mod tests {
         meta.create_thread(11, "i1");
         meta.create_thread(20, "i2");
 
-        assert_eq!(meta.tid_to_per_inferior_tid.get(&10), Some(&1));
-        assert_eq!(meta.tid_to_per_inferior_tid.get(&11), Some(&2));
-        assert_eq!(meta.tid_to_per_inferior_tid.get(&20), Some(&1));
+        assert_eq!(meta.per_inferior_tid(10), Some(1));
+        assert_eq!(meta.per_inferior_tid(11), Some(2));
+        assert_eq!(meta.per_inferior_tid(20), Some(1));
 
         let removed = meta.remove_thread_group("i1");
 
         assert_eq!(removed, HashSet::from([10, 11]));
-        assert!(!meta.t_to_tg.contains_key(&10));
+        assert!(meta.thread_group_for(10).is_none());
         assert!(!meta.t_status.contains_key(&10));
-        assert!(!meta.tid_to_per_inferior_tid.contains_key(&10));
-        assert!(meta.tg_to_t.contains_key("i2"));
+        assert!(meta.per_inferior_tid(10).is_none());
+        assert_eq!(meta.thread_group_len("i2"), Some(1));
     }
 
     #[test]
@@ -700,11 +621,14 @@ mod tests {
         meta.create_thread(11, "i1");
         meta.exit_thread_group("i1");
 
-        assert_eq!(meta.tg_status.get("i1"), Some(&ThreadGroupStatus::EXITED));
-        assert_eq!(meta.tg_to_t.get("i1").map(HashSet::len), Some(0));
-        assert!(!meta.t_to_tg.contains_key(&10));
+        assert_eq!(
+            meta.thread_group_status("i1"),
+            Some(ThreadGroupStatus::EXITED)
+        );
+        assert_eq!(meta.thread_group_len("i1"), Some(0));
+        assert!(meta.thread_group_for(10).is_none());
         assert!(!meta.t_status.contains_key(&10));
-        assert!(!meta.t_to_tg.contains_key(&11));
+        assert!(meta.thread_group_for(11).is_none());
         assert!(!meta.t_status.contains_key(&11));
     }
 
@@ -715,10 +639,9 @@ mod tests {
         mgr.add_session(2, "svc-b", None).await;
 
         let session = mgr
-            .get_session_by_tag("svc-b")
-            .await
+            .session_by_tag("svc-b")
             .expect("session should be found by tag");
 
-        assert_eq!(session.meta.read().await.sid, 2);
+        assert_eq!(session.read_with(|meta| meta.sid()).await, 2);
     }
 }

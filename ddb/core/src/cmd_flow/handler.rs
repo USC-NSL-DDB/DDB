@@ -7,9 +7,8 @@ use std::{
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
-use tokio::{sync::RwLockWriteGuard, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
-use tracing::{instrument, Level};
 
 use crate::{
     cmd_flow::{emit_error, transaction},
@@ -19,8 +18,8 @@ use crate::{
     feature::get_proclet_restore_mgr,
     notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
     state::{
-        get_bkpt_mgr, get_group_mgr, get_signal_mgr, get_state_mgr, BkptLoc, GroupSubBkpt,
-        LocalThreadId, SessionMeta, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext,
+        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, BreakpointStateChange, GroupSubBkpt,
+        LocalThreadId, SessionRef, SessionSubBkpt, SessionWriteGuard, SubBkptType, ThreadContext,
         ThreadStatus, STATES,
     },
 };
@@ -103,14 +102,14 @@ impl BreakInsertHandler {
         let grp_bkpt = GroupSubBkpt::new(gid);
 
         // Check if group exists and has active sessions
-        let grp = match get_group_mgr().get_grp_by_id(gid) {
+        let grp = match get_group_mgr().group_by_id(gid) {
             Some(g) => g,
             None => {
                 warn!("Group {} does not exist", gid);
                 return Err(anyhow!("Group {} does not exist", gid));
             }
         };
-        let sids = grp.get_sids();
+        let sids = grp.session_ids();
 
         // Only send breakpoint command if group has active sessions
         // If empty, the breakpoint will be applied later when sessions join via sync_bkpts_state()
@@ -253,8 +252,8 @@ impl Handler for BreakInsertHandler {
                     .iter()
                     .filter_map(|ele| match ele {
                         Target::Group(gid) => get_group_mgr()
-                            .get_grp_by_id(*gid)
-                            .map(|grp| grp.get_sids().clone()),
+                            .group_by_id(*gid)
+                            .map(|grp| grp.session_ids().clone()),
                         _ => None,
                     })
                     .flatten()
@@ -338,15 +337,14 @@ impl BreakDeleteHandler {
 }
 
 impl BreakDeleteHandler {
-    async fn delete_local_bkpt(sid: u64, local_bkpt_id: u64) -> Result<()> {
+    async fn delete_local_bkpt(sid: u64, local_bkpt_id: u64) -> Result<BreakpointStateChange> {
         let ret = api::send_and_return(&format!("-break-delete {}", local_bkpt_id))
             .unwrap()
             .to(Target::Session(sid))
             .await?;
         let response = ret.get_responses().first().unwrap();
         if response.get_message() == "done" {
-            get_bkpt_mgr().remove_local_bkpt_id_index(sid, local_bkpt_id);
-            Ok(())
+            Ok(get_bkpt_mgr().record_local_bkpt_deletion(sid, local_bkpt_id))
         } else {
             warn!(
                 "Failed to delete local breakpoint {} from session {}: {:?}",
@@ -360,7 +358,39 @@ impl BreakDeleteHandler {
         }
     }
 
-    async fn delete_subbkpt(bkpt_id: u64, subbkpt_id: u64) -> Result<()> {
+    fn merge_state_change(
+        current: BreakpointStateChange,
+        next: BreakpointStateChange,
+    ) -> BreakpointStateChange {
+        match (current, next) {
+            (BreakpointStateChange::Removed(bkpt_id), _)
+            | (_, BreakpointStateChange::Removed(bkpt_id)) => {
+                BreakpointStateChange::Removed(bkpt_id)
+            }
+            (BreakpointStateChange::TargetChanged(bkpt_id), _)
+            | (_, BreakpointStateChange::TargetChanged(bkpt_id)) => {
+                BreakpointStateChange::TargetChanged(bkpt_id)
+            }
+            _ => BreakpointStateChange::None,
+        }
+    }
+
+    fn finalize_explicit_subbkpt_delete(
+        bkpt_id: u64,
+        subbkpt_id: u64,
+    ) -> Result<BreakpointStateChange> {
+        get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
+        match get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
+            Some(true) => {
+                get_bkpt_mgr().delete_bkpt(bkpt_id);
+                Ok(BreakpointStateChange::Removed(bkpt_id))
+            }
+            Some(false) => Ok(BreakpointStateChange::TargetChanged(bkpt_id)),
+            None => Ok(BreakpointStateChange::None),
+        }
+    }
+
+    async fn delete_subbkpt(bkpt_id: u64, subbkpt_id: u64) -> Result<BreakpointStateChange> {
         if let Some(subbkpt) = get_bkpt_mgr().get_subbkpt(bkpt_id, subbkpt_id) {
             match subbkpt.get_type() {
                 SubBkptType::Session(sess_subbkpt) => {
@@ -368,10 +398,7 @@ impl BreakDeleteHandler {
                     let local_bkpt_id = sess_subbkpt.get_local_bkpt_id();
                     let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
                     match ret {
-                        Ok(_) => {
-                            get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
-                            return Ok(());
-                        }
+                        Ok(change) => return Ok(change),
                         Err(e) => {
                             bail!(
                                 "Failed to delete breakpoint {} from session {}. Error: {}",
@@ -384,10 +411,18 @@ impl BreakDeleteHandler {
                 }
                 SubBkptType::Group(group_subbkpt) => {
                     let mut error = false;
-                    for (sid, local_bkpt_id) in group_subbkpt.get_local_ids() {
+                    let local_ids = group_subbkpt.get_local_ids();
+                    if local_ids.is_empty() {
+                        return Self::finalize_explicit_subbkpt_delete(bkpt_id, subbkpt_id);
+                    }
+
+                    let mut change = BreakpointStateChange::None;
+                    for (sid, local_bkpt_id) in local_ids {
                         let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
                         match ret {
-                            Ok(_) => {}
+                            Ok(local_change) => {
+                                change = Self::merge_state_change(change, local_change);
+                            }
                             Err(e) => {
                                 error = true;
                                 error!(
@@ -403,8 +438,7 @@ impl BreakDeleteHandler {
                             subbkpt_id
                         );
                     } else {
-                        get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
-                        return Ok(());
+                        return Ok(change);
                     }
                 }
             }
@@ -430,7 +464,6 @@ impl Handler for BreakDeleteHandler {
 
         let bkpt_id: u64;
         if let Some((bkpt_id_str, subbkpt_id_str)) = args.split_once(char::is_whitespace) {
-            let mut modified = false;
             bkpt_id = match bkpt_id_str.parse::<u64>() {
                 Ok(id) => id,
                 Err(e) => {
@@ -452,51 +485,16 @@ impl Handler for BreakDeleteHandler {
                 }
             };
             match Self::delete_subbkpt(bkpt_id, subbkpt_id).await {
-                Ok(_) => {
-                    modified = true;
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to delete sub-breakpoint {} of breakpoint {}: {:?}",
-                        subbkpt_id, bkpt_id, e
-                    );
-                }
-            }
-            if modified {
-                if let Some(empty) = get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
-                    if !empty {
-                        // still has other sub-breakpoints, emit breakpoint-modified event
-                        if let Some(bkpt) = get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
-                            let out = MIFormatter::format("^", "done", None, cmd.external_token);
-                            println!("{}", out);
-                            debug!("output: {}", out);
-
-                            let out = MIFormatter::format(
-                                "=",
-                                "breakpoint-modified",
-                                Some(&bkpt.clone().into()),
-                                None,
-                            );
-                            println!("{}", out);
-                            debug!("output: {}", out);
-
-                            get_notif_mgr()
-                                .broadcast(Notification::new(
-                                    NotificationPayload::BreakpointChanged(
-                                        BreakpointChangeEvent::Updated((&bkpt).into()),
-                                    ),
-                                ))
-                                .await;
-                        }
-                    } else {
-                        get_bkpt_mgr().delete_bkpt(bkpt_id);
+                Ok(BreakpointStateChange::TargetChanged(bkpt_id)) => {
+                    if let Some(bkpt) = get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
                         let out = MIFormatter::format("^", "done", None, cmd.external_token);
                         println!("{}", out);
                         debug!("output: {}", out);
+
                         let out = MIFormatter::format(
                             "=",
-                            "breakpoint-deleted",
-                            Some(&bkpt_deleted_payload(bkpt_id)),
+                            "breakpoint-modified",
+                            Some(&bkpt.clone().into()),
                             None,
                         );
                         println!("{}", out);
@@ -504,10 +502,36 @@ impl Handler for BreakDeleteHandler {
 
                         get_notif_mgr()
                             .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                                BreakpointChangeEvent::Removed(bkpt_id),
+                                BreakpointChangeEvent::Updated((&bkpt).into()),
                             )))
                             .await;
                     }
+                }
+                Ok(BreakpointStateChange::Removed(bkpt_id)) => {
+                    let out = MIFormatter::format("^", "done", None, cmd.external_token);
+                    println!("{}", out);
+                    debug!("output: {}", out);
+                    let out = MIFormatter::format(
+                        "=",
+                        "breakpoint-deleted",
+                        Some(&bkpt_deleted_payload(bkpt_id)),
+                        None,
+                    );
+                    println!("{}", out);
+                    debug!("output: {}", out);
+
+                    get_notif_mgr()
+                        .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
+                            BreakpointChangeEvent::Removed(bkpt_id),
+                        )))
+                        .await;
+                }
+                Ok(BreakpointStateChange::None) => {}
+                Err(e) => {
+                    warn!(
+                        "Failed to delete sub-breakpoint {} of breakpoint {}: {:?}",
+                        subbkpt_id, bkpt_id, e
+                    );
                 }
             }
         } else {
@@ -607,17 +631,17 @@ impl ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument)]
     async fn switch_context_and_cont(
         cont_cmd: ParsedInputCmd,
-        mut session: RwLockWriteGuard<'_, SessionMeta>,
+        mut session: SessionWriteGuard<'_>,
     ) -> Result<()> {
-        if let Some(ctx) = &session.curr_ctx {
+        if let Some(ctx) = session.current_context().cloned() {
             let target = Target::Thread(ctx.tid);
             let ctx = Self::prepare_ctx_switch_args(&ctx);
+            let sid = session.sid();
             let r = api::send_and_return(&format!("-switch-context-custom {}", ctx))
                 .unwrap()
                 .to(target)
                 .await?;
             let responses = r.get_responses();
-            let sid = session.sid;
             if responses.len() != 1
                 || responses[0].get_payload().unwrap()["message"]
                     .expect_string_ref()
@@ -626,11 +650,11 @@ impl ContinueHandler {
             {
                 // Fail to restore the context, skip continue
                 // TODO: maybe auto-retry is desired?
-                session.in_custom_ctx = true;
+                session.set_in_custom_context(true);
                 bail!("Failed to restore context for session {}", sid);
             } else {
                 // Context restored, continue
-                session.in_custom_ctx = false;
+                session.set_in_custom_context(false);
                 Self::cont(Target::Session(sid), cont_cmd, session);
                 return Ok(());
             }
@@ -641,11 +665,7 @@ impl ContinueHandler {
 
     #[inline]
     #[cfg_attr(feature = "profile", tracing::instrument)]
-    fn cont(
-        target: Target,
-        cont_cmd: ParsedInputCmd,
-        mut session: RwLockWriteGuard<'_, SessionMeta>,
-    ) {
+    fn cont(target: Target, cont_cmd: ParsedInputCmd, mut session: SessionWriteGuard<'_>) {
         let _ = cont_cmd.send().with(PlainFormatter).to(target);
         // NOTE: assume all-stop mode here.
         session.update_all_status(ThreadStatus::RUNNING);
@@ -667,7 +687,7 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let ss = get_state_mgr().get_all_sessions();
+        let ss = get_state_mgr().sessions();
 
         if Config::global().conf.support_migration {
             // reset all proclet cache and clean up restored proclet heap.
@@ -685,9 +705,9 @@ impl Handler for ContinueHandler {
                         let sid = sid.clone();
                         let cmd = cmd.clone();
                         tokio::spawn(async move {
-                            let s = s.meta.write().await;
-                            if s.sid == sid {
-                                if s.in_custom_ctx {
+                            let s = s.write().await;
+                            if s.sid() == sid {
+                                if s.is_in_custom_context() {
                                     // need to restore context before continue
                                     Self::switch_context_and_cont(cmd, s).await?
                                 } else {
@@ -711,13 +731,14 @@ impl Handler for ContinueHandler {
                         let s = s.clone();
                         let cmd = cmd.clone();
                         tokio::spawn(async move {
-                            let s = s.meta.write().await;
-                            if s.in_custom_ctx {
+                            let s = s.write().await;
+                            if s.is_in_custom_context() {
                                 // need to restore context before continue
                                 Self::switch_context_and_cont(cmd, s).await?
                             } else {
                                 // no need to restore context, just continue
-                                Self::cont(Target::Session(s.sid), cmd, s);
+                                let sid = s.sid();
+                                Self::cont(Target::Session(sid), cmd, s);
                             }
                             Ok(())
                         })
@@ -751,7 +772,7 @@ impl Handler for InterruptHandler {
         let cmd = cmd.with_prefix("-exec-interrupt-if-running");
         match cmd.target {
             Target::Session(sid) => {
-                let ss = STATES.get_session(sid);
+                let ss = STATES.session(sid);
                 if ss.is_some() {
                     // Note: send interrupt to running process. Ignore thread granularity.
                     // skips checking if the thread is running or not.
@@ -923,21 +944,15 @@ impl DistributeBacktraceHandler {
         Ok(ThreadContext { ctx, tid: gtid })
     }
 
-    async fn check_thread_status(s: &SessionRef) -> Result<RwLockWriteGuard<'_, SessionMeta>> {
+    async fn check_thread_status(s: &SessionRef) -> Result<SessionWriteGuard<'_>> {
         // set deadline to 1s
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         // busy wait for the interrupt to take effect for sure
         // e.g. the thread status is changed to STOPPED
         loop {
-            let write_guard = s.meta.write().await;
-            debug!("check thread status for {}", write_guard.tag);
-            if write_guard
-                .t_status
-                .iter()
-                .filter(|(_, v)| **v != ThreadStatus::STOPPED)
-                .count()
-                != 0
-            {
+            let write_guard = s.write().await;
+            debug!("check thread status for {}", write_guard.tag());
+            if !write_guard.all_threads_stopped() {
                 if std::time::Instant::now() > deadline {
                     bail!("wait too long for interrupt to take effect, break call chain here.");
                 }
@@ -1142,11 +1157,10 @@ impl Handler for DistributeBacktraceHandler {
                     // has parent, need to interrupt the parent thread and switch context
                     // and get backtrace and caller meta (if exists) for the parent thread
                     let parent_id = parent_meta.get("id").unwrap().expect_string_ref().unwrap();
-                    let parent_s = STATES.get_session_by_tag(parent_id).await.unwrap();
-                    let parent_s_guard = parent_s.meta.read().await;
-                    let parent_sid = parent_s_guard.sid;
-                    let parent_in_custom_ctx = parent_s_guard.in_custom_ctx;
-                    drop(parent_s_guard);
+                    let parent_s = STATES.session_by_tag(parent_id).unwrap();
+                    let (parent_sid, parent_in_custom_ctx) = parent_s
+                        .read_with(|session| (session.sid(), session.is_in_custom_context()))
+                        .await;
                     inspect_gtid = STATES.get_gtids_by_sid(parent_sid).first().unwrap().clone();
 
                     // ------------ [BEGIN] interrupt the parent thread ------------
@@ -1215,8 +1229,8 @@ impl Handler for DistributeBacktraceHandler {
                         let ctx_to_save =
                             Self::extract_ctx_from_payload(&switch_resp, inspect_gtid).unwrap();
 
-                        w_guard.curr_ctx = Some(ctx_to_save);
-                        w_guard.in_custom_ctx = true;
+                        w_guard.set_current_context(Some(ctx_to_save));
+                        w_guard.set_in_custom_context(true);
 
                         self.handle_migration_if_enabled(inspect_gtid, &parent_meta)
                             .await;

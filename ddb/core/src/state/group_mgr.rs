@@ -28,13 +28,43 @@ impl GroupMeta {
     }
 
     #[inline]
-    pub fn insert(&mut self, sid: SessionId) {
+    pub fn add_session(&mut self, sid: SessionId) {
         self.sids.insert(sid);
     }
 
     #[inline]
+    pub fn remove_session(&mut self, sid: SessionId) {
+        self.sids.remove(&sid);
+    }
+
+    #[inline]
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    #[inline]
+    pub fn session_ids(&self) -> &HashSet<SessionId> {
+        &self.sids
+    }
+
+    #[inline]
+    pub fn id(&self) -> GroupId {
+        self.id
+    }
+
+    #[inline]
+    pub fn hash(&self) -> &GroupHash {
+        &self.hash
+    }
+
+    #[inline]
+    pub fn insert(&mut self, sid: SessionId) {
+        self.add_session(sid);
+    }
+
+    #[inline]
     pub fn remove(&mut self, sid: &SessionId) {
-        self.sids.remove(sid);
+        self.remove_session(*sid);
     }
 
     #[inline]
@@ -49,12 +79,12 @@ impl GroupMeta {
 
     #[inline]
     pub fn get_grp_id(&self) -> GroupId {
-        self.id
+        self.id()
     }
 
     #[inline]
     pub fn get_grp_hash(&self) -> &GroupHash {
-        &self.hash
+        self.hash()
     }
 }
 
@@ -90,29 +120,29 @@ impl GroupMgr {
     }
 
     #[inline]
-    pub fn add_session(&self, bin_id: &str, alias: String, sid: u64) {
-        self.sid_to_grp.insert(sid, bin_id.to_string());
+    pub fn register_session(&self, group_hash: &str, alias: String, sid: SessionId) {
+        self.sid_to_grp.insert(sid, group_hash.to_string());
         self.hash_to_grp
-            .entry(bin_id.to_string())
+            .entry(group_hash.to_string())
             .or_insert_with(|| {
                 let grp_id = next_group_id();
-                self.id_to_hash.insert(grp_id, bin_id.to_string());
-                GroupMeta::new(grp_id, bin_id.to_string(), alias)
+                self.id_to_hash.insert(grp_id, group_hash.to_string());
+                GroupMeta::new(grp_id, group_hash.to_string(), alias)
             })
-            .insert(sid);
+            .add_session(sid);
     }
 
     #[inline]
-    pub fn remove_session(&self, sid: u64) {
+    pub fn remove_session(&self, sid: SessionId) {
         if let Some((_, group_hash)) = self.sid_to_grp.remove(&sid) {
             let remove_group_id = {
                 let mut group = match self.hash_to_grp.get_mut(&group_hash) {
                     Some(group) => group,
                     None => return,
                 };
-                group.remove(&sid);
-                if group.get_sids().is_empty() {
-                    Some(group.get_grp_id())
+                group.remove_session(sid);
+                if group.session_ids().is_empty() {
+                    Some(group.id())
                 } else {
                     None
                 }
@@ -126,14 +156,14 @@ impl GroupMgr {
     }
 
     #[inline]
-    pub fn get_grp_id_by_hash(&self, hash: &str) -> Option<GroupId> {
+    pub fn group_id_by_hash(&self, hash: &str) -> Option<GroupId> {
         self.hash_to_grp.get(hash).map(|s| s.id)
     }
 
     #[inline]
-    pub fn get_grp_info_by_sid(&self, sid: u64) -> Option<(GroupId, GroupHash)> {
-        if let Some(group_hash) = self.get_grp_hash_by_sid(sid) {
-            if let Some(group_id) = self.get_grp_id_by_sid(sid) {
+    pub fn group_info_by_session(&self, sid: SessionId) -> Option<(GroupId, GroupHash)> {
+        if let Some(group_hash) = self.group_hash_by_session(sid) {
+            if let Some(group_id) = self.group_id_by_session(sid) {
                 return Some((group_id, group_hash));
             }
         }
@@ -141,40 +171,40 @@ impl GroupMgr {
     }
 
     #[inline]
-    pub fn get_grp_hash_by_sid(&self, sid: u64) -> Option<GroupHash> {
+    pub fn group_hash_by_session(&self, sid: SessionId) -> Option<GroupHash> {
         self.sid_to_grp.get(&sid).map(|s| s.value().clone())
     }
 
     #[inline]
-    pub fn get_grp_id_by_sid(&self, sid: u64) -> Option<GroupId> {
-        if let Some(group_hash) = self.get_grp_hash_by_sid(sid) {
-            self.get_grp_id_by_hash(&group_hash)
+    pub fn group_id_by_session(&self, sid: SessionId) -> Option<GroupId> {
+        if let Some(group_hash) = self.group_hash_by_session(sid) {
+            self.group_id_by_hash(&group_hash)
         } else {
             None
         }
     }
 
     #[inline]
-    pub fn get_grp_by_hash(&self, hash: &str) -> Option<GroupMeta> {
+    pub fn group_by_hash(&self, hash: &str) -> Option<GroupMeta> {
         self.hash_to_grp.get(hash).map(|s| s.clone())
     }
 
     #[inline]
-    pub fn get_grp_by_id(&self, id: GroupId) -> Option<GroupMeta> {
+    pub fn group_by_id(&self, id: GroupId) -> Option<GroupMeta> {
         if let Some(hash) = self.id_to_hash.get(&id) {
-            self.get_grp_by_hash(&hash)
+            self.group_by_hash(&hash)
         } else {
             None
         }
     }
 
     #[inline]
-    pub fn get_all_grp_meta(&self) -> Vec<GroupMeta> {
+    pub fn groups(&self) -> Vec<GroupMeta> {
         self.hash_to_grp.iter().map(|s| s.value().clone()).collect()
     }
 
     #[inline]
-    pub fn get_all_grp_meta_if<P>(&self, f: P) -> Vec<GroupMeta>
+    pub fn matching_groups<P>(&self, f: P) -> Vec<GroupMeta>
     where
         P: Fn(&GroupMeta) -> bool,
     {
@@ -188,6 +218,54 @@ impl GroupMgr {
                 }
             })
             .collect()
+    }
+
+    #[inline]
+    pub fn add_session(&self, bin_id: &str, alias: String, sid: u64) {
+        self.register_session(bin_id, alias, sid);
+    }
+
+    #[inline]
+    pub fn get_grp_id_by_hash(&self, hash: &str) -> Option<GroupId> {
+        self.group_id_by_hash(hash)
+    }
+
+    #[inline]
+    pub fn get_grp_info_by_sid(&self, sid: u64) -> Option<(GroupId, GroupHash)> {
+        self.group_info_by_session(sid)
+    }
+
+    #[inline]
+    pub fn get_grp_hash_by_sid(&self, sid: u64) -> Option<GroupHash> {
+        self.group_hash_by_session(sid)
+    }
+
+    #[inline]
+    pub fn get_grp_id_by_sid(&self, sid: u64) -> Option<GroupId> {
+        self.group_id_by_session(sid)
+    }
+
+    #[inline]
+    pub fn get_grp_by_hash(&self, hash: &str) -> Option<GroupMeta> {
+        self.group_by_hash(hash)
+    }
+
+    #[inline]
+    pub fn get_grp_by_id(&self, id: GroupId) -> Option<GroupMeta> {
+        self.group_by_id(id)
+    }
+
+    #[inline]
+    pub fn get_all_grp_meta(&self) -> Vec<GroupMeta> {
+        self.groups()
+    }
+
+    #[inline]
+    pub fn get_all_grp_meta_if<P>(&self, f: P) -> Vec<GroupMeta>
+    where
+        P: Fn(&GroupMeta) -> bool,
+    {
+        self.matching_groups(f)
     }
 
     #[inline]

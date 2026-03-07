@@ -150,7 +150,7 @@ impl ProcletRestorationMgr {
 
         let caladan_ip = resp.caladan_ip;
         let owner_sid = get_proclet_mgr()
-            .get_sid(caladan_ip)
+            .session_id_for_caladan_ip(caladan_ip)
             .ok_or(anyhow::anyhow!(
                 "Fail to find the owner session for proclet {}. caladan_ip: {}",
                 proclet_id,
