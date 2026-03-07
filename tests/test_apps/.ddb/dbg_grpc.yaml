@@ -5,8 +5,6 @@ FrameFilter:
   filter_preset:
     - "cpp-stdlib"
     - "grpc"
-    - "protobuf-gen"
-    - "ddb-runtime"
 
 PrerunGdbCommands:
   - name: "Pretty Print for CPP"
@@ -16,7 +14,7 @@ ServiceDiscovery:
   Broker:
     hostname: 127.0.0.1
     managed:
-      type: emqx 
+      type: mosquitto
 
 Conf:
   on_exit: kill

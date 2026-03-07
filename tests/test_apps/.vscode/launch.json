@@ -1,16 +1,15 @@
+// A launch configuration that compiles the extension and then opens it inside a new window
 {
 	"version": "0.2.0",
 	"configurations": [
 		{
 			"type": "ddb",
 			"request": "launch",
-			"name": "Attach DDB",
-			// "ddbpath": "${env:HOME}/.cargo/bin/ddb",
-			"ddbpath": "/home/ybyan/projs/DDB/ddb/target/debug/ddb",
+			"name": "Start DDB",
+			"ddbpath": "${env:HOME}/.cargo/bin/ddb",
 			"configFilePath":"${workspaceFolder}/.ddb/dbg_grpc.yaml",
-			"debugger_args": [ "--console-log", "--console-level", "error", "--file-level", "debug" ],
+			"debugger_args": [ "--file-level", "info" ],
 			"valuesFormatting": "prettyPrinters",
-			"debugServer": 4712
-		}, 
+		},
 	],
 }
