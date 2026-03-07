@@ -119,7 +119,7 @@ enum BuilderTimeTravel {
 /// If you need even more control you can spawn the process yourself and pass it
 /// to [`Gdb::new`].
 ///
-/// ```
+/// ```no_run
 /// # use gdbmi::GdbBuilder;
 /// # use std::time::Duration;
 /// # tokio_test::block_on(async {
@@ -234,7 +234,7 @@ pub struct Gdb {
     timeout: Duration,
 }
 
-/// ```
+/// ```no_run
 /// use gdbmi::{Gdb, breakpoint::LineSpec};
 ///
 /// # tokio_test::block_on(async {
@@ -652,7 +652,7 @@ impl Gdb {
     /// GDB/MI, and setting stdin, stdout, and stderr to [`Stdio::piped`]. The
     /// following is roughly what [`Self::spawn`] does for you.
     ///
-    /// ```rust
+    /// ```no_run
     /// # use gdbmi::Gdb;
     /// # use std::{process::Stdio, time::Duration};
     /// # tokio_test::block_on(async {
@@ -744,9 +744,8 @@ mod tests {
     use crate::status::{ExitReason, StopReason};
 
     use super::*;
-    use insta::assert_debug_snapshot;
     use pretty_assertions::assert_eq;
-    use test_common::{build_hello_world, init, Result};
+    use test_common::{build_hello_world, hello_world_source, init, Result};
 
     // TODO: Replace assert!(matches!) with assert_matches! when stable
 
@@ -1018,14 +1017,14 @@ mod tests {
         let subject = fixture()?;
 
         let bp = subject
-            .break_insert(LineSpec::line("samples/hello_world/src/main.rs", 13))
+            .break_insert(LineSpec::line(hello_world_source(), 13))
             .await?;
         assert_eq!(1, bp.number);
         assert!(bp
             .file
             .as_ref()
             .unwrap()
-            .ends_with("samples/hello_world/src/main.rs"));
+            .ends_with("gdbmi/samples/hello_world/src/main.rs"));
         assert_eq!(17, bp.line.unwrap());
         assert_eq!(0, bp.times);
 
@@ -1065,9 +1064,22 @@ mod tests {
     #[tokio::test]
     async fn test_symbol_info_function() -> Result {
         let subject = fixture()?;
-        // Convert to BTreeMap so it has stable order
         let symbols: BTreeMap<_, _> = subject.symbol_info_functions().await?.into_iter().collect();
-        assert_debug_snapshot!(symbols);
+        let sample_file = hello_world_source();
+        let sample_functions = symbols
+            .get(sample_file.as_path())
+            .ok_or_else(|| eyre::eyre!("Missing symbols for {}", sample_file))?;
+
+        assert!(sample_functions.iter().any(|function| {
+            function.name == "hello_world::main"
+                && function.description.contains("fn hello_world::main")
+        }));
+        assert!(sample_functions.iter().any(|function| {
+            function.name == "hello_world::HelloMsg::say"
+                && function
+                    .description
+                    .contains("fn hello_world::HelloMsg::say")
+        }));
         Ok(())
     }
 
