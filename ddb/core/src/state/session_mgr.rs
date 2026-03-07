@@ -661,3 +661,64 @@ impl SessionStateMgr {
     //     self.sessions.read().await
     // }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn session_meta_removing_thread_group_cleans_thread_indexes() {
+        let mut meta = SessionMeta::new(1, "svc-a".to_string(), None);
+
+        meta.add_thread_group("i1");
+        meta.add_thread_group("i2");
+        meta.create_thread(10, "i1");
+        meta.create_thread(11, "i1");
+        meta.create_thread(20, "i2");
+
+        assert_eq!(meta.tid_to_per_inferior_tid.get(&10), Some(&1));
+        assert_eq!(meta.tid_to_per_inferior_tid.get(&11), Some(&2));
+        assert_eq!(meta.tid_to_per_inferior_tid.get(&20), Some(&1));
+
+        let removed = meta.remove_thread_group("i1");
+
+        assert_eq!(removed, HashSet::from([10, 11]));
+        assert!(!meta.t_to_tg.contains_key(&10));
+        assert!(!meta.t_status.contains_key(&10));
+        assert!(!meta.tid_to_per_inferior_tid.contains_key(&10));
+        assert!(meta.tg_to_t.contains_key("i2"));
+    }
+
+    #[test]
+    fn session_meta_exiting_thread_group_marks_it_exited_and_clears_threads() {
+        let mut meta = SessionMeta::new(1, "svc-a".to_string(), None);
+
+        meta.add_thread_group("i1");
+        meta.create_thread(10, "i1");
+        meta.create_thread(11, "i1");
+        meta.exit_thread_group("i1");
+
+        assert_eq!(meta.tg_status.get("i1"), Some(&ThreadGroupStatus::EXITED));
+        assert_eq!(meta.tg_to_t.get("i1").map(HashSet::len), Some(0));
+        assert!(!meta.t_to_tg.contains_key(&10));
+        assert!(!meta.t_status.contains_key(&10));
+        assert!(!meta.t_to_tg.contains_key(&11));
+        assert!(!meta.t_status.contains_key(&11));
+    }
+
+    #[tokio::test]
+    async fn session_state_manager_can_find_session_by_tag() {
+        let mgr = SessionStateMgr::new();
+        mgr.add_session(1, "svc-a", None).await;
+        mgr.add_session(2, "svc-b", None).await;
+
+        let session = mgr
+            .get_session_by_tag("svc-b")
+            .await
+            .expect("session should be found by tag");
+
+        assert_eq!(session.meta.read().await.sid, 2);
+    }
+}

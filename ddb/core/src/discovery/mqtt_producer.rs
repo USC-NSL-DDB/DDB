@@ -90,7 +90,10 @@ impl<'a> MqttProducer<'a> {
                 .await
             {
                 if let Err(e) = client.handle(sender, stop_rx).await {
-                    error!("Client handler error: {}. WARN: Service Discovery has been stopped.", e);
+                    error!(
+                        "Client handler error: {}. WARN: Service Discovery has been stopped.",
+                        e
+                    );
                 }
             } else {
                 debug!(
@@ -275,5 +278,80 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, net::Ipv4Addr};
+
+    use super::*;
+
+    #[test]
+    fn mqtt_payload_parses_identifier_and_user_data() {
+        let ip = Ipv4Addr::new(10, 0, 0, 5);
+        let payload = format!(
+            "{}:ignored:42:hash-a=api:{{caladan_ip=7,role=leader}}",
+            u32::from(ip)
+        );
+
+        let parsed = MqttPayload::from(payload.as_str());
+
+        assert_eq!(parsed.ip, ip);
+        assert_eq!(parsed.tag, "10.0.0.5:-42");
+        assert_eq!(parsed.pid, 42);
+        assert_eq!(parsed.hash, "hash-a");
+        assert_eq!(parsed.alias, "api");
+        assert_eq!(
+            parsed
+                .user_data
+                .as_ref()
+                .and_then(|data| data.get("caladan_ip"))
+                .map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            parsed
+                .user_data
+                .as_ref()
+                .and_then(|data| data.get("role"))
+                .map(String::as_str),
+            Some("leader")
+        );
+    }
+
+    #[test]
+    fn mqtt_payload_defaults_hash_alias_and_user_data_when_absent() {
+        let ip = Ipv4Addr::new(127, 0, 0, 1);
+        let payload = format!("{}:ignored:9", u32::from(ip));
+
+        let parsed = MqttPayload::from(payload.as_str());
+
+        assert_eq!(parsed.ip, ip);
+        assert_eq!(parsed.tag, "127.0.0.1:-9");
+        assert_eq!(parsed.pid, 9);
+        assert!(parsed.hash.is_empty());
+        assert!(parsed.alias.is_empty());
+        assert!(parsed.user_data.is_none());
+    }
+
+    #[test]
+    fn write_config_persists_broker_endpoint_and_topic() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("service_discovery").join("broker.conf");
+        let broker = BrokerInfo {
+            hostname: "broker.local".to_string(),
+            port: 1883,
+            broker_config: None,
+        };
+
+        write_config(&broker, config_path.to_str().unwrap()).expect("config should be written");
+
+        let contents = fs::read_to_string(config_path).expect("config should exist");
+        assert!(contents.contains(&format!(
+            "{}://broker.local:1883",
+            sd_defaults::BROKER_MSG_TRANSPORT
+        )));
+        assert!(contents.contains(sd_defaults::T_SERVICE_DISCOVERY));
     }
 }

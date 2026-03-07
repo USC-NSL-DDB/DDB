@@ -34,7 +34,11 @@ impl RuntimeStatus {
         let (tx, rx) = tokio::sync::watch::channel(false);
 
         let mut monitor = HashMap::new();
-        for component in &[Component::CmdFlow, Component::DbgMgr, Component::Notification] {
+        for component in &[
+            Component::CmdFlow,
+            Component::DbgMgr,
+            Component::Notification,
+        ] {
             monitor.insert(*component, false);
         }
 
@@ -89,5 +93,46 @@ impl RuntimeStatus {
     #[inline]
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
         self.running.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn runtime_status_only_turns_up_after_required_components_are_up() {
+        let status = RuntimeStatus::new();
+
+        status.up(Component::CmdFlow);
+        assert!(!status.is_up());
+
+        status.up(Component::DbgMgr);
+        assert!(!status.is_up());
+
+        status.up(Component::Notification);
+        assert!(status.is_up());
+    }
+
+    #[tokio::test]
+    async fn wait_for_up_unblocks_when_all_required_components_report_ready() {
+        let status = Arc::new(RuntimeStatus::new());
+        let waiter = {
+            let status = Arc::clone(&status);
+            tokio::spawn(async move {
+                status.wait_for_up().await;
+            })
+        };
+
+        status.up(Component::CmdFlow);
+        status.up(Component::DbgMgr);
+        status.up(Component::Notification);
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("wait_for_up should complete")
+            .expect("waiter task should finish cleanly");
     }
 }

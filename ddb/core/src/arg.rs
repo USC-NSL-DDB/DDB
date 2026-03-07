@@ -59,7 +59,9 @@ fn parse_positive_usize(value: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Args;
+    use std::fs;
+
+    use super::*;
     use clap::Parser;
 
     #[test]
@@ -77,5 +79,28 @@ mod tests {
     #[test]
     fn command_workers_must_be_positive() {
         assert!(Args::try_parse_from(["ddb", "--command-workers", "0"]).is_err());
+    }
+
+    #[test]
+    fn parse_path_canonicalizes_existing_paths() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let file = dir.path().join("ddb.yaml");
+        fs::write(&file, "Framework: nu\n").expect("temp file should be written");
+
+        let parsed = parse_path(file.to_str().expect("path should be valid utf-8"))
+            .expect("existing path should parse");
+
+        assert_eq!(
+            parsed,
+            file.canonicalize().expect("file should canonicalize")
+        );
+    }
+
+    #[test]
+    fn parse_path_rejects_missing_paths() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let file = dir.path().join("missing.yaml");
+
+        assert!(parse_path(file.to_str().expect("path should be valid utf-8")).is_err());
     }
 }

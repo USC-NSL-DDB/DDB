@@ -173,10 +173,9 @@ impl SourceMgr {
             })
             .collect::<Vec<_>>();
 
-        let grp_id = get_group_mgr().get_grp_id_by_hash(grp_hash).ok_or(anyhow!(
-            "Group ID not found for group hash: {}",
-            grp_hash
-        ))?;
+        let grp_id = get_group_mgr()
+            .get_grp_id_by_hash(grp_hash)
+            .ok_or(anyhow!("Group ID not found for group hash: {}", grp_hash))?;
         if sources.is_empty() {
             // if no source files are found, we still
             // mark the path has been searched for this group
@@ -208,7 +207,11 @@ impl SourceMgr {
             }
             // if the group has been resolve for this source path, skip
             if self.is_source_resolved_for_group(path, g_meta.get_grp_id()) {
-                debug!("Source already resolved for group: id={}, hash={}", g_meta.get_grp_id(), grp_hash);
+                debug!(
+                    "Source already resolved for group: id={}, hash={}",
+                    g_meta.get_grp_id(),
+                    grp_hash
+                );
                 return false;
             }
             true

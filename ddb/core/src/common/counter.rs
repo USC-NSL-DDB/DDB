@@ -52,3 +52,17 @@ pub fn next_rpc_req_id() -> u64 {
 pub fn next_bkpt_id() -> u64 {
     BKPT_COUNTER.next()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_counter_starts_at_one_and_increments() {
+        let counter = SimpleCounter::new();
+
+        assert_eq!(counter.next(), 1);
+        assert_eq!(counter.next(), 2);
+        assert_eq!(counter.next(), 3);
+    }
+}

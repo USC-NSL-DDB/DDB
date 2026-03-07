@@ -20,8 +20,7 @@ pub fn get_version() -> &'static str {
 #[inline]
 pub fn get_proj_dirs() -> directories::ProjectDirs {
     use directories::ProjectDirs;
-    ProjectDirs::from("com", "nsl", APP_NAME)
-        .expect("Failed to get project directories")
+    ProjectDirs::from("com", "nsl", APP_NAME).expect("Failed to get project directories")
 }
 
 #[inline]

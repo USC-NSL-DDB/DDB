@@ -8,11 +8,13 @@ mod dbg_cmd;
 mod dbg_ctrl;
 mod dbg_mgr;
 mod dbg_parser;
+mod debugger;
 mod discovery;
 mod feature;
 mod global;
 mod logging;
 mod notification;
+mod plugin;
 mod session;
 mod setup;
 mod shutdown;
@@ -24,14 +26,14 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use app::App;
-use cmd_flow::framework_adapter::*;
 use cmd_flow::get_cmd_handler;
 use cmd_flow::init_cmd_handler;
 use cmd_flow::input::CmdHandler;
 use common::config::Config;
-use common::config::Framework;
 use dbg_mgr::DbgManagable;
 use dbg_mgr::DbgManager;
+use debugger::{init_debugger_backend, resolve_debugger_backend};
+use plugin::{get_framework_plugin, init_framework_plugin, resolve_framework_plugin};
 use setup::LoggingSettings;
 use setup::{AppDirConfig, SetupProcedure};
 use shutdown::{get_shutdown_ctrl, ShutdownCause, ShutdownCtrl};
@@ -47,7 +49,6 @@ use tracing::{debug, info};
 
 #[cfg(feature = "profile")]
 use tracing::instrument;
-use tracing::Level;
 
 #[derive(Embed)]
 #[folder = "assets/"]
@@ -142,17 +143,7 @@ async fn run_main(command_workers: usize) -> Result<()> {
     // Initialize notification manager
     notification::init_notification_mgr();
 
-    init_cmd_handler(|| {
-        let adapter: Arc<dyn FrameworkCommandAdapter> = match Config::global().framework {
-            Framework::Nu => Arc::new(NuAdapter),
-            Framework::GRPC => Arc::new(GrpcAdapter),
-            Framework::ServiceWeaverKube => Arc::new(ServiceWeaverAdapter),
-            _ => {
-                panic!("Unsupported framework adapter for now.");
-            }
-        };
-        CmdHandler::new(adapter)
-    });
+    init_cmd_handler(|| CmdHandler::new(get_framework_plugin().command_adapter()));
 
     let cmd_flow_handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -269,6 +260,8 @@ async fn main() -> Result<()> {
     let command_workers = args.command_workers;
     let logging_settings = LoggingSettings::from_args(&args);
     Config::init_global(args.config)?;
+    init_debugger_backend(|| resolve_debugger_backend(Config::global()));
+    init_framework_plugin(|| resolve_framework_plugin(Config::global()));
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
     get_shutdown_ctrl().setup_signal_handling();
@@ -285,7 +278,7 @@ async fn main() -> Result<()> {
         .with_app_dir_config(app_dir_conf)
         .with_logging_settings(logging_settings)
         .run()?;
-    
+
     run_main(command_workers).await?;
 
     // Gracefully shutdown the OpenTelemetry tracer to flush pending spans

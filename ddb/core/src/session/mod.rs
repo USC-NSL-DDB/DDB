@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 pub use dbg_session::*;
 
 use crate::{
-    common::config::{GdbCommand, OnExit},
+    common::config::{DebuggerCommand, GdbCommand, OnExit},
     connection::ssh_client::SSHCred,
     dbg_ctrl::DbgController,
     discovery::discovery_message_producer::ServiceMeta,
@@ -24,14 +24,14 @@ pub struct DbgSessionConfig {
     pub ssh_cred: Option<SSHCred>,
     pub tag: Option<String>,
 
-    pub prerun_gdb_cmds: Vec<GdbCommand>,
-    pub postrun_gdb_cmds: Vec<GdbCommand>,
+    pub prerun_debugger_cmds: Vec<DebuggerCommand>,
+    pub postrun_debugger_cmds: Vec<DebuggerCommand>,
 
     // This should be present if the service discovery is enabled.
     // pub service_info: Option<ServiceInfo>,
     pub service_meta: Option<ServiceMeta>,
 
-    pub gdb_controller: DbgController,
+    pub debugger_controller: DbgController,
 }
 
 #[derive(Debug)]
@@ -42,11 +42,11 @@ pub struct DbgSessionCfgBuilder {
     pub ssh_cred: Option<SSHCred>,
     pub tag: Option<String>,
 
-    pub prerun_gdb_cmds: Vec<GdbCommand>,
-    pub postrun_gdb_cmds: Vec<GdbCommand>,
+    pub prerun_debugger_cmds: Vec<DebuggerCommand>,
+    pub postrun_debugger_cmds: Vec<DebuggerCommand>,
 
     pub service_meta: Option<ServiceMeta>,
-    pub gdb_controller: Option<DbgController>,
+    pub debugger_controller: Option<DbgController>,
 }
 
 /// Creates a new `DbgSessionCfgBuilder` initialized with values from the global configuration.
@@ -54,8 +54,8 @@ pub struct DbgSessionCfgBuilder {
 /// This constructor initializes a new builder with the following fields inherited from global config:
 /// - `sudo`: Whether to run with sudo privileges
 /// - `on_exit`: Behavior specification for program exit
-/// - `prerun_gdb_cmds`: GDB commands to run before debugging session
-/// - `postrun_gdb_cmds`: GDB commands to run after debugging session
+/// - `prerun_debugger_cmds`: debugger commands to run before debugging session
+/// - `postrun_debugger_cmds`: debugger commands to run after debugging session
 ///
 /// All other fields are initialized to `None`.
 ///
@@ -69,8 +69,8 @@ impl DbgSessionCfgBuilder {
         let gconf = crate::common::config::Config::global();
         let sudo = gconf.conf.sudo;
         let on_exit = gconf.conf.on_exit.clone();
-        let prerun_gdb_cmds = gconf.prerun_gdb_cmds.clone();
-        let postrun_gdb_cmds = gconf.postrun_gdb_cmds.clone();
+        let prerun_debugger_cmds = gconf.prerun_gdb_cmds.clone();
+        let postrun_debugger_cmds = gconf.postrun_gdb_cmds.clone();
 
         Self {
             mode: None,
@@ -78,10 +78,10 @@ impl DbgSessionCfgBuilder {
             on_exit,
             ssh_cred: None,
             tag: None,
-            prerun_gdb_cmds,
-            postrun_gdb_cmds,
+            prerun_debugger_cmds,
+            postrun_debugger_cmds,
             service_meta: None,
-            gdb_controller: None,
+            debugger_controller: None,
         }
     }
 
@@ -118,24 +118,40 @@ impl DbgSessionCfgBuilder {
         self
     }
 
-    pub fn add_prerun_gdb_cmds(mut self, cmds: Vec<GdbCommand>) -> Self {
-        self.prerun_gdb_cmds.extend(cmds);
+    pub fn add_prerun_debugger_cmds(mut self, cmds: Vec<DebuggerCommand>) -> Self {
+        self.prerun_debugger_cmds.extend(cmds);
         self
     }
 
-    pub fn add_prerun_gdb_cmd(mut self, cmd: GdbCommand) -> Self {
-        self.prerun_gdb_cmds.push(cmd);
+    pub fn add_prerun_debugger_cmd(mut self, cmd: DebuggerCommand) -> Self {
+        self.prerun_debugger_cmds.push(cmd);
         self
     }
 
-    pub fn add_postrun_gdb_cmds(mut self, cmds: Vec<GdbCommand>) -> Self {
-        self.postrun_gdb_cmds.extend(cmds);
+    pub fn add_prerun_gdb_cmds(self, cmds: Vec<GdbCommand>) -> Self {
+        self.add_prerun_debugger_cmds(cmds)
+    }
+
+    pub fn add_prerun_gdb_cmd(self, cmd: GdbCommand) -> Self {
+        self.add_prerun_debugger_cmd(cmd)
+    }
+
+    pub fn add_postrun_debugger_cmds(mut self, cmds: Vec<DebuggerCommand>) -> Self {
+        self.postrun_debugger_cmds.extend(cmds);
         self
     }
 
-    pub fn add_postrun_gdb_cmd(mut self, cmd: GdbCommand) -> Self {
-        self.postrun_gdb_cmds.push(cmd);
+    pub fn add_postrun_debugger_cmd(mut self, cmd: DebuggerCommand) -> Self {
+        self.postrun_debugger_cmds.push(cmd);
         self
+    }
+
+    pub fn add_postrun_gdb_cmds(self, cmds: Vec<GdbCommand>) -> Self {
+        self.add_postrun_debugger_cmds(cmds)
+    }
+
+    pub fn add_postrun_gdb_cmd(self, cmd: GdbCommand) -> Self {
+        self.add_postrun_debugger_cmd(cmd)
     }
 
     pub fn with_service_meta(mut self, meta: ServiceMeta) -> Self {
@@ -143,10 +159,15 @@ impl DbgSessionCfgBuilder {
         self
     }
 
-    pub fn add_gdb_controller(mut self, gdb_controller: DbgController) -> Self {
-        self.gdb_controller = Some(gdb_controller);
+    pub fn with_debugger_controller(mut self, debugger_controller: DbgController) -> Self {
+        self.debugger_controller = Some(debugger_controller);
         self
     }
+
+    pub fn add_gdb_controller(self, gdb_controller: DbgController) -> Self {
+        self.with_debugger_controller(gdb_controller)
+    }
+
     pub fn build(self) -> DbgSessionConfig {
         let mode = {
             if self.mode.is_none() {
@@ -170,10 +191,10 @@ impl DbgSessionCfgBuilder {
             on_exit: self.on_exit,
             ssh_cred,
             tag: self.tag,
-            prerun_gdb_cmds: self.prerun_gdb_cmds,
-            postrun_gdb_cmds: self.postrun_gdb_cmds,
+            prerun_debugger_cmds: self.prerun_debugger_cmds,
+            postrun_debugger_cmds: self.postrun_debugger_cmds,
             service_meta: self.service_meta,
-            gdb_controller: self.gdb_controller.unwrap(),
+            debugger_controller: self.debugger_controller.unwrap(),
         }
     }
 }

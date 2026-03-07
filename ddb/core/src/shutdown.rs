@@ -107,7 +107,7 @@ impl ShutdownCtrl {
         let _ = self.tx.lock().unwrap().send(true);
         true
     }
-    
+
     pub fn should_shutdown(&self) -> bool {
         *self.rx.lock().unwrap().borrow()
     }
@@ -228,5 +228,35 @@ impl ShutdownAcks {
         if let Some(tx) = self.senders.lock().unwrap().remove(&component) {
             let _ = tx.send(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn trigger_once_records_only_the_first_shutdown_cause() {
+        let ctrl = ShutdownCtrl::new();
+
+        assert!(ctrl.trigger_once(ShutdownCause::UserExit));
+        assert!(!ctrl.trigger_once(ShutdownCause::SigInt));
+        assert!(ctrl.should_shutdown());
+        assert_eq!(ctrl.cause(), Some(ShutdownCause::UserExit));
+    }
+
+    #[tokio::test]
+    async fn shutdown_acks_complete_registered_receivers() {
+        let acks = ShutdownAcks::new();
+        let receiver = acks.register(Component::CmdFlow);
+
+        acks.ack(Component::CmdFlow);
+
+        tokio::time::timeout(Duration::from_secs(1), receiver)
+            .await
+            .expect("ack receiver should resolve")
+            .expect("ack should be delivered");
     }
 }

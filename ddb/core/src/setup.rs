@@ -1,10 +1,13 @@
 use crate::{
-    arg, common::{self, config::Config, default_vals, utils}, logging
+    common::{self, config::Config, default_vals},
+    debugger::{get_debugger_backend, install_bundled_assets},
+    logging,
+    plugin::get_framework_plugin,
 };
 
+use crate::logging::TracingGuards;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
-use crate::logging::TracingGuards;
 
 #[derive(Debug)]
 pub struct AppDirConfig {
@@ -195,7 +198,7 @@ impl SetupProcedure {
         self.logging_settings = logging_settings;
         self
     }
-    
+
     pub fn run(&mut self) -> Result<TracingGuards> {
         // Create directories
         self.app_dir_config.create_dirs()?;
@@ -207,15 +210,17 @@ impl SetupProcedure {
             &self.logging_settings,
         )?;
 
-        // Write gdb ext script
-        // NOTE: this function returns the path to the script file
-        // However, the return value is currently not used
-        // For now, we assume the script is written to the default location
-        utils::gdb::setup_gdb_ext_script()?;
-        utils::gdb::setup_gdb_ext_frame_filter_script()?;
+        let config = common::Config::global();
+        let backend_assets = get_debugger_backend().bundled_assets(config);
+        install_bundled_assets(&backend_assets)?;
+        let plugin_assets = get_framework_plugin().bundled_assets(config);
+        let installed_plugin_assets = install_bundled_assets(&plugin_assets)?;
 
-        if common::Config::global().conf.support_migration {
-            let path = utils::gdb::setup_proclet_ext_script()?;
+        if config.conf.support_migration {
+            let path = installed_plugin_assets
+                .last()
+                .cloned()
+                .unwrap_or_else(|| std::path::PathBuf::from("<not-installed>"));
             info!(
                 "feature: [ENABLED] proclet migration. Proclet gdb ext script written to: {}",
                 path.display()
@@ -223,7 +228,6 @@ impl SetupProcedure {
         } else {
             info!("feature: [DISABLED] proclet migration.");
         }
-
 
         // print out some heads-up
         #[cfg(feature = "lazy_source_map")]

@@ -272,7 +272,7 @@ pub fn send(command: &str) -> Result<SendBuilder> {
 ///
 /// # Returns
 /// A builder that requires calling `.to(target)` to execute
-/// 
+///
 /// # Note
 /// This function is different from `send` in that it discards any output from the command.
 /// `send` routes the command and outputs results to STDOUT directly (after applying formatter).

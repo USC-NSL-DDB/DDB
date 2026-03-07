@@ -1,4 +1,4 @@
-use anyhow::{bail, Result, anyhow};
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flume::Receiver;
@@ -13,10 +13,11 @@ use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
+use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::shutdown::get_shutdown_ctrl;
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr};
 use crate::{
-    common::{self, config::Framework, config::Config as DDBConfig},
+    common::{self, config::Config as DDBConfig},
     discovery::DiscoveryMessageProducer,
 };
 
@@ -35,10 +36,10 @@ pub trait DbgManagable {
     async fn cleanup(&self);
 }
 
-pub type GdbSessionRef = crate::session::DbgSession;
+pub type DebuggerSessionRef = crate::session::DbgSession;
 
 /// For convenience, a type alias to store sessions in a DashMap (sid -> session).
-pub type SessionsRef = Arc<DashMap<u64, GdbSessionRef>>;
+pub type SessionsRef = Arc<DashMap<u64, DebuggerSessionRef>>;
 
 pub struct ServiceDiscover {
     /// The service discovery producer that will send `ServiceInfo` events.
@@ -85,10 +86,10 @@ impl ServiceDiscover {
             .mode(crate::session::DbgMode::REMOTE(
                 crate::session::DbgStartMode::ATTACH(pid),
             ))
-            .add_prerun_gdb_cmd(
+            .add_prerun_debugger_cmd(
                 crate::dbg_cmd::GdbCmd::SetOption(crate::dbg_cmd::GdbOption::MiAsync(true)).into(),
             )
-            .add_gdb_controller(info.ssh_controller)
+            .with_debugger_controller(info.ssh_controller)
             .with_service_meta(service_meta)
             .build();
 
@@ -105,15 +106,10 @@ impl ServiceDiscover {
                 // Register with proclet manager if needed.
                 // so that we have the mapping between caladan ip and session id.
                 let g_cfg = DDBConfig::global();
-                match g_cfg.framework {
-                    Framework::Nu | Framework::Quicksand => {
-                        if g_cfg.conf.support_migration {
-                            if let Some(caladan_ip) = caladan_ip {
-                                get_proclet_mgr().register_caladan_ip(caladan_ip, new_sid);
-                            }
-                        }
+                if get_framework_plugin().should_register_caladan_ip(g_cfg) {
+                    if let Some(caladan_ip) = caladan_ip {
+                        get_proclet_mgr().register_caladan_ip(caladan_ip, new_sid);
                     }
-                    _ => {}
                 }
                 match dbg_session.post_start().await {
                     Ok(_) => {
@@ -195,9 +191,10 @@ impl DbgManager {
 
     async fn init_sd(&self) -> Result<()> {
         let config = self.config;
+        let plugin = get_framework_plugin();
         let (producer_tx, producer_rx) = flume::unbounded::<crate::discovery::ServiceInfo>();
-        match config.framework {
-            Framework::Nu | Framework::GRPC => {
+        match plugin.service_discovery_mode(config) {
+            ServiceDiscoveryMode::MessageBroker => {
                 let sd = config
                     .service_discovery
                     .as_ref()
@@ -205,9 +202,7 @@ impl DbgManager {
 
                 if let Some(managed_broker_conf) = sd.broker.managed.as_ref() {
                     let b: Box<dyn MessageBroker> = match managed_broker_conf.broker_type {
-                        common::config::BrokerType::Mosquitto => {
-                            Box::new(MosquittoBroker::new())
-                        }
+                        common::config::BrokerType::Mosquitto => Box::new(MosquittoBroker::new()),
                         common::config::BrokerType::Emqx => Box::new(EMQXBroker::new()),
                         _ => {
                             panic!("Broker type not supported yet.");
@@ -237,7 +232,7 @@ impl DbgManager {
                     }
                 }
             }
-            Framework::ServiceWeaverKube => {
+            ServiceDiscoveryMode::Kubernetes => {
                 let swc = config
                     .service_discovery
                     .as_ref()
@@ -304,9 +299,7 @@ impl DbgManager {
                     producer_rx,
                 ));
             }
-            _ => {
-                panic!("Unsupported framework adapter for now.");
-            }
+            ServiceDiscoveryMode::None => {}
         }
         Ok(())
     }
@@ -316,22 +309,18 @@ impl DbgManager {
 impl DbgManagable for DbgManager {
     async fn new_with_config(config: &'static DDBConfig) -> Self {
         let sessions: SessionsRef = Arc::new(DashMap::new());
+        let plugin = get_framework_plugin();
 
-        let proclet_ctrl = match config.framework {
-            Framework::Nu | Framework::Quicksand => {
-                if config.conf.support_migration {
-                    debug!("Migration support is ENABLED, initializing proxy proclet controller.");
-                    Some(
-                        ProcletCtrlClient::try_connect_default()
-                            .await
-                            .expect("Failed to connect to proclet controller"),
-                    )
-                } else {
-                    debug!("[Migration SUPPORT]: DISABLED. SKIP initializing proxy proclet controller.");
-                    None
-                }
-            }
-            _ => None,
+        let proclet_ctrl = if plugin.supports_migration(config) {
+            debug!("Migration support is ENABLED, initializing proxy proclet controller.");
+            Some(
+                ProcletCtrlClient::try_connect_default()
+                    .await
+                    .expect("Failed to connect to proclet controller"),
+            )
+        } else {
+            debug!("[Migration SUPPORT]: DISABLED. SKIP initializing proxy proclet controller.");
+            None
         };
 
         DbgManager {

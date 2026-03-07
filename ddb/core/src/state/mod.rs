@@ -2,10 +2,10 @@ pub mod bkpt_mgr;
 pub mod group_mgr;
 pub mod proclet_mgr;
 pub mod session_mgr;
+pub mod signal_mgr;
 pub mod source_mgr;
 pub mod state_mgr;
 pub mod thread_mgr;
-pub mod signal_mgr;
 
 use std::sync::OnceLock;
 
@@ -13,13 +13,12 @@ pub use bkpt_mgr::*;
 pub use group_mgr::*;
 pub use proclet_mgr::*;
 pub use session_mgr::*;
+pub use signal_mgr::*;
 pub use source_mgr::*;
 pub use state_mgr::*;
 pub use thread_mgr::*;
-pub use signal_mgr::*;
 
 use lazy_static::lazy_static;
-
 
 lazy_static! {
     pub static ref STATES: StateMgr = StateMgr::new();

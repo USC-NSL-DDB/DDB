@@ -1,22 +1,16 @@
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig};
 use crate::cmd_flow::{api, get_router, SessionResponse, Target};
-use crate::common::default_vals::{DEFAULT_GDB_EXT_FRAME_FILTER_NAME, PROCLET_GDB_EXT_NAME};
 use crate::common::Config;
-use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd, GdbOption};
 use crate::dbg_ctrl::{InputSender, OutputReceiver};
+use crate::debugger::get_debugger_backend;
+use crate::plugin::get_framework_plugin;
+use crate::session::DbgStartMode;
 use crate::state::{get_bkpt_mgr, get_group_mgr, get_state_mgr, STATES};
 use crate::{cmd_flow, common};
-use crate::{
-    common::default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_NAME},
-    dbg_cmd::DbgCmdListBuilder,
-    session::DbgStartMode,
-};
 
 // Prefer static dispatch over dynamic dispatch here
 // considering we don't have too much flexibility in
@@ -50,7 +44,6 @@ impl DbgSession {
         // used to pass output from SSH connections back to the session.
 
         let sid = next_session_id();
-        // let ctrl=config.gdb_controller.as_dyn();
         DbgSession {
             sid,
             config,
@@ -123,16 +116,18 @@ impl DbgSession {
         // Sync state after starting the session.
         self.sync_bkpts_state().await?;
 
-        // Instruct debuggee to continue if service discovery is enabled.
-        // Skip SIG40 for ServiceWeaver mode — it doesn't use this signal.
-        let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
         let cfg = Config::global();
-        if cfg.service_discovery.is_some() && cfg.framework != common::config::Framework::ServiceWeaverKube {
-            // Broker is enabled. We need to handle the SIG40 signal.
-            bdr.add(GdbCmd::ConsoleExec("signal SIG40".to_string()));
+        let plugin = get_framework_plugin();
+        let bootstrap = plugin.debugger_bootstrap(cfg);
+        let commands = bootstrap
+            .post_start_commands
+            .iter()
+            .map(|cmd| cmd.render())
+            .collect::<Vec<_>>()
+            .join("");
+        if !commands.is_empty() {
+            self.write(commands).await?;
         }
-        let all_cmds = bdr.build().join("");
-        self.write(all_cmds).await?;
         Ok(())
     }
 
@@ -182,129 +177,20 @@ impl DbgSession {
         Ok(())
     }
 
-    /// Setup GDB logging configuration
-    /// Creates log directory if it doesn't exist and configures GDB to log to
-    /// /tmp/ddb/gdb_logs/<hostname>_<pid>_gdb.txt
-    async fn setup_gdb_logging(&self, bdr: &mut DbgCmdListBuilder<GdbCmd>) -> Result<()> {
-        use crate::common::utils::get_hostname;
-        use std::fs;
-
-        // Get the PID from the session config
-        let pid = match &self.config.mode {
-            DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => *pid,
-            _ => return Err(anyhow::anyhow!("Cannot setup logging for non-attach mode")),
-        };
-
-        // Get hostname
-        let hostname = get_hostname().context("Failed to get hostname for GDB logging")?;
-
-        // Create log directory
-        let log_dir = Path::new("/tmp/ddb/gdb_logs");
-        fs::create_dir_all(log_dir).context("Failed to create GDB log directory")?;
-
-        // Create log file path: /tmp/ddb/gdb_logs/<hostname>_<pid>_gdb.txt
-        let log_file = log_dir.join(format!("{}_{}_gdb.txt", hostname, pid));
-
-        debug!("Setting up GDB logging to: {:?}", log_file);
-
-        // Set the logging file
-        bdr.add(GdbCmd::SetOption(GdbOption::LoggingFile(
-            log_file.to_string_lossy().to_string(),
-        )));
-
-        // Enable logging
-        bdr.add(GdbCmd::SetOption(GdbOption::Logging(true)));
-
-        Ok(())
-    }
-
     pub async fn remote_attach(&mut self) -> Result<InputSender> {
-        use crate::common::config::{Config, Framework};
-        use crate::common::utils::gdb::gdb_start_cmd;
+        let config = Config::global();
+        let backend = get_debugger_backend();
+        let plugin = get_framework_plugin();
+        let plugin_bootstrap = plugin.debugger_bootstrap(config);
 
-        let full_args = gdb_start_cmd(Config::global().conf.sudo);
-        let ctrl = &mut self.config.gdb_controller;
+        let full_args = backend.build_start_command(config.conf.sudo);
+        let ctrl = &mut self.config.debugger_controller;
         let ssh_io = ctrl.start(&full_args).await?;
         self.input_tx = Some(ssh_io.in_tx.clone());
         self.output_rx = Some(ssh_io.out_rx.clone());
-        let mut bdr = DbgCmdListBuilder::<GdbCmd>::new();
-
-        // Configure GDB logging if enabled in config
-        if Config::global().conf.gdb.logging {
-            self.setup_gdb_logging(&mut bdr).await?;
-        } else {
-            bdr.add(GdbCmd::SetOption(GdbOption::Logging(false)));
-        }
-
-        bdr.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
-
-        // source framework-specific GDB extension scripts
-        match Config::global().framework {
-            Framework::GRPC | Framework::Nu | Framework::Quicksand => {
-                let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_NAME);
-                bdr.add(GdbCmd::ConsoleExec(format!(
-                    r#"source {}"#,
-                    gdb_ext_path.to_str().unwrap()
-                )));
-            }
-            _ => {}
-        }
-        match Config::global().framework {
-            Framework::Nu | Framework::Quicksand => {
-                if Config::global().conf.support_migration {
-                    let gdb_ext_path = Path::new(DEFAULT_GDB_EXT_DIR).join(PROCLET_GDB_EXT_NAME);
-                    bdr.add(GdbCmd::ConsoleExec(format!(
-                        r#"source {}"#,
-                        gdb_ext_path.to_str().unwrap()
-                    )));
-                }
-            }
-            _ => {}
-        }
-
-        // apply frame filter settings if any
-        if let Some(frame_filter_cfg) = &Config::global().frame_filter {
-            debug!("Applying frame filter settings: {:?}", frame_filter_cfg);
-            let gdb_ext_frame_filter_path =
-                Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
-            bdr.add(GdbCmd::ConsoleExec(format!(
-                r#"source {}"#,
-                gdb_ext_frame_filter_path.to_str().unwrap()
-            )));
-
-            bdr.add(GdbCmd::EnableFrameFilter);
-            bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
-            for pattern in &frame_filter_cfg.filter_file {
-                let args: FrameFilterAddArgs = pattern.into();
-                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFile(args)));
-            }
-            for pattern in &frame_filter_cfg.filter_function {
-                let args: FrameFilterAddArgs = pattern.into();
-                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFunction(args)));
-            }
-            for preset in &frame_filter_cfg.filter_preset {
-                bdr.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::PresetEnable(
-                    preset.clone(),
-                )));
-            }
-        }
-
-        for cmd in &self.config.prerun_gdb_cmds {
-            bdr.add(cmd);
-        }
-
-        match &self.config.mode {
-            DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => {
-                bdr.add(GdbCmd::TargetAttach(*pid));
-            }
-            _ => return Err(anyhow::anyhow!("Invalid mode for remote attach")),
-        }
-
-        for cmd in &self.config.postrun_gdb_cmds {
-            bdr.add(cmd);
-        }
-
-        let all_cmds = bdr.build().join("");
+        let all_cmds = backend
+            .build_remote_attach_commands(config, &self.config, plugin.as_ref(), &plugin_bootstrap)?
+            .join("");
         self.write(all_cmds).await?;
         Ok(ssh_io.in_tx.clone())
     }
@@ -358,11 +244,13 @@ impl DbgSession {
         // - remove from the group manager
         // - remove from state manager
         // - shutdown the connection
-        get_bkpt_mgr().clean_bkpts_for_terminated_session(self.sid).await;
+        get_bkpt_mgr()
+            .clean_bkpts_for_terminated_session(self.sid)
+            .await;
         get_router().remove_session(self.sid);
         get_group_mgr().remove_session(self.sid);
         get_state_mgr().remove_session(self.sid).await;
-        let ctrl = &self.config.gdb_controller;
+        let ctrl = &self.config.debugger_controller;
         if ctrl.is_open() {
             match common::config::Config::global().conf.on_exit {
                 common::config::OnExit::DETACH => {
@@ -388,7 +276,7 @@ impl DbgSession {
         if ctrl.is_open() {
             debug!("Failed to close controller after 10 retries");
         }
-        let ctrl = &mut self.config.gdb_controller;
+        let ctrl = &mut self.config.debugger_controller;
         ctrl.close().await?;
         if let Some(handle) = self.poll_handle.take() {
             handle.abort();

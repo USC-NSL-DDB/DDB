@@ -7,8 +7,8 @@ use thiserror::Error;
 use tracing::{debug, error, info};
 
 use crate::common::config::ManagedBrokerConfig;
-use crate::Asset;
 use crate::common::utils::run_command;
+use crate::Asset;
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
@@ -68,20 +68,27 @@ impl MosquittoBroker {
 
 impl MessageBroker for MosquittoBroker {
     fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
-        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
-            brker_conf.config_path.as_ref()
-        });
-        
+        let config_path = broker_info
+            .broker_config
+            .as_ref()
+            .and_then(|brker_conf| brker_conf.config_path.as_ref());
+
         let mqtt_conf_path = match config_path {
             Some(path) => path,
             None => {
-                let conf = Asset::get("conf/mosquitto.conf").context("Failed to get Mosquitto config file")?;
+                let conf = Asset::get("conf/mosquitto.conf")
+                    .context("Failed to get Mosquitto config file")?;
                 let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
                 self.temp_config_file = Some(temp_conf_file);
-                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+                self.temp_config_file
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .to_str()
+                    .unwrap()
             }
         };
-        
+
         fs::create_dir_all("/tmp/ddb/brokers/mosquitto")?;
         let result = run_command::<true, true>("mosquitto", &["-c", mqtt_conf_path, "-d"]);
         match result {
@@ -137,19 +144,25 @@ impl EMQXBroker {
     }
 }
 
-
 impl MessageBroker for EMQXBroker {
     fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
-        let config_path = broker_info.broker_config.as_ref().and_then(|brker_conf| {
-            brker_conf.config_path.as_ref()
-        });
+        let config_path = broker_info
+            .broker_config
+            .as_ref()
+            .and_then(|brker_conf| brker_conf.config_path.as_ref());
         let mqtt_conf_path = match config_path {
             Some(path) => path,
             None => {
-                let conf = Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
+                let conf =
+                    Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
                 let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
                 self.temp_config_file = Some(temp_conf_file);
-                self.temp_config_file.as_ref().unwrap().path().to_str().unwrap()
+                self.temp_config_file
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .to_str()
+                    .unwrap()
             }
         };
 
@@ -232,5 +245,34 @@ impl MessageBroker for EMQXBroker {
                 Err(BrokerError::StopError(e.to_string()).into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_embedded_file_content_writes_bytes_to_temp_file() {
+        let script = b"#!/bin/sh\necho hello\n";
+
+        let temp_file = extract_embedded_file_content(script).expect("temp file should be created");
+
+        assert_eq!(std::fs::read(temp_file.path()).unwrap(), script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_embedded_file_content_marks_temp_file_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_file =
+            extract_embedded_file_content(b"#!/bin/sh\necho hello\n").expect("temp file");
+        let mode = std::fs::metadata(temp_file.path())
+            .unwrap()
+            .permissions()
+            .mode();
+
+        assert_eq!(mode & 0o111, 0o111);
     }
 }

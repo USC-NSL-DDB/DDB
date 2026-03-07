@@ -151,3 +151,58 @@ pub trait DiscoveryMessageProducer: Send + Sync {
     /// * After calling `stop_producing`, the producer should no longer push into `tx`.
     async fn stop_producing(&mut self) -> anyhow::Result<()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, net::Ipv4Addr};
+
+    use super::*;
+    use crate::{connection::ssh_client::SSHCred, dbg_ctrl::SSHAttachController};
+
+    fn sample_service_info() -> ServiceInfo {
+        let ip = Ipv4Addr::new(127, 0, 0, 1);
+        let ssh_cred = SSHCred::new(&ip.to_string(), 22, "root", None);
+        ServiceInfo::new(
+            ip,
+            "127.0.0.1:-42".to_string(),
+            42,
+            "hash-a".to_string(),
+            "api".to_string(),
+            Box::new(SSHAttachController::new(ssh_cred)),
+            Some(HashMap::from([("caladan_ip".to_string(), "7".to_string())])),
+        )
+    }
+
+    #[test]
+    fn service_meta_from_service_info_copies_metadata_fields() {
+        let info = sample_service_info();
+
+        let meta = ServiceMeta::from_service_info(&info);
+
+        assert_eq!(meta.ip, Ipv4Addr::new(127, 0, 0, 1));
+        assert_eq!(meta.tag, "127.0.0.1:-42");
+        assert_eq!(meta.pid, 42);
+        assert_eq!(meta.hash, "hash-a");
+        assert_eq!(meta.alias, "api");
+        assert_eq!(
+            meta.user_data
+                .as_ref()
+                .and_then(|data| data.get("caladan_ip"))
+                .map(String::as_str),
+            Some("7")
+        );
+    }
+
+    #[test]
+    fn service_info_display_includes_public_fields() {
+        let info = sample_service_info();
+        let rendered = format!("{info}");
+
+        assert!(rendered.contains("127.0.0.1"));
+        assert!(rendered.contains("127.0.0.1:-42"));
+        assert!(rendered.contains("pid: 42"));
+        assert!(rendered.contains("hash-a"));
+        assert!(rendered.contains("api"));
+        assert!(rendered.contains("caladan_ip"));
+    }
+}

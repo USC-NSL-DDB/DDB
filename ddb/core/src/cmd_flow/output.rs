@@ -509,14 +509,8 @@ impl Formatter for StopAsyncRecordFormatter {
             if let Some((bkpt_id, subbkpt_id)) =
                 get_bkpt_mgr().get_bkpt_ids_by_local_bkpt_id(sid, local_bkpt_id)
             {
-                payload.insert(
-                    "bkptno".into(),
-                    bkpt_id.to_string().into(),
-                );
-                payload.insert(
-                    "subbkptno".into(),
-                    subbkpt_id.to_string().into(),
-                );
+                payload.insert("bkptno".into(), bkpt_id.to_string().into());
+                payload.insert("subbkptno".into(), subbkpt_id.to_string().into());
             }
         }
 

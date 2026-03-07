@@ -46,7 +46,7 @@ impl GroupMeta {
     pub fn get_sids(&self) -> &HashSet<SessionId> {
         &self.sids
     }
-    
+
     #[inline]
     pub fn get_grp_id(&self) -> GroupId {
         self.id
@@ -59,13 +59,13 @@ impl GroupMeta {
 }
 
 pub struct GroupMgr {
-    // maps from group hash (by default, when binary hash is used, this is a sha256 hash) 
+    // maps from group hash (by default, when binary hash is used, this is a sha256 hash)
     // to a set of dbg session ids
     hash_to_grp: DashMap<GroupHash, GroupMeta>,
-    
+
     // maps from group ID to group hash
     id_to_hash: DashMap<GroupId, GroupHash>,
-    
+
     // a reverse index
     sid_to_grp: DashMap<SessionId, GroupHash>,
 }
@@ -96,9 +96,8 @@ impl GroupMgr {
             .entry(bin_id.to_string())
             .or_insert_with(|| {
                 let grp_id = next_group_id();
-                self.id_to_hash
-                    .insert(grp_id, bin_id.to_string());
-                GroupMeta::new(grp_id, bin_id.to_string(), alias) 
+                self.id_to_hash.insert(grp_id, bin_id.to_string());
+                GroupMeta::new(grp_id, bin_id.to_string(), alias)
             })
             .insert(sid);
     }
@@ -106,17 +105,31 @@ impl GroupMgr {
     #[inline]
     pub fn remove_session(&self, sid: u64) {
         if let Some((_, group_hash)) = self.sid_to_grp.remove(&sid) {
-            self.hash_to_grp.entry(group_hash).and_modify(|s| {
-                let _ = s.remove(&sid);
-            });
+            let remove_group_id = {
+                let mut group = match self.hash_to_grp.get_mut(&group_hash) {
+                    Some(group) => group,
+                    None => return,
+                };
+                group.remove(&sid);
+                if group.get_sids().is_empty() {
+                    Some(group.get_grp_id())
+                } else {
+                    None
+                }
+            };
+
+            if let Some(group_id) = remove_group_id {
+                self.hash_to_grp.remove(&group_hash);
+                self.id_to_hash.remove(&group_id);
+            }
         }
     }
-    
+
     #[inline]
     pub fn get_grp_id_by_hash(&self, hash: &str) -> Option<GroupId> {
         self.hash_to_grp.get(hash).map(|s| s.id)
     }
-    
+
     #[inline]
     pub fn get_grp_info_by_sid(&self, sid: u64) -> Option<(GroupId, GroupHash)> {
         if let Some(group_hash) = self.get_grp_hash_by_sid(sid) {
@@ -192,5 +205,61 @@ impl GroupMgr {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_session_reuses_existing_group_for_same_hash() {
+        let mgr = GroupMgr::new();
+
+        mgr.add_session("hash-a", "svc-a".to_string(), 11);
+        mgr.add_session("hash-a", "svc-b".to_string(), 12);
+
+        let group = mgr
+            .get_grp_by_hash("hash-a")
+            .expect("group should exist for hash");
+        let grp_id = group.get_grp_id();
+
+        assert_eq!(group.get_sids().len(), 2);
+        assert!(group.get_sids().contains(&11));
+        assert!(group.get_sids().contains(&12));
+        assert_eq!(mgr.get_grp_id_by_sid(11), Some(grp_id));
+        assert_eq!(mgr.get_grp_id_by_sid(12), Some(grp_id));
+    }
+
+    #[test]
+    fn remove_session_drops_empty_group_indexes() {
+        let mgr = GroupMgr::new();
+
+        mgr.add_session("hash-a", "svc-a".to_string(), 11);
+        let grp_id = mgr
+            .get_grp_id_by_sid(11)
+            .expect("session should be indexed");
+
+        mgr.remove_session(11);
+
+        assert!(mgr.get_grp_hash_by_sid(11).is_none());
+        assert!(mgr.get_grp_by_hash("hash-a").is_none());
+        assert!(mgr.get_grp_by_id(grp_id).is_none());
+        assert!(mgr.get_all_grp_meta().is_empty());
+    }
+
+    #[test]
+    fn get_all_grps_if_filters_groups_using_predicate() {
+        let mgr = GroupMgr::new();
+
+        mgr.add_session("hash-a", "svc-a".to_string(), 11);
+        mgr.add_session("hash-b", "svc-b".to_string(), 21);
+        mgr.add_session("hash-b", "svc-b".to_string(), 22);
+
+        let populated = mgr.get_all_grps_if(|_, grp| grp.get_sids().len() > 1);
+
+        assert_eq!(populated.len(), 1);
+        assert!(populated.contains_key("hash-b"));
+        assert_eq!(populated["hash-b"].get_sids().len(), 2);
     }
 }

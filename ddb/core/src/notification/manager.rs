@@ -109,8 +109,8 @@ impl NotificationManager {
             .get(&id)
             .ok_or(BroadcastError::SubscriberNotFound)?;
 
-        let msg = serde_json::to_string(&notification)
-            .map_err(|_| BroadcastError::SerializationError)?;
+        let msg =
+            serde_json::to_string(&notification).map_err(|_| BroadcastError::SerializationError)?;
 
         subscriber
             .send(Message::Text(msg))
@@ -209,4 +209,68 @@ pub enum BroadcastError {
     SubscriberNotFound,
     SerializationError,
     SendFailed,
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::notification::{Notification, NotificationPayload};
+
+    #[test]
+    fn subscribe_and_unsubscribe_update_subscriber_count() {
+        let manager = NotificationManager::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let id = manager
+            .subscribe(tx)
+            .expect("subscriber should be accepted");
+        assert_eq!(manager.subscriber_count(), 1);
+
+        manager.unsubscribe(id);
+        assert_eq!(manager.subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn broadcast_sends_to_active_subscribers() {
+        let manager = NotificationManager::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        manager
+            .subscribe(tx)
+            .expect("subscriber should be accepted");
+
+        manager
+            .broadcast(Notification::new(NotificationPayload::SessionListChanged))
+            .await;
+
+        let message = rx
+            .recv()
+            .await
+            .expect("subscriber should receive a message");
+        match message {
+            Message::Text(text) => {
+                let value: serde_json::Value =
+                    serde_json::from_str(&text.to_string()).expect("message should be valid json");
+                assert_eq!(value["payload"]["type"], "SessionListChanged");
+            }
+            other => panic!("expected text message, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn broadcast_removes_disconnected_subscribers() {
+        let manager = NotificationManager::new();
+        let (tx, rx) = mpsc::unbounded_channel();
+        manager
+            .subscribe(tx)
+            .expect("subscriber should be accepted");
+        drop(rx);
+
+        manager
+            .broadcast(Notification::new(NotificationPayload::SessionListChanged))
+            .await;
+
+        assert_eq!(manager.subscriber_count(), 0);
+    }
 }

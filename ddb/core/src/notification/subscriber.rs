@@ -49,3 +49,40 @@ impl Subscriber {
 pub enum SendError {
     Disconnected,
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::extract::ws::Message;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn heartbeat_failures_flip_health_until_success_resets_it() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let subscriber = Subscriber::new(tx);
+
+        for _ in 0..4 {
+            subscriber.heartbeat_failure().await;
+        }
+        assert!(subscriber.is_healthy().await);
+
+        subscriber.heartbeat_failure().await;
+        assert!(!subscriber.is_healthy().await);
+
+        subscriber.heartbeat_success().await;
+        assert!(subscriber.is_healthy().await);
+    }
+
+    #[test]
+    fn send_reports_disconnected_when_receiver_is_gone() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let subscriber = Subscriber::new(tx);
+        drop(rx);
+
+        assert!(matches!(
+            subscriber.send(Message::Text("payload".into())),
+            Err(SendError::Disconnected)
+        ));
+    }
+}

@@ -36,6 +36,8 @@ pub struct Config {
     #[serde(rename = "Conf", default)]
     pub conf: Conf,
 
+    #[serde(rename = "Plugin", default)]
+    pub plugin: Option<PluginConfig>,
 
     #[serde(rename = "FrameFilter", default)]
     pub frame_filter: Option<FrameFilterConfig>,
@@ -103,6 +105,34 @@ impl Default for GdbConf {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum DebuggerBackendKind {
+    Gdb,
+    #[serde(other)]
+    Unknown,
+}
+
+impl Default for DebuggerBackendKind {
+    fn default() -> Self {
+        Self::Gdb
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct DebuggerConf {
+    #[serde(default)]
+    pub backend: DebuggerBackendKind,
+}
+
+impl Default for DebuggerConf {
+    fn default() -> Self {
+        Self {
+            backend: DebuggerBackendKind::Gdb,
+        }
+    }
+}
+
 fn default_auto_shutdown() -> bool {
     true
 }
@@ -123,6 +153,8 @@ pub struct Conf {
     pub base_dir: String,
     #[serde(default)]
     pub support_migration: bool,
+    #[serde(rename = "Debugger", default)]
+    pub debugger: DebuggerConf,
     #[serde(default)]
     pub gdb: GdbConf,
 }
@@ -137,6 +169,7 @@ impl Default for Conf {
             log_dir: default_vals::DEFAULT_LOG_DIR.to_string(),
             base_dir: default_vals::DEFAULT_BASE_DIR.to_string(),
             support_migration: false, // TODO: default to true when testing is done.
+            debugger: DebuggerConf::default(),
             gdb: GdbConf::default(),
         }
     }
@@ -181,11 +214,30 @@ pub struct Task {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
-pub struct GdbCommand {
+pub struct DebuggerCommand {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub command: String,
+}
+
+impl DebuggerCommand {
+    pub fn render(&self) -> String {
+        let command = self.command.trim();
+        if command.ends_with('\n') {
+            command.to_string()
+        } else {
+            format!("{}\n", command)
+        }
+    }
+}
+
+pub type GdbCommand = DebuggerCommand;
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct PluginConfig {
+    #[serde(rename = "DebuggerScripts", default)]
+    pub debugger_scripts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -304,6 +356,7 @@ impl Default for Config {
             ssh: SshConfig::default(),
             service_discovery: None,
             conf: Conf::default(),
+            plugin: None,
             frame_filter: None,
         }
     }
@@ -373,5 +426,81 @@ impl Config {
         GLOBAL_CONFIG
             .get()
             .expect("Global config is not properly initialized.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn load_repo_config(file_name: &str) -> Config {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("configs")
+            .join(file_name);
+        Config::from_file(path).expect("config in repository should parse")
+    }
+
+    #[test]
+    fn lower_case_framework_values_in_repo_configs_parse_correctly() {
+        let quicksand = Config::from_str("Framework: quicksand\n")
+            .expect("lower-case quicksand framework should parse");
+        assert_eq!(quicksand.framework, Framework::Quicksand);
+
+        let nu = Config::from_str("Framework: nu\n").expect("lower-case nu framework should parse");
+        assert_eq!(nu.framework, Framework::Nu);
+
+        assert_eq!(
+            load_repo_config("dbg_pass_signal.yaml").framework,
+            Framework::GRPC
+        );
+        assert_eq!(
+            load_repo_config("serviceweaverConfig.yaml").framework,
+            Framework::ServiceWeaverKube
+        );
+        assert_eq!(
+            load_repo_config("pidconfig.yaml").framework,
+            Framework::Unspecified
+        );
+    }
+
+    #[test]
+    fn handle_migration_only_applies_to_supported_frameworks() {
+        let mut config = Config::default();
+        config.conf.support_migration = true;
+
+        config.framework = Framework::Nu;
+        assert!(config.handle_migration());
+
+        config.framework = Framework::Quicksand;
+        assert!(config.handle_migration());
+
+        config.framework = Framework::GRPC;
+        assert!(!config.handle_migration());
+
+        config.framework = Framework::ServiceWeaverKube;
+        assert!(!config.handle_migration());
+    }
+
+    #[test]
+    fn debugger_command_render_trims_and_ensures_single_trailing_newline() {
+        let cmd = DebuggerCommand {
+            name: "load".to_string(),
+            command: "  source /tmp/runtime.py  \n".to_string(),
+        };
+
+        assert_eq!(cmd.render(), "source /tmp/runtime.py\n");
+    }
+
+    #[test]
+    fn frame_filter_pattern_conversion_preserves_match_type() {
+        let pattern = FrameFilterPatternConfig {
+            pattern: "runtime::*".to_string(),
+            match_type: FrameFilterMatchType::Glob,
+        };
+
+        let add_args: FrameFilterAddArgs = (&pattern).into();
+        assert_eq!(add_args.to_string(), "runtime::* --match-type glob");
     }
 }

@@ -8,14 +8,14 @@ use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
 use tokio::{sync::RwLockWriteGuard, task::JoinHandle};
-use tracing::{Level, instrument};
 use tracing::{debug, error, warn};
+use tracing::{instrument, Level};
 
 use crate::{
     cmd_flow::{emit_error, transaction},
     common::Config,
-    dbg_cmd::{DbgCmdGenerator, GdbCmd},
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
+    debugger::get_debugger_backend,
     feature::get_proclet_restore_mgr,
     notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
     state::{
@@ -27,7 +27,7 @@ use crate::{
 
 use super::{
     api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output, router::Target,
-    FinishedCmd, GdbDataErr, NullFormatter, PlainFormatter, ProcessReadableFormatter,
+    DebuggerDataErr, FinishedCmd, NullFormatter, PlainFormatter, ProcessReadableFormatter,
     ThreadInfoFormatter,
 };
 
@@ -852,11 +852,11 @@ impl DistributeBacktraceHandler {
     fn extract_remote_metadata(&self, payload: &Dict) -> Result<Dict> {
         let meta = payload
             .get("metadata")
-            .ok_or(GdbDataErr::MissingEntry("metadata".into()))?;
+            .ok_or(DebuggerDataErr::MissingEntry("metadata".into()))?;
 
         let msg = payload
             .get("message")
-            .ok_or(GdbDataErr::MissingEntry("message".into()))?
+            .ok_or(DebuggerDataErr::MissingEntry("message".into()))?
             .expect_string_ref()?;
 
         let caller_meta = meta.get_dict_entry("caller_meta")?;
@@ -907,7 +907,7 @@ impl DistributeBacktraceHandler {
     fn extract_ctx_from_payload(payload: &Dict, gtid: u64) -> Result<ThreadContext> {
         let ctx = payload
             .get("old_ctx")
-            .ok_or(GdbDataErr::MissingEntry("old_ctx".into()))?
+            .ok_or(DebuggerDataErr::MissingEntry("old_ctx".into()))?
             .expect_dict_ref()?;
 
         let ctx = ctx
@@ -1385,14 +1385,15 @@ impl Handler for SendSignalHandler {
 
                 // Signal can only be delivered when the process is stopped in gdb.
                 // So first send an interrupt to stop the process.
-                api::send_and_return(&GdbCmd::Interrupt.generate())
+                let backend = get_debugger_backend();
+                api::send_and_return(&backend.interrupt_command())
                     .unwrap()
                     .to(Target::Session(sid))
                     .await
                     .unwrap();
 
                 let signal_cmd =
-                    GdbCmd::ConsoleExec(format!("signal {}", cmd.args.trim())).generate();
+                    backend.console_exec_command(&format!("signal {}", cmd.args.trim()));
                 if let Ok(sender) = api::send_and_forget(&signal_cmd) {
                     match sender.to(cmd.target) {
                         Ok(_) => {

@@ -70,3 +70,34 @@ pub struct CustomEvent {
     pub event_type: String,
     pub data: serde_json::Value,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn notification_new_populates_version_timestamp_and_unique_id() {
+        let first = Notification::new(NotificationPayload::SessionListChanged);
+        let second = Notification::new(NotificationPayload::SessionListChanged);
+
+        assert_eq!(first.version, 1);
+        assert!(first.timestamp > 0);
+        assert_ne!(first.notification_id, second.notification_id);
+    }
+
+    #[test]
+    fn custom_notification_payload_serializes_with_type_and_data() {
+        let notification = Notification::new(NotificationPayload::Custom(CustomEvent {
+            event_type: "reload".to_string(),
+            data: json!({"ok": true}),
+        }));
+
+        let value = serde_json::to_value(notification).expect("notification should serialize");
+
+        assert_eq!(value["payload"]["type"], "Custom");
+        assert_eq!(value["payload"]["data"]["event_type"], "reload");
+        assert_eq!(value["payload"]["data"]["data"]["ok"], true);
+    }
+}

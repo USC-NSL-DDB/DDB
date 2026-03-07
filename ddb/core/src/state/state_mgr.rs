@@ -336,3 +336,36 @@ impl StateMgr {
         self.get_tag_with_tid_by_gtid(gtid).await.map(|v| v.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn state_manager_tracks_threads_groups_and_current_selection() {
+        let mgr = StateMgr::new();
+
+        mgr.register_session(1, "svc-a", None).await;
+        let gtgid = mgr.add_thread_group(1, "i1").await;
+        let (gtid, created_gtgid) = mgr.create_thread(1, 10, "i1").await;
+
+        assert_eq!(created_gtgid, gtgid);
+        assert_eq!(mgr.get_gtgid(1, "i1"), Some(gtgid));
+        assert_eq!(mgr.get_gtid(1, 10), Some(gtid));
+        assert_eq!(mgr.get_ltid_by_gtid(gtid), Some(LocalThreadId::new(1, 10)));
+
+        mgr.set_curr_session(1);
+        mgr.set_curr_gtid(gtid).await;
+
+        assert_eq!(mgr.get_curr_session(), Some(1));
+        assert_eq!(mgr.get_curr_gtid(), Some(gtid));
+        assert_eq!(
+            mgr.get_tag_with_tid_by_gtid(gtid).await,
+            Some(("svc-a".to_string(), 10))
+        );
+
+        assert_eq!(mgr.remove_thread_group(1, "i1").await, Some(gtgid));
+        assert!(mgr.get_gtid(1, 10).is_none());
+        assert!(mgr.get_gtgid(1, "i1").is_none());
+    }
+}

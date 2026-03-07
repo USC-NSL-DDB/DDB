@@ -1,6 +1,6 @@
 //! # Command Flow Module
 //!
-//! This module manages the lifecycle of GDB commands in the distributed debugging system.
+//! This module manages the lifecycle of debugger commands in the distributed debugging system.
 //!
 //! ## Module Boundaries
 //!
@@ -13,7 +13,7 @@
 //! - **`input`**: Parses command tokens, extracts target information, builds `Command<F>` types
 //! - **`handler`**: Per-command handlers that implement special routing or processing logic
 //! - **`router`**: Routes commands to specific sessions/threads, manages broadcast operations
-//! - **`output`**: Formatters that transform GDB/MI responses for different consumers
+//! - **`output`**: Formatters that transform debugger responses for different consumers
 //! - **`tracker`**: Tracks outstanding commands and manages response aggregation
 //! - **`framework_adapter`**: Framework-specific command adaptations
 //!
@@ -27,7 +27,7 @@
 //!   ↓
 //! Router::send_to/send_to_ret (resolve target → sessions)
 //!   ↓
-//! Session channels (flume) → GDB instances
+//! Session channels (flume) → debugger instances
 //!   ↓
 //! Response aggregation (Tracker)
 //!   ↓
@@ -39,7 +39,7 @@
 //! ## Responsibilities
 //! - **Parse**: Extract tokens, prefix, args from input
 //! - **Build**: Construct internal Command types with formatters
-//! - **Execute**: Route to appropriate GDB sessions via Router
+//! - **Execute**: Route to appropriate debugger sessions via Router
 //! - **Transform**: Apply formatters to responses
 //! - **Track**: Manage command/response correlation via tokens
 //!
@@ -108,7 +108,9 @@ pub fn get_output_tx(id: u64) -> flume::Sender<SessionResponse> {
 }
 
 #[derive(Debug, Error)]
-pub enum GdbDataErr {
+pub enum DebuggerDataErr {
     #[error("Missing entry: {0}")]
     MissingEntry(String),
 }
+
+pub type GdbDataErr = DebuggerDataErr;
