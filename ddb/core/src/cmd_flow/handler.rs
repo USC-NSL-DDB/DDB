@@ -19,8 +19,8 @@ use crate::{
     notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
     state::{
         get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, BreakpointStateChange, GroupSubBkpt,
-        LocalThreadId, SessionRef, SessionSubBkpt, SessionWriteGuard, SubBkptType, ThreadContext,
-        ThreadStatus, STATES,
+        LocalThreadId, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext, ThreadStatus,
+        STATES,
     },
 };
 
@@ -133,7 +133,7 @@ impl BreakInsertHandler {
                     .unwrap()
                     .parse::<u64>()
                     .unwrap();
-                let times = bkpt_info
+                let _times = bkpt_info
                     .get("times")
                     .unwrap()
                     .expect_string_ref()
@@ -146,7 +146,7 @@ impl BreakInsertHandler {
         }
 
         let subbkpt = SubBkptType::Group(grp_bkpt);
-        get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+        get_bkpt_mgr().add_sub_breakpoint(major_bkpt_id, subbkpt);
         Ok(())
     }
 
@@ -172,7 +172,7 @@ impl BreakInsertHandler {
             .unwrap()
             .parse::<u64>()
             .unwrap();
-        let times = bkpt_info
+        let _times = bkpt_info
             .get("times")
             .unwrap()
             .expect_string_ref()
@@ -181,7 +181,7 @@ impl BreakInsertHandler {
             .unwrap();
         // TODO: work out how to store `times` information.
         let subbkpt = SubBkptType::Session(SessionSubBkpt::new(local_bkpt_id, sid));
-        get_bkpt_mgr().add_subbkpt(major_bkpt_id, subbkpt);
+        get_bkpt_mgr().add_sub_breakpoint(major_bkpt_id, subbkpt);
         Ok(())
     }
 }
@@ -216,7 +216,7 @@ impl Handler for BreakInsertHandler {
             .unwrap();
         _bkpt_loc = [bkpt_loc_parts.0, bkpt_loc_parts.1];
         let bkpt_loc: BkptLoc = _bkpt_loc.into();
-        let bkpt_id = get_bkpt_mgr().add_bkpt(bkpt_loc);
+        let bkpt_id = get_bkpt_mgr().add_breakpoint(bkpt_loc);
 
         match cmd.target {
             Target::Session(sid) => {
@@ -304,7 +304,7 @@ impl Handler for BreakInsertHandler {
             }
         }
 
-        match get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
+        match get_bkpt_mgr().breakpoint(bkpt_id) {
             Some(bkpt) => {
                 let out = MIFormatter::format(
                     "^",
@@ -379,10 +379,10 @@ impl BreakDeleteHandler {
         bkpt_id: u64,
         subbkpt_id: u64,
     ) -> Result<BreakpointStateChange> {
-        get_bkpt_mgr().delete_subbkpt(bkpt_id, subbkpt_id);
-        match get_bkpt_mgr().is_bkpt_empty(bkpt_id) {
+        get_bkpt_mgr().remove_sub_breakpoint(bkpt_id, subbkpt_id);
+        match get_bkpt_mgr().breakpoint_is_empty(bkpt_id) {
             Some(true) => {
-                get_bkpt_mgr().delete_bkpt(bkpt_id);
+                get_bkpt_mgr().remove_breakpoint(bkpt_id);
                 Ok(BreakpointStateChange::Removed(bkpt_id))
             }
             Some(false) => Ok(BreakpointStateChange::TargetChanged(bkpt_id)),
@@ -390,12 +390,12 @@ impl BreakDeleteHandler {
         }
     }
 
-    async fn delete_subbkpt(bkpt_id: u64, subbkpt_id: u64) -> Result<BreakpointStateChange> {
-        if let Some(subbkpt) = get_bkpt_mgr().get_subbkpt(bkpt_id, subbkpt_id) {
-            match subbkpt.get_type() {
+    async fn delete_sub_breakpoint(bkpt_id: u64, subbkpt_id: u64) -> Result<BreakpointStateChange> {
+        if let Some(subbkpt) = get_bkpt_mgr().sub_breakpoint(bkpt_id, subbkpt_id) {
+            match subbkpt.kind() {
                 SubBkptType::Session(sess_subbkpt) => {
-                    let sid = sess_subbkpt.get_target_session();
-                    let local_bkpt_id = sess_subbkpt.get_local_bkpt_id();
+                    let sid = sess_subbkpt.target_session();
+                    let local_bkpt_id = sess_subbkpt.local_id();
                     let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
                     match ret {
                         Ok(change) => return Ok(change),
@@ -411,7 +411,7 @@ impl BreakDeleteHandler {
                 }
                 SubBkptType::Group(group_subbkpt) => {
                     let mut error = false;
-                    let local_ids = group_subbkpt.get_local_ids();
+                    let local_ids = group_subbkpt.local_ids();
                     if local_ids.is_empty() {
                         return Self::finalize_explicit_subbkpt_delete(bkpt_id, subbkpt_id);
                     }
@@ -484,9 +484,9 @@ impl Handler for BreakDeleteHandler {
                     return;
                 }
             };
-            match Self::delete_subbkpt(bkpt_id, subbkpt_id).await {
+            match Self::delete_sub_breakpoint(bkpt_id, subbkpt_id).await {
                 Ok(BreakpointStateChange::TargetChanged(bkpt_id)) => {
-                    if let Some(bkpt) = get_bkpt_mgr().get_bkpt_by_id(bkpt_id) {
+                    if let Some(bkpt) = get_bkpt_mgr().breakpoint(bkpt_id) {
                         let out = MIFormatter::format("^", "done", None, cmd.external_token);
                         println!("{}", out);
                         debug!("output: {}", out);
@@ -545,7 +545,7 @@ impl Handler for BreakDeleteHandler {
                     return;
                 }
             };
-            for (sid, local_bkpt_id) in get_bkpt_mgr().get_local_bkpt_ids(bkpt_id) {
+            for (sid, local_bkpt_id) in get_bkpt_mgr().local_breakpoint_ids(bkpt_id) {
                 match Self::delete_local_bkpt(sid, local_bkpt_id).await {
                     Ok(_) => {}
                     Err(e) => {
@@ -559,7 +559,7 @@ impl Handler for BreakDeleteHandler {
                 }
             }
 
-            get_bkpt_mgr().delete_bkpt(bkpt_id);
+            get_bkpt_mgr().remove_breakpoint(bkpt_id);
             let out = MIFormatter::format(
                 "=",
                 "breakpoint-deleted",
@@ -629,46 +629,53 @@ impl ContinueHandler {
 
 impl ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument)]
-    async fn switch_context_and_cont(
-        cont_cmd: ParsedInputCmd,
-        mut session: SessionWriteGuard<'_>,
-    ) -> Result<()> {
-        if let Some(ctx) = session.current_context().cloned() {
-            let target = Target::Thread(ctx.tid);
-            let ctx = Self::prepare_ctx_switch_args(&ctx);
-            let sid = session.sid();
-            let r = api::send_and_return(&format!("-switch-context-custom {}", ctx))
-                .unwrap()
-                .to(target)
-                .await?;
-            let responses = r.get_responses();
-            if responses.len() != 1
-                || responses[0].get_payload().unwrap()["message"]
+    async fn continue_session(cont_cmd: ParsedInputCmd, session: SessionRef) -> Result<()> {
+        let _tx = session.lock_transaction_owned().await;
+        let (sid, in_custom_context, current_context) = session
+            .read_with(|meta| {
+                (
+                    meta.sid(),
+                    meta.is_in_custom_context(),
+                    meta.current_context().cloned(),
+                )
+            })
+            .await;
+
+        if in_custom_context {
+            let Some(ctx) = current_context else {
+                return Ok(());
+            };
+            let restore = api::send_and_return(&format!(
+                "-switch-context-custom {}",
+                Self::prepare_ctx_switch_args(&ctx)
+            ))
+            .unwrap()
+            .to(Target::Thread(ctx.tid))
+            .await?;
+            let responses = restore.get_responses();
+            let restored = responses.len() == 1
+                && responses[0].get_payload().unwrap()["message"]
                     .expect_string_ref()
                     .unwrap()
-                    != "success"
-            {
-                // Fail to restore the context, skip continue
-                // TODO: maybe auto-retry is desired?
-                session.set_in_custom_context(true);
+                    == "success";
+
+            session
+                .write_with(|meta| meta.set_in_custom_context(!restored))
+                .await;
+
+            if !restored {
                 bail!("Failed to restore context for session {}", sid);
-            } else {
-                // Context restored, continue
-                session.set_in_custom_context(false);
-                Self::cont(Target::Session(sid), cont_cmd, session);
-                return Ok(());
             }
         }
-        // TODO: handle error if no context is found
-        Ok(())
-    }
 
-    #[inline]
-    #[cfg_attr(feature = "profile", tracing::instrument)]
-    fn cont(target: Target, cont_cmd: ParsedInputCmd, mut session: SessionWriteGuard<'_>) {
-        let _ = cont_cmd.send().with(PlainFormatter).to(target);
-        // NOTE: assume all-stop mode here.
-        session.update_all_status(ThreadStatus::RUNNING);
+        let _ = cont_cmd
+            .send()
+            .with(PlainFormatter)
+            .to(Target::Session(sid));
+        session
+            .write_with(|meta| meta.update_all_status(ThreadStatus::RUNNING))
+            .await;
+        Ok(())
     }
 
     #[inline]
@@ -687,70 +694,35 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let ss = get_state_mgr().sessions();
-
         if Config::global().conf.support_migration {
             // reset all proclet cache and clean up restored proclet heap.
             get_proclet_restore_mgr().reset().await;
         }
 
-        let tasks = match &cmd.target {
-            Target::Session(sid) => {
-                // Note: need to first check if the session is in custom context.
-                // If so, switch context and continue.
-                let tasks: Vec<_> = ss
-                    .iter()
-                    .map(|s| -> JoinHandle<Result<()>> {
-                        let s = s.clone();
-                        let sid = sid.clone();
-                        let cmd = cmd.clone();
-                        tokio::spawn(async move {
-                            let s = s.write().await;
-                            if s.sid() == sid {
-                                if s.is_in_custom_context() {
-                                    // need to restore context before continue
-                                    Self::switch_context_and_cont(cmd, s).await?
-                                } else {
-                                    // no need to restore context, just continue
-                                    Self::cont(Target::Session(sid), cmd, s);
-                                }
-                            }
-                            Ok(())
-                        })
-                    })
-                    .collect();
-                tasks
-            }
-            // no session specified, should revert back to broadcast to all sessions.
-            _ => {
-                // Note: need to first check if the session is in custom context.
-                // If so, switch context and continue.
-                let tasks: Vec<_> = ss
-                    .iter()
-                    .map(|s| {
-                        let s = s.clone();
-                        let cmd = cmd.clone();
-                        tokio::spawn(async move {
-                            let s = s.write().await;
-                            if s.is_in_custom_context() {
-                                // need to restore context before continue
-                                Self::switch_context_and_cont(cmd, s).await?
-                            } else {
-                                // no need to restore context, just continue
-                                let sid = s.sid();
-                                Self::cont(Target::Session(sid), cmd, s);
-                            }
-                            Ok(())
-                        })
-                    })
-                    .collect();
-                tasks
-            }
+        let tasks: Vec<JoinHandle<Result<()>>> = match &cmd.target {
+            Target::Session(sid) => get_state_mgr()
+                .session(*sid)
+                .into_iter()
+                .map(|session| {
+                    let cmd = cmd.clone();
+                    tokio::spawn(async move { Self::continue_session(cmd, session).await })
+                })
+                .collect(),
+            _ => get_state_mgr()
+                .sessions()
+                .into_iter()
+                .map(|session| {
+                    let cmd = cmd.clone();
+                    tokio::spawn(async move { Self::continue_session(cmd, session).await })
+                })
+                .collect(),
         };
 
         for result in futures::future::join_all(tasks).await {
-            if let Err(e) = result {
-                error!("Failed to continue: {:?}", e);
+            match result {
+                Err(e) => error!("Failed to continue: {:?}", e),
+                Ok(Err(e)) => error!("Failed to continue: {:?}", e),
+                Ok(Ok(())) => {}
             }
         }
     }
@@ -802,7 +774,7 @@ impl Handler for ListHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
-        STATES.set_curr_session(1);
+        STATES.select_session(1);
         let _ = cmd.send().with(PlainFormatter).to(Target::CurrSession);
     }
 }
@@ -823,7 +795,7 @@ impl Handler for ThreadSelectHandler {
         let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
         if !parts.is_empty() {
             let gtid = parts.last().unwrap().parse::<u64>().unwrap();
-            let (sid, tid) = STATES.get_ltid_by_gtid(gtid).unwrap().into();
+            let (sid, tid) = STATES.local_thread_id(gtid).unwrap().into();
             let target = Target::Session(sid);
             let _ = api::send(&format!("-thread-select {}", tid))
                 .unwrap()
@@ -944,55 +916,32 @@ impl DistributeBacktraceHandler {
         Ok(ThreadContext { ctx, tid: gtid })
     }
 
-    async fn check_thread_status(s: &SessionRef) -> Result<SessionWriteGuard<'_>> {
+    async fn wait_for_all_threads_stopped(session: &SessionRef) -> Result<()> {
         // set deadline to 1s
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         // busy wait for the interrupt to take effect for sure
         // e.g. the thread status is changed to STOPPED
         loop {
-            let write_guard = s.write().await;
-            debug!("check thread status for {}", write_guard.tag());
-            if !write_guard.all_threads_stopped() {
+            let all_stopped = session
+                .read_with(|meta| {
+                    debug!("check thread status for {}", meta.tag());
+                    meta.all_threads_stopped()
+                })
+                .await;
+            if !all_stopped {
                 if std::time::Instant::now() > deadline {
                     bail!("wait too long for interrupt to take effect, break call chain here.");
                 }
-                // Some threads are still considered as running
-                // drop the write guard, yield, and retry later.
-                drop(write_guard);
                 tokio::time::sleep(Duration::from_millis(1)).await;
                 continue;
-            } else {
-                // All threads are stopped, break the loop
-                // return the write guard
-                return Ok(write_guard);
             }
+            return Ok(());
         }
     }
 }
 
 impl DistributeBacktraceHandler {
-    async fn get_bt_and_caller_meta(&self, gtid: u64) -> Result<BacktraceData> {
-        // ------------ [BEGIN] get backtrace for the current thread ------------
-        let (sid, _) = get_state_mgr().get_ltid_by_gtid(gtid).unwrap().into();
-
-        // Acquire transaction lock for exclusive command sequence access
-        let tx = transaction::begin(sid)
-            .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        // Send interrupt command
-        // let _ = api::send_and_return(&"-exec-interrupt")
-        //     .unwrap()
-        //     .to(Target::Thread(gtid))
-        //     .await?;
-
-        // Update thread status with short-lived lock
-        // {
-        //     let mut write_guard = tx.session().meta.write().await;
-        //     write_guard.update_all_status(ThreadStatus::STOPPED);
-        // }
-
-        // Get stack frames
+    async fn get_bt_and_caller_meta_locked(&self, sid: u64, gtid: u64) -> Result<BacktraceData> {
         let mut stack_resp = api::send_and_return(&format!("-stack-list-frames --thread {}", gtid))
             .unwrap()
             .to_default_target()
@@ -1005,18 +954,13 @@ impl DistributeBacktraceHandler {
             frame.insert("session".to_string(), sid.to_string().into());
             frame.insert("thread".to_string(), gtid.to_string().into());
         }
-        // ------------ [END] get backtrace for the current thread ------------
 
         let dbt_cmd = self.adapter.get_bt_command_name();
-
-        // ------------ [BEGIN] get caller metadata for the current threads ------------
         let resp = api::send_and_return(&dbt_cmd)
             .unwrap()
             .to(Target::Thread(gtid))
             .await
-            .unwrap(); // TODO: better error handling.
-
-        // Transaction lock (tx) is released here when it goes out of scope
+            .unwrap();
 
         let remote_bt_parent_meta = match self
             .extract_remote_metadata(resp.get_responses().first().unwrap().get_payload().unwrap())
@@ -1033,9 +977,20 @@ impl DistributeBacktraceHandler {
         })
     }
 
+    async fn get_bt_and_caller_meta(&self, gtid: u64) -> Result<BacktraceData> {
+        // ------------ [BEGIN] get backtrace for the current thread ------------
+        let (sid, _) = get_state_mgr().local_thread_id(gtid).unwrap().into();
+
+        // Acquire transaction lock for exclusive command sequence access
+        let _tx = transaction::begin(sid)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        self.get_bt_and_caller_meta_locked(sid, gtid).await
+    }
+
     async fn handle_migration_if_enabled(&self, inspect_gtid: u64, parent_meta: &Dict) {
         if Config::global().handle_migration() {
-            if let Some(LocalThreadId(sid, _)) = STATES.get_ltid_by_gtid(inspect_gtid) {
+            if let Some(LocalThreadId(sid, _)) = STATES.local_thread_id(inspect_gtid) {
                 let proclet_id = parent_meta
                     .get("proclet_id")
                     .unwrap()
@@ -1157,20 +1112,30 @@ impl Handler for DistributeBacktraceHandler {
                     // has parent, need to interrupt the parent thread and switch context
                     // and get backtrace and caller meta (if exists) for the parent thread
                     let parent_id = parent_meta.get("id").unwrap().expect_string_ref().unwrap();
-                    let parent_s = STATES.session_by_tag(parent_id).unwrap();
-                    let (parent_sid, parent_in_custom_ctx) = parent_s
+                    let parent_session = STATES.session_by_tag(parent_id).unwrap();
+                    let (parent_sid, parent_in_custom_ctx) = parent_session
                         .read_with(|session| (session.sid(), session.is_in_custom_context()))
                         .await;
-                    inspect_gtid = STATES.get_gtids_by_sid(parent_sid).first().unwrap().clone();
+                    inspect_gtid = STATES
+                        .global_thread_ids_for_session(parent_sid)
+                        .first()
+                        .copied()
+                        .unwrap();
 
                     // ------------ [BEGIN] interrupt the parent thread ------------
-                    if !parent_in_custom_ctx {
+                    let bt_data = if !parent_in_custom_ctx {
                         debug!("try to swap context for {}", parent_sid);
 
-                        // TODO: Refactor this section to use transaction::begin(parent_sid)
-                        // instead of check_thread_status returning a write guard held across .await points.
-                        // The current pattern holds RwLock across multiple awaits which can cause issues.
-                        // See get_bt_and_caller_meta for the proper pattern using SessionTransaction.
+                        let tx = match transaction::begin(parent_sid).await {
+                            Ok(tx) => tx,
+                            Err(e) => {
+                                error!(
+                                    "Failed to start transaction for session {}, break call chain here: {:?}",
+                                    parent_sid, e
+                                );
+                                break;
+                            }
+                        };
 
                         // interrupt, switch context, get backtrace
                         let intr_resp = api::send_and_return(&format!(
@@ -1192,10 +1157,14 @@ impl Handler for DistributeBacktraceHandler {
                         // ------------ [END] interrupt the parent thread ------------
 
                         // ------------ [BEGIN] switch the context for the parent thread ------------
-                        let mut w_guard = Self::check_thread_status(&parent_s).await.unwrap();
+                        if let Err(e) = Self::wait_for_all_threads_stopped(tx.session()).await {
+                            error!(
+                                "Failed waiting for session {} to stop before context switch: {:?}",
+                                parent_sid, e
+                            );
+                            break;
+                        }
 
-                        // start to switch context, hold the write lock to create critical section.
-                        // to this point, all threads in this sessions are considered as stopped.
                         let ctx_switch_args = Self::prepare_ctx_switch_args(
                             &parent_meta
                                 .get("caller_ctx")
@@ -1224,21 +1193,28 @@ impl Handler for DistributeBacktraceHandler {
                                 "Failed to switch context for session {}, breaks here. The call stack might be corrupted.",
                                 parent_sid
                             );
+                            break;
                         }
 
                         let ctx_to_save =
                             Self::extract_ctx_from_payload(&switch_resp, inspect_gtid).unwrap();
 
-                        w_guard.set_current_context(Some(ctx_to_save));
-                        w_guard.set_in_custom_context(true);
+                        tx.session()
+                            .write_with(|session| {
+                                session.set_current_context(Some(ctx_to_save));
+                                session.set_in_custom_context(true);
+                            })
+                            .await;
 
                         self.handle_migration_if_enabled(inspect_gtid, &parent_meta)
                             .await;
-                    }
+                        self.get_bt_and_caller_meta_locked(parent_sid, inspect_gtid)
+                            .await
+                    } else {
+                        self.get_bt_and_caller_meta(inspect_gtid).await
+                    };
+
                     // ------------ [BEGIN] get backtrace for the parent thread ------------
-                    let bt_data = self.get_bt_and_caller_meta(inspect_gtid).await;
-                    // drop the write guard at this point to hold the critical section when getting the backtrace
-                    // drop(w_guard);
                     parent_meta = match bt_data {
                         Ok(data) => {
                             // move the backtrace to the output payload
@@ -1249,7 +1225,7 @@ impl Handler for DistributeBacktraceHandler {
                                     break;
                                 }
                             };
-                            let (sid, _) = STATES.get_ltid_by_gtid(inspect_gtid).unwrap().into();
+                            let (sid, _) = STATES.local_thread_id(inspect_gtid).unwrap().into();
                             let boundary_frame: gdbmi::raw::Value = HashMap::from([
                                 ("line".to_string(), "0".into()),
                                 ("level".to_string(), "-1".into()),

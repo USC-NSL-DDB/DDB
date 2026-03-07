@@ -93,22 +93,22 @@ struct BkptsResponse {
 impl From<&BkptLoc> for BkptLocJson {
     fn from(loc: &BkptLoc) -> Self {
         BkptLocJson {
-            src: loc.get_path().to_string(),
-            line: loc.get_line(),
+            src: loc.path().to_string(),
+            line: loc.line(),
         }
     }
 }
 
 impl From<&SubBkptMeta> for SubBkptJson {
     fn from(subbkpt: &SubBkptMeta) -> Self {
-        match subbkpt.get_type() {
+        match subbkpt.kind() {
             SubBkptType::Session(s) => SubBkptJson::Session {
-                id: subbkpt.get_id(),
-                target_session: s.get_target_session(),
+                id: subbkpt.id(),
+                target_session: s.target_session(),
             },
             SubBkptType::Group(g) => SubBkptJson::Group {
-                id: subbkpt.get_id(),
-                target_group: g.get_target_group(),
+                id: subbkpt.id(),
+                target_group: g.target_group(),
             },
         }
     }
@@ -117,11 +117,11 @@ impl From<&SubBkptMeta> for SubBkptJson {
 impl From<&BkptMeta> for BkptJson {
     fn from(bkpt: &BkptMeta) -> Self {
         BkptJson {
-            id: bkpt.get_id(),
-            location: bkpt.get_loc().into(),
+            id: bkpt.id(),
+            location: bkpt.location().into(),
             enabled: bkpt.is_enabled(),
-            times: bkpt.get_times(),
-            subbkpts: bkpt.get_subbkpts().iter().map(|s| s.into()).collect(),
+            times: bkpt.times(),
+            subbkpts: bkpt.sub_breakpoints().iter().map(|s| s.into()).collect(),
         }
     }
 }
@@ -381,7 +381,7 @@ async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_bkpts() -> impl IntoResponse {
     let bkpts: Vec<BkptJson> = get_bkpt_mgr()
-        .get_all_bkpts()
+        .breakpoints()
         .iter()
         .map(|bkpt| bkpt.into())
         .collect();

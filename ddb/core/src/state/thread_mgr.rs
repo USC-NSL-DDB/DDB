@@ -154,43 +154,6 @@ impl ThreadStateMgr {
         }
         None
     }
-
-    pub fn get_gtid(&self, ltid: &LocalThreadId) -> Option<u64> {
-        self.ltid_to_gtid.get(ltid).map(|v| *v)
-    }
-
-    pub fn get_ltid(&self, gtid: u64) -> Option<LocalThreadId> {
-        self.gtid_to_ltid.get(&gtid).map(|v| v.clone())
-    }
-
-    pub fn get_gtgid(&self, ltgid: &LocalThreadGroupId) -> Option<u64> {
-        self.ltgid_to_gtgid.get(ltgid).map(|v| *v)
-    }
-
-    #[allow(unused)]
-    pub fn get_ltgid(&self, gtgid: u64) -> Option<LocalThreadGroupId> {
-        self.gtgid_to_ltgid.get(&gtgid).map(|v| v.clone())
-    }
-
-    pub fn insert_tid(&self, ltid: &LocalThreadId, gtid: u64) {
-        self.insert_thread(ltid, gtid);
-    }
-
-    pub fn insert_tgid(&self, ltgid: &LocalThreadGroupId, gtgid: u64) {
-        self.insert_thread_group(ltgid, gtgid);
-    }
-
-    pub fn get_gtids_by_sid(&self, sid: u64) -> Vec<u64> {
-        self.global_thread_ids_for_session(sid)
-    }
-
-    pub fn remove_by_ltid(&self, ltid: &LocalThreadId) -> Option<u64> {
-        self.remove_thread(ltid)
-    }
-
-    pub fn remove_by_ltgid(&self, ltgid: &LocalThreadGroupId) -> Option<u64> {
-        self.remove_thread_group(ltgid)
-    }
 }
 
 #[cfg(test)]
@@ -229,26 +192,26 @@ mod tests {
         let ltid_c = LocalThreadId::new(2, 20);
         let ltgid = LocalThreadGroupId::new(1, "i1");
 
-        mgr.insert_tid(&ltid_a, 100);
-        mgr.insert_tid(&ltid_b, 101);
-        mgr.insert_tid(&ltid_c, 200);
-        mgr.insert_tgid(&ltgid, 300);
+        mgr.insert_thread(&ltid_a, 100);
+        mgr.insert_thread(&ltid_b, 101);
+        mgr.insert_thread(&ltid_c, 200);
+        mgr.insert_thread_group(&ltgid, 300);
 
-        assert_eq!(mgr.get_gtid(&ltid_a), Some(100));
-        assert_eq!(mgr.get_ltid(101), Some(ltid_b.clone()));
-        assert_eq!(mgr.get_gtgid(&ltgid), Some(300));
-        assert_eq!(mgr.get_ltgid(300), Some(ltgid.clone()));
+        assert_eq!(mgr.global_thread_id(&ltid_a), Some(100));
+        assert_eq!(mgr.local_thread_id(101), Some(ltid_b.clone()));
+        assert_eq!(mgr.global_thread_group_id(&ltgid), Some(300));
+        assert_eq!(mgr.local_thread_group_id(300), Some(ltgid.clone()));
 
-        let mut gtids = mgr.get_gtids_by_sid(1);
+        let mut gtids = mgr.global_thread_ids_for_session(1);
         gtids.sort_unstable();
         assert_eq!(gtids, vec![100, 101]);
 
-        assert_eq!(mgr.remove_by_ltid(&ltid_a), Some(100));
-        assert!(mgr.get_gtid(&ltid_a).is_none());
-        assert!(mgr.get_ltid(100).is_none());
+        assert_eq!(mgr.remove_thread(&ltid_a), Some(100));
+        assert!(mgr.global_thread_id(&ltid_a).is_none());
+        assert!(mgr.local_thread_id(100).is_none());
 
-        assert_eq!(mgr.remove_by_ltgid(&ltgid), Some(300));
-        assert!(mgr.get_gtgid(&ltgid).is_none());
-        assert!(mgr.get_ltgid(300).is_none());
+        assert_eq!(mgr.remove_thread_group(&ltgid), Some(300));
+        assert!(mgr.global_thread_group_id(&ltgid).is_none());
+        assert!(mgr.local_thread_group_id(300).is_none());
     }
 }

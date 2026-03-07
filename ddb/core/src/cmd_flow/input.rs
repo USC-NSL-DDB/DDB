@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use dashmap::DashMap;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error};
 
 use super::{
     framework_adapter::FrameworkCommandAdapter, handler::*, router::Target, DynFormatter,
@@ -265,7 +265,7 @@ impl InputCmdParser {
                     raw_cmd
                 ))?;
                 let (_, tid) = get_state_mgr()
-                    .get_ltid_by_gtid(gtid)
+                    .local_thread_id(gtid)
                     .ok_or(anyhow!(
                         "Unable to extract local tid correctly by gtid for command: {}",
                         raw_cmd
@@ -358,7 +358,7 @@ impl InputCmdParser {
             }
         }
 
-        if let Some(gtid) = get_state_mgr().get_curr_gtid() {
+        if let Some(gtid) = get_state_mgr().current_thread_id() {
             // if there is a current global thread selected, use it as the target
             return Ok((Target::Thread(gtid), prefix, rest.join(" ")));
         }

@@ -140,11 +140,11 @@ impl DbgSession {
     pub async fn sync_bkpts_state(&self) -> Result<()> {
         if let Some(grp_id) = get_group_mgr().group_id_by_session(self.sid) {
             // insert existing breakpoints
-            let bkpts = get_bkpt_mgr().get_bkpts_by_grp_id(grp_id);
+            let bkpts = get_bkpt_mgr().group_breakpoints(grp_id);
             for bkpt in &bkpts {
-                let loc = bkpt.get_loc();
+                let loc = bkpt.location();
                 debug!("Inserting existing breakpoint at location: {:?}", loc);
-                let bkpt_path = loc.to_bkpt_path();
+                let bkpt_path = loc.breakpoint_path();
                 let response = api::send_and_return(&format! {"-break-insert {}", bkpt_path})?
                     .to(Target::Session(self.sid))
                     .await
@@ -170,7 +170,12 @@ impl DbgSession {
                     .parse::<u64>()
                     .unwrap();
                 get_bkpt_mgr()
-                    .setup_grp_bkpt_for_new_session(bkpt.get_id(), grp_id, self.sid, local_bkpt_id)
+                    .attach_group_breakpoint_session_target(
+                        bkpt.id(),
+                        grp_id,
+                        self.sid,
+                        local_bkpt_id,
+                    )
                     .await;
             }
         }

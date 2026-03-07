@@ -34,15 +34,15 @@ pub struct BkptLoc {
 }
 
 impl BkptLoc {
-    pub fn get_path(&self) -> &str {
+    pub fn path(&self) -> &str {
         &self.src
     }
 
-    pub fn get_line(&self) -> u64 {
+    pub fn line(&self) -> u64 {
         self.line
     }
 
-    pub fn to_bkpt_path(&self) -> String {
+    pub fn breakpoint_path(&self) -> String {
         format!("{}:{}", self.src, self.line)
     }
 }
@@ -85,11 +85,11 @@ impl SessionSubBkpt {
         }
     }
 
-    pub fn get_target_session(&self) -> u64 {
+    pub fn target_session(&self) -> u64 {
         self.target_session
     }
 
-    pub fn get_local_bkpt_id(&self) -> u64 {
+    pub fn local_id(&self) -> u64 {
         self.local_id
     }
 }
@@ -117,11 +117,11 @@ impl GroupSubBkpt {
         self.local_ids.remove(&session_id).map(|(_, v)| v)
     }
 
-    pub fn get_target_group(&self) -> GroupId {
+    pub fn target_group(&self) -> GroupId {
         self.target_group
     }
 
-    pub fn get_local_ids(&self) -> Vec<(u64, u64)> {
+    pub fn local_ids(&self) -> Vec<(u64, u64)> {
         self.local_ids
             .iter()
             .map(|entry| (*entry.key(), *entry.value()))
@@ -155,30 +155,27 @@ impl SubBkptMeta {
         }
     }
 
-    pub fn get_id(&self) -> u64 {
+    pub fn id(&self) -> u64 {
         self.id
     }
 
-    pub fn get_type(&self) -> &SubBkptType {
+    pub fn kind(&self) -> &SubBkptType {
         &self.subbkpt_type
     }
 
-    fn get_local_ids(&self) -> Vec<(SessionId, u64)> {
+    fn local_ids(&self) -> Vec<(SessionId, u64)> {
         match &self.subbkpt_type {
             SubBkptType::Session(sess_subbkpt) => {
-                vec![(
-                    sess_subbkpt.get_target_session(),
-                    sess_subbkpt.get_local_bkpt_id(),
-                )]
+                vec![(sess_subbkpt.target_session(), sess_subbkpt.local_id())]
             }
-            SubBkptType::Group(group_subbkpt) => group_subbkpt.get_local_ids(),
+            SubBkptType::Group(group_subbkpt) => group_subbkpt.local_ids(),
         }
     }
 
-    fn get_target_group(&self) -> Option<GroupId> {
+    fn group_target(&self) -> Option<GroupId> {
         match &self.subbkpt_type {
             SubBkptType::Session(_) => None,
-            SubBkptType::Group(group_subbkpt) => Some(group_subbkpt.get_target_group()),
+            SubBkptType::Group(group_subbkpt) => Some(group_subbkpt.target_group()),
         }
     }
 }
@@ -243,19 +240,19 @@ impl BkptMeta {
         self.times.store(times, std::sync::atomic::Ordering::SeqCst);
     }
 
-    pub fn get_times(&self) -> u64 {
+    pub fn times(&self) -> u64 {
         self.times.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn get_loc(&self) -> &BkptLoc {
+    pub fn location(&self) -> &BkptLoc {
         &self.loc
     }
 
-    pub fn get_id(&self) -> u64 {
+    pub fn id(&self) -> u64 {
         self.id
     }
 
-    pub fn get_subbkpts(&self) -> &Vec<SubBkptMeta> {
+    pub fn sub_breakpoints(&self) -> &[SubBkptMeta] {
         &self.subbkpts
     }
 
@@ -350,14 +347,14 @@ impl BreakpointMgr {
         }
     }
 
-    pub fn is_bkpt_empty(&self, bkpt_id: u64) -> Option<bool> {
+    pub fn breakpoint_is_empty(&self, bkpt_id: u64) -> Option<bool> {
         // Return None when there is no bkpt
         // Return Some(true) when the bkpt has no subbkpts
         // Return Some(false) when the bkpt has subbkpts
         self.with_bkpt(bkpt_id, |bkpt| bkpt.is_empty())
     }
 
-    pub fn add_bkpt(&self, loc: BkptLoc) -> u64 {
+    pub fn add_breakpoint(&self, loc: BkptLoc) -> u64 {
         let bkpt = BkptMeta::new(loc);
         let bkpt_id = bkpt.id;
         match self.bkpts.insert(bkpt_id, bkpt) {
@@ -366,7 +363,7 @@ impl BreakpointMgr {
         }
     }
 
-    pub fn delete_bkpt(&self, bkpt_id: u64) {
+    pub fn remove_breakpoint(&self, bkpt_id: u64) {
         if let Some((_, mut bkpt)) = self.bkpts.remove(&bkpt_id) {
             for subbkpt in bkpt.remove_all_subbkpts() {
                 self.unregister_subbkpt(&subbkpt);
@@ -374,15 +371,15 @@ impl BreakpointMgr {
         }
     }
 
-    pub fn add_subbkpt(&self, bkpt_id: u64, subbkpt_type: SubBkptType) {
+    pub fn add_sub_breakpoint(&self, bkpt_id: u64, subbkpt_type: SubBkptType) {
         if let Some(subbkpt) = self.with_bkpt_mut(bkpt_id, |bkpt| bkpt.add_subbkpt(subbkpt_type)) {
             self.register_subbkpt(&subbkpt);
         }
     }
 
-    pub fn get_subbkpt(&self, bkpt_id: u64, sub_bkpt_id: u64) -> Option<SubBkptMeta> {
+    pub fn sub_breakpoint(&self, bkpt_id: u64, sub_bkpt_id: u64) -> Option<SubBkptMeta> {
         self.with_bkpt(bkpt_id, |bkpt| {
-            bkpt.get_subbkpts()
+            bkpt.sub_breakpoints()
                 .iter()
                 .find(|subbkpt| subbkpt.id == sub_bkpt_id)
                 .cloned()
@@ -390,7 +387,7 @@ impl BreakpointMgr {
         .flatten()
     }
 
-    pub fn delete_subbkpt(&self, bkpt_id: u64, subbkpt_id: u64) {
+    pub fn remove_sub_breakpoint(&self, bkpt_id: u64, subbkpt_id: u64) {
         if let Some(Some(subbkpt)) =
             self.with_bkpt_mut(bkpt_id, |bkpt| bkpt.delete_subbkpt(subbkpt_id))
         {
@@ -428,19 +425,19 @@ impl BreakpointMgr {
             .remove(&(session_id, local_bkpt_id));
     }
 
-    pub fn get_bkpts_by_grp_id(&self, grp_id: GroupId) -> Vec<BkptMeta> {
+    pub fn group_breakpoints(&self, grp_id: GroupId) -> Vec<BkptMeta> {
         self.group_bkpt
             .get(&grp_id)
             .map(|entry| {
                 entry
                     .iter()
-                    .filter_map(|bkpt_id| self.get_bkpt_by_id(*bkpt_id))
+                    .filter_map(|bkpt_id| self.breakpoint(*bkpt_id))
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    pub fn get_bkpt_locs_by_grp_id(&self, grp_id: GroupId) -> Vec<BkptLoc> {
+    pub fn group_breakpoint_locations(&self, grp_id: GroupId) -> Vec<BkptLoc> {
         self.group_bkpt
             .get(&grp_id)
             .map(|entry| {
@@ -452,18 +449,18 @@ impl BreakpointMgr {
             .unwrap_or_default()
     }
 
-    pub fn get_bkpt_by_id(&self, bkpt_id: u64) -> Option<BkptMeta> {
+    pub fn breakpoint(&self, bkpt_id: u64) -> Option<BkptMeta> {
         self.bkpts.get(&bkpt_id).map(|entry| entry.value().clone())
     }
 
-    pub fn get_all_bkpts(&self) -> Vec<BkptMeta> {
+    pub fn breakpoints(&self) -> Vec<BkptMeta> {
         self.bkpts
             .iter()
             .map(|entry| entry.value().clone())
             .collect()
     }
 
-    pub fn get_local_bkpt_ids(&self, bkpt_id: u64) -> Vec<(SessionId, u64)> {
+    pub fn local_breakpoint_ids(&self, bkpt_id: u64) -> Vec<(SessionId, u64)> {
         self.local_bkpt_to_global
             .iter()
             .filter_map(|entry| {
@@ -473,7 +470,7 @@ impl BreakpointMgr {
             .collect()
     }
 
-    pub async fn setup_grp_bkpt_for_new_session(
+    pub async fn attach_group_breakpoint_session_target(
         &self,
         bkpt_id: u64,
         grp_id: GroupId,
@@ -512,7 +509,7 @@ impl BreakpointMgr {
         for bkpt_id in bkpt_ids {
             match self.remove_session_targets(bkpt_id, sid, grp_id) {
                 BreakpointMutation::Removed => {
-                    self.delete_bkpt(bkpt_id);
+                    self.remove_breakpoint(bkpt_id);
                     self.emit_removed(bkpt_id).await;
                 }
                 BreakpointMutation::TargetChanged => {
@@ -526,7 +523,7 @@ impl BreakpointMgr {
         self.remove_session_local_indexes(sid);
     }
 
-    pub fn get_bkpt_ids_by_local_bkpt_id(
+    pub fn breakpoint_ids_by_local_id(
         &self,
         sid: SessionId,
         local_bkpt_id: u64,
@@ -560,7 +557,7 @@ impl BreakpointMgr {
 
         match mutation {
             BreakpointMutation::Removed => {
-                self.delete_bkpt(bkpt_id);
+                self.remove_breakpoint(bkpt_id);
                 BreakpointStateChange::Removed(bkpt_id)
             }
             BreakpointMutation::TargetChanged => BreakpointStateChange::TargetChanged(bkpt_id),
@@ -600,7 +597,7 @@ impl BreakpointMgr {
     }
 
     fn register_subbkpt(&self, subbkpt: &SubBkptMeta) {
-        for (session_id, local_bkpt_id) in subbkpt.get_local_ids() {
+        for (session_id, local_bkpt_id) in subbkpt.local_ids() {
             self.insert_local_bkpt_id_index(
                 session_id,
                 local_bkpt_id,
@@ -609,17 +606,17 @@ impl BreakpointMgr {
             );
         }
 
-        if let Some(group_id) = subbkpt.get_target_group() {
+        if let Some(group_id) = subbkpt.group_target() {
             self.add_grp_bkpt(group_id, subbkpt.major_bkpt_id);
         }
     }
 
     fn unregister_subbkpt(&self, subbkpt: &SubBkptMeta) {
-        for (session_id, local_bkpt_id) in subbkpt.get_local_ids() {
+        for (session_id, local_bkpt_id) in subbkpt.local_ids() {
             self.remove_local_bkpt_id_index(session_id, local_bkpt_id);
         }
 
-        if let Some(group_id) = subbkpt.get_target_group() {
+        if let Some(group_id) = subbkpt.group_target() {
             self.delete_grp_bkpt(group_id, subbkpt.major_bkpt_id);
         }
     }
@@ -659,7 +656,7 @@ impl BreakpointMgr {
     }
 
     async fn emit_target_changed(&self, bkpt_id: u64, context: &str) {
-        if let Some(bkpt) = self.get_bkpt_by_id(bkpt_id) {
+        if let Some(bkpt) = self.breakpoint(bkpt_id) {
             let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
             println!("{}", out);
             debug!("output: {}", out);
@@ -699,67 +696,67 @@ mod tests {
     #[test]
     fn adding_and_deleting_group_subbreakpoints_keeps_indexes_consistent() {
         let mgr = BreakpointMgr::new();
-        let bkpt_id = mgr.add_bkpt(BkptLoc::from(["main.rs", "10"]));
+        let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
         let group_subbkpt = GroupSubBkpt::new(7);
         group_subbkpt.add_local_bkpt(11, 101);
         group_subbkpt.add_local_bkpt(12, 202);
 
-        mgr.add_subbkpt(bkpt_id, SubBkptType::Group(group_subbkpt));
+        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
-        let mut local_ids = mgr.get_local_bkpt_ids(bkpt_id);
+        let mut local_ids = mgr.local_breakpoint_ids(bkpt_id);
         local_ids.sort_unstable();
         assert_eq!(local_ids, vec![(11, 101), (12, 202)]);
-        assert_eq!(mgr.get_bkpts_by_grp_id(7).len(), 1);
+        assert_eq!(mgr.group_breakpoints(7).len(), 1);
 
-        mgr.delete_bkpt(bkpt_id);
+        mgr.remove_breakpoint(bkpt_id);
 
-        assert!(mgr.get_local_bkpt_ids(bkpt_id).is_empty());
-        assert!(mgr.get_bkpts_by_grp_id(7).is_empty());
-        assert!(mgr.get_bkpt_by_id(bkpt_id).is_none());
+        assert!(mgr.local_breakpoint_ids(bkpt_id).is_empty());
+        assert!(mgr.group_breakpoints(7).is_empty());
+        assert!(mgr.breakpoint(bkpt_id).is_none());
     }
 
     #[test]
     fn deleting_session_subbreakpoint_unregisters_local_index() {
         let mgr = BreakpointMgr::new();
-        let bkpt_id = mgr.add_bkpt(BkptLoc::from(["main.rs", "10"]));
+        let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
-        mgr.add_subbkpt(bkpt_id, SubBkptType::Session(SessionSubBkpt::new(55, 3)));
+        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Session(SessionSubBkpt::new(55, 3)));
 
         let subbkpt_id = mgr
-            .get_bkpt_by_id(bkpt_id)
-            .and_then(|bkpt| bkpt.get_subbkpts().first().map(SubBkptMeta::get_id))
+            .breakpoint(bkpt_id)
+            .and_then(|bkpt| bkpt.sub_breakpoints().first().map(SubBkptMeta::id))
             .expect("sub-breakpoint should exist");
 
         assert_eq!(
-            mgr.get_bkpt_ids_by_local_bkpt_id(3, 55),
+            mgr.breakpoint_ids_by_local_id(3, 55),
             Some((bkpt_id, subbkpt_id))
         );
 
-        mgr.delete_subbkpt(bkpt_id, subbkpt_id);
+        mgr.remove_sub_breakpoint(bkpt_id, subbkpt_id);
 
-        assert_eq!(mgr.get_bkpt_ids_by_local_bkpt_id(3, 55), None);
-        assert_eq!(mgr.is_bkpt_empty(bkpt_id), Some(true));
+        assert_eq!(mgr.breakpoint_ids_by_local_id(3, 55), None);
+        assert_eq!(mgr.breakpoint_is_empty(bkpt_id), Some(true));
     }
 
     #[test]
     fn recording_local_breakpoint_deletion_keeps_group_breakpoint_until_last_target() {
         let mgr = BreakpointMgr::new();
-        let bkpt_id = mgr.add_bkpt(BkptLoc::from(["main.rs", "10"]));
+        let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
         let group_subbkpt = GroupSubBkpt::new(7);
         group_subbkpt.add_local_bkpt(11, 101);
         group_subbkpt.add_local_bkpt(12, 202);
-        mgr.add_subbkpt(bkpt_id, SubBkptType::Group(group_subbkpt));
+        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
         assert_eq!(
             mgr.record_local_bkpt_deletion(11, 101),
             BreakpointStateChange::TargetChanged(bkpt_id)
         );
-        assert!(mgr.get_bkpt_by_id(bkpt_id).is_some());
-        assert_eq!(mgr.get_bkpt_ids_by_local_bkpt_id(11, 101), None);
+        assert!(mgr.breakpoint(bkpt_id).is_some());
+        assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
         assert_eq!(
-            mgr.get_bkpt_ids_by_local_bkpt_id(12, 202).map(|ids| ids.0),
+            mgr.breakpoint_ids_by_local_id(12, 202).map(|ids| ids.0),
             Some(bkpt_id)
         );
     }
@@ -767,18 +764,18 @@ mod tests {
     #[test]
     fn recording_last_local_breakpoint_deletion_removes_group_breakpoint() {
         let mgr = BreakpointMgr::new();
-        let bkpt_id = mgr.add_bkpt(BkptLoc::from(["main.rs", "10"]));
+        let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
         let group_subbkpt = GroupSubBkpt::new(7);
         group_subbkpt.add_local_bkpt(11, 101);
-        mgr.add_subbkpt(bkpt_id, SubBkptType::Group(group_subbkpt));
+        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
         assert_eq!(
             mgr.record_local_bkpt_deletion(11, 101),
             BreakpointStateChange::Removed(bkpt_id)
         );
-        assert!(mgr.get_bkpt_by_id(bkpt_id).is_none());
-        assert_eq!(mgr.get_bkpt_ids_by_local_bkpt_id(11, 101), None);
-        assert!(mgr.get_bkpts_by_grp_id(7).is_empty());
+        assert!(mgr.breakpoint(bkpt_id).is_none());
+        assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
+        assert!(mgr.group_breakpoints(7).is_empty());
     }
 }

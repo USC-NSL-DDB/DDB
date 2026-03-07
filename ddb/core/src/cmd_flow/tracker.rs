@@ -446,7 +446,7 @@ impl Tracker {
                     )
                     .as_str(),
                 );
-                let gtgid = STATES.get_gtgid(sid, tgid).expect(
+                let gtgid = STATES.global_thread_group_id(sid, tgid).expect(
                     format!("Thread group not found. sid: {}, tgid: {}", sid, tgid).as_str(),
                 );
                 let resp = ParsedSessionResponse::new(sid, message, Some(payload));
@@ -528,7 +528,7 @@ impl Tracker {
                             .map_or("none", |s| s)
                             == "breakpoint-hit"
                         {
-                            STATES.set_curr_gtid_by_ltid(sid, tid).await;
+                            STATES.select_local_thread(sid, tid).await;
                         }
                     }
 

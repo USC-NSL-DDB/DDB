@@ -84,11 +84,6 @@ impl SignalMgr {
         let mut listing = self.signal_map.entry(sid).or_default();
         f(listing.value_mut())
     }
-
-    #[inline]
-    pub fn insert_signals(&self, sid: u64, signals: Signals) {
-        self.replace_signals(sid, signals);
-    }
 }
 
 #[cfg(test)]

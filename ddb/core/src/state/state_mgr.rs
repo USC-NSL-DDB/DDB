@@ -16,22 +16,22 @@ struct SelectionState {
 
 impl SelectionState {
     #[inline]
-    fn set_curr_session(&self, sid: u64) {
+    fn select_session(&self, sid: u64) {
         self.curr_session.lock().unwrap().replace(sid);
     }
 
     #[inline]
-    fn get_curr_session(&self) -> Option<u64> {
+    fn current_session_id(&self) -> Option<u64> {
         *self.curr_session.lock().unwrap()
     }
 
     #[inline]
-    fn set_curr_gtid(&self, gtid: u64) {
+    fn select_thread(&self, gtid: u64) {
         self.selected_gthread.lock().unwrap().replace(gtid);
     }
 
     #[inline]
-    fn get_curr_gtid(&self) -> Option<u64> {
+    fn current_thread_id(&self) -> Option<u64> {
         *self.selected_gthread.lock().unwrap()
     }
 }
@@ -53,12 +53,12 @@ impl StateMgr {
     }
 
     #[inline]
-    fn local_thread_id(sid: u64, tid: u64) -> LocalThreadId {
+    fn thread_key(sid: u64, tid: u64) -> LocalThreadId {
         LocalThreadId::new(sid, tid)
     }
 
     #[inline]
-    fn local_thread_group_id(sid: u64, tgid: &str) -> LocalThreadGroupId {
+    fn thread_group_key(sid: u64, tgid: &str) -> LocalThreadGroupId {
         LocalThreadGroupId::new(sid, tgid)
     }
 
@@ -66,7 +66,7 @@ impl StateMgr {
     fn register_thread_group_index(&self, sid: u64, tgid: &str) -> u64 {
         let gtgid = counter::next_g_inferior_id();
         self.thread_states
-            .insert_thread_group(&Self::local_thread_group_id(sid, tgid), gtgid);
+            .insert_thread_group(&Self::thread_group_key(sid, tgid), gtgid);
         gtgid
     }
 
@@ -74,7 +74,7 @@ impl StateMgr {
     fn register_thread_index(&self, sid: u64, tid: u64) -> u64 {
         let gtid = counter::next_g_thread_id();
         self.thread_states
-            .insert_thread(&Self::local_thread_id(sid, tid), gtid);
+            .insert_thread(&Self::thread_key(sid, tid), gtid);
         gtid
     }
 
@@ -85,7 +85,7 @@ impl StateMgr {
     {
         for tid in tids {
             self.thread_states
-                .remove_thread(&Self::local_thread_id(sid, tid));
+                .remove_thread(&Self::thread_key(sid, tid));
         }
     }
 
@@ -112,7 +112,7 @@ impl StateMgr {
     }
 
     #[inline]
-    pub fn get_gtids_by_sid(&self, sid: u64) -> Vec<u64> {
+    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
         self.thread_states.global_thread_ids_for_session(sid)
     }
 
@@ -133,7 +133,7 @@ impl StateMgr {
 
     #[inline]
     pub async fn remove_thread_group(&self, sid: u64, tgid: &str) -> Option<u64> {
-        let local_group_id = Self::local_thread_group_id(sid, tgid);
+        let local_group_id = Self::thread_group_key(sid, tgid);
         let gtgid = self.thread_states.global_thread_group_id(&local_group_id);
 
         let tids = self.session_states.remove_thread_group(sid, tgid).await;
@@ -147,14 +147,14 @@ impl StateMgr {
     pub async fn start_thread_group(&self, sid: u64, tgid: &str, pid: u64) -> Option<u64> {
         self.session_states.start_thread_group(sid, tgid, pid).await;
         self.thread_states
-            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
+            .global_thread_group_id(&Self::thread_group_key(sid, tgid))
     }
 
     #[inline]
     pub async fn exit_thread_group(&self, sid: u64, tgid: &str) -> Option<u64> {
         self.session_states.exit_thread_group(sid, tgid).await;
         self.thread_states
-            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
+            .global_thread_group_id(&Self::thread_group_key(sid, tgid))
     }
 
     // Creates a new global thread in the state manager by mapping the session specific thread information.
@@ -171,7 +171,7 @@ impl StateMgr {
         self.session_states.create_thread(sid, tid, tgid).await;
         let gtgid = self
             .thread_states
-            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
+            .global_thread_group_id(&Self::thread_group_key(sid, tgid))
             .unwrap();
         (gtid, gtgid)
     }
@@ -192,53 +192,54 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn set_curr_gtid(&self, gtid: u64) {
-        let ltid = self.get_ltid_by_gtid(gtid).unwrap();
-        self.set_curr_gtid_by_ltid(ltid.0, ltid.1).await;
+    pub async fn select_thread(&self, gtid: u64) {
+        let local_tid = self.local_thread_id(gtid).unwrap();
+        self.select_local_thread(local_tid.session_id(), local_tid.thread_id())
+            .await;
     }
 
     #[inline]
-    pub async fn set_curr_gtid_by_ltid(&self, sid: u64, tid: u64) {
+    pub async fn select_local_thread(&self, sid: u64, tid: u64) {
         self.session_states.set_curr_tid(sid, tid).await;
-        let gtid = self.get_gtid(sid, tid).unwrap();
-        self.selection.set_curr_gtid(gtid);
+        let gtid = self.global_thread_id(sid, tid).unwrap();
+        self.selection.select_thread(gtid);
     }
 
     #[inline]
-    pub fn get_curr_gtid(&self) -> Option<u64> {
-        self.selection.get_curr_gtid()
+    pub fn current_thread_id(&self) -> Option<u64> {
+        self.selection.current_thread_id()
     }
 
     #[inline]
-    pub fn set_curr_session(&self, sid: u64) {
-        self.selection.set_curr_session(sid);
+    pub fn select_session(&self, sid: u64) {
+        self.selection.select_session(sid);
     }
 
     #[inline]
-    pub fn get_curr_session(&self) -> Option<u64> {
-        self.selection.get_curr_session()
+    pub fn current_session_id(&self) -> Option<u64> {
+        self.selection.current_session_id()
     }
 
     #[inline]
-    pub fn get_gtid(&self, sid: u64, tid: u64) -> Option<u64> {
+    pub fn global_thread_id(&self, sid: u64, tid: u64) -> Option<u64> {
         self.thread_states
-            .global_thread_id(&Self::local_thread_id(sid, tid))
+            .global_thread_id(&Self::thread_key(sid, tid))
     }
 
     #[inline]
     pub fn remove_thread(&self, sid: u64, tid: u64) -> Option<u64> {
         self.thread_states
-            .remove_thread(&Self::local_thread_id(sid, tid))
+            .remove_thread(&Self::thread_key(sid, tid))
     }
 
     #[inline]
-    pub fn get_gtgid(&self, sid: u64, tgid: &str) -> Option<u64> {
+    pub fn global_thread_group_id(&self, sid: u64, tgid: &str) -> Option<u64> {
         self.thread_states
-            .global_thread_group_id(&Self::local_thread_group_id(sid, tgid))
+            .global_thread_group_id(&Self::thread_group_key(sid, tgid))
     }
 
     #[inline]
-    pub fn get_ltid_by_gtid(&self, gtid: u64) -> Option<LocalThreadId> {
+    pub fn local_thread_id(&self, gtid: u64) -> Option<LocalThreadId> {
         self.thread_states.local_thread_id(gtid)
     }
 
@@ -292,10 +293,10 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn get_tag_with_tid_by_gtid(&self, gtid: u64) -> Option<(String, u64)> {
-        let ltid = self.thread_states.local_thread_id(gtid)?;
-        let sid = ltid.0;
-        let tid = ltid.1;
+    pub async fn session_tag_and_thread_id(&self, gtid: u64) -> Option<(String, u64)> {
+        let local_tid = self.thread_states.local_thread_id(gtid)?;
+        let sid = local_tid.session_id();
+        let tid = local_tid.thread_id();
         let tag = self
             .with_session(sid, |session| session.tag().to_string())
             .await?;
@@ -303,28 +304,10 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn get_tag_by_gtid(&self, gtid: u64) -> Option<String> {
-        self.get_tag_with_tid_by_gtid(gtid).await.map(|v| v.0)
-    }
-
-    #[inline]
-    pub fn get_all_sessions(&self) -> Vec<SessionMetaRef> {
-        self.sessions()
-    }
-
-    #[inline]
-    pub fn get_session(&self, sid: u64) -> Option<SessionMetaRef> {
-        self.session(sid)
-    }
-
-    #[inline]
-    pub async fn get_session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
-        self.session_service_meta(sid).await
-    }
-
-    #[inline]
-    pub fn get_session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
-        self.session_by_tag(tag)
+    pub async fn session_tag_for_thread(&self, gtid: u64) -> Option<String> {
+        self.session_tag_and_thread_id(gtid)
+            .await
+            .map(|value| value.0)
     }
 }
 
@@ -341,22 +324,22 @@ mod tests {
         let (gtid, created_gtgid) = mgr.create_thread(1, 10, "i1").await;
 
         assert_eq!(created_gtgid, gtgid);
-        assert_eq!(mgr.get_gtgid(1, "i1"), Some(gtgid));
-        assert_eq!(mgr.get_gtid(1, 10), Some(gtid));
-        assert_eq!(mgr.get_ltid_by_gtid(gtid), Some(LocalThreadId::new(1, 10)));
+        assert_eq!(mgr.global_thread_group_id(1, "i1"), Some(gtgid));
+        assert_eq!(mgr.global_thread_id(1, 10), Some(gtid));
+        assert_eq!(mgr.local_thread_id(gtid), Some(LocalThreadId::new(1, 10)));
 
-        mgr.set_curr_session(1);
-        mgr.set_curr_gtid(gtid).await;
+        mgr.select_session(1);
+        mgr.select_thread(gtid).await;
 
-        assert_eq!(mgr.get_curr_session(), Some(1));
-        assert_eq!(mgr.get_curr_gtid(), Some(gtid));
+        assert_eq!(mgr.current_session_id(), Some(1));
+        assert_eq!(mgr.current_thread_id(), Some(gtid));
         assert_eq!(
-            mgr.get_tag_with_tid_by_gtid(gtid).await,
+            mgr.session_tag_and_thread_id(gtid).await,
             Some(("svc-a".to_string(), 10))
         );
 
         assert_eq!(mgr.remove_thread_group(1, "i1").await, Some(gtgid));
-        assert!(mgr.get_gtid(1, 10).is_none());
-        assert!(mgr.get_gtgid(1, "i1").is_none());
+        assert!(mgr.global_thread_id(1, 10).is_none());
+        assert!(mgr.global_thread_group_id(1, "i1").is_none());
     }
 }

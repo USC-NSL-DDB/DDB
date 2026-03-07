@@ -176,7 +176,7 @@ impl Formatter for ThreadInfoFormatter {
                         let gtid = {
                             let tid = t["id"].expect_string_ref().unwrap();
                             let tid = tid.parse::<u64>().unwrap();
-                            STATES.get_gtid(sid, tid).unwrap()
+                            STATES.global_thread_id(sid, tid).unwrap()
                         };
                         t.insert("id".into(), Value::String(gtid.to_string()));
                         all_thread_info.push(t.into());
@@ -192,7 +192,7 @@ impl Formatter for ThreadInfoFormatter {
                 (
                     "current-thread-id".to_string(),
                     STATES
-                        .get_curr_gtid()
+                        .current_thread_id()
                         .map(|v| v.to_string())
                         .unwrap_or("".to_string())
                         .into(),
@@ -226,7 +226,7 @@ impl Formatter for ProcessInfoFormatter {
                         let mut p = p.expect_dict_ref().unwrap().clone();
                         let gtgid = {
                             let tgid = p["id"].expect_string_ref().unwrap();
-                            let gtgid = STATES.get_gtgid(sid, tgid).unwrap();
+                            let gtgid = STATES.global_thread_group_id(sid, tgid).unwrap();
                             gtgid.to_string()
                         };
                         p.insert("id".into(), Value::String(gtgid));
@@ -436,7 +436,7 @@ impl RunningAsyncRecordFormatter {
     fn iter_over_threads(&self, responses: &FinishedCmd) -> String {
         let sid = responses.get_sid();
         STATES
-            .get_gtids_by_sid(sid)
+            .global_thread_ids_for_session(sid)
             .iter()
             .fold(format!(""), |acc, gtid| {
                 acc + format!("*running,thread-id=\"{}\"\n", gtid).as_str()
@@ -476,7 +476,7 @@ impl Formatter for RunningAsyncRecordFormatter {
             };
             format!(
                 "*running,thread-id=\"{}\"",
-                STATES.get_gtid(input.get_sid(), tid).unwrap()
+                STATES.global_thread_id(input.get_sid(), tid).unwrap()
             )
         }
     }
@@ -507,7 +507,7 @@ impl Formatter for StopAsyncRecordFormatter {
                 _ => unreachable!(),
             };
             if let Some((bkpt_id, subbkpt_id)) =
-                get_bkpt_mgr().get_bkpt_ids_by_local_bkpt_id(sid, local_bkpt_id)
+                get_bkpt_mgr().breakpoint_ids_by_local_id(sid, local_bkpt_id)
             {
                 payload.insert("bkptno".into(), bkpt_id.to_string().into());
                 payload.insert("subbkptno".into(), subbkpt_id.to_string().into());
@@ -519,7 +519,7 @@ impl Formatter for StopAsyncRecordFormatter {
                 Value::String(s) => s.parse::<u64>().unwrap(),
                 _ => unreachable!(),
             };
-            STATES.get_gtid(sid, tid).unwrap()
+            STATES.global_thread_id(sid, tid).unwrap()
         };
         payload.insert("thread-id".into(), gtid.to_string().into());
         payload.insert("session-id".into(), sid.to_string().into());
@@ -531,13 +531,13 @@ impl Formatter for StopAsyncRecordFormatter {
                     if let Value::String(tid) = t {
                         let tid = tid.parse::<u64>().unwrap();
                         new_stopped_threads.push(Value::String(
-                            STATES.get_gtid(sid, tid).unwrap().to_string(),
+                            STATES.global_thread_id(sid, tid).unwrap().to_string(),
                         ));
                     }
                 }
             }
             Value::String(s) if s == "all" => {
-                for gtid in STATES.get_gtids_by_sid(sid) {
+                for gtid in STATES.global_thread_ids_for_session(sid) {
                     new_stopped_threads.push(Value::String(gtid.to_string()));
                 }
             }

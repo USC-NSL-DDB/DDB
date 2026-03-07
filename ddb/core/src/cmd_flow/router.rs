@@ -272,7 +272,7 @@ impl Router {
         sid: u64,
         cmd: Command<F>,
     ) {
-        STATES.set_curr_session(sid);
+        STATES.select_session(sid);
         let out_src = if FORGET {
             OutputSource::DISCARD
         } else {
@@ -293,7 +293,7 @@ impl Router {
         self.sessions
             .get(&sid)
             .ok_or_else(|| anyhow::anyhow!("Session {} does not exist", sid))?;
-        STATES.set_curr_session(sid);
+        STATES.select_session(sid);
         let (tx, rx) = tokio::sync::oneshot::channel();
         let out_src = OutputSource::RETURN(tx);
         let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
@@ -307,8 +307,8 @@ impl Router {
         gtid: u64,
         cmd: Command<F>,
     ) {
-        if let Some(LocalThreadId(sid, tid)) = STATES.get_ltid_by_gtid(gtid) {
-            STATES.set_curr_session(sid);
+        if let Some(LocalThreadId(sid, tid)) = STATES.local_thread_id(gtid) {
+            STATES.select_session(sid);
             let out_src = if FORGET {
                 OutputSource::DISCARD
             } else {
@@ -327,8 +327,8 @@ impl Router {
         gtid: u64,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        if let Some(LocalThreadId(sid, tid)) = STATES.get_ltid_by_gtid(gtid) {
-            STATES.set_curr_session(sid);
+        if let Some(LocalThreadId(sid, tid)) = STATES.local_thread_id(gtid) {
+            STATES.select_session(sid);
             let (tx, rx) = tokio::sync::oneshot::channel();
             let out_src = OutputSource::RETURN(tx);
             let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
@@ -345,7 +345,7 @@ impl Router {
         &self,
         cmd: Command<F>,
     ) {
-        if let Some(gtid) = STATES.get_curr_gtid() {
+        if let Some(gtid) = STATES.current_thread_id() {
             self.send_to_thread::<F, FORGET>(gtid, cmd);
         } else {
             println!("use -thread-select #gtid to select the thread first.");
@@ -356,7 +356,7 @@ impl Router {
         &self,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        if let Some(gtid) = STATES.get_curr_gtid() {
+        if let Some(gtid) = STATES.current_thread_id() {
             self.send_to_thread_ret(gtid, cmd).await
         } else {
             bail!("use -thread-select #gtid to select the thread first.");
@@ -367,7 +367,7 @@ impl Router {
         &self,
         cmd: Command<F>,
     ) {
-        if let Some(sid) = STATES.get_curr_session() {
+        if let Some(sid) = STATES.current_session_id() {
             self.send_to_session::<F, FORGET>(sid, cmd);
         }
     }
@@ -376,7 +376,7 @@ impl Router {
         &self,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        if let Some(sid) = STATES.get_curr_session() {
+        if let Some(sid) = STATES.current_session_id() {
             return self.send_to_session_ret(sid, cmd).await;
         }
         bail!("No current session selected.");

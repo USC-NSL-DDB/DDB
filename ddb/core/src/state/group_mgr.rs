@@ -56,36 +56,6 @@ impl GroupMeta {
     pub fn hash(&self) -> &GroupHash {
         &self.hash
     }
-
-    #[inline]
-    pub fn insert(&mut self, sid: SessionId) {
-        self.add_session(sid);
-    }
-
-    #[inline]
-    pub fn remove(&mut self, sid: &SessionId) {
-        self.remove_session(*sid);
-    }
-
-    #[inline]
-    pub fn get_alias(&self) -> &String {
-        &self.alias
-    }
-
-    #[inline]
-    pub fn get_sids(&self) -> &HashSet<SessionId> {
-        &self.sids
-    }
-
-    #[inline]
-    pub fn get_grp_id(&self) -> GroupId {
-        self.id()
-    }
-
-    #[inline]
-    pub fn get_grp_hash(&self) -> &GroupHash {
-        self.hash()
-    }
 }
 
 pub struct GroupMgr {
@@ -219,57 +189,8 @@ impl GroupMgr {
             })
             .collect()
     }
-
     #[inline]
-    pub fn add_session(&self, bin_id: &str, alias: String, sid: u64) {
-        self.register_session(bin_id, alias, sid);
-    }
-
-    #[inline]
-    pub fn get_grp_id_by_hash(&self, hash: &str) -> Option<GroupId> {
-        self.group_id_by_hash(hash)
-    }
-
-    #[inline]
-    pub fn get_grp_info_by_sid(&self, sid: u64) -> Option<(GroupId, GroupHash)> {
-        self.group_info_by_session(sid)
-    }
-
-    #[inline]
-    pub fn get_grp_hash_by_sid(&self, sid: u64) -> Option<GroupHash> {
-        self.group_hash_by_session(sid)
-    }
-
-    #[inline]
-    pub fn get_grp_id_by_sid(&self, sid: u64) -> Option<GroupId> {
-        self.group_id_by_session(sid)
-    }
-
-    #[inline]
-    pub fn get_grp_by_hash(&self, hash: &str) -> Option<GroupMeta> {
-        self.group_by_hash(hash)
-    }
-
-    #[inline]
-    pub fn get_grp_by_id(&self, id: GroupId) -> Option<GroupMeta> {
-        self.group_by_id(id)
-    }
-
-    #[inline]
-    pub fn get_all_grp_meta(&self) -> Vec<GroupMeta> {
-        self.groups()
-    }
-
-    #[inline]
-    pub fn get_all_grp_meta_if<P>(&self, f: P) -> Vec<GroupMeta>
-    where
-        P: Fn(&GroupMeta) -> bool,
-    {
-        self.matching_groups(f)
-    }
-
-    #[inline]
-    pub fn get_all_grps_if<P>(&self, f: P) -> std::collections::HashMap<GroupHash, GroupMeta>
+    pub fn matching_group_map<P>(&self, f: P) -> std::collections::HashMap<GroupHash, GroupMeta>
     where
         P: Fn(&GroupHash, &GroupMeta) -> bool,
     {
@@ -294,50 +215,50 @@ mod tests {
     fn add_session_reuses_existing_group_for_same_hash() {
         let mgr = GroupMgr::new();
 
-        mgr.add_session("hash-a", "svc-a".to_string(), 11);
-        mgr.add_session("hash-a", "svc-b".to_string(), 12);
+        mgr.register_session("hash-a", "svc-a".to_string(), 11);
+        mgr.register_session("hash-a", "svc-b".to_string(), 12);
 
         let group = mgr
-            .get_grp_by_hash("hash-a")
+            .group_by_hash("hash-a")
             .expect("group should exist for hash");
-        let grp_id = group.get_grp_id();
+        let grp_id = group.id();
 
-        assert_eq!(group.get_sids().len(), 2);
-        assert!(group.get_sids().contains(&11));
-        assert!(group.get_sids().contains(&12));
-        assert_eq!(mgr.get_grp_id_by_sid(11), Some(grp_id));
-        assert_eq!(mgr.get_grp_id_by_sid(12), Some(grp_id));
+        assert_eq!(group.session_ids().len(), 2);
+        assert!(group.session_ids().contains(&11));
+        assert!(group.session_ids().contains(&12));
+        assert_eq!(mgr.group_id_by_session(11), Some(grp_id));
+        assert_eq!(mgr.group_id_by_session(12), Some(grp_id));
     }
 
     #[test]
     fn remove_session_drops_empty_group_indexes() {
         let mgr = GroupMgr::new();
 
-        mgr.add_session("hash-a", "svc-a".to_string(), 11);
+        mgr.register_session("hash-a", "svc-a".to_string(), 11);
         let grp_id = mgr
-            .get_grp_id_by_sid(11)
+            .group_id_by_session(11)
             .expect("session should be indexed");
 
         mgr.remove_session(11);
 
-        assert!(mgr.get_grp_hash_by_sid(11).is_none());
-        assert!(mgr.get_grp_by_hash("hash-a").is_none());
-        assert!(mgr.get_grp_by_id(grp_id).is_none());
-        assert!(mgr.get_all_grp_meta().is_empty());
+        assert!(mgr.group_hash_by_session(11).is_none());
+        assert!(mgr.group_by_hash("hash-a").is_none());
+        assert!(mgr.group_by_id(grp_id).is_none());
+        assert!(mgr.groups().is_empty());
     }
 
     #[test]
     fn get_all_grps_if_filters_groups_using_predicate() {
         let mgr = GroupMgr::new();
 
-        mgr.add_session("hash-a", "svc-a".to_string(), 11);
-        mgr.add_session("hash-b", "svc-b".to_string(), 21);
-        mgr.add_session("hash-b", "svc-b".to_string(), 22);
+        mgr.register_session("hash-a", "svc-a".to_string(), 11);
+        mgr.register_session("hash-b", "svc-b".to_string(), 21);
+        mgr.register_session("hash-b", "svc-b".to_string(), 22);
 
-        let populated = mgr.get_all_grps_if(|_, grp| grp.get_sids().len() > 1);
+        let populated = mgr.matching_group_map(|_, grp| grp.session_ids().len() > 1);
 
         assert_eq!(populated.len(), 1);
         assert!(populated.contains_key("hash-b"));
-        assert_eq!(populated["hash-b"].get_sids().len(), 2);
+        assert_eq!(populated["hash-b"].session_ids().len(), 2);
     }
 }

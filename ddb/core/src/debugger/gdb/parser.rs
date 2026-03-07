@@ -111,21 +111,21 @@ impl MIFormatter {
 
 impl From<BkptMeta> for Dict {
     fn from(bkpt: BkptMeta) -> Self {
-        let bkpt_loc = bkpt.get_loc();
+        let bkpt_loc = bkpt.location();
         let subbkpts: Vec<gdbmi::raw::Value> = bkpt
-            .get_subbkpts()
+            .sub_breakpoints()
             .iter()
             .map(|subbkpt| {
-                let (bkpt_type, target_id) = match subbkpt.get_type() {
+                let (bkpt_type, target_id) = match subbkpt.kind() {
                     crate::state::SubBkptType::Group(grp_bkpt) => {
-                        ("group".to_string(), grp_bkpt.get_target_group())
+                        ("group".to_string(), grp_bkpt.target_group())
                     }
                     crate::state::SubBkptType::Session(s_bkpt) => {
-                        ("session".to_string(), s_bkpt.get_target_session())
+                        ("session".to_string(), s_bkpt.target_session())
                     }
                 };
                 HashMap::from([
-                    ("id", subbkpt.get_id().to_string().into()),
+                    ("id", subbkpt.id().to_string().into()),
                     ("type", bkpt_type.into()),
                     ("target_id", target_id.to_string().into()),
                 ])
@@ -137,7 +137,7 @@ impl From<BkptMeta> for Dict {
         map.insert(
             "bkpt",
             HashMap::from([
-                ("id", bkpt.get_id().to_string().into()),
+                ("id", bkpt.id().to_string().into()),
                 (
                     "enabled",
                     if bkpt.is_enabled() {
@@ -147,8 +147,8 @@ impl From<BkptMeta> for Dict {
                     }
                     .into(),
                 ),
-                ("fullname", bkpt_loc.get_path().into()),
-                ("line", bkpt_loc.get_line().to_string().into()),
+                ("fullname", bkpt_loc.path().into()),
+                ("line", bkpt_loc.line().to_string().into()),
             ])
             .into(),
         );

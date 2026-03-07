@@ -37,14 +37,6 @@ impl ProcletMgr {
             .get(&caladan_ip)
             .map(|sid| sid.value().clone())
     }
-
-    pub fn register_caladan_ip(&self, caladan_ip: u32, sid: u64) {
-        self.register_owner_session(caladan_ip, sid);
-    }
-
-    pub fn get_sid(&self, caladan_ip: u32) -> Option<u64> {
-        self.session_id_for_caladan_ip(caladan_ip)
-    }
 }
 
 pub fn get_caladan_ip_from_user_data(user_data: &UserDataMap) -> Option<u32> {
