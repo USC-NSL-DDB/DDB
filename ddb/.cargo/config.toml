@@ -1,0 +1,5 @@
+[alias]
+xtest-unit = "test --workspace --lib --bins"
+xtest-integration = "test -p ddb --tests"
+xtest-integration-mock = "test -p ddb --test session_bootstrap --test breakpoint_sync --test session_cleanup"
+xtest-integration-real = "test -p ddb --test real_session_bootstrap --test real_breakpoint_sync --test real_session_cleanup"

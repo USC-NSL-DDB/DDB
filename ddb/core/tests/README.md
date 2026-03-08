@@ -8,6 +8,24 @@ Run all integration and unit tests from the repository root with:
 cargo test -p ddb
 ```
 
+## Cargo Aliases
+
+The workspace defines a few convenience aliases in `.cargo/config.toml`:
+
+```bash
+cargo xtest-unit
+cargo xtest-integration
+cargo xtest-integration-mock
+cargo xtest-integration-real
+```
+
+These map to:
+
+- `cargo xtest-unit`: workspace unit tests only
+- `cargo xtest-integration`: all `ddb` integration tests only
+- `cargo xtest-integration-mock`: mock integration tier only
+- `cargo xtest-integration-real`: real GDB-backed integration tier only
+
 ## Test Tiers
 
 There are two integration-test tiers.
