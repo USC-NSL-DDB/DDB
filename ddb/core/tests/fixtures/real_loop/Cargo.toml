@@ -1,0 +1,8 @@
+[package]
+name = "ddb_real_loop"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]

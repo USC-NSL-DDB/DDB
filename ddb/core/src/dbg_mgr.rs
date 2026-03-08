@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
-use crate::discovery::discovery_message_producer::{ServiceInfo, ServiceMeta};
+use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
@@ -19,7 +19,10 @@ use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr
 use crate::{
     common::{
         self,
-        config::{Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig},
+        config::{
+            Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig,
+            StaticSessionStartMode,
+        },
     },
     discovery::DiscoveryMessageProducer,
 };
@@ -57,6 +60,43 @@ pub struct ServiceDiscover {
 }
 
 impl ServiceDiscover {
+    async fn start_session(
+        sessions: SessionsRef,
+        mut dbg_session: crate::session::DbgSession,
+        caladan_ip: Option<u32>,
+    ) {
+        let new_sid = dbg_session.sid;
+
+        match dbg_session.start().await {
+            Ok(input_tx) => {
+                crate::cmd_flow::get_router().add_session(new_sid, input_tx);
+
+                let g_cfg = DDBConfig::global();
+                if get_framework_plugin().should_register_caladan_ip(g_cfg) {
+                    if let Some(caladan_ip) = caladan_ip {
+                        get_proclet_mgr().register_owner_session(caladan_ip, new_sid);
+                    }
+                }
+                match dbg_session.post_start().await {
+                    Ok(_) => {
+                        sessions.insert(new_sid, dbg_session);
+                        debug!("Session {} started successfully.", new_sid);
+                    }
+                    Err(e) => {
+                        error!("Post-start actions for session {} failed: {:?}", new_sid, e);
+                    }
+                }
+                let notification = Notification::new(NotificationPayload::SessionListChanged);
+                get_notif_mgr().broadcast(notification).await;
+            }
+            Err(e) => {
+                error!("Failed to start session {}: {:?}", new_sid, e);
+                let _ = dbg_session.cleanup().await;
+                get_state_mgr().remove_session(new_sid).await;
+            }
+        }
+    }
+
     pub fn new(
         producer: Box<dyn DiscoveryMessageProducer>,
         rx: Receiver<crate::discovery::ServiceInfo>,
@@ -96,45 +136,8 @@ impl ServiceDiscover {
             .with_service_meta(service_meta)
             .build();
 
-        // Build the session
-        let mut dbg_session = crate::session::DbgSession::new(s_cfg);
-        let new_sid = dbg_session.sid;
-
-        // Attempt to start the session
-        match dbg_session.start().await {
-            Ok(input_tx) => {
-                // Register with your command router or anywhere else
-                crate::cmd_flow::get_router().add_session(new_sid, input_tx);
-
-                // Register with proclet manager if needed.
-                // so that we have the mapping between caladan ip and session id.
-                let g_cfg = DDBConfig::global();
-                if get_framework_plugin().should_register_caladan_ip(g_cfg) {
-                    if let Some(caladan_ip) = caladan_ip {
-                        get_proclet_mgr().register_owner_session(caladan_ip, new_sid);
-                    }
-                }
-                match dbg_session.post_start().await {
-                    Ok(_) => {
-                        // Put it in the manager's DashMap
-                        sessions.insert(new_sid, dbg_session);
-                        debug!("Session {} started successfully.", new_sid);
-                    }
-                    Err(e) => {
-                        error!("Post-start actions for session {} failed: {:?}", new_sid, e);
-                    }
-                }
-                let notification = Notification::new(NotificationPayload::SessionListChanged);
-                get_notif_mgr().broadcast(notification).await;
-            }
-            Err(e) => {
-                // If failure, remove from global state
-                error!("Failed to start session {}: {:?}", new_sid, e);
-                // best-effort clean up for a broken session.
-                let _ = dbg_session.cleanup().await;
-                get_state_mgr().remove_session(new_sid).await;
-            }
-        }
+        let dbg_session = crate::session::DbgSession::new(s_cfg);
+        Self::start_session(sessions, dbg_session, caladan_ip).await;
     }
 
     pub fn start(&mut self, sessions: SessionsRef) {
@@ -309,39 +312,6 @@ impl DbgManager {
         Ok(())
     }
 
-    fn static_service_info(
-        config: &'static DDBConfig,
-        session: StaticSessionConfig,
-    ) -> Result<ServiceInfo> {
-        let controller = match config.conf.debugger.backend {
-            DebuggerBackendKind::Mock => Box::new(crate::dbg_ctrl::MockAttachController::new(
-                session.mock.clone(),
-                session.pid,
-            )) as crate::dbg_ctrl::DbgController,
-            DebuggerBackendKind::Gdb => {
-                let ssh_cred = crate::connection::ssh_client::SSHCred::new(
-                    &session.ip.to_string(),
-                    config.ssh.port,
-                    config.ssh.user.as_str(),
-                    None,
-                );
-                Box::new(crate::dbg_ctrl::SSHAttachController::new(ssh_cred))
-                    as crate::dbg_ctrl::DbgController
-            }
-            DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
-        };
-
-        Ok(ServiceInfo::new(
-            session.ip,
-            session.tag,
-            session.pid,
-            session.hash,
-            session.alias,
-            controller,
-            None,
-        ))
-    }
-
     async fn start_static_session(
         sessions: SessionsRef,
         config: &'static DDBConfig,
@@ -350,8 +320,61 @@ impl DbgManager {
         if session.start_delay_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(session.start_delay_ms)).await;
         }
-        let info = Self::static_service_info(config, session)?;
-        ServiceDiscover::prepare_new_session(sessions, info).await;
+
+        let service_meta = ServiceMeta::new(
+            session.ip,
+            session.tag.clone(),
+            session.pid,
+            session.hash.clone(),
+            session.alias.clone(),
+            None,
+        );
+
+        let mut builder = crate::session::DbgSessionCfgBuilder::new()
+            .tag(session.tag.clone())
+            .stop_at_entry(session.stop_at_entry)
+            .with_service_meta(service_meta);
+
+        builder = match config.conf.debugger.backend {
+            DebuggerBackendKind::Mock => builder
+                .ssh_cred(session.ip)
+                .mode(crate::session::DbgMode::REMOTE(
+                    crate::session::DbgStartMode::ATTACH(session.pid),
+                ))
+                .with_debugger_controller(Box::new(crate::dbg_ctrl::MockAttachController::new(
+                    session.mock.clone(),
+                    session.pid,
+                ))),
+            DebuggerBackendKind::Gdb => {
+                let mode = match session.start_mode {
+                    StaticSessionStartMode::Attach => {
+                        if session.pid == 0 {
+                            bail!("static attach sessions require a non-zero pid");
+                        }
+                        crate::session::DbgMode::LOCAL(crate::session::DbgStartMode::ATTACH(
+                            session.pid,
+                        ))
+                    }
+                    StaticSessionStartMode::Binary => {
+                        if session.binary_path.trim().is_empty() {
+                            bail!("static binary sessions require binary_path to be set");
+                        }
+                        crate::session::DbgMode::LOCAL(crate::session::DbgStartMode::BINARY {
+                            path: session.binary_path.clone(),
+                            args: session.binary_args.clone(),
+                        })
+                    }
+                };
+
+                builder
+                    .mode(mode)
+                    .with_debugger_controller(Box::new(crate::dbg_ctrl::LocalProcessController::new()))
+            }
+            DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
+        };
+
+        let dbg_session = crate::session::DbgSession::new(builder.build());
+        ServiceDiscover::start_session(sessions, dbg_session, None).await;
         Ok(())
     }
 

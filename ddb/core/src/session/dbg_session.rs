@@ -77,7 +77,7 @@ impl DbgSession {
         let sender = match &self.config.mode {
             DbgMode::LOCAL(_) => self.local_start().await?,
             DbgMode::REMOTE(DbgStartMode::ATTACH(_)) => self.remote_attach().await?,
-            DbgMode::REMOTE(DbgStartMode::BINARY(_)) => self.remote_start().await?,
+            DbgMode::REMOTE(DbgStartMode::BINARY { .. }) => self.remote_start().await?,
         };
 
         // this procedure seems to be quite slow, so we can do it in the background.
@@ -205,7 +205,36 @@ impl DbgSession {
     }
 
     pub async fn local_start(&mut self) -> Result<InputSender> {
-        unimplemented!()
+        let config = Config::global();
+        let backend = get_debugger_backend();
+        let plugin = get_framework_plugin();
+        let plugin_bootstrap = plugin.debugger_bootstrap(config);
+
+        let full_args = backend.build_start_command(config.conf.sudo);
+        let ctrl = &mut self.config.debugger_controller;
+        let io = ctrl.start(&full_args).await?;
+        self.input_tx = Some(io.in_tx.clone());
+        self.output_rx = Some(io.out_rx.clone());
+
+        let all_cmds = match &self.config.mode {
+            DbgMode::LOCAL(DbgStartMode::ATTACH(_)) => backend.build_remote_attach_commands(
+                config,
+                &self.config,
+                plugin.as_ref(),
+                &plugin_bootstrap,
+            )?,
+            DbgMode::LOCAL(DbgStartMode::BINARY { .. }) => backend.build_local_binary_commands(
+                config,
+                &self.config,
+                plugin.as_ref(),
+                &plugin_bootstrap,
+            )?,
+            _ => unreachable!("local_start should only be used with local modes"),
+        }
+        .join("");
+
+        self.write(all_cmds).await?;
+        Ok(io.in_tx.clone())
     }
 
     pub async fn poll(sid: u64, output_rx: OutputReceiver) {

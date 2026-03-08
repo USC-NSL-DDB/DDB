@@ -59,6 +59,13 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>>;
+    fn build_local_binary_commands(
+        &self,
+        config: &Config,
+        session: &DbgSessionConfig,
+        plugin: &dyn FrameworkPlugin,
+        plugin_bootstrap: &FrameworkDebuggerBootstrap,
+    ) -> Result<Vec<String>>;
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
 }

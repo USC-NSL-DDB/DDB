@@ -24,6 +24,71 @@ use super::{
 pub struct GdbBackend;
 
 impl GdbBackend {
+    fn apply_common_setup(
+        &self,
+        config: &Config,
+        session: &DbgSessionConfig,
+        plugin_bootstrap: &FrameworkDebuggerBootstrap,
+        builder: &mut DbgCmdListBuilder<GdbCmd>,
+    ) -> Result<()> {
+        if config.conf.gdb.logging {
+            match &session.mode {
+                DbgMode::REMOTE(DbgStartMode::ATTACH(_)) => {
+                    self.setup_logging_commands(session, builder)?;
+                }
+                _ => {
+                    builder.add(GdbCmd::SetOption(GdbOption::Logging(false)));
+                }
+            }
+        } else {
+            builder.add(GdbCmd::SetOption(GdbOption::Logging(false)));
+        }
+
+        builder.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
+
+        for script in &plugin_bootstrap.scripts {
+            builder.add(GdbCmd::ConsoleExec(format!(
+                "source {}",
+                script.to_string_lossy()
+            )));
+        }
+
+        if let Some(frame_filter_cfg) = &config.frame_filter {
+            debug!("Applying frame filter settings: {:?}", frame_filter_cfg);
+            let frame_filter_script =
+                Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
+            builder.add(GdbCmd::ConsoleExec(format!(
+                "source {}",
+                frame_filter_script.to_string_lossy()
+            )));
+            builder.add(GdbCmd::EnableFrameFilter);
+            builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
+            for pattern in &frame_filter_cfg.filter_file {
+                let args: FrameFilterAddArgs = pattern.into();
+                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFile(args)));
+            }
+            for pattern in &frame_filter_cfg.filter_function {
+                let args: FrameFilterAddArgs = pattern.into();
+                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFunction(args)));
+            }
+            for preset in &frame_filter_cfg.filter_preset {
+                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::PresetEnable(
+                    preset.clone(),
+                )));
+            }
+        }
+
+        for cmd in &plugin_bootstrap.pre_attach_commands {
+            builder.add(cmd);
+        }
+
+        for cmd in &session.prerun_debugger_cmds {
+            builder.add(cmd);
+        }
+
+        Ok(())
+    }
+
     fn setup_logging_commands(
         &self,
         session: &DbgSessionConfig,
@@ -71,57 +136,13 @@ impl DebuggerBackend for GdbBackend {
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>> {
         let mut builder = DbgCmdListBuilder::<GdbCmd>::new();
-
-        if config.conf.gdb.logging {
-            self.setup_logging_commands(session, &mut builder)?;
-        } else {
-            builder.add(GdbCmd::SetOption(GdbOption::Logging(false)));
-        }
-
-        builder.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
-
-        for script in &plugin_bootstrap.scripts {
-            builder.add(GdbCmd::ConsoleExec(format!(
-                "source {}",
-                script.to_string_lossy()
-            )));
-        }
-
-        if let Some(frame_filter_cfg) = &config.frame_filter {
-            debug!("Applying frame filter settings: {:?}", frame_filter_cfg);
-            let frame_filter_script =
-                Path::new(DEFAULT_GDB_EXT_DIR).join(DEFAULT_GDB_EXT_FRAME_FILTER_NAME);
-            builder.add(GdbCmd::ConsoleExec(format!(
-                "source {}",
-                frame_filter_script.to_string_lossy()
-            )));
-            builder.add(GdbCmd::EnableFrameFilter);
-            builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::Enable));
-            for pattern in &frame_filter_cfg.filter_file {
-                let args: FrameFilterAddArgs = pattern.into();
-                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFile(args)));
-            }
-            for pattern in &frame_filter_cfg.filter_function {
-                let args: FrameFilterAddArgs = pattern.into();
-                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::AddFunction(args)));
-            }
-            for preset in &frame_filter_cfg.filter_preset {
-                builder.add(GdbCmd::FrameFilterCmd(FrameFilterCmdArg::PresetEnable(
-                    preset.clone(),
-                )));
-            }
-        }
-
-        for cmd in &plugin_bootstrap.pre_attach_commands {
-            builder.add(cmd);
-        }
-
-        for cmd in &session.prerun_debugger_cmds {
-            builder.add(cmd);
-        }
+        self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
 
         match &session.mode {
             DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => {
+                builder.add(GdbCmd::TargetAttach(*pid));
+            }
+            DbgMode::LOCAL(DbgStartMode::ATTACH(pid)) => {
                 builder.add(GdbCmd::TargetAttach(*pid));
             }
             _ => return Err(anyhow!("Invalid mode for remote attach")),
@@ -130,6 +151,41 @@ impl DebuggerBackend for GdbBackend {
         for cmd in &session.postrun_debugger_cmds {
             builder.add(cmd);
         }
+
+        Ok(builder.build())
+    }
+
+    fn build_local_binary_commands(
+        &self,
+        config: &Config,
+        session: &DbgSessionConfig,
+        _plugin: &dyn FrameworkPlugin,
+        plugin_bootstrap: &FrameworkDebuggerBootstrap,
+    ) -> Result<Vec<String>> {
+        let mut builder = DbgCmdListBuilder::<GdbCmd>::new();
+        self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
+
+        match &session.mode {
+            DbgMode::LOCAL(DbgStartMode::BINARY { path, args }) => {
+                builder.add(GdbCmd::FileExecAndSym(path.clone()));
+                if !args.is_empty() {
+                    builder.add(GdbCmd::ExeArgs(args.join(" ")));
+                }
+            }
+            _ => return Err(anyhow!("Invalid mode for local binary launch")),
+        }
+
+        for cmd in &session.postrun_debugger_cmds {
+            builder.add(cmd);
+        }
+
+        builder.add(GdbCmd::Plain(
+            if session.stop_at_entry {
+                "-exec-run --start".to_string()
+            } else {
+                "-exec-run".to_string()
+            },
+        ));
 
         Ok(builder.build())
     }

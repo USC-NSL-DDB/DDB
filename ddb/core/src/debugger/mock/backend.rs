@@ -56,6 +56,16 @@ impl DebuggerBackend for MockBackend {
         Ok(commands)
     }
 
+    fn build_local_binary_commands(
+        &self,
+        config: &Config,
+        session: &DbgSessionConfig,
+        plugin: &dyn FrameworkPlugin,
+        plugin_bootstrap: &FrameworkDebuggerBootstrap,
+    ) -> Result<Vec<String>> {
+        self.build_remote_attach_commands(config, session, plugin, plugin_bootstrap)
+    }
+
     fn interrupt_command(&self) -> String {
         "-exec-interrupt-if-running".to_string()
     }

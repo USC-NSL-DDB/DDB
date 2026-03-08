@@ -3,8 +3,9 @@
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -44,6 +45,25 @@ pub struct SessionSpec<'a> {
     pub exit_on_continue: bool,
 }
 
+pub struct BinarySessionSpec<'a> {
+    pub tag: &'a str,
+    pub alias: &'a str,
+    pub hash: &'a str,
+    pub pid: u64,
+    pub start_delay_ms: u64,
+    pub binary_path: &'a str,
+    pub binary_args: Vec<String>,
+    pub stop_at_entry: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltRealExample {
+    pub manifest_path: PathBuf,
+    pub binary_path: PathBuf,
+    pub source_path: PathBuf,
+    pub breakpoint_line: u64,
+}
+
 pub struct DdbProcess {
     _tempdir: TempDir,
     child: Child,
@@ -57,27 +77,32 @@ pub struct DdbProcess {
 
 impl DdbProcess {
     pub fn spawn(sessions: &[SessionSpec<'_>]) -> Self {
+        let config_contents = render_mock_config(sessions);
+        Self::spawn_with_config("ddb-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_real_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
+        let config_contents = render_real_binary_config(sessions);
+        Self::spawn_with_config("ddb-real-integration.yaml", config_contents)
+    }
+
+    fn spawn_with_config(config_name: &str, config_contents: String) -> Self {
         let port = reserve_port();
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
-        let config_path = tempdir.path().join("ddb-integration.yaml");
-        std::fs::write(
-            &config_path,
-            render_config(
-                port,
-                tempdir
-                    .path()
-                    .join("state")
-                    .to_str()
-                    .expect("state dir should be valid utf-8"),
-                tempdir
-                    .path()
-                    .join("logs")
-                    .to_str()
-                    .expect("log dir should be valid utf-8"),
-                sessions,
-            ),
-        )
-        .expect("config file should be written");
+        let config_path = tempdir.path().join(config_name);
+        let state_dir = tempdir.path().join("state");
+        let log_dir = tempdir.path().join("logs");
+        let config_contents = config_contents
+            .replace("__API_PORT__", &port.to_string())
+            .replace(
+                "__BASE_DIR__",
+                state_dir.to_str().expect("state dir should be valid utf-8"),
+            )
+            .replace(
+                "__LOG_DIR__",
+                log_dir.to_str().expect("log dir should be valid utf-8"),
+            );
+        std::fs::write(&config_path, config_contents).expect("config file should be written");
 
         let stdout = Arc::new(OutputBuffer::default());
         let stderr = Arc::new(OutputBuffer::default());
@@ -333,7 +358,7 @@ fn reserve_port() -> u16 {
         .port()
 }
 
-fn render_config(port: u16, base_dir: &str, log_dir: &str, sessions: &[SessionSpec<'_>]) -> String {
+fn render_mock_config(sessions: &[SessionSpec<'_>]) -> String {
     let sessions_yaml = sessions
         .iter()
         .map(|session| {
@@ -366,19 +391,136 @@ fn render_config(port: u16, base_dir: &str, log_dir: &str, sessions: &[SessionSp
         r#"Framework: unspecified
 Conf:
   auto_shutdown: false
-  api_server_port: {port}
-  base_dir: "{base_dir}"
-  log_dir: "{log_dir}"
+  api_server_port: __API_PORT__
+  base_dir: "__BASE_DIR__"
+  log_dir: "__LOG_DIR__"
   Debugger:
     backend: mock
 StaticSessions:
 {sessions_yaml}
 "#,
-        port = port,
-        base_dir = base_dir,
-        log_dir = log_dir,
         sessions_yaml = sessions_yaml,
     )
+}
+
+fn render_real_binary_config(sessions: &[BinarySessionSpec<'_>]) -> String {
+    let sessions_yaml = sessions
+        .iter()
+        .map(|session| {
+            let args_yaml = session
+                .binary_args
+                .iter()
+                .map(|arg| format!("      - \"{}\"", arg))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                r#"  - tag: "{tag}"
+    alias: "{alias}"
+    hash: "{hash}"
+    pid: {pid}
+    start_delay_ms: {start_delay_ms}
+    start_mode: binary
+    binary_path: "{binary_path}"
+    stop_at_entry: {stop_at_entry}
+    binary_args:
+{args_yaml}"#,
+                tag = session.tag,
+                alias = session.alias,
+                hash = session.hash,
+                pid = session.pid,
+                start_delay_ms = session.start_delay_ms,
+                binary_path = session.binary_path,
+                stop_at_entry = session.stop_at_entry,
+                args_yaml = args_yaml,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"Framework: unspecified
+Conf:
+  auto_shutdown: false
+  on_exit: kill
+  api_server_port: __API_PORT__
+  base_dir: "__BASE_DIR__"
+  log_dir: "__LOG_DIR__"
+  Debugger:
+    backend: gdb
+StaticSessions:
+{sessions_yaml}
+"#,
+        sessions_yaml = sessions_yaml,
+    )
+}
+
+fn fixture_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+fn ensure_real_debugger_environment() {
+    let status = Command::new("gdb")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("gdb should be installed and invokable for real integration tests");
+    assert!(
+        status.success(),
+        "gdb --version should succeed for real integration tests"
+    );
+}
+
+pub fn build_real_loop_example() -> &'static BuiltRealExample {
+    static REAL_LOOP_EXAMPLE: OnceLock<BuiltRealExample> = OnceLock::new();
+    REAL_LOOP_EXAMPLE.get_or_init(|| {
+        ensure_real_debugger_environment();
+        let manifest_path = fixture_root().join("real_loop").join("Cargo.toml");
+        let status = Command::new("cargo")
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(&manifest_path)
+            .status()
+            .expect("fixture build command should run");
+        assert!(status.success(), "fixture build should succeed");
+
+        let crate_root = manifest_path
+            .parent()
+            .expect("fixture manifest should have a parent directory");
+        let source_path = crate_root.join("src").join("main.rs");
+        let binary_path = crate_root
+            .join("target")
+            .join("debug")
+            .join(format!("ddb_real_loop{}", std::env::consts::EXE_SUFFIX));
+        assert!(binary_path.exists(), "fixture binary should exist after build");
+
+        BuiltRealExample {
+            manifest_path,
+            binary_path,
+            source_path: source_path.clone(),
+            breakpoint_line: marker_line(&source_path, "BREAKPOINT_MARKER"),
+        }
+    })
+}
+
+fn marker_line(path: &Path, marker: &str) -> u64 {
+    let contents =
+        std::fs::read_to_string(path).expect("fixture source should be readable for markers");
+    contents
+        .lines()
+        .enumerate()
+        .find_map(|(idx, line)| line.contains(marker).then_some((idx + 1) as u64))
+        .expect("fixture marker should exist")
+}
+
+pub fn real_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static REAL_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    REAL_TEST_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("real test mutex should not be poisoned")
 }
 
 pub fn session_id_by_tag(sessions: &Value, tag: &str) -> u64 {

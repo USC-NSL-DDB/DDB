@@ -26,6 +26,7 @@ pub struct DbgSessionConfig {
 
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
     pub postrun_debugger_cmds: Vec<DebuggerCommand>,
+    pub stop_at_entry: bool,
 
     // This should be present if the service discovery is enabled.
     // pub service_info: Option<ServiceInfo>,
@@ -44,6 +45,7 @@ pub struct DbgSessionCfgBuilder {
 
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
     pub postrun_debugger_cmds: Vec<DebuggerCommand>,
+    pub stop_at_entry: bool,
 
     pub service_meta: Option<ServiceMeta>,
     pub debugger_controller: Option<DbgController>,
@@ -80,6 +82,7 @@ impl DbgSessionCfgBuilder {
             tag: None,
             prerun_debugger_cmds,
             postrun_debugger_cmds,
+            stop_at_entry: false,
             service_meta: None,
             debugger_controller: None,
         }
@@ -159,6 +162,11 @@ impl DbgSessionCfgBuilder {
         self
     }
 
+    pub fn stop_at_entry(mut self, stop_at_entry: bool) -> Self {
+        self.stop_at_entry = stop_at_entry;
+        self
+    }
+
     pub fn with_debugger_controller(mut self, debugger_controller: DbgController) -> Self {
         self.debugger_controller = Some(debugger_controller);
         self
@@ -193,6 +201,7 @@ impl DbgSessionCfgBuilder {
             tag: self.tag,
             prerun_debugger_cmds: self.prerun_debugger_cmds,
             postrun_debugger_cmds: self.postrun_debugger_cmds,
+            stop_at_entry: self.stop_at_entry,
             service_meta: self.service_meta,
             debugger_controller: self.debugger_controller.unwrap(),
         }
@@ -203,7 +212,10 @@ impl DbgSessionCfgBuilder {
 #[derive(Debug, Clone)]
 pub enum DbgStartMode {
     ATTACH(u64),    // pid
-    BINARY(String), // bin_path
+    BINARY {
+        path: String,
+        args: Vec<String>,
+    },
 }
 
 #[allow(dead_code)]

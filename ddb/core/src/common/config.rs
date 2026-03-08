@@ -173,6 +173,14 @@ pub struct StaticSessionConfig {
     #[serde(default)]
     pub start_delay_ms: u64,
     #[serde(default)]
+    pub start_mode: StaticSessionStartMode,
+    #[serde(default)]
+    pub binary_path: String,
+    #[serde(default)]
+    pub binary_args: Vec<String>,
+    #[serde(default)]
+    pub stop_at_entry: bool,
+    #[serde(default)]
     pub mock: MockSessionConfig,
 }
 
@@ -185,8 +193,25 @@ impl Default for StaticSessionConfig {
             pid: 0,
             ip: default_static_session_ip(),
             start_delay_ms: 0,
+            start_mode: StaticSessionStartMode::default(),
+            binary_path: String::new(),
+            binary_args: Vec::new(),
+            stop_at_entry: false,
             mock: MockSessionConfig::default(),
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StaticSessionStartMode {
+    Attach,
+    Binary,
+}
+
+impl Default for StaticSessionStartMode {
+    fn default() -> Self {
+        Self::Attach
     }
 }
 
@@ -651,5 +676,39 @@ StaticSessions:
         assert_eq!(config.static_sessions[0].start_delay_ms, 25);
         assert_eq!(config.static_sessions[0].mock.source_line, 44);
         assert!(config.static_sessions[0].mock.exit_on_continue);
+    }
+
+    #[test]
+    fn static_binary_session_parses_launch_configuration() {
+        let config = Config::from_str(
+            r#"
+Conf:
+  Debugger:
+    backend: gdb
+StaticSessions:
+  - tag: real-a
+    alias: real-a
+    hash: grp-real
+    start_mode: binary
+    binary_path: /tmp/ddb-real-example
+    stop_at_entry: true
+    binary_args:
+      - --mode
+      - loop
+"#,
+        )
+        .expect("static binary configuration should parse");
+
+        assert_eq!(config.static_sessions.len(), 1);
+        assert_eq!(
+            config.static_sessions[0].start_mode,
+            StaticSessionStartMode::Binary
+        );
+        assert_eq!(config.static_sessions[0].binary_path, "/tmp/ddb-real-example");
+        assert_eq!(
+            config.static_sessions[0].binary_args,
+            vec!["--mode".to_string(), "loop".to_string()]
+        );
+        assert!(config.static_sessions[0].stop_at_entry);
     }
 }
