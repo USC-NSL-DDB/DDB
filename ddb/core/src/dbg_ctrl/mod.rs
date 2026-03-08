@@ -1,7 +1,9 @@
 pub mod dbg_bridge_ctrl;
 pub mod dbg_ctrl;
+pub mod mock_ctrl;
 use bytes::Bytes;
 pub use dbg_ctrl::*;
+pub use mock_ctrl::*;
 
 // pub type ChannelSender = tokio::sync::mpsc::Sender<Bytes>;
 // pub type ChannelReceiver = tokio::sync::mpsc::Receiver<Bytes>;

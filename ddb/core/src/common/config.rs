@@ -1,6 +1,7 @@
 use super::default_vals;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::{fs, sync::OnceLock};
 use tracing::debug;
@@ -41,6 +42,9 @@ pub struct Config {
 
     #[serde(rename = "FrameFilter", default)]
     pub frame_filter: Option<FrameFilterConfig>,
+
+    #[serde(rename = "StaticSessions", default)]
+    pub static_sessions: Vec<StaticSessionConfig>,
 }
 
 impl Config {
@@ -106,9 +110,91 @@ impl Default for GdbConf {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MockThreadConfig {
+    #[serde(default = "default_mock_thread_id")]
+    pub id: u64,
+    #[serde(default = "default_mock_thread_name")]
+    pub name: String,
+}
+
+impl Default for MockThreadConfig {
+    fn default() -> Self {
+        Self {
+            id: default_mock_thread_id(),
+            name: default_mock_thread_name(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MockSessionConfig {
+    #[serde(default = "default_mock_thread_group")]
+    pub thread_group: String,
+    #[serde(default = "default_mock_threads")]
+    pub threads: Vec<MockThreadConfig>,
+    #[serde(default = "default_mock_source_file")]
+    pub source_file: String,
+    #[serde(default = "default_mock_source_line")]
+    pub source_line: u64,
+    #[serde(default = "default_mock_function")]
+    pub function: String,
+    #[serde(default)]
+    pub executable: String,
+    #[serde(default)]
+    pub exit_on_continue: bool,
+}
+
+impl Default for MockSessionConfig {
+    fn default() -> Self {
+        Self {
+            thread_group: default_mock_thread_group(),
+            threads: default_mock_threads(),
+            source_file: default_mock_source_file(),
+            source_line: default_mock_source_line(),
+            function: default_mock_function(),
+            executable: String::new(),
+            exit_on_continue: false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StaticSessionConfig {
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub alias: String,
+    #[serde(default)]
+    pub hash: String,
+    #[serde(default)]
+    pub pid: u64,
+    #[serde(default = "default_static_session_ip")]
+    pub ip: Ipv4Addr,
+    #[serde(default)]
+    pub start_delay_ms: u64,
+    #[serde(default)]
+    pub mock: MockSessionConfig,
+}
+
+impl Default for StaticSessionConfig {
+    fn default() -> Self {
+        Self {
+            tag: String::new(),
+            alias: String::new(),
+            hash: String::new(),
+            pid: 0,
+            ip: default_static_session_ip(),
+            start_delay_ms: 0,
+            mock: MockSessionConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DebuggerBackendKind {
     Gdb,
+    Mock,
     #[serde(other)]
     Unknown,
 }
@@ -321,6 +407,38 @@ fn default_base_dir() -> String {
     default_vals::DEFAULT_BASE_DIR.to_string()
 }
 
+fn default_static_session_ip() -> Ipv4Addr {
+    Ipv4Addr::new(127, 0, 0, 1)
+}
+
+fn default_mock_thread_id() -> u64 {
+    1
+}
+
+fn default_mock_thread_name() -> String {
+    "main".to_string()
+}
+
+fn default_mock_thread_group() -> String {
+    "i1".to_string()
+}
+
+fn default_mock_threads() -> Vec<MockThreadConfig> {
+    vec![MockThreadConfig::default()]
+}
+
+fn default_mock_source_file() -> String {
+    "main.rs".to_string()
+}
+
+fn default_mock_source_line() -> u64 {
+    1
+}
+
+fn default_mock_function() -> String {
+    "main".to_string()
+}
+
 fn default_broker_hostname() -> String {
     use super::sd_defaults;
     sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string()
@@ -358,6 +476,7 @@ impl Default for Config {
             conf: Conf::default(),
             plugin: None,
             frame_filter: None,
+            static_sessions: Vec::new(),
         }
     }
 }
@@ -502,5 +621,35 @@ mod tests {
 
         let add_args: FrameFilterAddArgs = (&pattern).into();
         assert_eq!(add_args.to_string(), "runtime::* --match-type glob");
+    }
+
+    #[test]
+    fn mock_backend_and_static_sessions_parse_from_yaml() {
+        let config = Config::from_str(
+            r#"
+Conf:
+  Debugger:
+    backend: mock
+StaticSessions:
+  - tag: svc-a
+    alias: api
+    hash: grp-a
+    pid: 101
+    start_delay_ms: 25
+    mock:
+      source_file: src/main.rs
+      source_line: 44
+      function: worker
+      exit_on_continue: true
+"#,
+        )
+        .expect("mock test configuration should parse");
+
+        assert_eq!(config.conf.debugger.backend, DebuggerBackendKind::Mock);
+        assert_eq!(config.static_sessions.len(), 1);
+        assert_eq!(config.static_sessions[0].tag, "svc-a");
+        assert_eq!(config.static_sessions[0].start_delay_ms, 25);
+        assert_eq!(config.static_sessions[0].mock.source_line, 44);
+        assert!(config.static_sessions[0].mock.exit_on_continue);
     }
 }

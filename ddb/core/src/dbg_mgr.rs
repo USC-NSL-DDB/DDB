@@ -10,14 +10,17 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
-use crate::discovery::discovery_message_producer::ServiceMeta;
+use crate::discovery::discovery_message_producer::{ServiceInfo, ServiceMeta};
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::shutdown::get_shutdown_ctrl;
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr};
 use crate::{
-    common::{self, config::Config as DDBConfig},
+    common::{
+        self,
+        config::{Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig},
+    },
     discovery::DiscoveryMessageProducer,
 };
 
@@ -168,6 +171,8 @@ pub struct DbgManager {
     proclet_ctrl: Option<ProcletCtrlClient>,
 
     config: &'static DDBConfig,
+
+    static_session_handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl DbgManager {
@@ -303,6 +308,73 @@ impl DbgManager {
         }
         Ok(())
     }
+
+    fn static_service_info(
+        config: &'static DDBConfig,
+        session: StaticSessionConfig,
+    ) -> Result<ServiceInfo> {
+        let controller = match config.conf.debugger.backend {
+            DebuggerBackendKind::Mock => Box::new(crate::dbg_ctrl::MockAttachController::new(
+                session.mock.clone(),
+                session.pid,
+            )) as crate::dbg_ctrl::DbgController,
+            DebuggerBackendKind::Gdb => {
+                let ssh_cred = crate::connection::ssh_client::SSHCred::new(
+                    &session.ip.to_string(),
+                    config.ssh.port,
+                    config.ssh.user.as_str(),
+                    None,
+                );
+                Box::new(crate::dbg_ctrl::SSHAttachController::new(ssh_cred))
+                    as crate::dbg_ctrl::DbgController
+            }
+            DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
+        };
+
+        Ok(ServiceInfo::new(
+            session.ip,
+            session.tag,
+            session.pid,
+            session.hash,
+            session.alias,
+            controller,
+            None,
+        ))
+    }
+
+    async fn start_static_session(
+        sessions: SessionsRef,
+        config: &'static DDBConfig,
+        session: StaticSessionConfig,
+    ) -> Result<()> {
+        if session.start_delay_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(session.start_delay_ms)).await;
+        }
+        let info = Self::static_service_info(config, session)?;
+        ServiceDiscover::prepare_new_session(sessions, info).await;
+        Ok(())
+    }
+
+    async fn init_static_sessions(&self) -> Result<()> {
+        let mut delayed_handles = self.static_session_handles.lock().await;
+        delayed_handles.clear();
+
+        for session in self.config.static_sessions.clone() {
+            if session.start_delay_ms == 0 {
+                Self::start_static_session(self.sessions.clone(), self.config, session).await?;
+            } else {
+                let sessions = self.sessions.clone();
+                let config = self.config;
+                delayed_handles.push(tokio::spawn(async move {
+                    if let Err(error) = Self::start_static_session(sessions, config, session).await
+                    {
+                        error!("Failed to start delayed static session: {:?}", error);
+                    }
+                }));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -328,6 +400,7 @@ impl DbgManagable for DbgManager {
             sd: Mutex::new(None),
             proclet_ctrl,
             config,
+            static_session_handles: Mutex::new(Vec::new()),
         }
     }
 
@@ -342,10 +415,22 @@ impl DbgManagable for DbgManager {
             sd.start(self.sessions.clone());
             debug!("DbgManager is now listening for discovered services.");
         }
+        if !self.config.static_sessions.is_empty() {
+            info!(
+                "[Static Sessions]: STARTING {} configured session(s).",
+                self.config.static_sessions.len()
+            );
+            self.init_static_sessions().await?;
+        }
         Ok(())
     }
 
     async fn cleanup(&self) {
+        let mut handles = self.static_session_handles.lock().await;
+        for handle in handles.drain(..) {
+            handle.abort();
+        }
+
         // 1) Shutdown the service discovery if it exists
         if let Some(sd) = &mut *self.sd.lock().await {
             debug!("Shutting down ServiceDiscovery...");

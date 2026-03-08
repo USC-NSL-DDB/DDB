@@ -71,9 +71,17 @@ pub struct BkptLocJson {
 #[serde(tag = "type")]
 pub enum SubBkptJson {
     #[serde(rename = "session")]
-    Session { id: u64, target_session: u64 },
+    Session {
+        id: u64,
+        target_session: u64,
+        local_breakpoint_id: u64,
+    },
     #[serde(rename = "group")]
-    Group { id: u64, target_group: u64 },
+    Group {
+        id: u64,
+        target_group: u64,
+        active_sessions: usize,
+    },
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -105,10 +113,12 @@ impl From<&SubBkptMeta> for SubBkptJson {
             SubBkptType::Session(s) => SubBkptJson::Session {
                 id: subbkpt.id(),
                 target_session: s.target_session(),
+                local_breakpoint_id: s.local_id(),
             },
             SubBkptType::Group(g) => SubBkptJson::Group {
                 id: subbkpt.id(),
                 target_group: g.target_group(),
+                active_sessions: g.local_ids().len(),
             },
         }
     }

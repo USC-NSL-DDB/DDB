@@ -1,4 +1,5 @@
 pub mod gdb;
+pub mod mock;
 
 use std::{
     fs,
@@ -80,6 +81,7 @@ pub fn get_debugger_backend() -> &'static Arc<dyn DebuggerBackend> {
 pub fn resolve_debugger_backend(config: &Config) -> Arc<dyn DebuggerBackend> {
     match config.conf.debugger.backend {
         DebuggerBackendKind::Gdb => Arc::new(gdb::GdbBackend),
+        DebuggerBackendKind::Mock => Arc::new(mock::MockBackend),
         DebuggerBackendKind::Unknown => {
             panic!("Unsupported debugger backend configured.");
         }
