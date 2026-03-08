@@ -36,12 +36,14 @@ These tests use the mock debugger backend and are fast and deterministic:
 
 - `session_bootstrap.rs`
 - `breakpoint_sync.rs`
+- `breakpoint_validation.rs`
+- `command_routing.rs`
 - `session_cleanup.rs`
 
 Run only this tier with:
 
 ```bash
-cargo test -p ddb --test session_bootstrap --test breakpoint_sync --test session_cleanup
+cargo test -p ddb --test session_bootstrap --test breakpoint_sync --test breakpoint_validation --test command_routing --test session_cleanup
 ```
 
 ### 2. Real debugger integration tests

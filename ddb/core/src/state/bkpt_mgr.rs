@@ -34,6 +34,13 @@ pub struct BkptLoc {
 }
 
 impl BkptLoc {
+    pub fn new(src: impl Into<String>, line: u64) -> Self {
+        Self {
+            src: src.into(),
+            line,
+        }
+    }
+
     pub fn path(&self) -> &str {
         &self.src
     }
@@ -51,7 +58,7 @@ impl From<[&str; 2]> for BkptLoc {
     fn from(arr: [&str; 2]) -> Self {
         let src = arr[0].to_string();
         let line = arr[1].parse::<u64>().unwrap_or(0);
-        BkptLoc { src, line }
+        Self::new(src, line)
     }
 }
 
@@ -59,7 +66,7 @@ impl From<&[&str; 2]> for BkptLoc {
     fn from(arr: &[&str; 2]) -> Self {
         let src = arr[0].to_string();
         let line = arr[1].parse::<u64>().unwrap_or(0);
-        BkptLoc { src, line }
+        Self::new(src, line)
     }
 }
 
@@ -67,7 +74,7 @@ impl From<Vec<&str>> for BkptLoc {
     fn from(arr: Vec<&str>) -> Self {
         let src = arr[0].to_string();
         let line = arr[1].parse::<u64>().unwrap_or(0);
-        BkptLoc { src, line }
+        Self::new(src, line)
     }
 }
 

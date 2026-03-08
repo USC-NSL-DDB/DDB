@@ -11,6 +11,7 @@ use std::{
 };
 
 use reqwest::blocking::Client;
+use reqwest::StatusCode;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -168,11 +169,27 @@ impl DdbProcess {
             .expect("response body should be json")
     }
 
+    pub fn api_post_json(&self, path: &str, body: &Value) -> (StatusCode, Value) {
+        let response = self
+            .client
+            .post(format!("{}{}", self.base_url(), path))
+            .json(body)
+            .send()
+            .expect("request should succeed");
+        let status = response.status();
+        let body = response.json().expect("response body should be json");
+        (status, body)
+    }
+
     pub fn wait_for_status_up(&mut self) {
         let deadline = Instant::now() + DEFAULT_TIMEOUT;
         loop {
             self.assert_running();
-            match self.client.get(format!("{}/status", self.base_url())).send() {
+            match self
+                .client
+                .get(format!("{}/status", self.base_url()))
+                .send()
+            {
                 Ok(response) if response.status().is_success() => return,
                 Ok(_) | Err(_) => {}
             }
@@ -209,7 +226,11 @@ impl DdbProcess {
             let bkpts = self.api_get("/bkpts");
             if let Some(active_sessions) = bkpts["bkpts"]
                 .as_array()
-                .and_then(|items| items.iter().find(|bkpt| bkpt["id"].as_u64() == Some(bkpt_id)))
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|bkpt| bkpt["id"].as_u64() == Some(bkpt_id))
+                })
                 .and_then(|bkpt| bkpt["subbkpts"].as_array())
                 .and_then(|subbkpts| {
                     subbkpts.iter().find_map(|subbkpt| {
@@ -291,8 +312,15 @@ impl DdbProcess {
     }
 
     fn assert_running(&mut self) {
-        if let Some(status) = self.child.try_wait().expect("child status should be readable") {
-            panic!("ddb exited unexpectedly with status {status}\n{}", self.debug_dump());
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .expect("child status should be readable")
+        {
+            panic!(
+                "ddb exited unexpectedly with status {status}\n{}",
+                self.debug_dump()
+            );
         }
     }
 
@@ -312,7 +340,11 @@ impl DdbProcess {
 
         let deadline = Instant::now() + DEFAULT_TIMEOUT;
         loop {
-            match self.child.try_wait().expect("child status should be readable") {
+            match self
+                .child
+                .try_wait()
+                .expect("child status should be readable")
+            {
                 Some(_) => {
                     self.stopped = true;
                     return;
@@ -494,7 +526,10 @@ pub fn build_real_loop_example() -> &'static BuiltRealExample {
             .join("target")
             .join("debug")
             .join(format!("ddb_real_loop{}", std::env::consts::EXE_SUFFIX));
-        assert!(binary_path.exists(), "fixture binary should exist after build");
+        assert!(
+            binary_path.exists(),
+            "fixture binary should exist after build"
+        );
 
         BuiltRealExample {
             manifest_path,

@@ -62,6 +62,13 @@ impl Router {
 }
 
 impl Router {
+    fn live_session_ids<'a>(&self, sids: impl IntoIterator<Item = &'a u64>) -> Vec<u64> {
+        sids.into_iter()
+            .filter(|sid| self.sessions.contains_key(sid))
+            .copied()
+            .collect()
+    }
+
     fn write_to(&self, sid: u64, cmd_str: String) {
         debug!("Router writing to session: {}, command: {}", sid, cmd_str);
         if let Some(session) = self.sessions.get(&sid) {
@@ -155,10 +162,11 @@ impl Router {
         cmd: Command<F>,
     ) {
         for target in targets {
+            let cmd = cmd.clone().with_fresh_internal_token();
             if FORGET {
-                self.send_to_and_forget(target, cmd.clone().into_null_formatter_cmd());
+                self.send_to_and_forget(target, cmd.into_null_formatter_cmd());
             } else {
-                self.send_to(target, cmd.clone());
+                self.send_to(target, cmd);
             }
         }
     }
@@ -168,10 +176,14 @@ impl Router {
         targets: Vec<Target>,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
+        if targets.is_empty() {
+            bail!("No targets provided for send_to_multiple_ret");
+        }
+
         let futures: Vec<_> = targets
             .into_iter()
             .map(|target| {
-                let cmd = cmd.clone();
+                let cmd = cmd.clone().with_fresh_internal_token();
                 async move { self.send_to_ret(target, cmd).await }
             })
             .collect();
@@ -224,10 +236,11 @@ impl Router {
         cmd: Command<F>,
     ) {
         // perform some sanity checks to remove all non-existent sessions
-        let sids = sids
-            .iter()
-            .filter(|sid| self.sessions.contains_key(sid))
-            .collect::<Vec<_>>();
+        let sids = self.live_session_ids(sids.iter());
+        if sids.is_empty() {
+            warn!("Router attempted to send to an empty session set");
+            return;
+        }
 
         let out_src = if FORGET {
             OutputSource::DISCARD
@@ -241,7 +254,7 @@ impl Router {
         }
 
         for sid in sids {
-            self.write_to(*sid, cmd.clone());
+            self.write_to(sid, cmd.clone());
         }
     }
 
@@ -251,10 +264,10 @@ impl Router {
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
         // perform some sanity checks to remove all non-existent sessions
-        let sids = sids
-            .iter()
-            .filter(|sid| self.sessions.contains_key(sid))
-            .collect::<Vec<_>>();
+        let sids = self.live_session_ids(sids.iter());
+        if sids.is_empty() {
+            bail!("No live sessions matched the target set");
+        }
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let out_src = OutputSource::RETURN(tx);
@@ -262,7 +275,7 @@ impl Router {
         self.tracker.add_cmd(out_meta);
 
         for sid in sids {
-            self.write_to(*sid, cmd.clone());
+            self.write_to(sid, cmd.clone());
         }
         Ok(rx.await?)
     }
@@ -384,6 +397,10 @@ impl Router {
 
     pub fn broadcast<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
         let num_sessions = self.sessions.len() as u32;
+        if num_sessions == 0 {
+            warn!("Router attempted to broadcast with no active sessions");
+            return;
+        }
         let out_src = if FORGET {
             OutputSource::DISCARD
         } else {
@@ -401,6 +418,9 @@ impl Router {
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
         let num_sessions = self.sessions.len() as u32;
+        if num_sessions == 0 {
+            bail!("No active sessions available for broadcast target");
+        }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let out_src = OutputSource::RETURN(tx);
         let (out_meta, cmd) = cmd.prepare_to_send(num_sessions, out_src);

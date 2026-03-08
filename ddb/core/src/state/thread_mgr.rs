@@ -137,6 +137,26 @@ impl ThreadStateMgr {
             .collect()
     }
 
+    pub fn remove_session(&self, sid: u64) {
+        let local_tids: Vec<_> = self
+            .ltid_to_gtid
+            .iter()
+            .filter_map(|entry| (entry.key().session_id() == sid).then(|| entry.key().clone()))
+            .collect();
+        for local_tid in local_tids {
+            self.remove_thread(&local_tid);
+        }
+
+        let local_tgids: Vec<_> = self
+            .ltgid_to_gtgid
+            .iter()
+            .filter_map(|entry| (entry.key().session_id() == sid).then(|| entry.key().clone()))
+            .collect();
+        for local_tgid in local_tgids {
+            self.remove_thread_group(&local_tgid);
+        }
+    }
+
     pub fn remove_thread(&self, local_tid: &LocalThreadId) -> Option<u64> {
         if let Some(gtid) = self.global_thread_id(local_tid) {
             self.ltid_to_gtid.remove(local_tid);
@@ -213,5 +233,33 @@ mod tests {
         assert_eq!(mgr.remove_thread_group(&ltgid), Some(300));
         assert!(mgr.global_thread_group_id(&ltgid).is_none());
         assert!(mgr.local_thread_group_id(300).is_none());
+    }
+
+    #[test]
+    fn removing_session_clears_all_thread_and_group_indexes_for_that_session() {
+        let mgr = ThreadStateMgr::new();
+        let ltid_a = LocalThreadId::new(1, 10);
+        let ltid_b = LocalThreadId::new(1, 11);
+        let ltid_c = LocalThreadId::new(2, 20);
+        let ltgid_a = LocalThreadGroupId::new(1, "i1");
+        let ltgid_b = LocalThreadGroupId::new(2, "i2");
+
+        mgr.insert_thread(&ltid_a, 100);
+        mgr.insert_thread(&ltid_b, 101);
+        mgr.insert_thread(&ltid_c, 200);
+        mgr.insert_thread_group(&ltgid_a, 300);
+        mgr.insert_thread_group(&ltgid_b, 400);
+
+        mgr.remove_session(1);
+
+        assert!(mgr.global_thread_id(&ltid_a).is_none());
+        assert!(mgr.global_thread_id(&ltid_b).is_none());
+        assert!(mgr.local_thread_id(100).is_none());
+        assert!(mgr.local_thread_id(101).is_none());
+        assert!(mgr.global_thread_group_id(&ltgid_a).is_none());
+        assert!(mgr.local_thread_group_id(300).is_none());
+
+        assert_eq!(mgr.global_thread_id(&ltid_c), Some(200));
+        assert_eq!(mgr.global_thread_group_id(&ltgid_b), Some(400));
     }
 }

@@ -74,6 +74,17 @@ where
         }
     }
 
+    #[inline]
+    pub fn with_internal_token(mut self, internal_token: u64) -> Self {
+        self.internal_token = internal_token;
+        self
+    }
+
+    #[inline]
+    pub fn with_fresh_internal_token(self) -> Self {
+        self.with_internal_token(crate::common::counter::next_token())
+    }
+
     pub fn new_with_parsed_cmd(parsed_cmd: ParsedInputCmd, formatter: F) -> (Self, Target) {
         (
             Command {

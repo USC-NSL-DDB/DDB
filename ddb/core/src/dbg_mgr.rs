@@ -15,13 +15,12 @@ use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::shutdown::get_shutdown_ctrl;
-use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr, get_state_mgr};
+use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
     common::{
         self,
         config::{
-            Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig,
-            StaticSessionStartMode,
+            Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig, StaticSessionStartMode,
         },
     },
     discovery::DiscoveryMessageProducer,
@@ -68,8 +67,12 @@ impl ServiceDiscover {
         let new_sid = dbg_session.sid;
 
         match dbg_session.start().await {
-            Ok(input_tx) => {
-                crate::cmd_flow::get_router().add_session(new_sid, input_tx);
+            Ok(_) => {
+                if let Err(e) = dbg_session.post_start().await {
+                    error!("Post-start actions for session {} failed: {:?}", new_sid, e);
+                    let _ = dbg_session.cleanup().await;
+                    return;
+                }
 
                 let g_cfg = DDBConfig::global();
                 if get_framework_plugin().should_register_caladan_ip(g_cfg) {
@@ -77,22 +80,15 @@ impl ServiceDiscover {
                         get_proclet_mgr().register_owner_session(caladan_ip, new_sid);
                     }
                 }
-                match dbg_session.post_start().await {
-                    Ok(_) => {
-                        sessions.insert(new_sid, dbg_session);
-                        debug!("Session {} started successfully.", new_sid);
-                    }
-                    Err(e) => {
-                        error!("Post-start actions for session {} failed: {:?}", new_sid, e);
-                    }
-                }
+
+                sessions.insert(new_sid, dbg_session);
+                debug!("Session {} started successfully.", new_sid);
                 let notification = Notification::new(NotificationPayload::SessionListChanged);
                 get_notif_mgr().broadcast(notification).await;
             }
             Err(e) => {
                 error!("Failed to start session {}: {:?}", new_sid, e);
                 let _ = dbg_session.cleanup().await;
-                get_state_mgr().remove_session(new_sid).await;
             }
         }
     }
@@ -366,9 +362,9 @@ impl DbgManager {
                     }
                 };
 
-                builder
-                    .mode(mode)
-                    .with_debugger_controller(Box::new(crate::dbg_ctrl::LocalProcessController::new()))
+                builder.mode(mode).with_debugger_controller(Box::new(
+                    crate::dbg_ctrl::LocalProcessController::new(),
+                ))
             }
             DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
         };

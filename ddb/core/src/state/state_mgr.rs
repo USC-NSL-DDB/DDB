@@ -34,6 +34,22 @@ impl SelectionState {
     fn current_thread_id(&self) -> Option<u64> {
         *self.selected_gthread.lock().unwrap()
     }
+
+    #[inline]
+    fn clear_session(&self, sid: u64) {
+        let mut current = self.curr_session.lock().unwrap();
+        if *current == Some(sid) {
+            current.take();
+        }
+    }
+
+    #[inline]
+    fn clear_thread(&self, gtid: u64) {
+        let mut current = self.selected_gthread.lock().unwrap();
+        if *current == Some(gtid) {
+            current.take();
+        }
+    }
 }
 
 pub struct StateMgr {
@@ -98,6 +114,17 @@ impl StateMgr {
 
     #[inline]
     pub async fn remove_session(&self, sid: u64) {
+        if let Some(gtid) = self.selection.current_thread_id() {
+            if self
+                .thread_states
+                .local_thread_id(gtid)
+                .is_some_and(|local_tid| local_tid.session_id() == sid)
+            {
+                self.selection.clear_thread(gtid);
+            }
+        }
+        self.selection.clear_session(sid);
+        self.thread_states.remove_session(sid);
         self.session_states.remove_session(sid).await;
     }
 
@@ -341,5 +368,28 @@ mod tests {
         assert_eq!(mgr.remove_thread_group(1, "i1").await, Some(gtgid));
         assert!(mgr.global_thread_id(1, 10).is_none());
         assert!(mgr.global_thread_group_id(1, "i1").is_none());
+    }
+
+    #[tokio::test]
+    async fn removing_session_clears_selection_and_thread_indexes() {
+        let mgr = StateMgr::new();
+
+        mgr.register_session(1, "svc-a", None).await;
+        let gtgid = mgr.add_thread_group(1, "i1").await;
+        let (gtid, _) = mgr.create_thread(1, 10, "i1").await;
+
+        mgr.select_session(1);
+        mgr.select_thread(gtid).await;
+
+        mgr.remove_session(1).await;
+
+        assert!(mgr.session(1).is_none());
+        assert!(mgr.global_thread_id(1, 10).is_none());
+        assert!(mgr.local_thread_id(gtid).is_none());
+        assert!(mgr.global_thread_group_id(1, "i1").is_none());
+        assert_eq!(mgr.current_session_id(), None);
+        assert_eq!(mgr.current_thread_id(), None);
+        assert_eq!(mgr.session_tag_and_thread_id(gtid).await, None);
+        assert!(gtgid > 0);
     }
 }

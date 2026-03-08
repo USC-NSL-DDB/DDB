@@ -43,5 +43,10 @@ jobs:
           gdb --version | head -n 1
           uname -m
 
+      - name: Check feature matrix
+        run: |
+          cargo check --workspace --all-features
+          cargo check -p ddb --no-default-features
+
       - name: Run ddb tests
         run: cargo test -p ddb

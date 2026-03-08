@@ -9,6 +9,8 @@ use crate::dbg_ctrl::{InputSender, OutputReceiver};
 use crate::debugger::get_debugger_backend;
 use crate::plugin::get_framework_plugin;
 use crate::session::DbgStartMode;
+#[cfg(not(feature = "lazy_source_map"))]
+use crate::state::get_source_mgr;
 use crate::state::{get_bkpt_mgr, get_group_mgr, get_state_mgr, STATES};
 use crate::{cmd_flow, common};
 
@@ -84,11 +86,13 @@ impl DbgSession {
         // taking this out of the critical path may have other implications...
         // TODO: ... need to think about this more.
         #[cfg(not(feature = "lazy_source_map"))]
+        let sid = self.sid;
+        #[cfg(not(feature = "lazy_source_map"))]
         tokio::spawn(async move {
             // try to resolve the source files
             // this should be done after updating the router,
             // as it will try to use router to send to a specific session.
-            match get_source_mgr().resolve_src_for(new_sid).await {
+            match get_source_mgr().resolve_src_for(sid).await {
                 Ok(_) => {
                     debug!("Source files resolved successfully.");
                 }

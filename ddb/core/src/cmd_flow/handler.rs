@@ -98,6 +98,28 @@ impl BreakInsertHandler {
 }
 
 impl BreakInsertHandler {
+    fn parse_breakpoint_location(args: &str) -> Result<BkptLoc> {
+        let location = args
+            .trim()
+            .rsplit_once(char::is_whitespace)
+            .map(|(_, tail)| tail)
+            .unwrap_or(args)
+            .trim_matches(['"', '\'']);
+        let (src, line) = location.rsplit_once(':').ok_or_else(|| {
+            anyhow!(
+                "Unsupported breakpoint location '{}'. Expected <file>:<line>.",
+                location
+            )
+        })?;
+        if src.is_empty() {
+            bail!("Breakpoint source path cannot be empty");
+        }
+        let line = line
+            .parse::<u64>()
+            .map_err(|_| anyhow!("Invalid breakpoint line '{}'", line))?;
+        Ok(BkptLoc::new(src, line))
+    }
+
     async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) -> Result<()> {
         let grp_bkpt = GroupSubBkpt::new(gid);
 
@@ -203,24 +225,19 @@ impl Handler for BreakInsertHandler {
 
         let full_cmd = cmd.full_cmd();
         let args = &cmd.args;
-        // Assumption: the args contains the breakpoint loc at the last place.
-        // In the last element, the first element is the file path and the second element is the line number.
-        let _bkpt_loc: [&str; 2]; // Use stack allocation for perf optimization.
-        let bkpt_loc_parts = args
-            .trim()
-            .rsplit_once(char::is_whitespace)
-            .unwrap_or(("", args))
-            .1 // the result is like "file_path:line_no", including the quotes.
-            .trim_matches(['"', '\''])
-            .split_once(":")
-            .unwrap();
-        _bkpt_loc = [bkpt_loc_parts.0, bkpt_loc_parts.1];
-        let bkpt_loc: BkptLoc = _bkpt_loc.into();
+        let bkpt_loc = match Self::parse_breakpoint_location(args) {
+            Ok(location) => location,
+            Err(error) => {
+                emit_error(&error.to_string(), cmd.external_token);
+                return;
+            }
+        };
         let bkpt_id = get_bkpt_mgr().add_breakpoint(bkpt_loc);
 
         match cmd.target {
             Target::Session(sid) => {
                 if let Err(e) = Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await {
+                    get_bkpt_mgr().remove_breakpoint(bkpt_id);
                     let err_msg = format!(
                         "Failed to insert breakpoint into session {}: {}",
                         sid,
@@ -232,6 +249,7 @@ impl Handler for BreakInsertHandler {
             }
             Target::Group(gid) => {
                 if let Err(e) = Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await {
+                    get_bkpt_mgr().remove_breakpoint(bkpt_id);
                     let err_msg = format!(
                         "Failed to insert breakpoint into group {}: {}",
                         gid,
@@ -296,12 +314,22 @@ impl Handler for BreakInsertHandler {
                 }
             }
             _ => {
+                get_bkpt_mgr().remove_breakpoint(bkpt_id);
                 warn!(
                     "Unsupported target for BreakInsertHandler: {:?}",
                     cmd.target
                 );
                 return;
             }
+        }
+
+        if get_bkpt_mgr().breakpoint_is_empty(bkpt_id) == Some(true) {
+            get_bkpt_mgr().remove_breakpoint(bkpt_id);
+            emit_error(
+                "Failed to insert breakpoint into any target.",
+                cmd.external_token,
+            );
+            return;
         }
 
         match get_bkpt_mgr().breakpoint(bkpt_id) {
