@@ -55,6 +55,13 @@ struct Args {
     #[arg(long, value_delimiter = ',', default_values_t = [1_usize, 4, 16, 64])]
     scales: Vec<usize>,
 
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_values_t = [1_usize, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    )]
+    dbt_depths: Vec<usize>,
+
     #[arg(long, default_value_t = 4)]
     threads_per_session: usize,
 
@@ -88,6 +95,7 @@ struct BenchmarkReport {
     generated_at_epoch_s: u64,
     binary: String,
     scales: Vec<usize>,
+    dbt_depths: Vec<usize>,
     threads_per_session: usize,
     notification_subscribers: usize,
     warmup: usize,
@@ -118,12 +126,13 @@ fn main() -> Result<()> {
 
     let mut results = Vec::new();
     for scenario in &args.scenarios {
-        for &sessions in &args.scales {
-            eprintln!(
-                "running {} with {} session(s)...",
-                scenario.as_str(),
-                sessions
-            );
+        let scales = if matches!(scenario, ScenarioKind::DistributedBacktrace) {
+            &args.dbt_depths
+        } else {
+            &args.scales
+        };
+        for &sessions in scales {
+            eprintln!("running {} with scale {}...", scenario.as_str(), sessions);
             results.push(run_scenario(*scenario, sessions, &config)?);
         }
     }
@@ -135,6 +144,7 @@ fn main() -> Result<()> {
             .as_secs(),
         binary: binary.display().to_string(),
         scales: args.scales.clone(),
+        dbt_depths: args.dbt_depths.clone(),
         threads_per_session: args.threads_per_session,
         notification_subscribers: args.notification_subscribers,
         warmup: args.warmup,
@@ -162,6 +172,9 @@ fn validate_args(args: &mut Args) -> Result<()> {
     if args.scales.is_empty() {
         bail!("at least one session scale must be provided");
     }
+    if args.dbt_depths.is_empty() {
+        bail!("at least one distributed-backtrace depth must be provided");
+    }
     if args.threads_per_session == 0 {
         bail!("threads-per-session must be greater than zero");
     }
@@ -174,9 +187,18 @@ fn validate_args(args: &mut Args) -> Result<()> {
     if args.samples == 0 || args.startup_samples == 0 {
         bail!("sample counts must be greater than zero");
     }
+    if args
+        .dbt_depths
+        .iter()
+        .any(|depth| *depth == 0 || *depth > 16)
+    {
+        bail!("distributed-backtrace depths must be in the range 1..=16");
+    }
 
     args.scales.sort_unstable();
     args.scales.dedup();
+    args.dbt_depths.sort_unstable();
+    args.dbt_depths.dedup();
     Ok(())
 }
 
@@ -220,20 +242,35 @@ fn resolve_ddb_binary(args: &Args, workspace_root: &Path) -> Result<PathBuf> {
 
 fn print_table(report: &BenchmarkReport) {
     println!(
-        "binary: {}\nthreads/session: {}\nnotification subscribers: {}\n",
-        report.binary, report.threads_per_session, report.notification_subscribers
+        "binary: {}\nthreads/session: {}\nnotification subscribers: {}\ndbt depths: {:?}\n",
+        report.binary,
+        report.threads_per_session,
+        report.notification_subscribers,
+        report.dbt_depths
     );
     println!(
-        "{:<18} {:>8} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "scenario", "sessions", "samples", "p50 ms", "p95 ms", "p99 ms", "mean ms", "max ms"
+        "{:<24} {:>8} {:>7} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "scenario",
+        "sessions",
+        "depth",
+        "samples",
+        "p50 ms",
+        "p95 ms",
+        "p99 ms",
+        "mean ms",
+        "max ms"
     );
-    println!("{}", "-".repeat(92));
+    println!("{}", "-".repeat(112));
 
     for result in &report.results {
         println!(
-            "{:<18} {:>8} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "{:<24} {:>8} {:>7} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
             result.scenario,
             result.sessions,
+            result
+                .dbt_depth
+                .map(|depth| depth.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             result.stats.samples,
             fmt_ms(result.stats.p50_ms),
             fmt_ms(result.stats.p95_ms),

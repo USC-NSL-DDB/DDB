@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    harness::{DdbHarness, HarnessSpec},
+    harness::{dbt_session_tag, session_id_by_tag, DdbHarness, HarnessSpec},
     stats::SummaryStats,
 };
 
@@ -23,6 +23,7 @@ pub enum ScenarioKind {
     CliThreadInfo,
     CliBreakInsert,
     Notifications,
+    DistributedBacktrace,
 }
 
 impl ScenarioKind {
@@ -34,6 +35,7 @@ impl ScenarioKind {
             Self::CliThreadInfo => "cli-thread-info",
             Self::CliBreakInsert => "cli-break-insert",
             Self::Notifications => "notifications",
+            Self::DistributedBacktrace => "distributed-backtrace",
         }
     }
 
@@ -57,6 +59,9 @@ impl ScenarioKind {
             Self::Notifications => {
                 "WebSocket broadcast latency for test notifications, covering notification serialization and subscriber fanout."
             }
+            Self::DistributedBacktrace => {
+                "Real GDB-backed end-to-end distributed backtrace latency for a synthetic cross-process call chain, including parent metadata lookup, interrupt, context switch, and recursive stack aggregation."
+            }
         }
     }
 
@@ -67,7 +72,8 @@ impl ScenarioKind {
             | Self::ApiListGroups
             | Self::CliThreadInfo
             | Self::CliBreakInsert
-            | Self::Notifications => "latency_ms",
+            | Self::Notifications
+            | Self::DistributedBacktrace => "latency_ms",
         }
     }
 }
@@ -97,6 +103,7 @@ pub struct ScenarioResult {
     pub description: &'static str,
     pub metric: &'static str,
     pub sessions: usize,
+    pub dbt_depth: Option<usize>,
     pub threads_per_session: usize,
     pub notification_subscribers: Option<usize>,
     pub stats: SummaryStats,
@@ -104,138 +111,137 @@ pub struct ScenarioResult {
 
 pub fn run_scenario(
     kind: ScenarioKind,
-    sessions: usize,
+    scale: usize,
     config: &ScenarioConfig<'_>,
 ) -> Result<ScenarioResult> {
-    let stats = match kind {
-        ScenarioKind::Startup => SummaryStats::from_durations(&measure_startup(sessions, config)?),
-        ScenarioKind::ApiThreadInfo => SummaryStats::from_durations(&measure_with_live_harness(
-            sessions,
-            config,
-            |harness, _, _| {
-                let start = Instant::now();
-                let response = harness.api_post_json(
-                    "/send",
-                    &json!({
-                        "wait": true,
-                        "cmd": "-thread-info",
-                    }),
-                )?;
-                let payload = response["payload"]
-                    .as_object()
-                    .context("missing /send payload for api-thread-info")?;
-                let responses = payload
-                    .get("responses")
-                    .and_then(|value| value.as_array())
-                    .context("missing responses array for api-thread-info")?;
-                if responses.len() != sessions {
-                    bail!(
-                        "expected {} session responses for api-thread-info, got {}",
-                        sessions,
-                        responses.len()
-                    );
-                }
-                Ok(start.elapsed())
-            },
-        )?),
-        ScenarioKind::ApiListGroups => SummaryStats::from_durations(&measure_with_live_harness(
-            sessions,
-            config,
-            |harness, _, _| {
-                let start = Instant::now();
-                let response = harness.api_post_json(
-                    "/send",
-                    &json!({
-                        "wait": true,
-                        "cmd": "-list-thread-groups",
-                    }),
-                )?;
-                let payload = response["payload"]
-                    .as_object()
-                    .context("missing /send payload for api-list-groups")?;
-                let responses = payload
-                    .get("responses")
-                    .and_then(|value| value.as_array())
-                    .context("missing responses array for api-list-groups")?;
-                if responses.len() != sessions {
-                    bail!(
-                        "expected {} session responses for api-list-groups, got {}",
-                        sessions,
-                        responses.len()
-                    );
-                }
-                Ok(start.elapsed())
-            },
-        )?),
-        ScenarioKind::CliThreadInfo => SummaryStats::from_durations(&measure_with_live_harness(
-            sessions,
-            config,
-            |harness, iteration, sample_idx| {
-                let token = 10_000_u64 + iteration as u64;
-                let cursor = harness.send_cli_cmd(&format!("{token}-thread-info"))?;
-                let start = Instant::now();
-                let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
-                    line.starts_with(&format!("{token}^done"))
-                })?;
-                if !line.contains("threads") {
-                    bail!(
-                        "thread-info benchmark sample {} returned unexpected output: {}",
-                        sample_idx,
-                        line
-                    );
-                }
-                Ok(start.elapsed())
-            },
-        )?),
-        ScenarioKind::CliBreakInsert => SummaryStats::from_durations(&measure_with_live_harness(
-            sessions,
-            config,
-            |harness, iteration, _| {
-                let gid = harness.first_group_id()?;
-                let token = 20_000_u64 + iteration as u64;
-                let line_number = 1_000_u64 + iteration as u64;
-                let cursor = harness.send_cli_cmd(&format!(
-                    "{token}-break-insert bench_{sessions}_{iteration}.rs:{line_number} --group {gid}"
+    let stats =
+        match kind {
+            ScenarioKind::Startup => SummaryStats::from_durations(&measure_startup(scale, config)?),
+            ScenarioKind::ApiThreadInfo => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, _, _| {
+                    let start = Instant::now();
+                    let response = harness.api_post_json(
+                        "/send",
+                        &json!({
+                            "wait": true,
+                            "cmd": "-thread-info",
+                        }),
+                    )?;
+                    let payload = response["payload"]
+                        .as_object()
+                        .context("missing /send payload for api-thread-info")?;
+                    let responses = payload
+                        .get("responses")
+                        .and_then(|value| value.as_array())
+                        .context("missing responses array for api-thread-info")?;
+                    if responses.len() != scale {
+                        bail!(
+                            "expected {} session responses for api-thread-info, got {}",
+                            scale,
+                            responses.len()
+                        );
+                    }
+                    Ok(start.elapsed())
+                })?,
+            ),
+            ScenarioKind::ApiListGroups => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, _, _| {
+                    let start = Instant::now();
+                    let response = harness.api_post_json(
+                        "/send",
+                        &json!({
+                            "wait": true,
+                            "cmd": "-list-thread-groups",
+                        }),
+                    )?;
+                    let payload = response["payload"]
+                        .as_object()
+                        .context("missing /send payload for api-list-groups")?;
+                    let responses = payload
+                        .get("responses")
+                        .and_then(|value| value.as_array())
+                        .context("missing responses array for api-list-groups")?;
+                    if responses.len() != scale {
+                        bail!(
+                            "expected {} session responses for api-list-groups, got {}",
+                            scale,
+                            responses.len()
+                        );
+                    }
+                    Ok(start.elapsed())
+                })?,
+            ),
+            ScenarioKind::CliThreadInfo => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, iteration, sample_idx| {
+                    let token = 10_000_u64 + iteration as u64;
+                    let cursor = harness.send_cli_cmd(&format!("{token}-thread-info"))?;
+                    let start = Instant::now();
+                    let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
+                        line.starts_with(&format!("{token}^done"))
+                    })?;
+                    if !line.contains("threads") {
+                        bail!(
+                            "thread-info benchmark sample {} returned unexpected output: {}",
+                            sample_idx,
+                            line
+                        );
+                    }
+                    Ok(start.elapsed())
+                })?,
+            ),
+            ScenarioKind::CliBreakInsert => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, iteration, _| {
+                    let gid = harness.first_group_id()?;
+                    let token = 20_000_u64 + iteration as u64;
+                    let line_number = 1_000_u64 + iteration as u64;
+                    let cursor = harness.send_cli_cmd(&format!(
+                    "{token}-break-insert bench_{scale}_{iteration}.rs:{line_number} --group {gid}"
                 ))?;
-                let start = Instant::now();
-                let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
-                    line.starts_with(&format!("{token}^done"))
-                })?;
-                if !line.contains("done") {
-                    bail!(
-                        "break-insert benchmark returned unexpected output: {}",
-                        line
-                    );
-                }
-                Ok(start.elapsed())
-            },
-        )?),
-        ScenarioKind::Notifications => SummaryStats::from_durations(&measure_with_live_harness(
-            sessions,
-            config,
-            |harness, iteration, _| {
-                let subscribers = harness.connect_notification_subscribers(
-                    config.notification_subscribers,
-                    config.timeout,
-                )?;
-                harness.wait_for_notification_subscribers(
-                    config.notification_subscribers,
-                    config.timeout,
-                )?;
+                    let start = Instant::now();
+                    let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
+                        line.starts_with(&format!("{token}^done"))
+                    })?;
+                    if !line.contains("done") {
+                        bail!(
+                            "break-insert benchmark returned unexpected output: {}",
+                            line
+                        );
+                    }
+                    Ok(start.elapsed())
+                })?,
+            ),
+            ScenarioKind::Notifications => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, iteration, _| {
+                    let subscribers = harness.connect_notification_subscribers(
+                        config.notification_subscribers,
+                        config.timeout,
+                    )?;
+                    harness.wait_for_notification_subscribers(
+                        config.notification_subscribers,
+                        config.timeout,
+                    )?;
 
-                let message = format!("bench-notification-{sessions}-{iteration}");
-                let start = Instant::now();
-                let response = harness.post_test_notification(&message)?;
-                if response["success"].as_bool() != Some(true) {
-                    bail!("notification test endpoint returned unsuccessful response");
-                }
-                subscribers.wait_for_all(&message, config.timeout)?;
-                let elapsed = start.elapsed();
+                    let message = format!("bench-notification-{scale}-{iteration}");
+                    let start = Instant::now();
+                    let response = harness.post_test_notification(&message)?;
+                    if response["success"].as_bool() != Some(true) {
+                        bail!("notification test endpoint returned unsuccessful response");
+                    }
+                    subscribers.wait_for_all(&message, config.timeout)?;
+                    let elapsed = start.elapsed();
 
-                harness.wait_for_notification_subscribers(0, config.timeout)?;
-                Ok(elapsed)
-            },
-        )?),
+                    harness.wait_for_notification_subscribers(0, config.timeout)?;
+                    Ok(elapsed)
+                })?,
+            ),
+            ScenarioKind::DistributedBacktrace => {
+                SummaryStats::from_durations(&measure_distributed_backtrace(scale, config)?)
+            }
+        };
+
+    let (sessions, dbt_depth, threads_per_session) = match kind {
+        ScenarioKind::DistributedBacktrace => (scale, Some(scale), 1),
+        _ => (scale, None, config.threads_per_session),
     };
 
     Ok(ScenarioResult {
@@ -243,11 +249,85 @@ pub fn run_scenario(
         description: kind.description(),
         metric: kind.metric(),
         sessions,
-        threads_per_session: config.threads_per_session,
+        dbt_depth,
+        threads_per_session,
         notification_subscribers: matches!(kind, ScenarioKind::Notifications)
             .then_some(config.notification_subscribers),
         stats,
     })
+}
+
+fn measure_distributed_backtrace(
+    depth: usize,
+    config: &ScenarioConfig<'_>,
+) -> Result<Vec<Duration>> {
+    let mut samples = Vec::with_capacity(config.samples);
+    for iteration in 0..(config.warmup + config.samples) {
+        let mut harness = DdbHarness::spawn_real_dbt(config.binary, config.workspace_root, depth)?;
+        harness.wait_for_status_up(config.timeout)?;
+        let sessions = harness.provision_real_dbt_contexts(depth, config.timeout)?;
+
+        let leaf_sid = session_id_by_tag(&sessions, &dbt_session_tag(depth))?;
+        let root_sid = session_id_by_tag(&sessions, &dbt_session_tag(1))?;
+        let leaf_gtid = harness.resolve_single_thread_gtid(leaf_sid, config.timeout)?;
+
+        if depth > 1 {
+            let token = 80_000_u64 + iteration as u64;
+            let cursor =
+                harness.send_cli_cmd(&format!("{token}-get-remote-bt --thread {leaf_gtid}"))?;
+            let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
+                line.starts_with(&format!("{token}^done"))
+            })?;
+            if !line.contains("message=\"success\"") {
+                bail!(
+                    "distributed-backtrace preflight remote metadata lookup failed at depth {}: {}",
+                    depth,
+                    line
+                );
+            }
+        }
+
+        let token = 90_000_u64 + iteration as u64;
+        let cursor = harness.send_cli_cmd(&format!("{token}-bt-remote --thread {leaf_gtid}"))?;
+        let start = Instant::now();
+        let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
+            line.starts_with(&format!("{token}^done"))
+        })?;
+        let elapsed = start.elapsed();
+
+        if !line.contains(&format!("session=\"{leaf_sid}\"")) {
+            bail!(
+                "distributed-backtrace output missing leaf session {} at depth {}: {}",
+                leaf_sid,
+                depth,
+                line
+            );
+        }
+        if !line.contains(&format!("session=\"{root_sid}\"")) {
+            bail!(
+                "distributed-backtrace output missing root session {} at depth {}: {}",
+                root_sid,
+                depth,
+                line
+            );
+        }
+        let boundary_frames = line.matches("boundary_frame=\"1\"").count();
+        if boundary_frames != depth.saturating_sub(1) {
+            bail!(
+                "distributed-backtrace output had {} boundary frames, expected {} at depth {}: {}",
+                boundary_frames,
+                depth.saturating_sub(1),
+                depth,
+                line
+            );
+        }
+
+        if iteration >= config.warmup {
+            samples.push(elapsed);
+        }
+    }
+
+    Ok(samples)
 }
 
 fn measure_startup(sessions: usize, config: &ScenarioConfig<'_>) -> Result<Vec<Duration>> {

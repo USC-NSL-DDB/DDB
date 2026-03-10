@@ -1,6 +1,8 @@
 mod support;
 
-use support::{build_real_loop_example, real_test_guard, session_id_by_tag, BinarySessionSpec, DdbProcess};
+use support::{
+    build_real_loop_example, real_test_guard, session_id_by_tag, BinarySessionSpec, DdbProcess,
+};
 
 #[test]
 fn real_binary_session_exit_is_reflected_in_ddb_state() {
@@ -16,6 +18,7 @@ fn real_binary_session_exit_is_reflected_in_ddb_state() {
         alias: "real-exit",
         hash: "grp-real-exit",
         pid: 9201,
+        ip: "127.0.0.1",
         start_delay_ms: 0,
         binary_path,
         binary_args: vec![

@@ -17,7 +17,9 @@ use tokio::{
 };
 
 use crate::{
-    common::config::{MockSessionConfig, MockThreadConfig},
+    common::config::{
+        MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig, MockThreadConfig,
+    },
     connection::SSHIo,
     dbg_parser::gdb_parser::MIFormatter,
 };
@@ -37,6 +39,7 @@ struct MockDebuggerState {
     breakpoints: BTreeMap<u64, MockBreakpoint>,
     next_breakpoint_id: u64,
     current_thread_id: u64,
+    current_context_regs: BTreeMap<String, u64>,
     running: bool,
     bootstrapped: bool,
 }
@@ -45,6 +48,7 @@ impl MockDebuggerState {
     fn new(config: MockSessionConfig, pid: u64) -> Self {
         let current_thread_id = config.threads.first().map(|thread| thread.id).unwrap_or(1);
         Self {
+            current_context_regs: config.context_regs.clone(),
             config,
             pid,
             breakpoints: BTreeMap::new(),
@@ -72,12 +76,133 @@ impl MockDebuggerState {
             ("addr".to_string(), "0x0000000000401000".into()),
             ("func".to_string(), self.config.function.clone().into()),
             ("file".to_string(), self.config.source_file.clone().into()),
-            ("fullname".to_string(), self.config.source_file.clone().into()),
+            (
+                "fullname".to_string(),
+                self.config.source_file.clone().into(),
+            ),
             (
                 "line".to_string(),
                 self.config.source_line.to_string().into(),
             ),
             ("arch".to_string(), "i386:x86-64".into()),
+        ]
+        .into()
+    }
+
+    fn stack_frames(&self) -> &[MockStackFrameConfig] {
+        if self.config.stack_frames.is_empty() {
+            &[]
+        } else {
+            &self.config.stack_frames
+        }
+    }
+
+    fn stack_frames_payload(&self) -> Dict {
+        let frames = if self.stack_frames().is_empty() {
+            vec![Value::Dict(self.frame_payload())]
+        } else {
+            self.stack_frames()
+                .iter()
+                .enumerate()
+                .map(|(idx, frame)| {
+                    Value::Dict(
+                        vec![
+                            ("level".to_string(), idx.to_string().into()),
+                            (
+                                "addr".to_string(),
+                                format!("0x{:016x}", 0x401000_u64 + idx as u64 * 0x10).into(),
+                            ),
+                            ("func".to_string(), frame.function.clone().into()),
+                            ("file".to_string(), frame.file.clone().into()),
+                            ("fullname".to_string(), frame.file.clone().into()),
+                            ("line".to_string(), frame.line.to_string().into()),
+                            ("arch".to_string(), "i386:x86-64".into()),
+                        ]
+                        .into(),
+                    )
+                })
+                .collect()
+        };
+
+        vec![("stack".to_string(), Value::List(frames))].into()
+    }
+
+    fn dbt_payload(&self) -> Dict {
+        match &self.config.dbt_parent {
+            Some(parent) => {
+                let caller_ctx: Dict = parent
+                    .caller_ctx
+                    .iter()
+                    .map(|(reg, value)| (reg.clone(), value.to_string().into()))
+                    .collect::<Vec<_>>()
+                    .into();
+                let caller_meta = Self::dbt_parent_meta(parent);
+
+                vec![
+                    ("message".to_string(), "success".into()),
+                    (
+                        "metadata".to_string(),
+                        Value::Dict(
+                            vec![
+                                ("caller_ctx".to_string(), Value::Dict(caller_ctx)),
+                                ("caller_meta".to_string(), Value::Dict(caller_meta)),
+                                (
+                                    "local_meta".to_string(),
+                                    Value::Dict(
+                                        vec![(
+                                            "tid".to_string(),
+                                            self.current_thread_id.to_string().into(),
+                                        )]
+                                        .into(),
+                                    ),
+                                ),
+                            ]
+                            .into(),
+                        ),
+                    ),
+                ]
+                .into()
+            }
+            None => vec![("message".to_string(), "failed".into())].into(),
+        }
+    }
+
+    fn dbt_parent_meta(parent: &MockDbtParentConfig) -> Dict {
+        vec![
+            ("ip".to_string(), u32::from(parent.ip).to_string().into()),
+            ("pid".to_string(), parent.pid.to_string().into()),
+            ("tid".to_string(), parent.tid.to_string().into()),
+            (
+                "proclet_id".to_string(),
+                if parent.proclet_id.is_empty() {
+                    "0".into()
+                } else {
+                    parent.proclet_id.clone().into()
+                },
+            ),
+        ]
+        .into()
+    }
+
+    fn switch_context(&mut self, args: &str) -> Dict {
+        let old_ctx: Dict = self
+            .current_context_regs
+            .iter()
+            .map(|(reg, value)| (reg.clone(), value.to_string().into()))
+            .collect::<Vec<_>>()
+            .into();
+
+        for reg_pair in args.split_whitespace() {
+            if let Some((reg, value)) = reg_pair.split_once('=') {
+                if let Ok(value) = value.parse::<u64>() {
+                    self.current_context_regs.insert(reg.to_string(), value);
+                }
+            }
+        }
+
+        vec![
+            ("message".to_string(), "success".into()),
+            ("old_ctx".to_string(), Value::Dict(old_ctx)),
         ]
         .into()
     }
@@ -118,7 +243,9 @@ impl MockAttachController {
     }
 
     async fn send_line(out_tx: &OutputSender, line: String) -> Result<()> {
-        out_tx.send_async(Bytes::from(format!("{}\n", line))).await?;
+        out_tx
+            .send_async(Bytes::from(format!("{}\n", line)))
+            .await?;
         Ok(())
     }
 
@@ -142,11 +269,7 @@ impl MockAttachController {
         Self::send_line(out_tx, line).await
     }
 
-    async fn send_status(
-        out_tx: &OutputSender,
-        message: &str,
-        payload: Dict,
-    ) -> Result<()> {
+    async fn send_status(out_tx: &OutputSender, message: &str, payload: Dict) -> Result<()> {
         let line = MIFormatter::format("=", message, Some(&payload), None);
         Self::send_line(out_tx, line).await
     }
@@ -162,7 +285,12 @@ impl MockAttachController {
 
         drop(state);
 
-        Self::send_status(&out_tx, "thread-group-added", vec![("id".to_string(), tgid.clone().into())].into()).await?;
+        Self::send_status(
+            &out_tx,
+            "thread-group-added",
+            vec![("id".to_string(), tgid.clone().into())].into(),
+        )
+        .await?;
         Self::send_status(
             &out_tx,
             "thread-group-started",
@@ -235,10 +363,7 @@ impl MockAttachController {
                     ),
                 ]
                 .into();
-                thread_payload.insert(
-                    "frame".to_string(),
-                    Value::Dict(state.frame_payload()),
-                );
+                thread_payload.insert("frame".to_string(), Value::Dict(state.frame_payload()));
                 Value::Dict(thread_payload)
             })
             .collect::<Vec<_>>();
@@ -410,6 +535,20 @@ impl MockAttachController {
                 };
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
+            "-stack-list-frames" => {
+                let payload = {
+                    let state = state.lock().await;
+                    state.stack_frames_payload()
+                };
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
+            "-get-remote-bt" | "-serviceweaver-bt-remote" => {
+                let payload = {
+                    let state = state.lock().await;
+                    state.dbt_payload()
+                };
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
             "-thread-select" => {
                 let new_thread_id = args
                     .split_whitespace()
@@ -420,8 +559,18 @@ impl MockAttachController {
                     let mut state = state.lock().await;
                     state.current_thread_id = new_thread_id;
                 }
-                let payload: Dict =
-                    vec![("new-thread-id".to_string(), new_thread_id.to_string().into())].into();
+                let payload: Dict = vec![(
+                    "new-thread-id".to_string(),
+                    new_thread_id.to_string().into(),
+                )]
+                .into();
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
+            "-switch-context-custom" => {
+                let payload = {
+                    let mut state = state.lock().await;
+                    state.switch_context(&args)
+                };
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
             "-break-insert" => {
@@ -503,15 +652,9 @@ impl MockAttachController {
                 if prefix.is_empty() && args.is_empty() {
                     continue;
                 }
-                if Self::handle_command(
-                    Arc::clone(&state),
-                    out_tx.clone(),
-                    token,
-                    prefix,
-                    args,
-                )
-                .await
-                .is_err()
+                if Self::handle_command(Arc::clone(&state), out_tx.clone(), token, prefix, args)
+                    .await
+                    .is_err()
                 {
                     break;
                 }
@@ -548,5 +691,140 @@ impl DbgControllable for MockAttachController {
             task.abort();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, net::Ipv4Addr};
+
+    use gdbmi::parser::Message;
+
+    use super::*;
+    use crate::{
+        common::config::{MockDbtParentConfig, MockStackFrameConfig},
+        debugger::gdb::parser::GdbParser,
+    };
+
+    fn result_payload(line: &Bytes) -> Dict {
+        let text = std::str::from_utf8(line.as_ref()).expect("mock output should be utf-8");
+        let message = GdbParser::parse(text).expect("mock output should parse");
+        match message {
+            Message::Response(gdbmi::parser::Response::Result { payload, .. }) => {
+                payload.expect("result response should include payload")
+            }
+            other => panic!("expected result response, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_dbt_commands_emit_configured_payloads() {
+        let config = MockSessionConfig {
+            stack_frames: vec![
+                MockStackFrameConfig {
+                    function: "leaf_frame".to_string(),
+                    file: "leaf.rs".to_string(),
+                    line: 10,
+                },
+                MockStackFrameConfig {
+                    function: "leaf_caller".to_string(),
+                    file: "leaf.rs".to_string(),
+                    line: 20,
+                },
+            ],
+            dbt_parent: Some(MockDbtParentConfig {
+                ip: Ipv4Addr::new(127, 0, 0, 2),
+                pid: 4242,
+                tid: 1,
+                proclet_id: String::new(),
+                caller_ctx: BTreeMap::from([
+                    ("pc".to_string(), 0x501000),
+                    ("sp".to_string(), 0x7fff_2000),
+                    ("fp".to_string(), 0x7fff_3000),
+                ]),
+            }),
+            ..MockSessionConfig::default()
+        };
+
+        let mut controller = MockAttachController::new(config, 7);
+        let io = controller
+            .start("")
+            .await
+            .expect("mock controller should start");
+
+        io.in_tx
+            .send_async(Bytes::from(
+                "-stack-list-frames\n-get-remote-bt\n-switch-context-custom pc=123 sp=456 fp=789\n",
+            ))
+            .await
+            .expect("mock commands should send");
+
+        let stack = result_payload(
+            &io.out_rx
+                .recv_async()
+                .await
+                .expect("stack-list-frames response should arrive"),
+        );
+        let frames = stack["stack"]
+            .expect_list_ref()
+            .expect("stack payload should contain frames");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(
+            frames[0].expect_dict_ref().unwrap()["func"]
+                .expect_string_ref()
+                .unwrap(),
+            "leaf_frame"
+        );
+
+        let dbt = result_payload(
+            &io.out_rx
+                .recv_async()
+                .await
+                .expect("remote-bt response should arrive"),
+        );
+        assert_eq!(dbt["message"].expect_string_ref().unwrap(), "success");
+        let caller_meta = dbt["metadata"].expect_dict_ref().unwrap()["caller_meta"]
+            .expect_dict_ref()
+            .unwrap();
+        assert_eq!(caller_meta["pid"].expect_string_ref().unwrap(), "4242");
+        assert_eq!(
+            caller_meta["ip"].expect_string_ref().unwrap(),
+            &u32::from(Ipv4Addr::new(127, 0, 0, 2)).to_string()
+        );
+
+        let switch = result_payload(
+            &io.out_rx
+                .recv_async()
+                .await
+                .expect("switch-context response should arrive"),
+        );
+        let old_ctx = switch["old_ctx"]
+            .expect_dict_ref()
+            .expect("switch-context should include old_ctx");
+        assert_eq!(old_ctx["pc"].expect_string_ref().unwrap(), "4198400");
+        assert_eq!(old_ctx["sp"].expect_string_ref().unwrap(), "2147418112");
+        assert_eq!(old_ctx["fp"].expect_string_ref().unwrap(), "2147422208");
+    }
+
+    #[tokio::test]
+    async fn mock_remote_bt_without_parent_returns_failed_message() {
+        let mut controller = MockAttachController::new(MockSessionConfig::default(), 8);
+        let io = controller
+            .start("")
+            .await
+            .expect("mock controller should start");
+
+        io.in_tx
+            .send_async(Bytes::from("-get-remote-bt\n"))
+            .await
+            .expect("mock command should send");
+
+        let payload = result_payload(
+            &io.out_rx
+                .recv_async()
+                .await
+                .expect("remote-bt response should arrive"),
+        );
+        assert_eq!(payload["message"].expect_string_ref().unwrap(), "failed");
     }
 }

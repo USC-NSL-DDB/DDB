@@ -24,6 +24,7 @@ fn real_binary_session_late_join_inherits_group_breakpoints() {
             alias: "real-a",
             hash: "grp-real",
             pid: 9101,
+            ip: "127.0.0.1",
             start_delay_ms: 0,
             binary_path,
             binary_args: vec![
@@ -39,6 +40,7 @@ fn real_binary_session_late_join_inherits_group_breakpoints() {
             alias: "real-b",
             hash: "grp-real",
             pid: 9102,
+            ip: "127.0.0.1",
             start_delay_ms: 300,
             binary_path,
             binary_args: vec![

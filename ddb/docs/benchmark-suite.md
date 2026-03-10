@@ -34,7 +34,10 @@ Those paths live in:
 
 ## Benchmark Matrix
 
-The suite intentionally uses the existing `mock` backend so it can scale session count without requiring real processes or remote hosts.
+The suite now has two tiers:
+
+- Mock-backed scale benchmarks for command fanout and notification behavior.
+- A real GDB-backed distributed-backtrace benchmark that uses a synthetic multi-process fixture.
 
 Current scenarios:
 
@@ -50,6 +53,8 @@ Current scenarios:
   Measures group-targeted breakpoint insertion through the CLI handler layer.
 - `notifications`
   Measures WebSocket notification fanout latency to subscribed clients.
+- `distributed-backtrace`
+  Measures end-to-end `-bt-remote` latency using a real dummy application chain, including remote metadata extraction, parent interrupt, context switch, and recursive stack aggregation.
 
 Primary scaling axis:
 
@@ -59,6 +64,7 @@ Secondary scaling axes:
 
 - threads per session
 - notification subscribers
+- distributed backtrace depth (`1..=16`)
 
 ## Running
 
@@ -77,6 +83,14 @@ JSON output for regression tooling:
 cargo run -p ddb-bench --release -- --format json
 ```
 
+Distributed backtrace depth sweep:
+
+```bash
+cargo run -p ddb-bench --release -- \
+  --scenarios distributed-backtrace \
+  --dbt-depths 1,2,4,8,16
+```
+
 The tool rebuilds `target/release/ddb` automatically before each run so the benchmarked binary matches the current source tree.
 If you want to reuse an already-built binary instead, pass `--binary /path/to/ddb`.
 
@@ -86,6 +100,8 @@ If you want to reuse an already-built binary instead, pass `--binary /path/to/dd
   This keeps the benchmark honest about thread layout, API overhead, stdout emission, and notification behavior.
 - Mock sessions are generated dynamically for each scale point.
   That makes session-count sweeps deterministic and cheap enough for local iteration.
+- The distributed-backtrace benchmark uses a real dummy application instead of the mock backend.
+  The runtime GDB script needs real frames, local variables, interrupts, and register context switching to make the measurement meaningful.
 - API and CLI scenarios are both present.
   The API path bypasses command-specific CLI handlers; the CLI path includes them.
 - Notification fanout is measured separately from command fanout.
@@ -93,6 +109,5 @@ If you want to reuse an already-built binary instead, pass `--binary /path/to/dd
 
 ## Recommended Next Steps
 
-- Add a periodic `real-gdb` benchmark tier for a smaller scale set such as `1,4`.
 - Track the JSON output in CI and gate on percentile regressions instead of averages.
 - Add a targeted benchmark for `-exec-continue` / stop-event latency once that path is made deterministic enough for repeated automated runs.

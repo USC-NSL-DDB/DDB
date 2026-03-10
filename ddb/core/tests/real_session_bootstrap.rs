@@ -23,6 +23,7 @@ fn launches_real_example_under_gdb_and_hits_source_breakpoint() {
         alias: "real-a",
         hash: "grp-real",
         pid: 9001,
+        ip: "127.0.0.1",
         start_delay_ms: 0,
         binary_path,
         binary_args: vec![

@@ -1,6 +1,7 @@
 use super::default_vals;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::{fs, sync::OnceLock};
@@ -142,6 +143,12 @@ pub struct MockSessionConfig {
     pub executable: String,
     #[serde(default)]
     pub exit_on_continue: bool,
+    #[serde(default)]
+    pub stack_frames: Vec<MockStackFrameConfig>,
+    #[serde(default)]
+    pub dbt_parent: Option<MockDbtParentConfig>,
+    #[serde(default = "default_mock_context_regs")]
+    pub context_regs: BTreeMap<String, u64>,
 }
 
 impl Default for MockSessionConfig {
@@ -154,8 +161,43 @@ impl Default for MockSessionConfig {
             function: default_mock_function(),
             executable: String::new(),
             exit_on_continue: false,
+            stack_frames: Vec::new(),
+            dbt_parent: None,
+            context_regs: default_mock_context_regs(),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MockStackFrameConfig {
+    #[serde(default = "default_mock_stack_frame_function")]
+    pub function: String,
+    #[serde(default = "default_mock_stack_frame_file")]
+    pub file: String,
+    #[serde(default = "default_mock_stack_frame_line")]
+    pub line: u64,
+}
+
+impl Default for MockStackFrameConfig {
+    fn default() -> Self {
+        Self {
+            function: default_mock_stack_frame_function(),
+            file: default_mock_stack_frame_file(),
+            line: default_mock_stack_frame_line(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MockDbtParentConfig {
+    pub ip: Ipv4Addr,
+    pub pid: u64,
+    #[serde(default = "default_mock_dbt_parent_tid")]
+    pub tid: u64,
+    #[serde(default)]
+    pub proclet_id: String,
+    #[serde(default = "default_mock_dbt_parent_context")]
+    pub caller_ctx: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -464,6 +506,34 @@ fn default_mock_function() -> String {
     "main".to_string()
 }
 
+fn default_mock_stack_frame_function() -> String {
+    "main".to_string()
+}
+
+fn default_mock_stack_frame_file() -> String {
+    "main.rs".to_string()
+}
+
+fn default_mock_stack_frame_line() -> u64 {
+    1
+}
+
+fn default_mock_dbt_parent_tid() -> u64 {
+    1
+}
+
+fn default_mock_context_regs() -> BTreeMap<String, u64> {
+    BTreeMap::from([
+        ("pc".to_string(), 0x401000),
+        ("sp".to_string(), 0x7fff_0000),
+        ("fp".to_string(), 0x7fff_1000),
+    ])
+}
+
+fn default_mock_dbt_parent_context() -> BTreeMap<String, u64> {
+    default_mock_context_regs()
+}
+
 fn default_broker_hostname() -> String {
     use super::sd_defaults;
     sd_defaults::DEFAULT_BROKER_HOSTNAME.to_string()
@@ -704,7 +774,10 @@ StaticSessions:
             config.static_sessions[0].start_mode,
             StaticSessionStartMode::Binary
         );
-        assert_eq!(config.static_sessions[0].binary_path, "/tmp/ddb-real-example");
+        assert_eq!(
+            config.static_sessions[0].binary_path,
+            "/tmp/ddb-real-example"
+        );
         assert_eq!(
             config.static_sessions[0].binary_args,
             vec!["--mode".to_string(), "loop".to_string()]

@@ -1,0 +1,13 @@
+[package]
+name = "ddb_real_dbt"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[workspace]
+
+[[bin]]
+name = "DDB"
+path = "src/main.rs"
+
+[dependencies]

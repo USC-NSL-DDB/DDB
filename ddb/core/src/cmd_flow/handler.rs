@@ -1343,6 +1343,82 @@ impl Handler for ExecFinishHandler {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, net::Ipv4Addr};
+
+    use super::*;
+    use crate::cmd_flow::framework_adapter::GrpcAdapter;
+
+    #[test]
+    fn distributed_backtrace_extracts_grpc_parent_metadata() {
+        let handler = DistributeBacktraceHandler::new(Arc::new(GrpcAdapter));
+        let payload: Dict = HashMap::from([
+            ("message".to_string(), Value::from("success")),
+            (
+                "metadata".to_string(),
+                Value::from(Dict::from(HashMap::from([
+                    (
+                        "caller_meta".to_string(),
+                        Value::from(Dict::from(HashMap::from([
+                            (
+                                "ip".to_string(),
+                                Value::from(u32::from(Ipv4Addr::new(127, 0, 0, 1)).to_string()),
+                            ),
+                            ("pid".to_string(), Value::from("42")),
+                            ("tid".to_string(), Value::from("7")),
+                            ("proclet_id".to_string(), Value::from("0")),
+                        ]))),
+                    ),
+                    (
+                        "caller_ctx".to_string(),
+                        Value::from(Dict::from(HashMap::from([
+                            ("pc".to_string(), Value::from("4096")),
+                            ("sp".to_string(), Value::from("8192")),
+                            ("fp".to_string(), Value::from("12288")),
+                        ]))),
+                    ),
+                ]))),
+            ),
+        ])
+        .into();
+
+        let extracted = handler
+            .extract_remote_metadata(&payload)
+            .expect("grpc metadata extraction should succeed");
+
+        assert_eq!(extracted["message"].expect_string_ref().unwrap(), "success");
+        assert_eq!(
+            extracted["id"].expect_string_ref().unwrap(),
+            "127.0.0.1:-42"
+        );
+        assert_eq!(extracted["pid"].expect_string_ref().unwrap(), "42");
+        assert_eq!(extracted["proclet_id"].expect_string_ref().unwrap(), "0");
+        assert_eq!(
+            extracted["caller_ctx"].expect_dict_ref().unwrap()["pc"]
+                .expect_string_ref()
+                .unwrap(),
+            "4096"
+        );
+    }
+
+    #[test]
+    fn prepare_ctx_switch_args_serializes_scalar_registers() {
+        let regs: Dict = HashMap::from([
+            ("pc".to_string(), Value::from("4096")),
+            ("sp".to_string(), Value::from("8192")),
+            ("fp".to_string(), Value::from("12288")),
+        ])
+        .into();
+
+        let args = DistributeBacktraceHandler::prepare_ctx_switch_args(&regs);
+
+        assert!(args.contains("pc=4096"));
+        assert!(args.contains("sp=8192"));
+        assert!(args.contains("fp=12288"));
+    }
+}
+
 #[derive(Debug)]
 pub struct ExecStepHandler;
 

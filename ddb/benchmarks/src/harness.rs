@@ -1,21 +1,24 @@
 use std::{
+    collections::BTreeMap,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    sync::{mpsc, Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::blocking::Client;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
 const HTTP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const STDOUT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const DBT_IP: &str = "127.0.0.1";
+const DBT_GROUP: &str = "bench-dbt";
 
 #[derive(Default)]
 struct OutputBuffer {
@@ -82,6 +85,7 @@ pub struct DdbHarness {
     stderr: Arc<OutputBuffer>,
     client: Client,
     port: u16,
+    dbt_context_dir: Option<PathBuf>,
     stopped: bool,
 }
 
@@ -139,6 +143,77 @@ impl DdbHarness {
             stderr,
             client,
             port,
+            dbt_context_dir: None,
+            stopped: false,
+        })
+    }
+
+    pub fn spawn_real_dbt(binary: &Path, workspace_root: &Path, depth: usize) -> Result<Self> {
+        if depth == 0 {
+            bail!("distributed backtrace benchmark requires depth >= 1");
+        }
+        if depth > 16 {
+            bail!("distributed backtrace benchmark currently supports depth <= 16");
+        }
+
+        ensure_real_debugger_environment()?;
+        let fixture_binary = build_real_dbt_fixture(workspace_root)?;
+
+        let port = reserve_port()?;
+        let tempdir = tempfile::tempdir().context("failed to create temporary benchmark dir")?;
+        let config_path = tempdir.path().join("ddb-real-dbt-bench.yaml");
+        let state_dir = tempdir.path().join("state");
+        let log_dir = tempdir.path().join("logs");
+        let ctx_dir = tempdir.path().join("dbt-context");
+        std::fs::create_dir_all(&ctx_dir).context("failed to create real DBT context directory")?;
+
+        let config_contents =
+            render_real_dbt_config(depth, &fixture_binary, port, &state_dir, &log_dir, &ctx_dir);
+        std::fs::write(&config_path, config_contents)
+            .context("failed to write real DBT benchmark config")?;
+
+        let stdout = Arc::new(OutputBuffer::default());
+        let stderr = Arc::new(OutputBuffer::default());
+
+        let mut child = Command::new(binary)
+            .arg(&config_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(workspace_root.join("core"))
+            .spawn()
+            .with_context(|| format!("failed to spawn debugger binary {}", binary.display()))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .context("failed to capture benchmark stdin")?;
+        let child_stdout = child
+            .stdout
+            .take()
+            .context("failed to capture benchmark stdout")?;
+        let child_stderr = child
+            .stderr
+            .take()
+            .context("failed to capture benchmark stderr")?;
+
+        spawn_reader(child_stdout, Arc::clone(&stdout));
+        spawn_reader(child_stderr, Arc::clone(&stderr));
+
+        let client = Client::builder()
+            .timeout(Duration::from_millis(250))
+            .build()
+            .context("failed to build benchmark http client")?;
+
+        Ok(Self {
+            _tempdir: tempdir,
+            child,
+            stdin,
+            stdout,
+            stderr,
+            client,
+            port,
+            dbt_context_dir: Some(ctx_dir),
             stopped: false,
         })
     }
@@ -181,6 +256,36 @@ impl DdbHarness {
                 );
             }
             thread::sleep(HTTP_POLL_INTERVAL);
+        }
+    }
+
+    pub fn wait_for_stdout_count(
+        &mut self,
+        needle: &str,
+        expected: usize,
+        timeout: Duration,
+    ) -> Result<Vec<String>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            self.assert_running()?;
+            let matches = self
+                .stdout
+                .snapshot()
+                .into_iter()
+                .filter(|line| line.contains(needle))
+                .collect::<Vec<_>>();
+            if matches.len() >= expected {
+                return Ok(matches);
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out waiting for stdout containing `{}` {} time(s)\n{}",
+                    needle,
+                    expected,
+                    self.debug_dump()
+                );
+            }
+            thread::sleep(STDOUT_POLL_INTERVAL);
         }
     }
 
@@ -285,6 +390,112 @@ impl DdbHarness {
             .and_then(|items| items.first())
             .and_then(|value| value["id"].as_u64())
             .ok_or_else(|| anyhow!("failed to resolve benchmark group id from /groups"))
+    }
+
+    pub fn resolve_single_thread_gtid(&mut self, sid: u64, timeout: Duration) -> Result<u64> {
+        let token = 70_000 + sid;
+        let cursor = self.send_cli_cmd(&format!("{token}-thread-info --session {sid}"))?;
+        let line = self.wait_for_stdout_match(cursor, timeout, |line| {
+            line.starts_with(&format!("{token}^done"))
+        })?;
+        extract_first_thread_id(&line)
+    }
+
+    pub fn provision_real_dbt_contexts(
+        &mut self,
+        depth: usize,
+        timeout: Duration,
+    ) -> Result<Value> {
+        let sessions = self.wait_for_sessions_len(depth, timeout)?;
+
+        for role_index in 1..=depth {
+            self.wait_for_stdout_count("*stopped", role_index, timeout)?;
+            let sid = session_id_by_tag(&sessions, &dbt_session_tag(role_index))?;
+            let context = self.capture_session_context(sid)?;
+            self.write_dbt_context(role_index, &context)?;
+        }
+
+        Ok(sessions)
+    }
+
+    fn capture_session_context(&self, sid: u64) -> Result<BTreeMap<String, u64>> {
+        let names = self.api_post_json(
+            "/send",
+            &json!({
+                "wait": true,
+                "cmd": format!("-data-list-register-names --session {sid}"),
+            }),
+        )?;
+        let values = self.api_post_json(
+            "/send",
+            &json!({
+                "wait": true,
+                "cmd": format!("-data-list-register-values x --session {sid}"),
+            }),
+        )?;
+
+        let names_payload = single_response_payload(&names)?;
+        let values_payload = single_response_payload(&values)?;
+        let register_names = names_payload
+            .get("register-names")
+            .and_then(encoded_list)
+            .ok_or_else(|| anyhow!("register-names payload missing for session {}", sid))?;
+        let register_values = values_payload
+            .get("register-values")
+            .and_then(encoded_list)
+            .ok_or_else(|| anyhow!("register-values payload missing for session {}", sid))?;
+
+        let values_by_name = register_values
+            .iter()
+            .filter_map(|entry| {
+                let entry = encoded_object(entry)?;
+                let number = encoded_field_string(entry, "number")?
+                    .parse::<usize>()
+                    .ok()?;
+                let value = encoded_field_string(entry, "value")?;
+                let name = encoded_string(register_names.get(number)?)?;
+                if name.is_empty()
+                    || !register_alias_names()
+                        .iter()
+                        .any(|(_, wanted)| name == *wanted)
+                {
+                    None
+                } else {
+                    Some((name.to_string(), parse_register_value(value).ok()?))
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        register_alias_names()
+            .into_iter()
+            .map(|(alias, name)| {
+                values_by_name
+                    .get(*name)
+                    .copied()
+                    .map(|value| (alias.to_string(), value))
+                    .ok_or_else(|| {
+                        anyhow!("register {} ({}) missing for session {}", alias, name, sid)
+                    })
+            })
+            .collect()
+    }
+
+    fn write_dbt_context(&self, role_index: usize, context: &BTreeMap<String, u64>) -> Result<()> {
+        let ctx_dir = self
+            .dbt_context_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("real DBT context directory not configured"))?;
+        let path = ctx_dir.join(format!("ctx-{role_index}.txt"));
+        let payload = register_alias_names()
+            .into_iter()
+            .filter_map(|(alias, _)| {
+                context
+                    .get(*alias)
+                    .map(|value| format!("{alias}={value}\n"))
+            })
+            .collect::<String>();
+        std::fs::write(&path, payload)
+            .with_context(|| format!("failed to write DBT context file {}", path.display()))
     }
 
     pub fn connect_notification_subscribers(
@@ -457,6 +668,42 @@ StaticSessions:
     )
 }
 
+fn render_real_dbt_config(
+    depth: usize,
+    fixture_binary: &Path,
+    port: u16,
+    state_dir: &Path,
+    log_dir: &Path,
+    ctx_dir: &Path,
+) -> String {
+    let binary_path = fixture_binary
+        .to_str()
+        .expect("fixture binary path should be valid utf-8");
+    let sessions_yaml = (1..=depth)
+        .map(|role_index| render_real_dbt_session(role_index, binary_path, ctx_dir))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"Framework: grpc
+Conf:
+  auto_shutdown: false
+  on_exit: kill
+  api_server_port: {port}
+  base_dir: "{base_dir}"
+  log_dir: "{log_dir}"
+  Debugger:
+    backend: gdb
+StaticSessions:
+{sessions_yaml}
+"#,
+        port = port,
+        base_dir = state_dir.display(),
+        log_dir = log_dir.display(),
+        sessions_yaml = sessions_yaml,
+    )
+}
+
 fn render_mock_session(spec: HarnessSpec, index: usize) -> String {
     let threads_yaml = (0..spec.threads_per_session)
         .map(|thread_index| {
@@ -493,6 +740,66 @@ fn render_mock_session(spec: HarnessSpec, index: usize) -> String {
     )
 }
 
+fn render_real_dbt_session(role_index: usize, binary_path: &str, ctx_dir: &Path) -> String {
+    let logical_pid = dbt_logical_pid(role_index);
+    let mut args = vec![
+        "--logical-pid".to_string(),
+        logical_pid.to_string(),
+        "--role-index".to_string(),
+        role_index.to_string(),
+        "--self-ctx-file".to_string(),
+        ctx_dir
+            .join(format!("ctx-{role_index}.txt"))
+            .to_str()
+            .expect("context path should be valid utf-8")
+            .to_string(),
+    ];
+
+    if role_index > 1 {
+        args.extend([
+            "--parent-ctx-file".to_string(),
+            ctx_dir
+                .join(format!("ctx-{}.txt", role_index - 1))
+                .to_str()
+                .expect("parent context path should be valid utf-8")
+                .to_string(),
+            "--caller-ip".to_string(),
+            DBT_IP.to_string(),
+            "--caller-pid".to_string(),
+            dbt_logical_pid(role_index - 1).to_string(),
+            "--caller-tid".to_string(),
+            "1".to_string(),
+        ]);
+    }
+
+    let args_yaml = args
+        .iter()
+        .map(|arg| format!("      - \"{}\"", arg))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"  - tag: "{tag}"
+    alias: "{alias}"
+    hash: "{hash}"
+    pid: {pid}
+    ip: "{ip}"
+    start_delay_ms: 0
+    start_mode: binary
+    binary_path: "{binary_path}"
+    stop_at_entry: false
+    binary_args:
+{args_yaml}"#,
+        tag = dbt_session_tag(role_index),
+        alias = format!("dbt-{role_index}"),
+        hash = DBT_GROUP,
+        pid = logical_pid,
+        ip = DBT_IP,
+        binary_path = binary_path,
+        args_yaml = args_yaml,
+    )
+}
+
 fn spawn_reader<R>(reader: R, buffer: Arc<OutputBuffer>)
 where
     R: std::io::Read + Send + 'static,
@@ -514,6 +821,168 @@ fn reserve_port() -> Result<u16> {
         .local_addr()
         .context("failed to read ephemeral port")?
         .port())
+}
+
+fn ensure_real_debugger_environment() -> Result<()> {
+    let status = Command::new("gdb")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to invoke gdb --version")?;
+    if !status.success() {
+        bail!("gdb --version failed");
+    }
+    Ok(())
+}
+
+fn build_real_dbt_fixture(workspace_root: &Path) -> Result<PathBuf> {
+    static REAL_DBT_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = REAL_DBT_FIXTURE.get() {
+        return Ok(path.clone());
+    }
+
+    let manifest_path = workspace_root
+        .join("core")
+        .join("tests")
+        .join("fixtures")
+        .join("real_dbt")
+        .join("Cargo.toml");
+    let status = Command::new("cargo")
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .current_dir(workspace_root)
+        .status()
+        .context("failed to build real DBT fixture")?;
+    if !status.success() {
+        bail!("real DBT fixture build failed");
+    }
+
+    let binary_path = manifest_path
+        .parent()
+        .expect("fixture manifest should have a parent directory")
+        .join("target")
+        .join("debug")
+        .join(format!("DDB{}", std::env::consts::EXE_SUFFIX));
+    if !binary_path.exists() {
+        bail!(
+            "real DBT fixture binary does not exist after build: {}",
+            binary_path.display()
+        );
+    }
+
+    let binary_path = binary_path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", binary_path.display()))?;
+    let _ = REAL_DBT_FIXTURE.set(binary_path.clone());
+    Ok(binary_path)
+}
+
+fn single_response_payload(response: &Value) -> Result<&Map<String, Value>> {
+    response
+        .get("payload")
+        .and_then(|payload| payload.get("responses"))
+        .and_then(Value::as_array)
+        .and_then(|responses| responses.first())
+        .and_then(|response| response.get("payload"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("missing single-response payload in {}", response))
+}
+
+fn parse_register_value(value: &str) -> Result<u64> {
+    if let Some(hex) = value.strip_prefix("0x") {
+        return u64::from_str_radix(hex, 16)
+            .with_context(|| format!("failed to parse hex register value {}", value));
+    }
+    value
+        .parse::<u64>()
+        .with_context(|| format!("failed to parse register value {}", value))
+}
+
+fn register_alias_names() -> &'static [(&'static str, &'static str)] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        &[("pc", "rip"), ("sp", "rsp"), ("fp", "rbp")]
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        &[("pc", "pc"), ("sp", "sp"), ("fp", "x29"), ("lr", "x30")]
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        &[]
+    }
+}
+
+fn encoded_list(value: &Value) -> Option<&Vec<Value>> {
+    value
+        .as_array()
+        .or_else(|| value.get("List").and_then(Value::as_array))
+}
+
+fn encoded_object(value: &Value) -> Option<&Map<String, Value>> {
+    value.as_object().and_then(|object| {
+        if let Some(dict) = object.get("Dict").and_then(Value::as_object) {
+            Some(dict)
+        } else {
+            Some(object)
+        }
+    })
+}
+
+fn encoded_string(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("String").and_then(Value::as_str))
+}
+
+fn encoded_field_string<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    object.get(key).and_then(encoded_string)
+}
+
+pub fn dbt_session_tag(role_index: usize) -> String {
+    format!("{DBT_IP}:-{}", dbt_logical_pid(role_index))
+}
+
+fn dbt_logical_pid(role_index: usize) -> u64 {
+    20_000 + role_index as u64
+}
+
+pub fn session_id_by_tag(sessions: &Value, tag: &str) -> Result<u64> {
+    sessions
+        .as_array()
+        .and_then(|items| items.iter().find(|session| session["tag"] == tag))
+        .and_then(|session| session["sid"].as_u64())
+        .ok_or_else(|| anyhow!("failed to resolve benchmark session for tag {}", tag))
+}
+
+fn extract_first_thread_id(line: &str) -> Result<u64> {
+    let (_, threads) = line
+        .split_once("threads=[")
+        .ok_or_else(|| anyhow!("thread-info output missing threads payload: {}", line))?;
+
+    for (offset, _) in threads.match_indices("id=\"") {
+        if offset == 0 {
+            continue;
+        }
+        let prefix = threads.as_bytes()[offset - 1];
+        if prefix != b'{' && prefix != b',' {
+            continue;
+        }
+        let rest = &threads[offset + 4..];
+        let id = rest
+            .split('"')
+            .next()
+            .ok_or_else(|| anyhow!("thread-info output had unterminated id: {}", line))?;
+        return id
+            .parse::<u64>()
+            .with_context(|| format!("invalid thread id in `{}`", line));
+    }
+
+    bail!("thread-info output missing thread id: {}", line)
 }
 
 fn set_websocket_timeout(
