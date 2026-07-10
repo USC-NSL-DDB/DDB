@@ -1,9 +1,16 @@
 #!/bin/bash
+#
+# Install dependencies (Go, Docker, k3s) on every node in cluster.txt, then
+# prepare the head node (weaver-kube + git submodules).
+#
+# Usage: ./deploy_all.sh [cluster.txt]
+#
+# After this finishes, log out and back in (or run `newgrp docker`) so your
+# docker group membership takes effect, then run ./setup_experiment.sh.
 
-CLUSTER_FILE="${1:-cluster.txt}"
-SCRIPT="install_deps_all.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
+CLUSTER_FILE="${1:-$SCRIPT_DIR/cluster.txt}"
+SCRIPT="install_deps_all.sh"
 HEAD_NODE_INSTALL_SCRIPT="$SCRIPT_DIR/install_deps_head.sh"
 
 # Append ~/.local/bin to PATH in .bashrc on remote nodes (idempotent)
@@ -46,8 +53,17 @@ done
 
 echo ""
 echo "Done: $((${#nodes[@]} - failed))/${#nodes[@]} succeeded"
-[[ $failed -eq 0 ]]
 
+if [[ $failed -ne 0 ]]; then
+  echo "Error: dependency install failed on $failed node(s); not preparing head node." >&2
+  exit 1
+fi
+
+echo ""
 echo "Preparing head node..."
+"$HEAD_NODE_INSTALL_SCRIPT" || exit 1
 
-$HEAD_NODE_INSTALL_SCRIPT
+echo ""
+echo "=== Dependencies installed ==="
+echo "Run 'newgrp docker' (or re-login) so docker works without sudo, then:"
+echo "  ./setup_experiment.sh"
