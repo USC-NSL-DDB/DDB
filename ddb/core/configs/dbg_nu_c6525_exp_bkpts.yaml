@@ -1,5 +1,5 @@
 ---
-Framework: Nu
+Framework: nu
 
 Conf:
   sudo: true
@@ -12,11 +12,8 @@ PrerunGdbCommands:
 PostrunGdbCommands:
 - name: "run auto-break-resume script"
   command: "source /proj/flashburst-PG0/code/distributed-debugger/rpc_frameworks/Nu/auto.gdb"
-- name: "auto continue attached process"
-  command: "-exec-continue"
-
-#   user: ybyan
-  # port: 22
+# No auto `-exec-continue`: it races DDB's post-attach `signal SIG40` handshake
+# and can leave the process parked in sigwait. Resume manually once attached.
 
 ServiceDiscovery:
   Broker:
