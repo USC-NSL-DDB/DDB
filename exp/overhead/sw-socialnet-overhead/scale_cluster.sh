@@ -19,16 +19,24 @@
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-# All worker nodes in order (node0 is master, never touched)
-WORKER_NODES=(
-    "node1.serviceweaver.flashburst-pg0.utah.cloudlab.us"
-    "node2.serviceweaver.flashburst-pg0.utah.cloudlab.us"
-    "node3.serviceweaver.flashburst-pg0.utah.cloudlab.us"
-    "node4.serviceweaver.flashburst-pg0.utah.cloudlab.us"
+ensure_kubeconfig
+
+# Discover worker nodes from the cluster: every node without a control-plane
+# role, sorted by name. The master (node0) is never touched.
+mapfile -t WORKER_NODES < <(
+    kubectl get nodes --no-headers \
+        -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master' \
+        -o custom-columns=NAME:.metadata.name 2>/dev/null | sort
 )
-WORKER_SHORT=(node1 node2 node3 node4)
+[[ ${#WORKER_NODES[@]} -gt 0 ]] || die "no worker nodes found. Run ./setup_experiment.sh to join them."
+
+# Short aliases (node1, node2, ...) = the hostname up to the first dot.
+WORKER_SHORT=()
+for _n in "${WORKER_NODES[@]}"; do
+    WORKER_SHORT+=("${_n%%.*}")
+done
 NUM_WORKERS=${#WORKER_NODES[@]}
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

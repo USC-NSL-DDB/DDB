@@ -12,10 +12,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOCIALNET_DIR="$SCRIPT_DIR/../../fwks/socialnetwork"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
 CLIENT_BIN="$SOCIALNET_DIR/src/client/client.out"
-RESULTS_DIR="$SCRIPT_DIR/results"
+RESULTS_DIR="$EXP_DIR/results"
 
 # Defaults
 TARGET_MOPS="0.00005"
@@ -34,26 +34,17 @@ while [[ $# -gt 0 ]]; do
     --warmup)      WARMUP="$2";      shift 2 ;;
     --addr)        ADDR="$2";        shift 2 ;;
     --sweep)       SWEEP="$2";       shift 2 ;;
-    *)             echo "Unknown option: $1" >&2; exit 1 ;;
+    *)             die "Unknown option: $1" ;;
   esac
 done
 
 # Auto-detect endpoint
 if [[ -z "$ADDR" ]]; then
-  master_ip="10.10.1.1"
-  svc_name=$(kubectl get svc -o name 2>/dev/null | grep apilistener | head -1)
-  if [[ -z "$svc_name" ]]; then
-    echo "Error: no apilistener service found. Run setup_experiment.sh first." >&2
-    exit 1
-  fi
-  node_port=$(kubectl get "$svc_name" -o jsonpath='{.spec.ports[0].nodePort}')
-  ADDR="http://${master_ip}:${node_port}"
+  ensure_kubeconfig
+  ADDR="$(detect_endpoint)"
 fi
 
-if [[ ! -f "$CLIENT_BIN" ]]; then
-  echo "Error: $CLIENT_BIN not found. Run setup_experiment.sh first." >&2
-  exit 1
-fi
+[[ -f "$CLIENT_BIN" ]] || die "$CLIENT_BIN not found. Run ./build_app.sh first."
 
 mkdir -p "$RESULTS_DIR"
 
