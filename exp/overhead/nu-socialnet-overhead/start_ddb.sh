@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# Start DDB for a Nu run and make its broker reachable from every server node.
-#
-#   1. render ddb/nu_config.yaml from the template
+# Start DDB on node0 for a distributed Nu run:
+#   1. render ddb/nu_config.yaml (managed EMQX broker on node0)
 #   2. launch ddb, holding its stdin open through a fifo so the REPL survives
-#   3. wait for the managed EMQX broker + the service-discovery config
-#   4. copy that config to the other caladan nodes (the Nu servers read it)
+#   3. wait for the broker + the service-discovery config
+#   4. copy that config to every server node (each server reads it to find the
+#      broker and report itself; DDB then ssh'es back to attach gdb)
 #
-# run_benchmark.sh calls this. Run it directly only if you want an attached DDB
-# session to drive by hand:  echo '-exec-continue' > logs/ddb_in
+# run_benchmark.sh calls this. Run it directly only to drive a session by hand:
+#   echo '-exec-continue' > logs/ddb_in
 
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -19,10 +19,11 @@ command -v docker >/dev/null || die "docker required (DDB starts EMQX in a conta
 docker info >/dev/null 2>&1 || die "cannot talk to docker as $(whoami). Run: newgrp docker"
 
 mkdir -p "$LOG_DIR"
-CALADAN_NIC="${CALADAN_NIC:-$(caladan_nic)}"; export CALADAN_NIC
-SSH_PREFIX="${SSH_PREFIX:-$(ssh_prefix "$CALADAN_NIC")}"; export SSH_PREFIX
+detect_network
 
-BROKER_IP="$(node_ip "$BACKEND_IDX")"   # DDB runs on the backend node
+# Broker + DDB run here on node0; servers reach the broker over the 10.10.x
+# ssh network (not caladan), so advertise node0's ssh IP.
+BROKER_IP="$(node_ip "$INFRA_IDX")"
 CONFIG_OUT="$EXP_DIR/ddb/nu_config.yaml"
 FIFO="$LOG_DIR/ddb_in"
 DDB_LOG="$LOG_DIR/ddb.log"
@@ -51,11 +52,9 @@ done
 [[ -s "$DDB_SD_CONFIG" ]] || die "DDB never wrote $DDB_SD_CONFIG; see $DDB_LOG"
 echo "  broker: $(head -1 "$DDB_SD_CONFIG")"
 
-# Every Nu server reads this file locally; ship it to the other caladan nodes.
-for i in $CTRL_IDX $CLIENT_IDX; do
-  remote "$i" "sudo mkdir -p $(dirname "$DDB_SD_CONFIG") && sudo chown -R $(whoami) $(dirname "$DDB_SD_CONFIG")"
-  scp -q "$DDB_SD_CONFIG" "$(node_ip "$i"):$DDB_SD_CONFIG" || die "could not copy sd config to node$i"
+# Each Nu server reads this file locally; ship it to every server node.
+for idx in "${SERVER_IDXS[@]}"; do
+  remote "$idx" "sudo mkdir -p $(dirname "$DDB_SD_CONFIG") && sudo chown -R $(whoami) $(dirname "$DDB_SD_CONFIG")"
+  scp -q "$DDB_SD_CONFIG" "$(node_ip "$idx"):$DDB_SD_CONFIG" || die "could not copy sd config to idx$idx"
 done
-echo "  service-discovery config distributed"
-
-echo "DDB is up. Send commands with:  echo '<gdb/mi cmd>' > $FIFO"
+echo "  service-discovery config distributed to ${#SERVER_IDXS[@]} servers"
