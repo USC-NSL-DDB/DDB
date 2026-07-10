@@ -1,26 +1,21 @@
 #!/bin/bash
 #
-# Run the Nu socialNetwork benchmark, optionally with DDB attached.
+# Run the distributed Nu socialNetwork benchmark, optionally with DDB attached
+# to every backend server.
 #
 #   ./run_benchmark.sh                 # baseline, no debugger
-#   ./run_benchmark.sh --ddb           # DDB attached to the backend
-#   ./run_benchmark.sh --mops 0.5      # override the client's target load
+#   ./run_benchmark.sh --ddb           # DDB attached to all 4 servers
+#   ./run_benchmark.sh --mops 2.0      # override target load (Mops, total)
 #
-# Topology (indices are Nu's ssh_ip indices):
-#   node1 backend (Nu main server)   node2 controller
-#   node3 nginx + docker stack       node4 client
-#
-# Results land in results/; per-process logs in logs/.
+# Layout (see common.sh):
+#   node0 : controller + init_graph + client  (+ DDB + EMQX broker with --ddb)
+#   node1-4 : Nu servers, caladan 18.18.1.2-5, one ServiceEntry proclet each
 
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 USE_DDB=0
-MOPS="0.5"
-LPID=1
-# One Nu backend (node1). The nginx config hard-codes its caladan IP, so this
-# experiment is single-backend by construction.
-NUM_ENTRIES=1
+MOPS="1.0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ddb)  USE_DDB=1; shift ;;
@@ -30,152 +25,180 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_built
+detect_network
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
-CALADAN_NIC="${CALADAN_NIC:-$(caladan_nic)}"; export CALADAN_NIC
-SSH_PREFIX="$(ssh_prefix "$CALADAN_NIC")"; export SSH_PREFIX
-[[ -n "$SSH_PREFIX" ]] || die "could not determine the ssh network"
-
-TAG="mops${MOPS}$([[ $USE_DDB -eq 1 ]] && echo _ddb || echo _baseline)_$(date +%Y%m%d_%H%M%S)"
+TAG="mops${MOPS}_n${NUM_SERVERS}$([[ $USE_DDB -eq 1 ]] && echo _ddb || echo _baseline)_$(date +%Y%m%d_%H%M%S)"
 RESULT="$RESULTS_DIR/$TAG.txt"
 
 cleanup_all() { "$EXP_DIR/stop_all.sh" >/dev/null 2>&1 || true; }
 trap cleanup_all EXIT
+echo "=== Cleaning up any previous run ==="; cleanup_all; sleep 2
 
-echo "=== Cleaning up any previous run ==="
-cleanup_all; sleep 2
-
+# ─── Build the workload with the right server count + load ───────────────────
 echo ""
-echo "=== Configuring the workload (${MOPS} Mops, ${NUM_ENTRIES} backend) ==="
-# The client fans out to 18.18.1.{2..kNumEntries+1}; the backend creates that
-# many service entries. If the two disagree the client connects to a node that
-# does not exist and dies in TSocket::openConnection. Pin both, every run: the
-# checked-in bench/client.cpp can be left at 7 by the nu_multi experiment.
+echo "=== Building workload: ${NUM_SERVERS} entries, ${MOPS} Mops ==="
+# client fans out to entries 18.18.1.2..; main creates kNumEntries ServiceEntry
+# proclets that the controller spreads one-per-server. The two counts must agree.
 cp "$NU_DIR/exp/social_net/nu/client.cpp" "$SOCIALNET_DIR/bench/client.cpp"
 sed -i "s/constexpr static double kTargetMops.*/constexpr static double kTargetMops = $MOPS;/g" \
   "$SOCIALNET_DIR/bench/client.cpp"
-sed -i "s/constexpr static uint32_t kNumEntries.*/constexpr static uint32_t kNumEntries = $NUM_ENTRIES;/g" \
+sed -i "s/constexpr static uint32_t kNumEntries.*/constexpr static uint32_t kNumEntries = $NUM_SERVERS;/g" \
   "$SOCIALNET_DIR/bench/client.cpp"
-sed -i "s/constexpr uint32_t kNumEntries.*/constexpr uint32_t kNumEntries = $NUM_ENTRIES;/g" \
+sed -i "s/constexpr uint32_t kNumEntries.*/constexpr uint32_t kNumEntries = $NUM_SERVERS;/g" \
   "$SOCIALNET_DIR/src/main.cpp"
-( cd "$SOCIALNET_DIR/build" && TMPDIR=/mnt/local/tmp make -j"$(nproc)" client main >/dev/null 2>&1 ) \
-  || die "failed to rebuild client/main"
-echo "  client kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/bench/client.cpp")" \
-     " main kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/src/main.cpp")"
+( cd "$SOCIALNET_DIR/build" && TMPDIR=/mnt/local/tmp make -j"$(nproc)" main client >/dev/null 2>&1 ) \
+  || die "failed to rebuild main/client"
+echo "  main kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/src/main.cpp")," \
+     "client kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/bench/client.cpp")"
 
+# ─── Distribute the server binary ────────────────────────────────────────────
 echo ""
-echo "=== Distributing binaries ==="
-for spec in "$BACKEND_IDX:build/src/main" "$CLIENT_IDX:build/bench/client"; do
-  idx="${spec%%:*}"; rel="${spec#*:}"
-  remote "$idx" "mkdir -p $SOCIALNET_DIR/$(dirname "$rel")"
-  scp -q "$SOCIALNET_DIR/$rel" "$(node_ip "$idx"):$SOCIALNET_DIR/$rel" || die "scp $rel -> node$idx"
-  echo "  node$idx <- $rel"
+echo "=== Distributing the server binary to node1-${NUM_SERVERS} ==="
+for idx in "${SERVER_IDXS[@]}"; do
+  remote "$idx" "mkdir -p $SOCIALNET_DIR/build/src"
+  scp -q "$SOCIALNET_DIR/build/src/main" "$(node_ip "$idx"):$SOCIALNET_DIR/build/src/main" \
+    || die "scp main -> node idx$idx"
+  echo "  idx$idx <- main"
 done
 
+# ─── iokerneld everywhere ────────────────────────────────────────────────────
 echo ""
-echo "=== Bringing up the nginx / storage stack (node$NGINX_IDX) ==="
-remote "$NGINX_IDX" "cd $SOCIALNET_DIR && ./down_nginx.sh >/dev/null 2>&1; ./up_nginx.sh" \
-  > "$LOG_DIR/nginx.log" 2>&1 || die "nginx stack failed; see logs/nginx.log"
-remote "$NGINX_IDX" "sudo ip addr add $NGINX_CALADAN_IP_AND_MASK dev $CALADAN_NIC 2>/dev/null || true"
-echo "  up"
+echo "=== Starting iokerneld (debugger-aware) ==="
+for idx in "$INFRA_IDX" "${SERVER_IDXS[@]}"; do
+  # Redirect under sudo so root owns the log (a prior root-owned log would
+  # otherwise make the user-shell redirect fail with EACCES).
+  remote_bg "$idx" "sudo bash -c 'cd $NU_DIR && ./caladan/iokerneld ias dbg </dev/null >/tmp/iokerneld.log 2>&1'"
+done
+for idx in "$INFRA_IDX" "${SERVER_IDXS[@]}"; do
+  for _ in $(seq 1 20); do remote "$idx" 'grep -q MAC /tmp/iokerneld.log' 2>/dev/null && break; sleep 1; done
+  remote "$idx" 'pgrep -x iokerneld >/dev/null' 2>/dev/null || die "iokerneld failed on idx$idx"
+done
+echo "  up on idx ${INFRA_IDX} ${SERVER_IDXS[*]}"
 
+# ─── Controller on node0 ─────────────────────────────────────────────────────
 echo ""
-echo "=== Starting iokerneld (debugger-aware) on caladan nodes ==="
-# `ias dbg` = debugger-aware mode: caladan blocks its preemption signal while a
-# debugger has the process stopped.
-for i in $CTRL_IDX $BACKEND_IDX $CLIENT_IDX; do
-  remote_bg "$i" "cd $NU_DIR && sudo ./caladan/iokerneld ias dbg </dev/null >/tmp/iokerneld.log 2>&1"
-done
-for i in $CTRL_IDX $BACKEND_IDX $CLIENT_IDX; do
-  for _ in $(seq 1 20); do
-    remote "$i" 'grep -q MAC /tmp/iokerneld.log' 2>/dev/null && break
-    sleep 1
-  done
-  remote "$i" 'pgrep -x iokerneld >/dev/null' 2>/dev/null \
-    || die "iokerneld failed on node$i; see /tmp/iokerneld.log there"
-  echo "  node$i up"
-done
+echo "=== Starting the Nu controller on node0 (caladan $CTRL_CALADAN_IP) ==="
+remote_bg "$INFRA_IDX" "sudo bash -c 'cd $NU_DIR && stdbuf -o0 ./bin/ctrl_main </dev/null >/tmp/ctrl_main.log 2>&1'"
+for _ in $(seq 1 20); do remote "$INFRA_IDX" 'pgrep -x ctrl_main >/dev/null' 2>/dev/null && break; sleep 1; done
+remote "$INFRA_IDX" 'pgrep -x ctrl_main >/dev/null' 2>/dev/null || die "ctrl_main failed"
+echo "  up"; sleep 4
 
-echo ""
-echo "=== Starting the Nu controller (node$CTRL_IDX) ==="
-remote_bg "$CTRL_IDX" "cd $NU_DIR && sudo stdbuf -o0 ./bin/ctrl_main </dev/null >/tmp/ctrl_main.log 2>&1"
-for _ in $(seq 1 20); do
-  remote "$CTRL_IDX" 'pgrep -x ctrl_main >/dev/null' 2>/dev/null && break
-  sleep 1
-done
-remote "$CTRL_IDX" 'pgrep -x ctrl_main >/dev/null' 2>/dev/null || die "ctrl_main failed to start"
-echo "  up"
-sleep 4
-
-DDB_ARGS=""
+# ─── DDB (before the servers report themselves) ──────────────────────────────
+DDB_COMMON_ARGS=""
 if [[ "$USE_DDB" -eq 1 ]]; then
   echo ""
-  echo "=== Starting DDB (node$BACKEND_IDX) ==="
-  # DDB must be listening before the server reports itself, and its broker
-  # writes the service-discovery config the server reads.
+  echo "=== Starting DDB on node0 ==="
   "$EXP_DIR/start_ddb.sh" || die "failed to start DDB"
-  DDB_ARGS="--ddb --ddb_node_ip $(node_ip "$BACKEND_IDX") --ddb_sd_config_path $DDB_SD_CONFIG"
+  DDB_COMMON_ARGS="--ddb --ddb_sd_config_path $DDB_SD_CONFIG"
 fi
 
-echo ""
-echo "=== Starting the socialnet backend (node$BACKEND_IDX) ==="
-BACKEND_CALADAN_IP="18.18.1.$((BACKEND_IDX + 1))"
-remote_bg "$BACKEND_IDX" "cd $SOCIALNET_DIR && sudo stdbuf -o0 ./build/src/main \
-  -m -l $LPID -i $BACKEND_CALADAN_IP $DDB_ARGS </dev/null >/tmp/backend.log 2>&1"
+# ─── Servers: non-main first, then the main server ───────────────────────────
+launch_server() {   # $1 = server index, $2 = 0-based k, $3 = "-m" or ""
+  local idx="$1" k="$2" main_flag="$3"
+  local cip; cip="$(server_caladan_ip "$k")"
+  local ddb=""
+  [[ "$USE_DDB" -eq 1 ]] && ddb="$DDB_COMMON_ARGS --ddb_node_ip $(node_ip "$idx")"
+  # main's RUNPATH resolves the caladan libs, so no LD_LIBRARY_PATH needed.
+  remote_bg "$idx" "sudo bash -c 'cd $SOCIALNET_DIR && stdbuf -o0 ./build/src/main $main_flag -l $LPID -i $cip $ddb </dev/null >/tmp/backend.log 2>&1'"
+  echo "  idx$idx  caladan=$cip  ${main_flag:-(plain)}"
+}
 
-if [[ "$USE_DDB" -eq 1 ]]; then
-  echo "  waiting for DDB to attach..."
-  # The connector parks in sigwait; DDB attaches, sends SIG40, and the
-  # connector's handler raises SIGTRAP. That trap is the "attached" signal.
-  # GDB/MI orders record fields arbitrarily, so match one field, not a sequence.
-  for i in $(seq 1 40); do
-    grep -q 'signal-name="SIGTRAP"' "$LOG_DIR/ddb.log" 2>/dev/null && break
+# Distinct sessions that have hit their post-attach SIGTRAP so far.
+trapped_sids() {
+  grep 'signal-name="SIGTRAP"' "$LOG_DIR/ddb.log" 2>/dev/null \
+    | grep -oE 'session-id="[0-9]+"' | grep -oE '[0-9]+' | sort -un
+}
+
+# Wait until >= $1 servers have attached, then resume any not-yet-resumed
+# session, one at a time with a pause, so each finishes its Nu runtime init and
+# controller registration before the next. Resuming servers in lockstep makes
+# them race distributed startup and segfaults one (NULL get_runtime() in the RPC
+# archive pool).
+RESUMED_SIDS=" "
+ddb_resume_upto() {   # $1 = expected attached count, $2 = label
+  local want="$1" label="$2" n sid
+  echo "  [ddb] waiting for $want server(s) to attach ($label)..."
+  for _ in $(seq 1 60); do
+    [[ "$(trapped_sids | wc -l)" -ge "$want" ]] && break
     sleep 2
   done
-  grep -q 'signal-name="SIGTRAP"' "$LOG_DIR/ddb.log" 2>/dev/null \
-    || die "DDB never attached; see logs/ddb.log"
-  echo "  attached. Resuming the debuggee (-exec-continue)."
-  # DDB stops the process after the SIG40 handshake; release it so it can serve.
-  echo "-exec-continue" > "$LOG_DIR/ddb_in"
-fi
+  n="$(trapped_sids | wc -l)"
+  [[ "$n" -ge "$want" ]] || die "only $n/$want servers attached ($label); see logs/ddb.log"
+  while read -r sid; do
+    [[ "$RESUMED_SIDS" == *" $sid "* ]] && continue
+    echo "-exec-continue --session $sid" > "$LOG_DIR/ddb_in"
+    RESUMED_SIDS+="$sid "
+    echo "    resumed session $sid"
+    sleep 6
+  done < <(trapped_sids)
+}
 
-echo "  waiting for the backend to serve..."
-for i in $(seq 1 60); do
-  remote "$BACKEND_IDX" "grep -q 'Starting the ThriftBackEndServer' /tmp/backend.log" 2>/dev/null && break
+echo ""
+echo "=== Starting the ${NUM_SERVERS} Nu servers ==="
+# Plain (non-main) servers first. Under DDB they are attached, resumed, and
+# registered with the controller BEFORE the main server is even started -- the
+# main server's DoWork creates and places proclets across the cluster, so it
+# must run last, against an already-registered set of servers.
+for k in $(seq 0 $((NUM_SERVERS - 1))); do
+  idx="${SERVER_IDXS[$k]}"
+  [[ "$idx" == "$MAIN_SERVER_IDX" ]] && continue
+  launch_server "$idx" "$k" ""
+done
+[[ "$USE_DDB" -eq 1 ]] && ddb_resume_upto "$((NUM_SERVERS - 1))" "plain servers"
+
+# Main server (-m) last: boots the app once the others are up and registered.
+launch_server "$MAIN_SERVER_IDX" "$((NUM_SERVERS - 1))" "-m"
+[[ "$USE_DDB" -eq 1 ]] && ddb_resume_upto "$NUM_SERVERS" "main server"
+
+# ─── Wait for the app to serve ───────────────────────────────────────────────
+echo ""
+echo "=== Waiting for the backend to serve ==="
+served=0
+for _ in $(seq 1 90); do
+  remote "$MAIN_SERVER_IDX" "grep -q 'Starting the ThriftBackEndServer' /tmp/backend.log" 2>/dev/null && { served=1; break; }
   sleep 2
 done
-remote "$BACKEND_IDX" "grep -q 'Starting the ThriftBackEndServer' /tmp/backend.log" 2>/dev/null \
-  || die "backend never came up; check /tmp/backend.log on node$BACKEND_IDX"
-echo "  backend up"
+if [[ "$served" -eq 0 ]]; then
+  echo "  backend did not serve; saving per-server logs to $LOG_DIR/ and dmesg:" >&2
+  for idx in "${SERVER_IDXS[@]}"; do
+    p=$(remote "$idx" 'pgrep -x main | head -1' 2>/dev/null)
+    st=$(remote "$idx" "[[ -n '$p' ]] && sudo awk '/^State/{print \$2}' /proc/$p/status 2>/dev/null || echo DEAD" 2>/dev/null)
+    echo "  --- idx$idx  pid=${p:-none}  State=${st:-?} ---" >&2
+    remote "$idx" 'sudo cat /tmp/backend.log 2>/dev/null' > "$LOG_DIR/backend.idx$idx.log" 2>/dev/null
+    tail -5 "$LOG_DIR/backend.idx$idx.log" 2>/dev/null | sed 's/^/      /' >&2
+    # if the process is gone, dmesg often shows a segfault / OOM kill
+    [[ "$st" == "DEAD" ]] && remote "$idx" 'sudo dmesg | tail -5' 2>/dev/null | grep -iE 'segfault|killed|oom|main' | sed 's/^/      dmesg: /' >&2
+  done
+  die "backend never came up (logs saved in $LOG_DIR/backend.idx*.log)"
+fi
+echo "  up"; sleep 3
 
+# ─── Seed the graph natively (Thrift, no nginx) ──────────────────────────────
 echo ""
-echo "=== Seeding the social graph ==="
-remote "$NGINX_IDX" "cd $SOCIALNET_DIR && python3 scripts/init_social_graph.py" \
+echo "=== Seeding the social graph (init_graph -> $INIT_ENTRY_IP) ==="
+( cd "$SOCIALNET_DIR" && sudo ./build/init_graph/init_graph "$EXP_DIR/conf/init" ) \
   > "$LOG_DIR/init_graph.log" 2>&1 || die "graph init failed; see logs/init_graph.log"
-sleep 5
-echo "  seeded"
+tail -1 "$LOG_DIR/init_graph.log" | sed 's/^/  /'
+sleep 3
 
+# ─── Verify DDB is still attached to every server ────────────────────────────
 if [[ "$USE_DDB" -eq 1 ]]; then
   echo ""
-  echo "=== Verifying DDB is still attached to the backend ==="
-  # Running sidecar/session logs are not proof. Ask the kernel: TracerPid must
-  # name a gdb, and the process must be running (S), not stopped (t).
-  probe=$(remote "$BACKEND_IDX" 'p=$(pgrep -x main | head -1)
-      sudo awk "/TracerPid/{print \$2}" /proc/$p/status
-      sudo awk "/^State/{print \$2}" /proc/$p/status' 2>/dev/null)
-  tracer=$(echo "$probe" | sed -n 1p); state=$(echo "$probe" | sed -n 2p)
-  [[ -n "$tracer" && "$tracer" != "0" ]] || die "backend is NOT traced (TracerPid=$tracer)"
-  [[ "$state" == "S" || "$state" == "R" ]] || die "backend is stopped (State=$state); it never resumed"
-  echo "  TracerPid=$tracer State=$state  ->  attached and running"
+  echo "=== Verifying DDB is attached to all $NUM_SERVERS servers ==="
+  for idx in "${SERVER_IDXS[@]}"; do
+    probe=$(remote "$idx" 'p=$(pgrep -x main|head -1); sudo awk "/TracerPid/{print \$2}" /proc/$p/status; sudo awk "/^State/{print \$2}" /proc/$p/status' 2>/dev/null)
+    tp=$(echo "$probe" | sed -n 1p); st=$(echo "$probe" | sed -n 2p)
+    [[ -n "$tp" && "$tp" != "0" ]] || die "idx$idx backend NOT traced (TracerPid=$tp)"
+    [[ "$st" == "S" || "$st" == "R" ]] || die "idx$idx backend stopped (State=$st)"
+    echo "  idx$idx: TracerPid=$tp State=$st"
+  done
 fi
 
+# ─── Run the client on node0 ─────────────────────────────────────────────────
 echo ""
-echo "=== Running the client (node$CLIENT_IDX) ==="
-# The client node only has the Nu tree, not this experiment dir; ship the conf.
-scp -q "$EXP_DIR/conf/client" "$(node_ip "$CLIENT_IDX"):/tmp/nu_client.conf" \
-  || die "could not copy the client conf to node$CLIENT_IDX"
-remote "$CLIENT_IDX" "cd $SOCIALNET_DIR && sudo ./build/bench/client /tmp/nu_client.conf" \
-  2>&1 | tee "$RESULT"
+echo "=== Running the client on node0 ==="
+( cd "$SOCIALNET_DIR" && sudo ./build/bench/client "$EXP_DIR/conf/client" ) 2>&1 | tee "$RESULT"
 
 echo ""
 echo "=== Done ==="

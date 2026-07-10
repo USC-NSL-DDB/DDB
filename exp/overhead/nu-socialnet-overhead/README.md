@@ -1,133 +1,176 @@
-# Nu SocialNetwork Overhead Experiment
+# Nu SocialNetwork — DDB Overhead Experiment (distributed)
 
-Measures throughput and tail latency of Nu's `socialNetwork` app, with and
-without DDB attached to the Nu backend.
+Measures the runtime overhead DDB imposes on Nu's `socialNetwork` app running
+across four proclet servers. **The overhead is the difference between two runs
+at the same offered load** — one with no debugger, one with DDB attached to all
+four servers — in achieved throughput (`real_mops`) and tail latency.
 
 ## Topology
 
-Nodes are addressed by Nu's `exp/shared.sh` index (`ssh_ip N`). Caladan binds one
-Mellanox port via DPDK, so Nu SSHes over the **other** `10.10.x` network.
+5 nodes. Caladan binds one Mellanox port via DPDK, so Nu ssh'es over the *other*
+10.10.x NIC. Nodes are addressed by the last octet of that ssh network.
 
-| Index | Role | Runs iokerneld |
-|-------|------|----------------|
-| node1 | Nu backend (`build/src/main`), DDB, EMQX broker | yes |
-| node2 | Nu controller (`bin/ctrl_main`) | yes |
-| node3 | nginx + the DeathStarBench storage stack (docker) | **no** — DPDK would seize its NIC |
-| node4 | benchmark client (`build/bench/client`) | yes |
+| Node | idx | Caladan IP | Role |
+|------|-----|-----------|------|
+| node0 (this header node) | 1 | ctrl `18.18.1.1` | controller + init_graph + client (+ DDB + EMQX broker) |
+| node1 | 2 | `18.18.1.2` | Nu server, `ServiceEntry` proclet, entry 0 |
+| node2 | 3 | `18.18.1.3` | Nu server, entry 1 |
+| node3 | 4 | `18.18.1.4` | Nu server, entry 2 |
+| node4 | 5 | `18.18.1.5` | Nu server, entry 3 — **main (`-m`)**, boots the app |
 
-The backend must stay at index 1: nginx's config hard-codes its caladan IP
-(`18.18.1.2`). Run every command below from **node1**, in this directory.
+`kNumEntries = 4`: the main server creates four `ServiceEntry` proclets the
+controller spreads one-per-server, and the `DistributedHashTable` shards spread
+across all four too, so proclet calls are genuinely cross-node. The client fans
+its 200 threads out across the four entry IPs. **Run every command from node0.**
+
+Seeding is native (`build/init_graph` speaks Thrift straight to the backend) —
+there is no nginx and no docker storage tier. That is also a hard requirement
+here: every node runs iokerneld (Caladan owns its NIC via DPDK), so no node could
+host the kernel-mode nginx the HTTP seeder would need.
 
 ## Prerequisites
 
-- 4 nodes, passwordless SSH + `sudo` between them
-- A Mellanox NIC for Caladan and a second `10.10.x` NIC for SSH
-- Docker on node1 (DDB runs its EMQX broker in a container) and node3
+- 5 nodes, passwordless SSH + `sudo` between them
+- A Mellanox NIC for Caladan and a second 10.10.x NIC for SSH
+- Docker on node0 only (DDB runs its EMQX broker in a container); your user in
+  the `docker` group (`newgrp docker`)
 
-## Run the benchmark
+## One-time setup
 
 ```bash
-# 1. Build everything: connector headers -> ~/.local/include, caladan + ksched,
-#    Nu with CONFIG_DDB=y, ddb itself, then the socialNetwork app.
+# Build: connector headers -> ~/.local, caladan + ksched, Nu (CONFIG_DDB=y),
+# ddb, and the socialNetwork app (server, client, init_graph).
 ./build_all.sh
 
-# 2. Prepare all four nodes: hugepages + ksched, replicate the repo to the same
-#    absolute path (there is no shared FS), docker + aiohttp on the nginx node.
+# Prepare all 5 nodes: hugepages + ksched, replicate the Nu tree to the server
+# nodes (there is no shared filesystem).
 ./setup_nodes.sh
-
-# 3. Baseline: no debugger.
-./run_benchmark.sh --mops 0.3
-
-# 4. With DDB attached to the backend. Needs docker without sudo (`newgrp docker`).
-./run_benchmark.sh --ddb --mops 0.3
 ```
 
-Each run tears down the previous one first. `./stop_all.sh` cleans up by hand;
-`./stop_all.sh --full` also takes the storage stack down.
+## Measure the overhead
 
-## What `--ddb` does
-
-`start_ddb.sh` launches DDB, which starts a managed EMQX broker and writes
-`tcp://<node1>:10101` into `/tmp/ddb/service_discovery/config`. That file is
-copied to the other Caladan nodes, because every Nu process launched with
-`--ddb` reads it to find the broker.
-
-The backend is then started with:
-
-```
---ddb --ddb_node_ip <node1-ssh-ip> --ddb_sd_config_path /tmp/ddb/service_discovery/config
-```
-
-It reports itself to the broker and parks in `sigwait`. DDB discovers it, SSHes
-in, attaches gdb, and sends `signal SIG40`; the connector's handler then raises
-`SIGTRAP` so the process stops for inspection. **The app is frozen at this
-point.** `run_benchmark.sh` waits for that trap and resumes it with
-`-exec-continue` before seeding and measuring.
-
-To drive a session by hand instead:
+Each `run_benchmark.sh` invocation brings the whole cluster up, seeds the graph,
+runs the client once, and tears everything down. One run = one data point.
 
 ```bash
-./start_ddb.sh                              # leaves DDB running
-echo '-exec-continue' > logs/ddb_in         # the REPL takes GDB/MI commands
+# Baseline and DDB-attached at the SAME load. --mops is the total target
+# throughput (Mops); the client uses 200 threads and defaults to --mops 1.0.
+./run_benchmark.sh              --mops 1.0     # baseline (no debugger)
+./run_benchmark.sh --ddb        --mops 1.0     # DDB attached to all 4 servers
 ```
 
-### Confirming DDB is really attached
+A single pair is enough to sanity-check the pipeline, but runs vary ~1% between
+trials, so for a real number **take several trials of each and compare the
+medians at matched load**:
 
-Session logs are not proof. `run_benchmark.sh --ddb` asks the kernel before it
-measures, and fails the run if the answer is wrong:
-
+```bash
+for i in 1 2 3 4 5; do ./run_benchmark.sh       --mops 1.0; done
+for i in 1 2 3 4 5; do ./run_benchmark.sh --ddb --mops 1.0; done
 ```
-TracerPid=191196 State=S  ->  attached and running
+
+To see how the overhead behaves with load, repeat the pair across a sweep (push
+`--mops` up until `real_mops` stops tracking the target — that is the saturation
+point, and the most interesting region for overhead):
+
+```bash
+for m in 0.5 1.0 1.5 2.0 2.5 3.0; do
+  ./run_benchmark.sh       --mops "$m"
+  ./run_benchmark.sh --ddb --mops "$m"
+done
 ```
 
-- `TracerPid: 0` → nothing attached.
-- `TracerPid: <pid>` + `State: t` → attached but **frozen**; it never resumed.
-- `TracerPid: <pid>` + `State: S` → attached and running. Numbers are valid.
+`./stop_all.sh` cleans up by hand if a run is interrupted (kills every node's
+processes, frees stale Caladan shm / hugepages).
 
-## Output
+## Read the results
 
-`results/mops<M>_{baseline,ddb}_<timestamp>.txt`, ending in the client's summary:
+Each run writes `results/mops<M>_n4_{baseline,ddb}_<timestamp>.txt`, ending in
+the client's summary line:
 
 ```
 real_mops, avg_lat, 50th_lat, 90th_lat, 95th_lat, 99th_lat, 99.9th_lat
-0.299808 45 27 89 171 300 481
+0.969433 196 104 489 766 1266 1851
 ```
 
-`real_mops` is achieved throughput (millions of ops/sec); latencies are in
-microseconds. Compare a `--ddb` run against a baseline run at the **same**
-`--mops`.
+`real_mops` is achieved throughput (millions of ops/sec); the rest are latencies
+in microseconds. Overhead at a given load = the baseline-vs-DDB difference in
+these numbers. A quick side-by-side:
 
-Measured on a 4-node c6525 cluster at 0.3 Mops:
+```bash
+for f in results/mops1.0_n4_*.txt; do
+  printf '%-40s %s\n' "$(basename "$f")" "$(tail -1 "$f")"
+done
+```
+
+Reference numbers from a 5-node c6525 cluster at 1.0 Mops (single trials):
 
 | | real_mops | p50 | p99 | p99.9 |
 |---|---|---|---|---|
-| baseline | 0.299698 | 27µs | 297µs | 479µs |
-| DDB attached | 0.299808 | 27µs | 300µs | 481µs |
+| baseline | 0.968 | 105µs | 1279µs | 1883µs |
+| DDB attached (all 4 servers) | 0.960 – 0.969 | 104–106µs | 1266–1302µs | 1851–1935µs |
 
-An attached-but-running gdb with no breakpoints costs essentially nothing at
-steady state.
+At steady state with no breakpoints set, an attached gdb costs essentially
+nothing — the interesting overhead shows up under breakpoint/stepping workloads
+and near saturation, not at idle attach.
+
+## What `--ddb` does
+
+`start_ddb.sh` launches DDB on node0 with a managed EMQX broker and writes
+`tcp://<node0>:10101` into `/tmp/ddb/service_discovery/config`, copied to every
+server node. Each server, launched with `--ddb --ddb_node_ip <its ip>`, reports
+itself to the broker and parks in `sigwait`; DDB discovers all four, ssh'es in,
+and attaches gdb to each.
+
+**Attaching freezes each server, and resume order matters.** The harness:
+
+1. starts the three **plain** servers, then resumes them one at a time
+   (`-exec-continue --session <sid>`, a pause between each) so each finishes its
+   Nu runtime init and registers with the controller;
+2. only then starts the **main** (`-m`) server and resumes it last.
+
+The main server's `DoWork` creates and places proclets across the cluster, so it
+must run against an already-registered set of servers. Resuming all four in
+lockstep (a broadcast `-exec-continue`) makes them race distributed startup and
+reliably segfaults one with a NULL `get_runtime()` in the RPC archive pool. This
+phased order avoids it and mirrors the original `nu_multi`.
+
+The run **verifies DDB is attached to every server before it measures** and
+aborts otherwise. To check by hand:
+
+```bash
+for ip in 10.10.2.2 10.10.2.3 10.10.2.4 10.10.2.5; do
+  ssh "$ip" 'p=$(pgrep -x main); sudo grep -E "TracerPid|^State" /proc/$p/status'
+done
+# TracerPid: <gdb pid> + State: S on all four = attached and running.
+```
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `build_all.sh` | connector headers, caladan + ksched, Nu (CONFIG_DDB=y), ddb, socialNetwork |
-| `setup_nodes.sh` | hugepages/ksched, repo replication, docker + aiohttp on nginx node |
-| `run_benchmark.sh` | **Main entry point.** Brings the cluster up, seeds, measures |
-| `start_ddb.sh` | DDB + EMQX broker + distributes the service-discovery config |
-| `stop_all.sh` | Kill everything; clear stale SysV shm and DPDK hugepages |
+| `setup_nodes.sh` | hugepages/ksched + replicate the Nu tree to the server nodes |
+| `run_benchmark.sh` | **Main entry point.** Brings up the cluster, seeds, runs the client |
+| `start_ddb.sh` | DDB + EMQX broker + distribute the service-discovery config |
+| `stop_all.sh` | Kill everything; clear stale Caladan shm / hugepages |
 | `common.sh` | Internal: node roles, NIC detection, remote helpers |
+
+Server count is not a flag — it is the four indices in `SERVER_IDXS` in
+`common.sh`. Change that array (and make sure the caladan IPs stay `18.18.1.2+`)
+to run a different number of servers.
 
 ## If a step fails
 
-Each script stops at the failure and prints what to do. Two failure modes are
-worth naming because their symptoms are opaque:
+Every script stops at the failure and prints what to do. Failure modes worth
+naming:
 
-**`Shared memory region is already mapped`** — a SIGKILLed `iokerneld`, or a Nu
-process still attached to its segments, leaves SysV shm and
-`/dev/hugepages/rtemap_*` behind. `./stop_all.sh` clears both.
+**`Shared memory region is already mapped`** — a SIGKILLed iokerneld left SysV
+shm + `/dev/hugepages/rtemap_*` behind. `./stop_all.sh` clears both on every node.
 
-**Client dies in `TSocket::openConnection` with `ASSERTION '!socket_'`** — the
-client's `kNumEntries` disagrees with the backend's, so it dials a node that
-does not exist. `run_benchmark.sh` pins both to 1 on every run; the checked-in
-`bench/client.cpp` can be left at 7 by the `nu_multi` experiment.
+**`backend never came up` with one server DEAD under `--ddb`** — the resume race
+above; the harness saves each server's full log to `logs/backend.idx*.log`. Keep
+the phased, per-session resume; do not resume servers in lockstep.
+
+**Client dies in `TSocket::openConnection`** — the client's `kNumEntries`
+disagrees with the servers'. `run_benchmark.sh` pins both to the server count on
+every run, so this only bites if you edit the sources by hand.
