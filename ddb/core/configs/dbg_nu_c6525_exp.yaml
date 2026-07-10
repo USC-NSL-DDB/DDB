@@ -1,5 +1,5 @@
 ---
-Framework: Nu
+Framework: nu
 
 Conf:
   sudo: true
@@ -9,12 +9,10 @@ PrerunGdbCommands:
 - name: "disable CALADAN's custom signal handling"
   command: "handle SIGUSR1 SIGUSR2 nostop noprint"
 
-PostrunGdbCommands:
-- name: "auto continue attached process"
-  command: "-exec-continue"
-
-#   user: ybyan
-  # port: 22
+# Do NOT auto-continue here. After attaching, DDB sends `signal SIG40`, which
+# releases the connector's wait_for_debugger() and re-traps via SIGTRAP. A
+# PostrunGdbCommands `-exec-continue` races that handshake and can leave the
+# process parked in sigwait. Resume it yourself once attached:  -exec-continue
 
 ServiceDiscovery:
   Broker:

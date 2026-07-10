@@ -1,5 +1,5 @@
 ---
-Framework: Nu
+Framework: nu
 PreTasks:
 - name: "Restart runtime"
   command: "./nu_scripts/start_rt.sh"
