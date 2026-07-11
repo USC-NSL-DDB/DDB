@@ -21,10 +21,10 @@ rm -f "$LOG_DIR/ddb_in"
 pkill -9 -x ddb 2>/dev/null || true
 docker rm -f emqx >/dev/null 2>&1 || true
 
-# Reset every node (infra + servers): kill processes, free shm + hugepages.
+# Reset every node (infra + clients + servers): kill processes, free shm + hugepages.
 if [[ -n "$SSH_PREFIX" ]]; then
-  for idx in "$INFRA_IDX" "${SERVER_IDXS[@]}"; do
+  while read -r idx; do
     remote "$idx" "$CALADAN_RESET_CMD" >/dev/null 2>&1 || true
-  done
+  done < <(all_node_idxs)
 fi
 echo "Stopped."

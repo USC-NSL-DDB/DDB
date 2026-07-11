@@ -38,9 +38,12 @@ echo "=== Cleaning up any previous run ==="; cleanup_all; sleep 2
 # ─── Build the workload with the right server count + load ───────────────────
 echo ""
 echo "=== Building workload: ${NUM_SERVERS} entries, ${MOPS} Mops ==="
+# Use Nu's DISTRIBUTED client (nu_multi): perf.run_multi_clients across
+# kClientAddrs (18.18.1.249..251) with a TCP barrier, each offering
+# kTargetMops/N. kTargetMops here is the TOTAL target; the client divides it.
 # client fans out to entries 18.18.1.2..; main creates kNumEntries ServiceEntry
 # proclets that the controller spreads one-per-server. The two counts must agree.
-cp "$NU_DIR/exp/social_net/nu/client.cpp" "$SOCIALNET_DIR/bench/client.cpp"
+cp "$NU_DIR/exp/social_net/nu_multi/client.cpp" "$SOCIALNET_DIR/bench/client.cpp"
 sed -i "s/constexpr static double kTargetMops.*/constexpr static double kTargetMops = $MOPS;/g" \
   "$SOCIALNET_DIR/bench/client.cpp"
 sed -i "s/constexpr static uint32_t kNumEntries.*/constexpr static uint32_t kNumEntries = $NUM_SERVERS;/g" \
@@ -52,29 +55,39 @@ sed -i "s/constexpr uint32_t kNumEntries.*/constexpr uint32_t kNumEntries = $NUM
 echo "  main kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/src/main.cpp")," \
      "client kNumEntries=$(grep -m1 -oP 'kNumEntries = \K[0-9]+' "$SOCIALNET_DIR/bench/client.cpp")"
 
-# ─── Distribute the server binary ────────────────────────────────────────────
+mapfile -t ALL_IDXS < <(all_node_idxs)
+
+# ─── Distribute the freshly-built binaries ───────────────────────────────────
 echo ""
-echo "=== Distributing the server binary to node1-${NUM_SERVERS} ==="
+echo "=== Distributing binaries ==="
 for idx in "${SERVER_IDXS[@]}"; do
   remote "$idx" "mkdir -p $SOCIALNET_DIR/build/src"
-  scp -q "$SOCIALNET_DIR/build/src/main" "$(node_ip "$idx"):$SOCIALNET_DIR/build/src/main" \
-    || die "scp main -> node idx$idx"
+  scp -q "$SOCIALNET_DIR/build/src/main" "$(node_ip "$idx"):$SOCIALNET_DIR/build/src/main" || die "scp main -> idx$idx"
   echo "  idx$idx <- main"
+done
+# The freshly-rebuilt client goes to every remote client node + its conf.
+for n in $(seq 1 "$NUM_CLIENTS"); do
+  idx="${CLIENT_NODES[$((n-1))]}"
+  [[ "$idx" == "$INFRA_IDX" ]] && continue     # client on the local node
+  remote "$idx" "mkdir -p $SOCIALNET_DIR/build/bench"
+  scp -q "$SOCIALNET_DIR/build/bench/client" "$(node_ip "$idx"):$SOCIALNET_DIR/build/bench/client" || die "scp client -> idx$idx"
+  scp -q "$EXP_DIR/conf/client$n" "$(node_ip "$idx"):/tmp/nu_client$n.conf" || die "scp conf -> idx$idx"
+  echo "  idx$idx <- client (client$n)"
 done
 
 # ─── iokerneld everywhere ────────────────────────────────────────────────────
 echo ""
-echo "=== Starting iokerneld (debugger-aware) ==="
-for idx in "$INFRA_IDX" "${SERVER_IDXS[@]}"; do
+echo "=== Starting iokerneld (debugger-aware) on all nodes ==="
+for idx in "${ALL_IDXS[@]}"; do
   # Redirect under sudo so root owns the log (a prior root-owned log would
   # otherwise make the user-shell redirect fail with EACCES).
   remote_bg "$idx" "sudo bash -c 'cd $NU_DIR && ./caladan/iokerneld ias dbg </dev/null >/tmp/iokerneld.log 2>&1'"
 done
-for idx in "$INFRA_IDX" "${SERVER_IDXS[@]}"; do
+for idx in "${ALL_IDXS[@]}"; do
   for _ in $(seq 1 20); do remote "$idx" 'grep -q MAC /tmp/iokerneld.log' 2>/dev/null && break; sleep 1; done
   remote "$idx" 'pgrep -x iokerneld >/dev/null' 2>/dev/null || die "iokerneld failed on idx$idx"
 done
-echo "  up on idx ${INFRA_IDX} ${SERVER_IDXS[*]}"
+echo "  up on idx ${ALL_IDXS[*]}"
 
 # ─── Controller on node0 ─────────────────────────────────────────────────────
 echo ""
@@ -195,12 +208,47 @@ if [[ "$USE_DDB" -eq 1 ]]; then
   done
 fi
 
-# ─── Run the client on node0 ─────────────────────────────────────────────────
+# ─── Run the clients (spread across the client nodes) ────────────────────────
 echo ""
-echo "=== Running the client on node0 ==="
-( cd "$SOCIALNET_DIR" && sudo ./build/bench/client "$EXP_DIR/conf/client" ) 2>&1 | tee "$RESULT"
+echo "=== Running $NUM_CLIENTS clients (nu_multi, barrier-synced across nodes) ==="
+# Each client offers kTargetMops/N and they rendezvous at a TCP barrier (sink =
+# first kClientAddr), so all must run concurrently. Each client blocks until the
+# benchmark finishes and prints its result to stdout, which we capture locally.
+# ssh (no -f) is fine here: the client exits on its own, so the channel closes.
+client_pids=()
+for n in $(seq 1 "$NUM_CLIENTS"); do
+  idx="${CLIENT_NODES[$((n-1))]}"
+  if [[ "$idx" == "$INFRA_IDX" ]]; then
+    ( cd "$LOG_DIR" && sudo "$SOCIALNET_DIR/build/bench/client" "$EXP_DIR/conf/client$n" ) \
+      > "$LOG_DIR/client.$n.log" 2>&1 &
+  else
+    ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no "$(node_ip "$idx")" \
+      "cd /tmp && sudo $SOCIALNET_DIR/build/bench/client /tmp/nu_client$n.conf" \
+      > "$LOG_DIR/client.$n.log" 2>&1 &
+  fi
+  client_pids+=($!)
+  echo "  client$n on idx$idx (caladan 18.18.1.$((248+n)))"
+done
+fail=0
+for pid in "${client_pids[@]}"; do wait "$pid" || fail=1; done
+[[ "$fail" -eq 0 ]] || echo "  warning: a client exited non-zero; see logs/client.*.log" >&2
+
+# Total system throughput = sum of the per-client real_mops (each measured its
+# own share over the barrier-synced window).
+echo ""
+{
+  echo "# per-client (real_mops avg 50th 90th 95th 99th 99.9th):"
+  total=0
+  for n in $(seq 1 "$NUM_CLIENTS"); do
+    line=$(grep -E '^[0-9]+\.[0-9]+ ' "$LOG_DIR/client.$n.log" | tail -1)
+    printf "client%s %s\n" "$n" "${line:-MISSING}"
+    m=$(awk '{print $1}' <<<"$line")
+    [[ -n "$m" ]] && total=$(awk -v a="$total" -v b="$m" 'BEGIN{print a+b}')
+  done
+  echo "aggregate_real_mops $total"
+} | tee "$RESULT"
 
 echo ""
 echo "=== Done ==="
-echo "Result: $RESULT"
+echo "Result: $RESULT   (aggregate throughput = sum of $NUM_CLIENTS clients)"
 [[ "$USE_DDB" -eq 1 ]] && echo "DDB log: $LOG_DIR/ddb.log"
