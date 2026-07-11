@@ -83,7 +83,13 @@ remote() {  # $1 = node index, rest = command; runs to completion
 # The caller supplies redirects. Poll for the process; -f returns before it runs.
 remote_bg() {  # $1 = node index, rest = command
   local idx="$1"; shift
-  ssh -f -n -o BatchMode=yes -o StrictHostKeyChecking=no "$(node_ip "$idx")" "$*"
+  # `-f` detaches the ssh client locally but it keeps the channel open for the
+  # lifetime of the remote process, and its stdout/stderr stay wired to our
+  # terminal. When stop_all later kills that process, the remote shell's
+  # job-control "Killed" line travels back and prints asynchronously (after the
+  # script has exited, sometimes over the next prompt). The process already
+  # logs to /tmp/*.log on its node, so send the client's stdio to /dev/null.
+  ssh -f -n -o BatchMode=yes -o StrictHostKeyChecking=no "$(node_ip "$idx")" "$*" >/dev/null 2>&1
 }
 
 # Set CALADAN_NIC + SSH_PREFIX in the environment (both exported).
