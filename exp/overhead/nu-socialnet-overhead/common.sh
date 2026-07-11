@@ -25,8 +25,12 @@ SOCIALNET_DIR="$NU_DIR/app/socialNetwork/single_proclet"
 CONNECTOR_DIR="$REPO_ROOT/connector"
 DDB_BIN="$REPO_ROOT/ddb/target/release/ddb"
 
-# ─── Roles ───────────────────────────────────────────────────────────────────
-INFRA_IDX=1                 # node0 (this node): controller + client + init + DDB
+# ─── Roles (node idx = last octet of the ssh network) ────────────────────────
+# idx1 (node0): controller + DDB + EMQX broker + init_graph + ALL clients
+# idx2..5 (node1..4): the Nu proclet servers
+# Server-side saturates first here, so co-locating the clients on node0 is fine;
+# to use dedicated client machines, move entries in CLIENT_NODES to other nodes.
+INFRA_IDX=1
 SERVER_IDXS=(2 3 4 5)       # node1..node4
 NUM_SERVERS=${#SERVER_IDXS[@]}
 # The last server boots the app (creates the proclets); the rest just join.
@@ -35,6 +39,17 @@ MAIN_SERVER_IDX=${SERVER_IDXS[$((NUM_SERVERS - 1))]}
 LPID=1
 CTRL_CALADAN_IP=18.18.1.1   # hard-coded in ctrl_main.cpp; server default -c too
 INIT_ENTRY_IP=18.18.1.2     # init_graph's kProxyIp -> the first server's entry
+
+# Nu benchmarks socialnet with multiple client processes (nu_multi/client.cpp:
+# perf.run_multi_clients + a TCP barrier), each offering kTargetMops/N, summed
+# for total throughput. CLIENT_NODES[i] = node idx hosting client i+1; caladan
+# IPs are 18.18.1.249.. (must match kClientAddrs in the client). All on node0
+# here -- the server side saturates first, so co-locating the clients is fine.
+CLIENT_NODES=(1 1 1)        # all 3 clients on node0
+NUM_CLIENTS=${#CLIENT_NODES[@]}
+
+# Every node the harness touches (infra + clients + servers), deduplicated.
+all_node_idxs() { printf '%s\n' "$INFRA_IDX" "${CLIENT_NODES[@]}" "${SERVER_IDXS[@]}" | sort -un; }
 
 # server k (0-based) gets caladan IP 18.18.1.(k+2); the client's get_entry_ip(k)
 # and init_graph both expect the entries to start at 18.18.1.2.
