@@ -1,0 +1,53 @@
+---
+# Rendered by start_ddb.sh -- edit this template, not the generated copy.
+#
+# Single-node experiment: DDB, the MQTT broker and the application under test all
+# run on this machine. DDB still reaches the app over SSH (there is no local
+# short-circuit), so passwordless ssh to @APP_IP@ has to work.
+#
+# Three things here are easy to get wrong and fail silently or fatally:
+#
+#   * `Framework` deserializes with serde(rename_all = "lowercase") and has a
+#     #[serde(other)] catch-all, so a capitalised `GRPC` is quietly accepted and
+#     becomes `Unspecified`, which then panics with "Unsupported framework
+#     adapter". It must be lowercase `grpc`. Note also that *omitting* Framework
+#     does not mean "none" -- it defaults to `nu`, whose adapter expects a
+#     Caladan runtime that a plain pthreads binary does not have.
+#
+#     `grpc` is the right pick for an ordinary C++ binary: it takes the same MQTT
+#     auto-discovery path as `nu` and sources runtime-gdb.py (which is what
+#     defines -record-time-and-continue, the command this whole experiment turns
+#     on), but without Nu's proclet/migration hooks.
+#
+#   * `sudo: true` is required, not cosmetic. This machine has
+#     kernel.yama.ptrace_scope=1, so a non-root gdb may only attach to its own
+#     descendants. faketime_pause is not a descendant of gdb -- it starts on its
+#     own and waits to be discovered -- so gdb has to be root to attach at all.
+#
+#   * Do NOT add PostrunGdbCommands: [-exec-continue]. After attaching, DDB sends
+#     SIG40, which releases the connector's wait_for_debugger() and then re-traps
+#     via SIGTRAP. An auto-continue races that handshake and can leave the process
+#     parked in sigwait forever. run_experiment.sh resumes it explicitly, once the
+#     attach has settled.
+Framework: grpc
+SSH:
+  user: "@SSH_USER@"
+  port: 22
+PrerunGdbCommands:
+  - name: "Pretty Print for CPP"
+    command: "-enable-pretty-printing"
+ServiceDiscovery:
+  Broker:
+    # The app reads tcp://<hostname>:<port> out of the service-discovery config
+    # DDB writes, so this must be an address the app can reach. Everything is on
+    # one machine here, so the loopback is fine.
+    hostname: "@BROKER_IP@"
+    managed:
+      type: emqx
+Conf:
+  sudo: true
+  on_exit: "kill"
+  support_migration: false
+  log_dir: "@LOG_DIR@"
+  base_dir: "@BASE_DIR@"
+  api_server_port: 5000
