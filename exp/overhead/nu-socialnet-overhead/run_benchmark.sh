@@ -1,11 +1,23 @@
 #!/bin/bash
 #
 # Run the distributed Nu socialNetwork benchmark, optionally with DDB attached
-# to every backend server.
+# to every backend server, or against a vanilla (non-instrumented) Nu build.
 #
-#   ./run_benchmark.sh                 # baseline, no debugger
+#   ./run_benchmark.sh                 # baseline: CONFIG_DDB=y, no debugger
 #   ./run_benchmark.sh --ddb           # DDB attached to all 4 servers
+#   ./run_benchmark.sh --vanilla       # vanilla Nu: CONFIG_DDB=n, no DDB
+#                                      #   metadata embedding in the RPC path
 #   ./run_benchmark.sh --mops 2.0      # override target load (Mops, total)
+#
+# baseline-vs-ddb isolates the ATTACH cost; vanilla-vs-baseline isolates the
+# INSTRUMENTATION cost (Nu's DDB hooks are compile-time, so both baseline and
+# ddb runs pay them); vanilla-vs-ddb is DDB's total cost on Nu.
+#
+# --vanilla and the other two modes need differently-compiled trees (libnu,
+# ctrl_main and the app must all match -- the RPC wire format differs). The
+# script switches the build flavor automatically and rebuilds when, and only
+# when, the requested mode needs the other flavor (~3-5 min per switch;
+# consecutive runs of the same flavor skip it).
 #
 # Layout (see common.sh):
 #   node0 : controller + init_graph + client  (+ DDB + EMQX broker with --ddb)
@@ -15,14 +27,18 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 USE_DDB=0
+USE_VANILLA=0
 MOPS="1.0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ddb)  USE_DDB=1; shift ;;
-    --mops) MOPS="$2"; shift 2 ;;
+    --ddb)     USE_DDB=1;     shift ;;
+    --vanilla) USE_VANILLA=1; shift ;;
+    --mops)    MOPS="$2";     shift 2 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
+[[ "$USE_DDB" -eq 1 && "$USE_VANILLA" -eq 1 ]] \
+  && die "--ddb needs the instrumented build; --vanilla compiles the connector out. Pick one."
 
 require_built
 detect_network
@@ -35,8 +51,69 @@ mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 exec 200>"$EXP_DIR/.run.lock"
 flock -n 200 || die "another run_benchmark.sh is still active (or tearing down); wait for it or ./stop_all.sh"
 
-TAG="mops${MOPS}_n${NUM_SERVERS}$([[ $USE_DDB -eq 1 ]] && echo _ddb || echo _baseline)_$(date +%Y%m%d_%H%M%S)"
+MODE_TAG=_baseline
+[[ "$USE_DDB" -eq 1 ]]     && MODE_TAG=_ddb
+[[ "$USE_VANILLA" -eq 1 ]] && MODE_TAG=_vanilla
+TAG="mops${MOPS}_n${NUM_SERVERS}${MODE_TAG}_$(date +%Y%m%d_%H%M%S)"
 RESULT="$RESULTS_DIR/$TAG.txt"
+
+# ─── Build flavor: instrumented (CONFIG_DDB=y) vs vanilla (CONFIG_DDB=n) ─────
+# Nu's DDB hooks are compile-time (#ifdef DDB_SUPPORT), and they change the RPC
+# wire format (a DDBTraceMeta is prepended to every argument buffer), so libnu,
+# ctrl_main, the backend, the client and init_graph must all come from the same
+# flavor. The flavor is read from the backend binary itself -- the connector's
+# "[DDB Connector]" log strings are only compiled in under DDB_SUPPORT -- so an
+# interrupted switch or a hand-edited tree cannot fool the check.
+
+binary_flavor() {
+  # grep -c (not -q): -q exits at the first match, strings then dies of
+  # SIGPIPE, and under `set -o pipefail` the pipeline reports failure -- which
+  # would misread every instrumented binary as vanilla.
+  local n
+  n=$(strings "$SOCIALNET_DIR/build/src/main" 2>/dev/null | grep -c "DDB Connector")
+  [[ "${n:-0}" -gt 0 ]] && echo instrumented || echo vanilla
+}
+
+set_tree_flavor() {   # $1 = instrumented|vanilla; edits config + app defines
+  if [[ "$1" == vanilla ]]; then
+    sed -i 's/^CONFIG_DDB=y/CONFIG_DDB=n/' "$NU_DIR/build/config"
+    sed -i 's|^add_compile_definitions(DDB_SUPPORT)|# add_compile_definitions(DDB_SUPPORT) # disabled by run_benchmark.sh --vanilla|' \
+      "$SOCIALNET_DIR/src/CMakeLists.txt" "$SOCIALNET_DIR/bench/CMakeLists.txt"
+  else
+    sed -i 's/^CONFIG_DDB=n/CONFIG_DDB=y/' "$NU_DIR/build/config"
+    sed -i 's|^# add_compile_definitions(DDB_SUPPORT) # disabled by run_benchmark.sh --vanilla|add_compile_definitions(DDB_SUPPORT)|' \
+      "$SOCIALNET_DIR/src/CMakeLists.txt" "$SOCIALNET_DIR/bench/CMakeLists.txt"
+  fi
+}
+
+ensure_flavor() {     # $1 = instrumented|vanilla; rebuild only when needed
+  local want="$1"
+  # Keep the tree consistent with the request even when no rebuild is needed --
+  # a later manual `make` should not silently produce the other flavor.
+  set_tree_flavor "$want"
+  if [[ "$(binary_flavor)" == "$want" ]]; then return 0; fi
+
+  echo ""
+  echo "=== Switching the Nu build flavor to '$want' (one-time rebuild, ~3-5 min) ==="
+  local extra=""
+  [[ "$want" == instrumented ]] && extra="bin/ctrl_proxy"
+  ( cd "$NU_DIR" && make clean >/dev/null 2>&1;
+    TMPDIR=/mnt/local/tmp make -j"$(nproc)" libnu.a bin/ctrl_main $extra >/dev/null 2>&1 ) \
+    || die "libnu rebuild failed for flavor '$want'"
+  # CMakeLists mtimes changed, so make re-runs cmake and recompiles the app
+  # objects. The BINARIES must be removed by hand: cmake records no dependency
+  # on libnu.a's mtime, so without this the app would not relink against the
+  # freshly-flavored libnu and could ship a mixed-wire-format binary.
+  rm -f "$SOCIALNET_DIR/build/src/main" "$SOCIALNET_DIR/build/bench/client" \
+        "$SOCIALNET_DIR/build/init_graph/init_graph"
+  ( cd "$SOCIALNET_DIR/build" && TMPDIR=/mnt/local/tmp make -j"$(nproc)" main client init_graph >/dev/null 2>&1 ) \
+    || die "app rebuild failed for flavor '$want'"
+  [[ "$(binary_flavor)" == "$want" ]] \
+    || die "rebuild finished but the backend binary is still '$(binary_flavor)', wanted '$want'"
+  echo "  flavor is now '$want'"
+}
+
+if [[ "$USE_VANILLA" -eq 1 ]]; then ensure_flavor vanilla; else ensure_flavor instrumented; fi
 
 cleanup_all() { "$EXP_DIR/stop_all.sh" >/dev/null 2>&1 || true; }
 trap cleanup_all EXIT
@@ -251,6 +328,13 @@ if [[ "$USE_DDB" -eq 1 ]]; then
     tp=$(remote "$idx" 'p=$(pgrep -x main|head -1); [[ -n "$p" ]] && sudo awk "/TracerPid/{print \$2}" /proc/$p/status' 2>/dev/null)
     [[ -n "$tp" && "$tp" != "0" ]] \
       || die "idx$idx: backend no longer traced after the run (TracerPid=${tp:-gone}); discard this run"
+  done
+else
+  # Symmetric check for baseline/vanilla: nothing may have been attached.
+  for idx in "${SERVER_IDXS[@]}"; do
+    tp=$(remote "$idx" 'p=$(pgrep -x main|head -1); [[ -n "$p" ]] && sudo awk "/TracerPid/{print \$2}" /proc/$p/status' 2>/dev/null)
+    [[ -z "$tp" || "$tp" == "0" ]] \
+      || die "idx$idx: a debugger was attached (TracerPid=$tp) during a ${MODE_TAG#_} run; discard this run"
   done
 fi
 
