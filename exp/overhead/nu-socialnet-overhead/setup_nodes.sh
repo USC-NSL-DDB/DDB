@@ -2,8 +2,9 @@
 #
 # Prepare every node for a distributed Caladan/Nu run:
 #   * hugepages + ksched module, jumbo frames, DSCP trust  (Nu's setup.sh)
-#   * replicate the Nu tree to every server node at the same absolute path
-#     (Nu ssh'es into `cd <path>`, and there is no shared filesystem here)
+#   * ship the Nu *runtime* subset (~64 MB: iokerneld + rdma libs + ksched +
+#     the socialnet config) to every server node at the same absolute path --
+#     remote nodes only run, never build, so the full 2.7 GB tree is not needed
 #
 # No docker / nginx: seeding is native (build/init_graph over Thrift).
 #
@@ -41,16 +42,30 @@ done
 
 if [[ "$SKIP_SYNC" -eq 0 ]]; then
   echo ""
-  echo "=== Replicating the Nu tree to every non-local node ==="
+  echo "=== Shipping the Nu runtime bits to every non-local node ==="
+  # A remote node never *builds* Nu -- it only runs iokerneld and the socialnet
+  # backend (both scp'd/launched from here), so it needs a ~64 MB runtime subset,
+  # not the full 2.7 GB tree. `-R` with the `/./` anchor recreates each path
+  # under $NU_DIR on the receiver. What each entry is for:
+  #   caladan/iokerneld                 - the iokernel binary (remote_bg on every node)
+  #   caladan/rdma-core/build/lib       - iokerneld + main/client rpath into here (ldd)
+  #   caladan/ksched/build/ksched.ko    - insmod'd by setup_machine.sh below
+  #   caladan/scripts                   - setup_machine.sh + its siblings
+  #   app/.../single_proclet/config     - main reads config/service-config.json (main.cpp)
+  # The main/client binaries themselves are scp'd fresh by run_benchmark.sh, and
+  # Nu generates its caladan .conf on the fly (runtime.cpp), so neither ships here.
   for idx in "${ALL_IDXS[@]}"; do
     [[ "$idx" == "$INFRA_IDX" ]] && continue     # infra node is where we run from
     ip="$(node_ip "$idx")"
     echo "  -> idx$idx ($ip)"
     remote "$idx" "sudo mkdir -p $NU_DIR && sudo chown -R \$(id -u):\$(id -g) $REPO_ROOT"
-    rsync -az --delete \
-      --exclude 'ddb/target' --exclude '.git' --exclude 'fwks/quicksand' \
-      --exclude 'fwks/gotosocial' --exclude 'fwks/grpc' \
-      "$NU_DIR/" "$ip:$NU_DIR/" 2>/dev/null || die "rsync to idx$idx failed"
+    rsync -azR \
+      "$NU_DIR/./caladan/iokerneld" \
+      "$NU_DIR/./caladan/rdma-core/build/lib" \
+      "$NU_DIR/./caladan/ksched/build/ksched.ko" \
+      "$NU_DIR/./caladan/scripts" \
+      "$NU_DIR/./app/socialNetwork/single_proclet/config" \
+      "$ip:$NU_DIR/" 2>/dev/null || die "rsync to idx$idx failed"
   done
 fi
 
