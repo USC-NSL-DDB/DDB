@@ -11,11 +11,6 @@ k3s cluster, with and without DDB attached.
 
 Run every command below **on node0**, from this directory.
 
-## Prerequisites
-
-- Passwordless SSH from node0 to every IP in `cluster.txt` (including node0 itself)
-- Passwordless `sudo` on all nodes
-
 ## Run the benchmark
 
 ```bash
@@ -44,24 +39,18 @@ newgrp docker
 ## Measure DDB overhead
 
 ```bash
-# 1. Build DDB (no prebuilt binary ships with the repo).
-#    Skip the first two lines if cargo is already installed.
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-cargo build --release --manifest-path ../../../ddb/Cargo.toml
-
-# 2. Deploy the ssh-gateway, inject debug sidecars into all 14 pods, and render
+# 1. Deploy the ssh-gateway, inject debug sidecars into all 14 pods, and render
 #    a ready-to-use DDB config. Re-run after any redeploy or rescale: pod
 #    restarts drop the ephemeral sidecars.
 ./setup_ddb.sh
 
-# 3. Attach. The config path is positional, not --config.
-../../../ddb/target/release/ddb ddb/serviceweaver_config.yaml
+# 2. Attach DDB.
+ddb ddb/serviceweaver_config.yaml
 ```
 
 **Attaching freezes the app.** DDB stops every process on attach, so the endpoint
-times out until you resume it. The REPL takes GDB/MI commands, so use
-`-exec-continue`, not `continue`:
+times out until you resume it. 
+Use `-exec-continue` to continue the execution.
 
 ```
 (ddb) -exec-continue
@@ -106,8 +95,8 @@ Pod restarts clear in-memory state and drop the debug sidecars.
 | `--addr` | auto | Override the API endpoint |
 | `--sweep` | — | Comma-separated MOPS values to sweep |
 
-Injection rate = `target-mops × threads`. Workload: 60% read user timeline,
-30% read home timeline, 5% compose post, 5% remove posts.
+Injection rate = `target-mops × threads`. 
+Workload: 60% read user timeline, 30% read home timeline, 5% compose post, 5% remove posts.
 
 ## Output
 

@@ -31,8 +31,7 @@ across all four too, so proclet calls are genuinely cross-node.
 # ddb, and the socialNetwork app (server, client, init_graph).
 ./build_all.sh
 
-# Prepare all nodes: hugepages + ksched, replicate the Nu tree to every
-# non-local node (there is no shared filesystem).
+# Prepare all nodes: hugepages + ksched, replicate the Nu tree to every node.
 ./setup_nodes.sh
 ```
 
@@ -56,34 +55,12 @@ the cost of Nu's compiled-in DDB instrumentation (paid whether or not anyone
 debugs), **baseline vs ddb** is the cost of actually attaching, and **vanilla vs
 ddb** is DDB's total cost on Nu.
 
-`--vanilla` and the other two modes need differently-compiled trees (the RPC
-wire format differs, so libnu, ctrl_main, backend, client and init_graph must
-all match). The script handles this automatically: when the requested mode
-needs the other flavor it flips `CONFIG_DDB` + the app's `DDB_SUPPORT` defines,
-rebuilds, and **verifies the flavor from the produced binary** before
-measuring. The switch is a one-time ~3–5 min rebuild; consecutive runs of the
-same flavor skip it, so group your trials by flavor rather than alternating
-every run.
-
-A single run per case sanity-checks the pipeline, but runs vary ~1% between
-trials, so for a real number take several trials of each and compare the
-medians at matched load (grouped by flavor to avoid rebuild churn):
+You can also do repeated trials of each and compare the medians at matched load:
 
 ```bash
 for i in 1 2 3 4 5; do ./run_benchmark.sh --vanilla --mops 1.0; done
 for i in 1 2 3 4 5; do ./run_benchmark.sh           --mops 1.0; done
 for i in 1 2 3 4 5; do ./run_benchmark.sh --ddb     --mops 1.0; done
-```
-
-To see how overhead behaves with load, repeat the pair across a sweep. Note the
-servers saturate near ~1 Mops (below), so pushing `--mops` far past that just
-raises latency:
-
-```bash
-for m in 0.5 1.0 1.5 2.0; do
-  ./run_benchmark.sh       --mops "$m"
-  ./run_benchmark.sh --ddb --mops "$m"
-done
 ```
 
 `./stop_all.sh` cleans up by hand if a run is interrupted (kills every node's
@@ -122,38 +99,13 @@ trials, 2026-07-11):
 | baseline (`CONFIG_DDB=y`, no debugger) | 0.968 | 368 | **−3.2% tput, +55% p50** |
 | DDB attached (all 4 servers) | 0.965 | 369 | **−3.4% tput** |
 
-**"Overhead" here has two parts, and the harness's `baseline` only isolates one of them.**
-
-* **DDB's cost on Nu is the compiled-in instrumentation, not the attach.** With
-  `CONFIG_DDB=y`, every proclet RPC captures trace metadata and — in the current
-  implementation — allocates a fresh vector and copies the whole argument buffer
-  to prepend it (`inc/nu/impl/rpc.ipp`), plus an extraction wrapper on every
-  receive. Unlike the DDB-patched gRPC (whose equivalent is gated at runtime on
-  `DDB::Initialized()`), Nu's hooks are `#ifdef DDB_SUPPORT` — compile-time,
-  always on. That costs ~3.2% throughput and ~130µs of median latency at this
-  load. 
-* **Attaching gdb via DDB on top costs ~0.2% — run-to-run noise** (interleaved
-  trials, attach verified before *and* after each measurement). This is real,
-  not a broken measurement: Nu handles RPCs on Caladan green threads, so there
-  is no OS-thread churn and no ptrace/MI thread-event traffic — the opposite
-  extreme from the raft-overhead experiment, where ~1M thread events per run
-  make an attached MI gdb cost ~20%.
-* The vanilla number is a **lower bound** on the instrumentation cost: vanilla
-  achieves the full offered 1.0 Mops (not saturated at this operating point),
-  while the instrumented build saturates at ~0.97.
-
-To reproduce the vanilla row, just run `./run_benchmark.sh --vanilla` — the
-flavor switch, rebuild, and restore-on-next-instrumented-run are automatic (see
-"Measure the overhead"). `--ddb --vanilla` is rejected: the connector is
-compiled out of a vanilla build, so there is nothing for DDB to attach to.
-
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `build_all.sh` | connector headers, caladan + ksched, Nu (CONFIG_DDB=y), ddb, socialNetwork |
 | `setup_nodes.sh` | hugepages/ksched + replicate the Nu tree to every non-local node |
-| `run_benchmark.sh` | **Main entry point.** Brings up the cluster, seeds, runs the clients; `--vanilla` switches the Nu build flavor automatically |
+| `run_benchmark.sh` | **Main entry point.** Brings up the cluster, seeds, runs the clients |
 | `start_ddb.sh` | DDB + EMQX broker + distribute the service-discovery config |
 | `stop_all.sh` | Kill everything; clear stale Caladan shm / hugepages |
 | `common.sh` | Internal: node roles, NIC detection, remote helpers |
