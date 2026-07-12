@@ -84,6 +84,20 @@ Pod restarts clear in-memory state and drop the debug sidecars.
 ./setup_ddb.sh                 # only if using DDB
 ```
 
+## Tearing everything down
+
+One command cleans up a whole run — DDB and benchmark processes on the head
+node, then the app, its services, and the ssh-gateway from the cluster:
+
+```bash
+./stop_all.sh                  # app-level teardown; the k3s cluster stays up
+./stop_all.sh --cluster        # also stop k3s on every node (k3s-killall + server)
+```
+
+Installation state (binaries, docker image cache, `~/.kube/config`, logs under
+`~/ddb-tmp`) is deliberately kept. Restore with `./setup_experiment.sh
+--skip-build`, then `./seed_data.sh` (and `./setup_ddb.sh` if using DDB).
+
 ## Benchmark parameters
 
 | Flag | Default | Description |

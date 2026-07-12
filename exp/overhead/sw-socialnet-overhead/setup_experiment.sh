@@ -52,6 +52,7 @@ echo "=== Step 3: Wait for nodes to become Ready ==="
 wait_for_nodes "$CLUSTER_FILE"
 
 prune_stale_nodes "$CLUSTER_FILE"
+heal_pod_mesh "$CLUSTER_FILE"
 taint_master
 kubectl get nodes -o wide
 

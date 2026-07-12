@@ -178,6 +178,52 @@ prune_stale_nodes() {
   done < <(kubectl get nodes -o name --no-headers 2>/dev/null | sed 's|^node/||')
 }
 
+# Flannel programs three kernel entries per REMOTE node: a route to its podCIDR
+# via flannel.1, a permanent ARP entry for that subnet's gateway, and an FDB
+# entry mapping the peer's VTEP MAC to its node IP. A missed node-watch event
+# (observed in the wild right after a join) leaves one host without one peer's
+# entries, silently blackholing pod traffic between that pair -- DNS from pods
+# breaks, ClusterIPs time out, and nothing in `kubectl get nodes/pods` shows it.
+# Verify the full mesh and program any missing entries exactly as flannel would.
+heal_pod_mesh() {
+  local cluster_file="${1:-$EXP_DIR/cluster.txt}"
+  echo "Verifying the flannel route mesh on every node..."
+
+  # One line per k8s node: "<podCIDR> <nodeIP> <vtepMAC>"
+  local peers
+  peers="$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDR}{" "}{.metadata.annotations.flannel\.alpha\.coreos\.com/public-ip}{" "}{.metadata.annotations.flannel\.alpha\.coreos\.com/backend-data}{"\n"}{end}' \
+    | sed 's/{"VNI":[0-9]*,"VtepMAC":"\([^"]*\)"}/\1/')"
+  [[ -n "$peers" ]] || { echo "  WARNING: could not read node annotations; skipping" >&2; return 0; }
+
+  local host healed=0
+  while IFS= read -r host; do
+    [[ -z "$host" || "$host" == \#* ]] && continue
+    # Build one remote script that checks/repairs every peer's three entries.
+    local script="" cidr ip mac gw
+    while read -r cidr ip mac; do
+      [[ -z "$cidr" || -z "$ip" || -z "$mac" ]] && continue
+      [[ "$ip" == "$host" ]] && continue          # a node needs no entry for itself
+      gw="${cidr%/*}"                             # flannel uses x.y.z.0 as the peer gateway
+      script+="
+        ip route show | grep -q '^$cidr ' || {
+          sudo ip route replace $cidr via $gw dev flannel.1 onlink
+          sudo ip neigh replace $gw lladdr $mac dev flannel.1 nud permanent
+          sudo bridge fdb append $mac dev flannel.1 dst $ip self permanent
+          echo 'HEALED $cidr (via $ip)'
+        }"
+    done <<<"$peers"
+    local out
+    out="$(ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no "$host" "$script" 2>/dev/null)"
+    if [[ -n "$out" ]]; then
+      healed=1
+      echo "  $host: ${out//$'\n'/, }"
+    fi
+  done <"$cluster_file"
+
+  [[ "$healed" -eq 0 ]] && echo "  mesh complete on all nodes."
+  return 0
+}
+
 # Keep app pods off the master: it runs the load generator, and co-scheduling
 # microservices there would contaminate the measurements.
 taint_master() {
@@ -186,15 +232,18 @@ taint_master() {
   echo "Master $(hostname) tainted NoSchedule (no app pods)."
 }
 
+# sudo -H everywhere kubectl runs as root: this image's sudo preserves $HOME,
+# so a plain `sudo k3s kubectl` writes a root-owned cache into the USER's
+# ~/.kube, and every later user-level write there fails with EACCES.
 k3s_server_up() {
-  systemctl is-active --quiet k3s && sudo k3s kubectl get nodes >/dev/null 2>&1
+  systemctl is-active --quiet k3s && sudo -H k3s kubectl get nodes >/dev/null 2>&1
 }
 
 # A running server can predate a config change: config.yaml may already say
 # node-ip: 10.10.1.1 while the live process still advertises the public IP.
 master_registered_correctly() {
   local addr
-  addr="$(sudo k3s kubectl get node "$(hostname)" \
+  addr="$(sudo -H k3s kubectl get node "$(hostname)" \
     -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
   [[ "$addr" == "$MASTER_IP" ]]
 }
@@ -246,6 +295,9 @@ ensure_kubeconfig() {
     [[ -f "$K3S_KUBECONFIG" ]] || die "$K3S_KUBECONFIG not found. Is the k3s server running on this node?"
     echo "Copying k3s kubeconfig to $user_cfg ..."
     mkdir -p "$HOME/.kube"
+    # A past `sudo kubectl` (with $HOME preserved) may have left ~/.kube
+    # root-owned; reclaim it or the user-level redirect below gets EACCES.
+    [[ -w "$HOME/.kube" ]] || sudo chown -R "$(whoami):" "$HOME/.kube"
     sudo cat "$K3S_KUBECONFIG" > "$user_cfg"
     chmod 600 "$user_cfg"
   fi
