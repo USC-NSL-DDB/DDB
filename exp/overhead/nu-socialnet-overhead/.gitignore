@@ -4,3 +4,4 @@ results/
 
 # rendered by start_ddb.sh from nu_config.yaml.tmpl
 ddb/nu_config.yaml
+.run.lock

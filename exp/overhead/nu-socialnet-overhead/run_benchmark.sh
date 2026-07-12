@@ -28,6 +28,13 @@ require_built
 detect_network
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
+# One run at a time. Two concurrent invocations shoot each other down (each
+# starts by killing every process the other depends on, and a finishing run's
+# exit trap does it again) -- fail fast instead. The lock is held until this
+# process exits, i.e. through the cleanup trap too.
+exec 200>"$EXP_DIR/.run.lock"
+flock -n 200 || die "another run_benchmark.sh is still active (or tearing down); wait for it or ./stop_all.sh"
+
 TAG="mops${MOPS}_n${NUM_SERVERS}$([[ $USE_DDB -eq 1 ]] && echo _ddb || echo _baseline)_$(date +%Y%m%d_%H%M%S)"
 RESULT="$RESULTS_DIR/$TAG.txt"
 
@@ -233,6 +240,20 @@ fail=0
 for pid in "${client_pids[@]}"; do wait "$pid" || fail=1; done
 [[ "$fail" -eq 0 ]] || echo "  warning: a client exited non-zero; see logs/client.*.log" >&2
 
+# The debugger must have SURVIVED the measurement, or the number is a hybrid of
+# debugged and undebugged execution and would masquerade as "zero overhead" --
+# the most dangerous failure for this experiment. (DDB can die mid-run, e.g. on
+# a full root filesystem, and its orphaned gdbs then detach or freeze.)
+if [[ "$USE_DDB" -eq 1 ]]; then
+  kill -0 "$(cat "$LOG_DIR/ddb.pid" 2>/dev/null)" 2>/dev/null \
+    || die "DDB died during the measurement; discard this run (see $LOG_DIR/ddb.log)"
+  for idx in "${SERVER_IDXS[@]}"; do
+    tp=$(remote "$idx" 'p=$(pgrep -x main|head -1); [[ -n "$p" ]] && sudo awk "/TracerPid/{print \$2}" /proc/$p/status' 2>/dev/null)
+    [[ -n "$tp" && "$tp" != "0" ]] \
+      || die "idx$idx: backend no longer traced after the run (TracerPid=${tp:-gone}); discard this run"
+  done
+fi
+
 # Total system throughput = sum of the per-client real_mops (each measured its
 # own share over the barrier-synced window).
 echo ""
@@ -251,4 +272,5 @@ echo ""
 echo ""
 echo "=== Done ==="
 echo "Result: $RESULT   (aggregate throughput = sum of $NUM_CLIENTS clients)"
-[[ "$USE_DDB" -eq 1 ]] && echo "DDB log: $LOG_DIR/ddb.log"
+# `[[ ... ]] && echo` as the last command would make the baseline exit 1.
+if [[ "$USE_DDB" -eq 1 ]]; then echo "DDB log: $LOG_DIR/ddb.log"; fi

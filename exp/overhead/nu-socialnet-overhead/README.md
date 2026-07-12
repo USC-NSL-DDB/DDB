@@ -115,18 +115,50 @@ for f in results/mops1.0_n4_*.txt; do
 done
 ```
 
-Reference numbers from this cluster (4 servers, single trials):
+Reference numbers from this cluster (4 servers, `--mops 1.0`, medians of 3
+trials, 2026-07-11):
 
-| | aggregate real_mops | notes |
-|---|---|---|
-| baseline | ~0.95 | server-side saturation |
-| DDB attached (all 4 servers) | ~0.95 | within run-to-run noise of baseline |
+| | aggregate real_mops | client p50 (µs) | vs vanilla |
+|---|---|---|---|
+| vanilla Nu (`CONFIG_DDB=n`) | 0.999 | 237 | — |
+| baseline (`CONFIG_DDB=y`, no debugger) | 0.968 | 368 | **−3.2% tput, +55% p50** |
+| DDB attached (all 4 servers) | 0.965 | 369 | **−3.4% tput** |
+
+**Read this table carefully — "overhead" here has two parts, and the harness's
+`baseline` only isolates one of them.**
+
+* **DDB's cost on Nu is the compiled-in instrumentation, not the attach.** With
+  `CONFIG_DDB=y`, every proclet RPC captures trace metadata and — in the current
+  implementation — allocates a fresh vector and copies the whole argument buffer
+  to prepend it (`inc/nu/impl/rpc.ipp`), plus an extraction wrapper on every
+  receive. Unlike the DDB-patched gRPC (whose equivalent is gated at runtime on
+  `DDB::Initialized()`), Nu's hooks are `#ifdef DDB_SUPPORT` — compile-time,
+  always on. That costs ~3.2% throughput and ~130µs of median latency at this
+  load. Both `baseline` and `--ddb` runs pay it equally, which is why comparing
+  them shows ~0.
+* **Attaching gdb via DDB on top costs ~0.2% — run-to-run noise** (interleaved
+  trials, attach verified before *and* after each measurement). This is real,
+  not a broken measurement: Nu handles RPCs on Caladan green threads, so there
+  is no OS-thread churn and no ptrace/MI thread-event traffic — the opposite
+  extreme from the raft-overhead experiment, where ~1M thread events per run
+  make an attached MI gdb cost ~20%.
+* The vanilla number is a **lower bound** on the instrumentation cost: vanilla
+  achieves the full offered 1.0 Mops (not saturated at this operating point),
+  while the instrumented build saturates at ~0.97.
+
+To reproduce the vanilla row: set `CONFIG_DDB=n` in `fwks/Nu/build/config`,
+comment out `add_compile_definitions(DDB_SUPPORT)` in the app's
+`src/CMakeLists.txt` and `bench/CMakeLists.txt`, `make clean && make` in Nu,
+rebuild `main client init_graph` in the app build dir, and run the baseline
+mode. (`--ddb` cannot run against a vanilla build — the connector is compiled
+out.) Restore all three files afterwards; the wire format differs between the
+two builds, so servers and clients must all come from the same one.
 
 The ceiling is **server-side**: throughput scales with server count
 (~0.24 Mops/server — 3 servers give ~0.71, 4 give ~0.95) and does not rise with
 more client threads, CPU, or client nodes. At steady state with no breakpoints,
-an attached gdb costs essentially nothing; the interesting overhead shows up
-under breakpoint/stepping workloads, not at idle attach.
+the attach itself costs essentially nothing on this workload; DDB's price on Nu
+is paid in the always-on RPC instrumentation above.
 
 ## What `--ddb` does
 
