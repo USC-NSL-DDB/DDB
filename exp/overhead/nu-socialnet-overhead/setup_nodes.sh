@@ -34,6 +34,8 @@ echo ""
 echo "=== Sanity: every node reachable with passwordless sudo ==="
 for idx in "${ALL_IDXS[@]}"; do
   remote "$idx" 'sudo -n true' >/dev/null 2>&1 || die "idx$idx ($(node_ip "$idx")) unreachable or no passwordless sudo"
+  # /mnt/local is often root-owned on a fresh node; claim it before we mkdir/rsync into it below.
+  remote "$idx" 'sudo chown -R $(whoami): /mnt/local' || die "could not claim /mnt/local on idx$idx"
   echo "  idx$idx ok"
 done
 

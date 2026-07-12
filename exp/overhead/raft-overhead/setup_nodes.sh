@@ -30,6 +30,8 @@ echo "=== Sanity: every server reachable, passwordless sudo, gdb present ==="
 for ip in "${SERVER_IPS[@]}"; do
   remote "$ip" 'sudo -n true' >/dev/null 2>&1 || die "$ip unreachable or no passwordless sudo"
   remote "$ip" 'command -v gdb'  >/dev/null 2>&1 || die "gdb not installed on $ip (sudo apt-get install -y gdb)"
+  # /mnt/local is often root-owned on a fresh node; claim it before we mkdir/rsync into it below.
+  remote "$ip" 'sudo chown -R $(whoami): /mnt/local' || die "could not claim /mnt/local on $ip"
   echo "  $ip ok"
 done
 
