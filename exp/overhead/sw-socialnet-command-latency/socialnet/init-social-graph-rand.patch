@@ -1,0 +1,55 @@
+diff --git a/bench/init_social_graph.go b/bench/init_social_graph.go
+--- a/bench/init_social_graph.go
++++ b/bench/init_social_graph.go
+@@ -88,6 +88,12 @@ func followUser(addr string, followerID, followeeID string, wg *sync.WaitGroup)
+ 	api.FollowWithUsername(addr, req)
+ }
+ 
++func randomIntn(n int) int {
++	mu.Lock()
++	defer mu.Unlock()
++	return r.Intn(n)
++}
++
+ // Compose post
+ func composePost(addr string, user_id int, num_users int, wg *sync.WaitGroup) {
+ 	defer wg.Done()
+@@ -96,17 +102,13 @@ func composePost(addr string, user_id int, num_users int, wg *sync.WaitGroup) {
+ 	text := randomString(letters, 256)
+ 
+ 	// User mentions
+-	mu.Lock()
+-	numMentions := r.Intn(6)
+-	mu.Unlock()
++	numMentions := randomIntn(6)
+ 	for i := 0; i < numMentions; i++ {
+-		text += " @username_" + strconv.Itoa(r.Intn(num_users)+1)
++		text += " @username_" + strconv.Itoa(randomIntn(num_users)+1)
+ 	}
+ 
+ 	// URLs
+-	mu.Lock()
+-	numURLs := r.Intn(6)
+-	mu.Unlock()
++	numURLs := randomIntn(6)
+ 	for i := 0; i < numURLs; i++ {
+ 		text += " http://" + randomString("abcdefghijklmnopqrstuvwxyz0123456789", 64)
+ 	}
+@@ -113,7 +115,7 @@ func composePost(addr string, user_id int, num_users int, wg *sync.WaitGroup) {
+ 	// Media
+ 	mediaIDs := make([]int64, 0)
+ 	mediaTypes := make([]string, 0)
+-	numMedia := r.Intn(6)
++	numMedia := randomIntn(6)
+ 	for i := 0; i < numMedia; i++ {
+ 		mediaIDs = append(mediaIDs, randomDigits(18))
+ 		mediaTypes = append(mediaTypes, "png")
+@@ -220,7 +222,7 @@ func compose(addr string, nodes int) {
+ 	fmt.Println("Composing posts...")
+ 	var wg sync.WaitGroup
+ 	for i := 0; i <= nodes; i++ {
+-		upper := r.Intn(20)
++		upper := randomIntn(20)
+ 		for j := 0; j < upper; j++ {
+ 			idx += 1
+ 			wg.Add(1)

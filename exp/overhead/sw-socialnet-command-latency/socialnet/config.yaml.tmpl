@@ -1,0 +1,20 @@
+# ServiceWeaver deployment configuration owned by this artifact recipe.
+appConfig: weaver.toml
+image: h21565897/socialnet-serviceweaver:12345
+namespace: "@NAMESPACE@"
+
+listeners:
+  - name: apilistener
+    public: true
+
+scalingSpec:
+  minReplicas: 1
+  maxReplicas: 1
+
+groups:
+  - name: scalingMachines
+    components:
+      - SocialNetwork/server/IStorage
+    scalingSpec:
+      minReplicas: 1
+      maxReplicas: 1

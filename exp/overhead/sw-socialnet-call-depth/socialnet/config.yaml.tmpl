@@ -1,0 +1,20 @@
+# Recipe-owned ServiceWeaver Kubernetes deployment configuration.
+appConfig: "@APP_CONFIG@"
+image: "@SOCIALNET_IMAGE@"
+namespace: "@NAMESPACE@"
+
+listeners:
+  - name: apilistener
+    public: true
+
+scalingSpec:
+  minReplicas: 1
+  maxReplicas: 1
+
+groups:
+  - name: scalingMachines
+    components:
+      - SocialNetwork/server/IStorage
+    scalingSpec:
+      minReplicas: 1
+      maxReplicas: 1

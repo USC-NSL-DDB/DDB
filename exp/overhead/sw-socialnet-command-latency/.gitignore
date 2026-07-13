@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+artifact.env
+workers.txt
+ddb/serviceweaver_config.yaml
+results/
+runtime/
