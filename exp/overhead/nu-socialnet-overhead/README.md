@@ -108,6 +108,7 @@ trials, 2026-07-11):
 | `run_benchmark.sh` | **Main entry point.** Brings up the cluster, seeds, runs the clients |
 | `start_ddb.sh` | DDB + EMQX broker + distribute the service-discovery config |
 | `stop_all.sh` | Kill everything; clear stale Caladan shm / hugepages |
+| `diag_backend.sh` | Re-run one backend with a verbose caladan conf (+`--strace`) to expose init errors |
 | `common.sh` | Internal: node roles, NIC detection, remote helpers |
 
 Node roles live in `common.sh`: `SERVER_IDXS` is the server node indices (their
@@ -125,6 +126,18 @@ shm + `/dev/hugepages/rtemap_*` behind. `./stop_all.sh` clears both on every nod
 **`iokerneld failed on <node>`** — Caladan's `ias` scheduler could not start on
 that node (e.g. a host whose BIOS exposes many NUMA domains). Use a node with a
 flat NUMA topology, or drop it from the role arrays in `common.sh`.
+
+**Server log ends in a bare `failed to start runtime`** — Nu's auto-generated
+caladan conf hard-codes `log_level 0`, which silences every real error on the
+runtime-init path. `run_benchmark.sh` now re-runs one backend with a verbose
+conf automatically when this happens (see `logs/backend.diag.log`); you can
+also do it by hand with `./diag_backend.sh <idx> --strace`. The classic cause
+is `Could not initialize directpath, ret = -12`: the backend silently resolved
+the **system** libmlx5/libibverbs instead of caladan's patched
+`rdma-core/build/lib` (check with `ldd build/src/main` on the server node —
+`run_benchmark.sh` also asserts this on every run). That happens when the
+binary's RUNPATH anchor dir (`single_proclet/src`) is missing on that node;
+re-running `./setup_nodes.sh` ships it.
 
 **Client dies in `TSocket::openConnection`** — the client's `kNumEntries`
 disagrees with the servers'. `run_benchmark.sh` pins both to the server count on

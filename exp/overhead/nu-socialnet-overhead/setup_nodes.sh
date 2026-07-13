@@ -52,6 +52,12 @@ if [[ "$SKIP_SYNC" -eq 0 ]]; then
   #   caladan/ksched/build/ksched.ko    - insmod'd by setup_machine.sh below
   #   caladan/scripts                   - setup_machine.sh + its siblings
   #   app/.../single_proclet/config     - main reads config/service-config.json (main.cpp)
+  #   app/.../single_proclet/src, bench - RUNPATH anchors: main/client embed
+  #       "<src|bench>/../../../../caladan/rdma-core/build/lib" as their RUNPATH,
+  #       and path resolution needs every intermediate component to EXIST. If
+  #       src/ (bench/) is missing, ld.so silently falls back to the SYSTEM
+  #       libmlx5/libibverbs, and caladan directpath then fails its runtime
+  #       init with a bare "failed to start runtime" (ret = -12).
   # The main/client binaries themselves are scp'd fresh by run_benchmark.sh, and
   # Nu generates its caladan .conf on the fly (runtime.cpp), so neither ships here.
   for idx in "${ALL_IDXS[@]}"; do
@@ -65,7 +71,13 @@ if [[ "$SKIP_SYNC" -eq 0 ]]; then
       "$NU_DIR/./caladan/ksched/build/ksched.ko" \
       "$NU_DIR/./caladan/scripts" \
       "$NU_DIR/./app/socialNetwork/single_proclet/config" \
+      "$NU_DIR/./app/socialNetwork/single_proclet/src" \
+      "$NU_DIR/./app/socialNetwork/single_proclet/bench" \
       "$ip:$NU_DIR/" 2>/dev/null || die "rsync to idx$idx failed"
+    # Belt and braces: the libs the benchmark binaries MUST pick up over the
+    # system rdma-core. Catch a broken RUNPATH here, not mid-benchmark.
+    remote "$idx" "[[ -e $NU_DIR/app/socialNetwork/single_proclet/src ]]" \
+      || die "idx$idx: RUNPATH anchor dir missing after rsync"
   done
 fi
 

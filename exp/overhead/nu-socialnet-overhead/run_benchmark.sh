@@ -147,6 +147,14 @@ echo "=== Distributing binaries ==="
 for idx in "${SERVER_IDXS[@]}"; do
   remote "$idx" "mkdir -p $SOCIALNET_DIR/build/src"
   scp -q "$SOCIALNET_DIR/build/src/main" "$(node_ip "$idx"):$SOCIALNET_DIR/build/src/main" || die "scp main -> idx$idx"
+  # main's RUNPATH must resolve libmlx5/libibverbs to caladan's patched
+  # rdma-core build inside the Nu tree. If it falls back to the system rdma
+  # libs (e.g. the RUNPATH anchor dir was not shipped -- see setup_nodes.sh),
+  # directpath init fails at run time with a bare "failed to start runtime".
+  remote "$idx" "ldd $SOCIALNET_DIR/build/src/main 2>/dev/null \
+      | awk '/libmlx5|libibverbs/{print \$3}' | grep -qv '^$NU_DIR'" \
+    && die "idx$idx: main resolves libmlx5/libibverbs OUTSIDE the Nu tree (system rdma-core).
+       The binary's RUNPATH anchor is missing on that node -- re-run ./setup_nodes.sh"
   echo "  idx$idx <- main"
 done
 # The freshly-rebuilt client goes to every remote client node + its conf.
@@ -156,6 +164,11 @@ for n in $(seq 1 "$NUM_CLIENTS"); do
   remote "$idx" "mkdir -p $SOCIALNET_DIR/build/bench"
   scp -q "$SOCIALNET_DIR/build/bench/client" "$(node_ip "$idx"):$SOCIALNET_DIR/build/bench/client" || die "scp client -> idx$idx"
   scp -q "$EXP_DIR/conf/client$n" "$(node_ip "$idx"):/tmp/nu_client$n.conf" || die "scp conf -> idx$idx"
+  # Same RUNPATH-resolution check as for main above.
+  remote "$idx" "ldd $SOCIALNET_DIR/build/bench/client 2>/dev/null \
+      | awk '/libmlx5|libibverbs/{print \$3}' | grep -qv '^$NU_DIR'" \
+    && die "idx$idx: client resolves libmlx5/libibverbs OUTSIDE the Nu tree (system rdma-core).
+       The binary's RUNPATH anchor is missing on that node -- re-run ./setup_nodes.sh"
   echo "  idx$idx <- client (client$n)"
 done
 
@@ -267,7 +280,26 @@ if [[ "$served" -eq 0 ]]; then
     # if the process is gone, dmesg often shows a segfault / OOM kill
     [[ "$st" == "DEAD" ]] && remote "$idx" 'sudo dmesg | tail -5' 2>/dev/null | grep -iE 'segfault|killed|oom|main' | sed 's/^/      dmesg: /' >&2
   done
-  die "backend never came up (logs saved in $LOG_DIR/backend.idx*.log)"
+  # Nu writes its auto-generated caladan conf with log_level 0 (command_line.cpp),
+  # which suppresses every log_err on the runtime-init path -- a failed backend
+  # can only say "failed to start runtime". Re-run ONE backend in the foreground
+  # with an otherwise-identical conf at log_level 6 so the real error prints.
+  # iokerneld is still up on every node here; the probe is bounded by timeout
+  # and the whole cluster is torn down by `die` right after.
+  diag_idx="${SERVER_IDXS[0]}"
+  diag_ip="$(server_caladan_ip 0)"
+  echo "  re-running the idx$diag_idx backend with a verbose caladan conf..." >&2
+  remote "$diag_idx" "kt=\$(( \$(nproc) / \$(ls -d /sys/devices/system/node/node[0-9]* | wc -l) - 2 ));
+    { echo 'host_addr $diag_ip'; echo 'host_netmask 255.255.255.0'; echo 'host_gateway 18.18.1.1';
+      echo 'host_mtu 9000'; echo \"runtime_kthreads \$kt\"; echo 'runtime_guaranteed_kthreads 0';
+      echo 'runtime_spinning_kthreads 0'; echo 'runtime_priority be'; echo 'runtime_qdelay_us 10';
+      echo 'enable_directpath 1'; echo 'log_level 6'; echo 'runtime_react_mem_pressure 1';
+      echo 'runtime_react_cpu_pressure 1'; } > /tmp/nu_diag.conf;
+    cd $SOCIALNET_DIR && sudo timeout 20 ./build/src/main -l $LPID -f /tmp/nu_diag.conf" \
+    > "$LOG_DIR/backend.diag.log" 2>&1 || true
+  echo "  --- verbose re-run (idx$diag_idx): tail of $LOG_DIR/backend.diag.log ---" >&2
+  tail -25 "$LOG_DIR/backend.diag.log" | sed 's/^/      /' >&2
+  die "backend never came up (logs saved in $LOG_DIR/backend.idx*.log, verbose diagnosis in backend.diag.log)"
 fi
 echo "  up"; sleep 3
 
