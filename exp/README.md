@@ -21,7 +21,7 @@ For four overhead and the PET-perceived gap experiments, we use CloudLab as the 
 ### CloudLab setup assumptions
 
 - **node0 is the head node**. Every command is run from it; it hosts the load generator, DDB, and the MQTT broker. The other nodes run the system under test. Node addressing is over the experiment network (`10.10.x.y`, node0 =`.1`), hard-coded in each experiment harness's `common.sh` / `cluster.txt`.
-- **Keep free space on `/`**. These images ship a 16G root disk; journald plus broker state can fill it under benchmark churn, and a full `/` kills DDB mid-run (harnesses detect this and reject the run, but you lose the trial). `sudo journalctl --vacuum-size=100M` reclaims space safely. Big artifacts (gRPC install, build temporaries) belong on the large local disk (`/mnt/local`), and harnesses already pu them there.
+- **Keep free space on `/`**. These images ship a 16G root disk; journald plus broker state can fill it under benchmark churn, and a full `/` kills DDB mid-run (harnesses detect this and reject the run, but you lose the trial). `sudo journalctl --vacuum-size=100M` reclaims space safely. Big artifacts (gRPC install, build temporaries) belong on the large local disk (`/mnt/local`), and harnesses already pu them there. You may also run `free_disk_cloudlab.sh` (from this dir) to reclaim some spaces on CloudLab machines.
 
 ## Installing DDB on the head/control node
 
