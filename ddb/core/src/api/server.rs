@@ -15,6 +15,7 @@ use crate::{
     cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
     notification,
     state::{get_bkpt_mgr, BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
+    status::{get_rt_status, Component},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -180,6 +181,7 @@ impl ApiServer {
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone()).await?;
         info!("[API Server]: Listening on {}", listener.local_addr()?);
+        get_rt_status().up(Component::Api);
 
         let shutdown = async move {
             let _ = shutdown_rx.changed().await;

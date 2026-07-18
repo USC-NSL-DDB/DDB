@@ -1,12 +1,10 @@
-use std::{collections::HashMap, future::IntoFuture, sync::Mutex, time::Duration};
+use std::{future::IntoFuture, sync::Mutex, time::Duration};
 use tokio::{
     signal::unix::{signal, SignalKind},
-    sync::{oneshot, watch},
+    sync::watch,
     time::timeout,
 };
-use tracing::{debug, error, info, warn};
-
-use crate::status::Component;
+use tracing::error;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -32,8 +30,6 @@ pub struct ShutdownCtrl {
     tx: Mutex<watch::Sender<bool>>,
     rx: Mutex<watch::Receiver<bool>>,
     state: Mutex<Option<ShutdownCause>>, // None until first trigger
-    shutdown_ack_pending: Mutex<Vec<(Component, oneshot::Receiver<()>)>>,
-    shutdown_acks: ShutdownAcks,
 }
 
 impl ShutdownCtrl {
@@ -44,8 +40,6 @@ impl ShutdownCtrl {
             tx: Mutex::new(tx),
             rx: Mutex::new(rx),
             state: Mutex::new(None),
-            shutdown_ack_pending: Mutex::new(vec![]),
-            shutdown_acks: ShutdownAcks::new(),
         }
     }
 
@@ -107,47 +101,26 @@ impl ShutdownCtrl {
         *self.state.lock().unwrap()
     }
 
-    /// Registers a component that must acknowledge shutdown before completion.
-    pub fn register_ack(&self, component: Component) {
-        let receiver = self.shutdown_acks.register(component);
-        self.shutdown_ack_pending
-            .lock()
-            .unwrap()
-            .push((component, receiver));
-    }
-
-    /// Registers multiple components that must acknowledge shutdown before completion.
-    pub fn register_acks(&self, components: &[Component]) {
-        for &component in components {
-            self.register_ack(component);
-        }
-    }
-
-    /// Acknowledges that a component has completed its shutdown procedure.
-    pub fn ack_shutdown(&self, component: Component) {
-        self.shutdown_acks.ack(component);
-    }
-
-    /// Sets up signal handling for SIGINT and SIGTERM.
+    /// Waits for SIGINT or SIGTERM, or returns when another source requests shutdown.
     ///
-    /// Spawns a Tokio task that awaits signals asynchronously.
-    /// When a signal is received, it triggers shutdown with the appropriate cause.
-    pub fn setup_signal_handling(&self) {
-        tokio::spawn(async {
-            let mut sigint =
-                signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    /// The root task supervisor owns this future, so signal handling is joined
+    /// with every other component instead of being detached.
+    pub async fn wait_for_signal(&self) {
+        let mut sigint =
+            signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        let mut shutdown = self.subscribe();
 
-            tokio::select! {
-                _ = sigint.recv() => {
-                    get_shutdown_ctrl().trigger_once(ShutdownCause::SigInt);
-                }
-                _ = sigterm.recv() => {
-                    get_shutdown_ctrl().trigger_once(ShutdownCause::SigTerm);
-                }
+        tokio::select! {
+            _ = sigint.recv() => {
+                self.trigger_once(ShutdownCause::SigInt);
             }
-        });
+            _ = sigterm.recv() => {
+                self.trigger_once(ShutdownCause::SigTerm);
+            }
+            _ = shutdown.changed() => {}
+        }
     }
 
     /// Runs a cleanup function with a timeout.
@@ -159,72 +132,10 @@ impl ShutdownCtrl {
     {
         let _ = timeout(SHUTDOWN_TIMEOUT, cleanup_fn).await;
     }
-
-    /// Blocks until shutdown is triggered, then waits for all registered components to acknowledge.
-    ///
-    /// Each component has `SHUTDOWN_TIMEOUT` to respond. This function uses a dedicated runtime
-    /// and blocks the current thread until all acknowledgments are received or timeouts occur.
-    pub async fn wait_for_shutdown(&self) {
-        // wait for all components to ack or timeout using a small runtime.
-        // let wait_rt = tokio::runtime::Builder::new_current_thread()
-        //     .enable_all()
-        //     .build()
-        //     .unwrap();
-        // wait_rt.block_on(async {
-        // });
-
-        let mut shutdown_sig = self.subscribe();
-        match shutdown_sig.changed().await {
-            Ok(_) => {
-                info!("Shutdown signal received, waiting for components to ack...");
-                for (comp, rx) in self.shutdown_ack_pending.lock().unwrap().drain(..) {
-                    let res = timeout(SHUTDOWN_TIMEOUT, rx).await;
-                    match res {
-                        Ok(Ok(())) => debug!("Received shutdown ack from {:?}", comp),
-                        Ok(Err(_)) => warn!("Shutdown ack dropped for {:?}", comp),
-                        Err(_) => warn!("Timed out waiting for shutdown ack from {:?}", comp),
-                    }
-                }
-            }
-            Err(_) => {
-                warn!("Shutdown signal channel closed unexpectedly");
-            }
-        }
-    }
-}
-
-pub struct ShutdownAcks {
-    senders: Mutex<HashMap<Component, oneshot::Sender<()>>>,
-}
-
-impl ShutdownAcks {
-    pub fn new() -> Self {
-        ShutdownAcks {
-            senders: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Registers a component and returns a receiver that will be signaled when the component acknowledges.
-    pub fn register(&self, component: Component) -> oneshot::Receiver<()> {
-        let (tx, rx) = oneshot::channel();
-        self.senders.lock().unwrap().insert(component, tx);
-        rx
-    }
-
-    /// Acknowledges completion for a component.
-    ///
-    /// This is idempotent and best-effort; if the component is not registered, this is a no-op.
-    pub fn ack(&self, component: Component) {
-        if let Some(tx) = self.senders.lock().unwrap().remove(&component) {
-            let _ = tx.send(());
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]
@@ -235,18 +146,5 @@ mod tests {
         assert!(!ctrl.trigger_once(ShutdownCause::SigInt));
         assert!(ctrl.should_shutdown());
         assert_eq!(ctrl.cause(), Some(ShutdownCause::UserExit));
-    }
-
-    #[tokio::test]
-    async fn shutdown_acks_complete_registered_receivers() {
-        let acks = ShutdownAcks::new();
-        let receiver = acks.register(Component::CmdFlow);
-
-        acks.ack(Component::CmdFlow);
-
-        tokio::time::timeout(Duration::from_secs(1), receiver)
-            .await
-            .expect("ack receiver should resolve")
-            .expect("ack should be delivered");
     }
 }

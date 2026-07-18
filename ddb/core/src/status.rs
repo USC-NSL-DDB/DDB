@@ -28,6 +28,7 @@ impl RuntimeStatus {
         for component in &[
             Component::CmdFlow,
             Component::DbgMgr,
+            Component::Api,
             Component::Notification,
         ] {
             monitor.insert(*component, false);
@@ -103,6 +104,9 @@ mod tests {
         status.up(Component::DbgMgr);
         assert!(!status.is_up());
 
+        status.up(Component::Api);
+        assert!(!status.is_up());
+
         status.up(Component::Notification);
         assert!(status.is_up());
     }
@@ -119,6 +123,7 @@ mod tests {
 
         status.up(Component::CmdFlow);
         status.up(Component::DbgMgr);
+        status.up(Component::Api);
         status.up(Component::Notification);
 
         tokio::time::timeout(Duration::from_secs(1), waiter)

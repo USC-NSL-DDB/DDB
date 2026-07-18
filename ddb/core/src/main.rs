@@ -42,6 +42,7 @@ use clap::Parser;
 use console_subscriber;
 use rust_embed::Embed;
 use tokio::io::{self, AsyncBufReadExt};
+use tokio::task::JoinSet;
 use tracing::error;
 use tracing::{debug, info};
 
@@ -128,116 +129,98 @@ pub fn get_dbg_mgr() -> Arc<DbgManager> {
     context::app_context().debugger_manager()
 }
 
+async fn run_command_flow(command_workers: usize) -> Result<()> {
+    let tracker = cmd_flow::get_cmd_tracker();
+    tracker.clone().start(command_workers);
+
+    let cmd_handler = Arc::clone(get_cmd_handler());
+    cmd_handler.clone().start(command_workers);
+    get_rt_status().up(Component::CmdFlow);
+
+    ShutdownCtrl::wait_for_exit().await;
+    get_shutdown_ctrl()
+        .shutdown_cleanup(async {
+            cmd_handler.stop();
+            tracker.stop();
+        })
+        .await;
+    Ok(())
+}
+
+async fn run_debugger_manager() -> Result<()> {
+    let dbg_mgr = Arc::new(DbgManager::new().await);
+    init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
+
+    if let Err(error) = dbg_mgr.start().await {
+        error!("[DbgManager]: Failed to start: {:?}", error);
+        get_shutdown_ctrl().trigger_once(ShutdownCause::DbgMgrInitFailure);
+        get_shutdown_ctrl()
+            .shutdown_cleanup(dbg_mgr.cleanup())
+            .await;
+        return Err(error);
+    }
+
+    debug!("[DbgManager]: Started successfully.");
+    get_rt_status().up(Component::DbgMgr);
+    ShutdownCtrl::wait_for_exit().await;
+    get_shutdown_ctrl()
+        .shutdown_cleanup(dbg_mgr.cleanup())
+        .await;
+    Ok(())
+}
+
+async fn run_notification_manager() -> Result<()> {
+    let manager = notification::get_notif_mgr();
+    manager.start().await;
+    get_rt_status().up(Component::Notification);
+
+    ShutdownCtrl::wait_for_exit().await;
+    get_shutdown_ctrl()
+        .shutdown_cleanup(manager.shutdown())
+        .await;
+    Ok(())
+}
+
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
 async fn run_main(command_workers: usize) -> Result<()> {
-    let mut app = App::new(Config::global().conf.api_server_port);
-    app.run(get_shutdown_ctrl().subscribe());
+    let app = App::new(Config::global().conf.api_server_port);
+    let mut tasks = JoinSet::new();
 
-    let cmd_flow_handle = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(5)
-            .thread_name("dbg-cmd-flow")
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let tracker = cmd_flow::get_cmd_tracker();
-            tracker.clone().start(command_workers);
-
-            let cmd_handler = get_cmd_handler();
-            cmd_handler.clone().start(command_workers);
-
-            get_rt_status().up(Component::CmdFlow);
-
-            ShutdownCtrl::wait_for_exit().await;
-            get_shutdown_ctrl()
-                .shutdown_cleanup(async {
-                    cmd_handler.stop();
-                    tracker.stop();
-                })
-                .await;
-            get_shutdown_ctrl().ack_shutdown(Component::CmdFlow);
-        });
+    tasks.spawn(async move { ("command-flow", run_command_flow(command_workers).await) });
+    tasks.spawn(async { ("debugger-manager", run_debugger_manager().await) });
+    tasks.spawn(async { ("notification-manager", run_notification_manager().await) });
+    tasks.spawn(async move { ("api-server", app.run(get_shutdown_ctrl().subscribe()).await) });
+    tasks.spawn(async {
+        get_shutdown_ctrl().wait_for_signal().await;
+        ("signal-handler", Ok(()))
+    });
+    tasks.spawn(async {
+        ("command-loop", {
+            run_cmd_loop(get_shutdown_ctrl().subscribe()).await;
+            Ok(())
+        })
     });
 
-    // Start DbgManager in a separate thread with custom runtime
-    let dbg_handle = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(5)
-            .thread_name("dbg-runtime")
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            let dbg_mgr = Arc::new(DbgManager::new().await);
-            init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
-            match get_dbg_mgr().start().await {
-                Ok(_) => {
-                    debug!("[DbgManager]: Started successfully.");
-                    get_rt_status().up(Component::DbgMgr);
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok((name, result)) => {
+                if let Err(error) = result {
+                    error!("[Runtime]: component {} failed: {:?}", name, error);
+                } else {
+                    debug!("[Runtime]: component {} stopped", name);
                 }
-                Err(e) => {
-                    error!("[DbgManager]: Failed to start: {:?}", e);
-                    get_shutdown_ctrl().trigger_once(ShutdownCause::DbgMgrInitFailure);
+                if !get_shutdown_ctrl().should_shutdown() {
+                    error!("[Runtime]: component {} stopped unexpectedly", name);
+                    get_shutdown_ctrl().trigger_once(ShutdownCause::Other);
                 }
             }
-            ShutdownCtrl::wait_for_exit().await;
-            get_shutdown_ctrl()
-                .shutdown_cleanup(async {
-                    get_dbg_mgr().cleanup().await;
-                })
-                .await;
-            get_shutdown_ctrl().ack_shutdown(Component::DbgMgr);
-        });
-    });
+            Err(error) => {
+                error!("[Runtime]: component task failed: {:?}", error);
+                get_shutdown_ctrl().trigger_once(ShutdownCause::Other);
+            }
+        }
+    }
 
-    // Start NotificationManager in a separate thread
-    let notif_handle = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .thread_name("notif-mgr")
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            let mgr = notification::get_notif_mgr();
-            mgr.start().await;
-            get_rt_status().up(Component::Notification);
-
-            ShutdownCtrl::wait_for_exit().await;
-            get_shutdown_ctrl()
-                .shutdown_cleanup(async {
-                    mgr.shutdown().await;
-                })
-                .await;
-            get_shutdown_ctrl().ack_shutdown(Component::Notification);
-        });
-    });
-
-    // schedule cmd loop in the same thread
-    // the main thread is sit idle and wait for the signal to stop
-    let main_loop = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .thread_name("ddb-cmd-loop")
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            run_cmd_loop(get_shutdown_ctrl().subscribe()).await;
-        });
-        // Seems like tokio has trouble shutting down the IO reader properly
-        // so we need to manually shutdown the runtime
-        rt.shutdown_background();
-    });
-
-    get_shutdown_ctrl().wait_for_shutdown().await;
-
-    app.join();
-    main_loop.join().unwrap();
-    cmd_flow_handle.join().unwrap();
-    dbg_handle.join().unwrap();
-    notif_handle.join().unwrap();
     Ok(())
 }
 
@@ -252,14 +235,6 @@ async fn main() -> Result<()> {
     init_framework_plugin(|| resolve_framework_plugin(Config::global()));
     context::init_app_context(get_framework_plugin().command_adapter());
     let app_dir_conf = AppDirConfig::from_config(Config::global());
-
-    get_shutdown_ctrl().setup_signal_handling();
-    get_shutdown_ctrl().register_acks(&[
-        Component::CmdFlow,
-        Component::DbgMgr,
-        Component::Api,
-        Component::Notification,
-    ]);
 
     // Keep the guards to ensure the async logger and OTEL tracer are running.
     // The guards will be used for graceful shutdown at the end.
