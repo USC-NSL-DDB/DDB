@@ -31,6 +31,8 @@ pub struct DbgSession {
 
     // for receiving output from the target process
     pub output_rx: Option<OutputReceiver>,
+
+    cleanup_complete: bool,
 }
 
 // pub struct DbgSessionRef {
@@ -52,6 +54,7 @@ impl DbgSession {
             poll_handle: None,
             input_tx: None,
             output_rx: None,
+            cleanup_complete: false,
         }
     }
 
@@ -271,6 +274,10 @@ impl DbgSession {
     }
 
     pub async fn cleanup(&mut self) -> Result<()> {
+        if self.cleanup_complete {
+            return Ok(());
+        }
+
         debug!("Cleaning up session with config: {:?}", self.config);
 
         // Indicate that the session is closing. Used in API server.
@@ -288,38 +295,146 @@ impl DbgSession {
         get_router().remove_session(self.sid);
         get_group_mgr().remove_session(self.sid);
         get_state_mgr().remove_session(self.sid).await;
-        let ctrl = &self.config.debugger_controller;
-        if ctrl.is_open() {
-            match common::config::Config::global().conf.on_exit {
+
+        let mut first_error = None;
+        if self.config.debugger_controller.is_open() && self.input_tx.is_some() {
+            match &self.config.on_exit {
                 common::config::OnExit::DETACH => {
-                    self.write("detach\n").await?;
+                    if let Err(error) = self.write("detach\n").await {
+                        first_error =
+                            Some(error.context("Failed to detach during session cleanup"));
+                    }
                     debug!("Detaching from the target process");
                 }
                 common::config::OnExit::KILL => {
-                    self.write("kill\n").await?;
+                    if let Err(error) = self.write("kill\n").await {
+                        first_error = Some(error.context("Failed to kill during session cleanup"));
+                    }
                     debug!("Killing the target process");
                 }
             }
-        }
-        self.write("exit\n").await?;
 
-        // Workaround:
-        // The SSH library doesn't flush all outgoing messages before disconnecting.
-        // Therefore, we need to wait for a while before closing the connection.
-        let mut retries = 0;
-        while ctrl.is_open() && retries < 10 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            retries += 1;
+            if let Err(error) = self.write("exit\n").await {
+                if first_error.is_none() {
+                    first_error = Some(error.context("Failed to exit during session cleanup"));
+                }
+            }
+
+            // Workaround: the SSH library does not flush all outgoing messages before
+            // disconnecting, so give the debugger a bounded opportunity to exit first.
+            let mut retries = 0;
+            while self.config.debugger_controller.is_open() && retries < 10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                retries += 1;
+            }
+            if self.config.debugger_controller.is_open() {
+                debug!("Failed to close controller after 10 retries");
+            }
         }
-        if ctrl.is_open() {
-            debug!("Failed to close controller after 10 retries");
-        }
+
         let ctrl = &mut self.config.debugger_controller;
-        ctrl.close().await?;
+        match ctrl.close().await {
+            Ok(()) => {
+                self.cleanup_complete = true;
+            }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error.context("Failed to close debugger controller"));
+                }
+            }
+        }
         if let Some(handle) = self.poll_handle.take() {
             handle.abort();
         }
-        Ok(())
+        self.input_tx.take();
+        self.output_rx.take();
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::{
+        common::config::OnExit,
+        connection::SSHIo,
+        dbg_ctrl::DbgControllable,
+        session::{DbgMode, DbgStartMode},
+    };
+
+    #[derive(Debug)]
+    struct CleanupTestController {
+        first_open_check: AtomicBool,
+        close_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl DbgControllable for CleanupTestController {
+        type InputType = Bytes;
+
+        async fn start(&mut self, _cmd: &str) -> Result<SSHIo> {
+            unreachable!("cleanup test does not start the controller")
+        }
+
+        fn is_open(&self) -> bool {
+            self.first_open_check.swap(false, Ordering::SeqCst)
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_closes_resources_after_write_failure_and_is_idempotent() {
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let controller = CleanupTestController {
+            first_open_check: AtomicBool::new(true),
+            close_count: Arc::clone(&close_count),
+        };
+        let config = DbgSessionConfig {
+            mode: DbgMode::LOCAL(DbgStartMode::ATTACH(1)),
+            sudo: false,
+            on_exit: OnExit::DETACH,
+            ssh_cred: None,
+            tag: None,
+            prerun_debugger_cmds: Vec::new(),
+            postrun_debugger_cmds: Vec::new(),
+            stop_at_entry: false,
+            service_meta: None,
+            debugger_controller: Box::new(controller),
+        };
+        let mut session = DbgSession::new(config);
+        let (input_tx, input_rx) = flume::bounded(1);
+        drop(input_rx);
+        session.input_tx = Some(input_tx);
+        session.poll_handle = Some(tokio::spawn(std::future::pending()));
+
+        let error = session
+            .cleanup()
+            .await
+            .expect_err("closed input channel should fail the debugger write");
+
+        assert!(error.to_string().contains("detach"));
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(session.poll_handle.is_none());
+        assert!(session.input_tx.is_none());
+        assert!(session.output_rx.is_none());
+
+        session.cleanup().await.unwrap();
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
     }
 }
 
