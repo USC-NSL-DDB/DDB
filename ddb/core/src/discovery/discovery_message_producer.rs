@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;
 
-use crate::dbg_ctrl::DbgController;
+use crate::dbg_ctrl::TransportSpec;
 
 pub type UserDataMap = Option<HashMap<String, String>>;
 
@@ -14,7 +14,7 @@ pub struct ServiceInfo {
     pub pid: u64,
     pub hash: String,
     pub alias: String,
-    pub ssh_controller: DbgController,
+    pub transport: TransportSpec,
     pub user_data: UserDataMap,
 }
 
@@ -25,7 +25,7 @@ impl ServiceInfo {
         pid: u64,
         hash: String,
         alias: String,
-        ssh_controller: DbgController,
+        transport: TransportSpec,
         user_data: UserDataMap,
     ) -> Self {
         ServiceInfo {
@@ -34,7 +34,7 @@ impl ServiceInfo {
             pid,
             hash,
             alias,
-            ssh_controller,
+            transport,
             user_data,
         }
     }
@@ -57,7 +57,7 @@ impl fmt::Debug for ServiceInfo {
             .field("hash", &self.hash)
             .field("alias", &self.alias)
             .field("user_data", &self.user_data)
-            // Note: ssh_controller is omitted as it might not implement Debug
+            // Note: transport is omitted as it might not implement Debug
             .finish()
     }
 }
@@ -157,7 +157,7 @@ mod tests {
     use std::{collections::HashMap, net::Ipv4Addr};
 
     use super::*;
-    use crate::{connection::ssh_client::SSHCred, dbg_ctrl::SSHAttachController};
+    use crate::{connection::ssh_client::SSHCred, dbg_ctrl::TransportSpec};
 
     fn sample_service_info() -> ServiceInfo {
         let ip = Ipv4Addr::new(127, 0, 0, 1);
@@ -168,7 +168,7 @@ mod tests {
             42,
             "hash-a".to_string(),
             "api".to_string(),
-            Box::new(SSHAttachController::new(ssh_cred)),
+            TransportSpec::DirectSsh(ssh_cred),
             Some(HashMap::from([("caladan_ip".to_string(), "7".to_string())])),
         )
     }

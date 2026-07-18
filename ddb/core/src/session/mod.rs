@@ -1,13 +1,10 @@
 pub mod dbg_session;
 
-use std::net::Ipv4Addr;
-
 pub use dbg_session::*;
 
 use crate::{
     common::config::{DebuggerCommand, GdbCommand, OnExit},
-    connection::ssh_client::SSHCred,
-    dbg_ctrl::DbgController,
+    dbg_ctrl::TransportSpec,
     discovery::discovery_message_producer::ServiceMeta,
 };
 
@@ -19,9 +16,6 @@ pub struct DbgSessionConfig {
     pub mode: DbgMode,
     pub sudo: bool,
     pub on_exit: OnExit,
-    // TODO: consider redesign this API,
-    // as not all connection needs ssh cred.
-    pub ssh_cred: Option<SSHCred>,
     pub tag: Option<String>,
 
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
@@ -32,7 +26,7 @@ pub struct DbgSessionConfig {
     // pub service_info: Option<ServiceInfo>,
     pub service_meta: Option<ServiceMeta>,
 
-    pub debugger_controller: DbgController,
+    pub transport: TransportSpec,
 }
 
 #[derive(Debug)]
@@ -40,7 +34,6 @@ pub struct DbgSessionCfgBuilder {
     pub mode: Option<DbgMode>,
     pub sudo: bool,
     pub on_exit: OnExit,
-    pub ssh_cred: Option<SSHCred>,
     pub tag: Option<String>,
 
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
@@ -48,7 +41,7 @@ pub struct DbgSessionCfgBuilder {
     pub stop_at_entry: bool,
 
     pub service_meta: Option<ServiceMeta>,
-    pub debugger_controller: Option<DbgController>,
+    pub transport: Option<TransportSpec>,
 }
 
 /// Creates a new `DbgSessionCfgBuilder` initialized with values from the global configuration.
@@ -78,13 +71,12 @@ impl DbgSessionCfgBuilder {
             mode: None,
             sudo,
             on_exit,
-            ssh_cred: None,
             tag: None,
             prerun_debugger_cmds,
             postrun_debugger_cmds,
             stop_at_entry: false,
             service_meta: None,
-            debugger_controller: None,
+            transport: None,
         }
     }
 
@@ -100,19 +92,6 @@ impl DbgSessionCfgBuilder {
 
     pub fn on_exit(mut self, on_exit: OnExit) -> Self {
         self.on_exit = on_exit;
-        self
-    }
-
-    pub fn ssh_cred(mut self, host: Ipv4Addr) -> Self {
-        let g = crate::common::config::Config::global();
-        let ssh_cred = SSHCred::new(
-            host.to_string().as_str(),
-            g.ssh.port,
-            g.ssh.user.as_str(),
-            None,
-        );
-
-        self.ssh_cred = Some(ssh_cred);
         self
     }
 
@@ -167,13 +146,9 @@ impl DbgSessionCfgBuilder {
         self
     }
 
-    pub fn with_debugger_controller(mut self, debugger_controller: DbgController) -> Self {
-        self.debugger_controller = Some(debugger_controller);
+    pub fn transport(mut self, transport: TransportSpec) -> Self {
+        self.transport = Some(transport);
         self
-    }
-
-    pub fn add_gdb_controller(self, gdb_controller: DbgController) -> Self {
-        self.with_debugger_controller(gdb_controller)
     }
 
     pub fn build(self) -> DbgSessionConfig {
@@ -184,26 +159,18 @@ impl DbgSessionCfgBuilder {
             self.mode.as_ref().unwrap()
         };
 
-        let ssh_cred = {
-            if let DbgMode::REMOTE(_) = mode {
-                if self.ssh_cred.is_none() {
-                    panic!("DbgSessionConfig ssh_cred is required for remote mode");
-                }
-            }
-            self.ssh_cred
-        };
-
         DbgSessionConfig {
             mode: mode.clone(),
             sudo: self.sudo,
             on_exit: self.on_exit,
-            ssh_cred,
             tag: self.tag,
             prerun_debugger_cmds: self.prerun_debugger_cmds,
             postrun_debugger_cmds: self.postrun_debugger_cmds,
             stop_at_entry: self.stop_at_entry,
             service_meta: self.service_meta,
-            debugger_controller: self.debugger_controller.unwrap(),
+            transport: self
+                .transport
+                .expect("DbgSessionConfig transport is required"),
         }
     }
 }
@@ -211,11 +178,8 @@ impl DbgSessionCfgBuilder {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum DbgStartMode {
-    ATTACH(u64),    // pid
-    BINARY {
-        path: String,
-        args: Vec<String>,
-    },
+    ATTACH(u64), // pid
+    BINARY { path: String, args: Vec<String> },
 }
 
 #[allow(dead_code)]

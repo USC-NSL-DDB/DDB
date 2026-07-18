@@ -1,21 +1,52 @@
-pub mod dbg_bridge_ctrl;
 pub mod dbg_ctrl;
 pub mod local_ctrl;
 pub mod mock_ctrl;
-use bytes::Bytes;
 pub use dbg_ctrl::*;
 pub use local_ctrl::*;
 pub use mock_ctrl::*;
 
-// pub type ChannelSender = tokio::sync::mpsc::Sender<Bytes>;
-// pub type ChannelReceiver = tokio::sync::mpsc::Receiver<Bytes>;
-pub type ChannelSender = flume::Sender<Bytes>;
-pub type ChannelReceiver = flume::Receiver<Bytes>;
+use std::sync::Arc;
 
-pub type InputSender = ChannelSender;
-pub type InputReceiver = ChannelReceiver;
+use anyhow::{anyhow, Result};
+use russh::client::Handle;
 
-// used to send output to a centralize location for processing
-pub type OutputSender = ChannelSender;
-// used to receive output at a centralize location for processing
-pub type OutputReceiver = ChannelReceiver;
+use crate::{
+    common::config::MockSessionConfig,
+    connection::{
+        ssh_client::{SSHConnection, SSHCred},
+        ssh_client_channel::{SSHProxyClientHandler, SSHProxyConnection, SSHProxyCred},
+    },
+};
+
+/// Pure description of how a debugger session should be transported.
+#[derive(Debug, Clone)]
+pub enum TransportSpec {
+    DirectSsh(SSHCred),
+    ProxySsh(SSHProxyCred),
+    Local,
+    Mock { config: MockSessionConfig, pid: u64 },
+}
+
+pub fn build_transport(
+    spec: &TransportSpec,
+    proxy_tunnel: Option<Arc<Handle<SSHProxyClientHandler>>>,
+) -> Result<DebuggerTransportHandle> {
+    match spec {
+        TransportSpec::DirectSsh(credentials) => Ok(Box::new(RemoteTransport::new(
+            SSHConnection::new(credentials.clone(), None),
+        ))),
+        TransportSpec::ProxySsh(credentials) => {
+            let tunnel = proxy_tunnel
+                .ok_or_else(|| anyhow!("proxy SSH transport requires a bastion session"))?;
+            Ok(Box::new(RemoteTransport::new(SSHProxyConnection::new(
+                tunnel,
+                credentials.clone(),
+                None,
+            ))))
+        }
+        TransportSpec::Local => Ok(Box::new(LocalProcessController::new())),
+        TransportSpec::Mock { config, pid } => {
+            Ok(Box::new(MockAttachController::new(config.clone(), *pid)))
+        }
+    }
+}

@@ -18,7 +18,7 @@ use super::{
     discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo},
 };
 use crate::{
-    common::sd_defaults, connection::ssh_client::SSHCred, dbg_ctrl::SSHAttachController,
+    common::sd_defaults, connection::ssh_client::SSHCred, dbg_ctrl::TransportSpec,
     discovery::subscriber::AsyncDiscoverClient,
 };
 
@@ -238,7 +238,7 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
                                 mqtt_payload.pid,
                                 mqtt_payload.hash,
                                 mqtt_payload.alias,
-                                Box::new(SSHAttachController::new(ssh_cred)),
+                                TransportSpec::DirectSsh(ssh_cred),
                                 mqtt_payload.user_data,
                             );
 

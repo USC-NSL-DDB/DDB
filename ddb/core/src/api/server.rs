@@ -245,12 +245,16 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
     let result: Result<Option<FinishedCmd>> = async {
         if send_cmd.wait {
             Ok(Some(
-                cmd_flow_api::send_and_return(&send_cmd.cmd)?
-                    .to_or_default(send_cmd.target)
+                cmd_flow_api::command(&send_cmd.cmd)?
+                    .target_or_default(send_cmd.target)
+                    .execute()
                     .await?,
             ))
         } else {
-            cmd_flow_api::send(&send_cmd.cmd)?.to_or_default::<true>(send_cmd.target)?;
+            cmd_flow_api::command(&send_cmd.cmd)?
+                .target_or_default(send_cmd.target)
+                .submit()
+                .await?;
             Ok(None)
         }
     }
@@ -338,20 +342,8 @@ async fn get_sessions() -> impl IntoResponse {
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_pending_commands() -> impl IntoResponse {
-    let mut results = vec![];
-    let cmds = crate::cmd_flow::get_cmd_tracker().get_inflight_cmds_copy();
-    for c in cmds {
-        let e_token = c.ext_id;
-        let i_token = c.id;
-        let cmd = json!({
-            "token": e_token.map(|x| x.to_string()).unwrap_or("".to_string()),
-            "internal_token": i_token,
-            "target_sessions": c.target_num_resp,
-            "finished_sessions": c.received_num_resp,
-        });
-        results.push(cmd);
-    }
-    (StatusCode::OK, Json(json!(results)))
+    let statuses = crate::cmd_flow::get_router().runtime_statuses();
+    (StatusCode::OK, Json(json!(statuses)))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]

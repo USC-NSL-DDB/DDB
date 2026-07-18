@@ -20,7 +20,10 @@ fn exiting_session_cleans_breakpoints_and_session_state() {
     ddb.wait_for_stdout_count("thread-created", 1);
     let sid = session_id_by_tag(&sessions, "svc-exit");
 
-    ddb.send_cmd(&format!("401-break-insert --session {} src/exit.rs:70", sid));
+    ddb.send_cmd(&format!(
+        "401-break-insert --session {} src/exit.rs:70",
+        sid
+    ));
     ddb.wait_for_stdout_line("401^done");
     assert_eq!(
         ddb.api_get("/bkpts")["bkpts"]
@@ -33,10 +36,8 @@ fn exiting_session_cleans_breakpoints_and_session_state() {
     ddb.send_cmd(&format!("402-exec-continue --session {}", sid));
     ddb.wait_for_stdout_line("402^running");
     ddb.wait_for_sessions_len(0);
-    assert!(
-        ddb.api_get("/bkpts")["bkpts"]
-            .as_array()
-            .expect("bkpts should be an array")
-            .is_empty()
-    );
+    assert!(ddb.api_get("/bkpts")["bkpts"]
+        .as_array()
+        .expect("bkpts should be an array")
+        .is_empty());
 }

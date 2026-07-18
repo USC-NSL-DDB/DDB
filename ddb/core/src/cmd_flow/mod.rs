@@ -1,66 +1,29 @@
-//! # Command Flow Module
+//! Session-oriented debugger command flow.
 //!
-//! This module manages the lifecycle of debugger commands in the distributed debugging system.
-//!
-//! ## Module Boundaries
-//!
-//! ### Public API (`api`)
-//! The primary entry point for external callers. Provides ergonomic builders:
-//! - `send()` - Fire-and-forget commands (optionally with custom formatters via `.with()`)
-//! - `send_and_return()` - Commands that await responses (returns raw `FinishedCmd` data)
-//!
-//! ### Internal Components
-//! - **`input`**: Parses command tokens, extracts target information, builds `Command<F>` types
-//! - **`handler`**: Per-command handlers that implement special routing or processing logic
-//! - **`router`**: Routes commands to specific sessions/threads, manages broadcast operations
-//! - **`output`**: Formatters that transform debugger responses for different consumers
-//! - **`tracker`**: Tracks outstanding commands and manages response aggregation
-//! - **`framework_adapter`**: Framework-specific command adaptations
-//!
-//! ## Data Flow
-//! ```text
-//! External Caller
-//!   ↓
-//! api::send/send_and_return (parse prefix/args, inject tokens)
-//!   ↓
-//! Command<F> (with formatter and tokens)
-//!   ↓
-//! Router::send_to/send_to_ret (resolve target → sessions)
-//!   ↓
-//! Session channels (flume) → debugger instances
-//!   ↓
-//! Response aggregation (Tracker)
-//!   ↓
-//! Formatter (transform & format)
-//!   ↓
-//! STDOUT or returned FinishedCmd
-//! ```
-//!
-//! ## Responsibilities
-//! - **Parse**: Extract tokens, prefix, args from input
-//! - **Build**: Construct internal Command types with formatters
-//! - **Execute**: Route to appropriate debugger sessions via Router
-//! - **Transform**: Apply formatters to responses
-//! - **Track**: Manage command/response correlation via tokens
-//!
+//! The public API builds semantic execution requests. The router resolves a target
+//! into a snapshot of session handles, and each session runtime owns command
+//! admission, transport I/O, response correlation, timeouts, and ordered state
+//! projection. No transport channels cross component boundaries.
 
 pub mod api;
+pub(crate) mod event;
 pub mod framework_adapter;
 pub mod handler;
 pub mod input;
 pub mod output;
+pub mod response;
 pub mod router;
-pub mod tracker;
+pub mod session_runtime;
 pub(crate) mod transaction;
 
 use std::sync::Arc;
 use thiserror::Error;
 
 pub use output::*;
-pub use tracker::*;
+pub use response::*;
 // Re-export facade API for convenient access
 #[allow(unused_imports)]
-pub use api::{send, send_and_return, Error as ApiError, Target};
+pub use api::{command, Error as ApiError, Target};
 
 use input::CmdHandler;
 use router::Router;
@@ -76,20 +39,8 @@ pub fn get_router() -> &'static Arc<Router> {
     crate::context::app_context().command_router()
 }
 
-#[inline]
-pub fn get_cmd_tracker() -> Arc<Tracker> {
-    crate::context::app_context().command_tracker().clone()
-}
-
-#[inline]
-pub fn get_output_tx(id: u64) -> flume::Sender<SessionResponse> {
-    get_cmd_tracker().register_output_tx(id)
-}
-
 #[derive(Debug, Error)]
 pub enum DebuggerDataErr {
     #[error("Missing entry: {0}")]
     MissingEntry(String),
 }
-
-pub type GdbDataErr = DebuggerDataErr;

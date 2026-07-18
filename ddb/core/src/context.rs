@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use crate::{
-    cmd_flow::{input::CmdHandler, router::Router, tracker::Tracker},
+    cmd_flow::{input::CmdHandler, router::Router},
     dbg_mgr::DbgManager,
     notification::NotificationManager,
     plugin::FrameworkCommandAdapter,
@@ -9,16 +9,10 @@ use crate::{
     status::RuntimeStatus,
 };
 
-/// Owns the mutable services that make up one DDB process.
-///
-/// Compatibility accessors in the individual modules currently delegate to
-/// this context. Keeping construction and ownership here gives subsequent
-/// refactors a single dependency boundary without forcing every caller to
-/// change at once.
+/// Owns the process-wide services and their dependency boundaries.
 pub struct AppContext {
     command_handler: Arc<CmdHandler>,
     command_router: Arc<Router>,
-    command_tracker: Arc<Tracker>,
     notification_manager: Arc<NotificationManager>,
     shutdown: ShutdownCtrl,
     runtime_status: RuntimeStatus,
@@ -27,13 +21,11 @@ pub struct AppContext {
 
 impl AppContext {
     fn new(command_adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
-        let command_tracker = Tracker::new();
-        let command_router = Arc::new(Router::new(Arc::clone(&command_tracker)));
+        let command_router = Arc::new(Router::new());
 
         Self {
             command_handler: CmdHandler::new(command_adapter),
             command_router,
-            command_tracker,
             notification_manager: Arc::new(NotificationManager::new()),
             shutdown: ShutdownCtrl::new(),
             runtime_status: RuntimeStatus::new(),
@@ -47,10 +39,6 @@ impl AppContext {
 
     pub fn command_router(&self) -> &Arc<Router> {
         &self.command_router
-    }
-
-    pub fn command_tracker(&self) -> &Arc<Tracker> {
-        &self.command_tracker
     }
 
     pub fn notification_manager(&self) -> &Arc<NotificationManager> {

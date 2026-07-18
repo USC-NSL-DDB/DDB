@@ -179,13 +179,11 @@ impl DebuggerBackend for GdbBackend {
             builder.add(cmd);
         }
 
-        builder.add(GdbCmd::Plain(
-            if session.stop_at_entry {
-                "-exec-run --start".to_string()
-            } else {
-                "-exec-run".to_string()
-            },
-        ));
+        builder.add(GdbCmd::Plain(if session.stop_at_entry {
+            "-exec-run --start".to_string()
+        } else {
+            "-exec-run".to_string()
+        }));
 
         Ok(builder.build())
     }

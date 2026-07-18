@@ -4,133 +4,54 @@ use anyhow::{anyhow, bail, Context, Result};
 use dashmap::DashMap;
 use tracing::{debug, error};
 
+use super::get_router;
 use super::{
-    framework_adapter::FrameworkCommandAdapter, handler::*, router::Target, DynFormatter,
-    OutgoingCmd, OutputSource,
+    framework_adapter::FrameworkCommandAdapter, handler::*, router::Target,
+    session_runtime::CompletionConsistency,
 };
-use crate::{
-    cmd_flow::{
-        api::{SendAndForgetBuilder, SendAndReturnBuilder, SendBuilder},
-        get_router, NullFormatter,
-    },
-    handlers_map,
-    state::get_state_mgr,
-};
+use crate::{handlers_map, state::get_state_mgr};
 
 #[derive(Debug, Clone)]
-pub struct Command<F: DynFormatter + 'static>
-where
-    F: Clone,
-{
+pub struct Command {
     pub external_token: Option<u64>,
     pub internal_token: u64,
     pub raw_cmd: String,
-    pub formatter: F,
+    pub consistency: CompletionConsistency,
 }
 
-impl<F> Command<F>
-where
-    F: DynFormatter + 'static + Clone,
-{
-    /// Prepares the command to be sent by creating an OutgoingCmd and formatting the raw command string
-    /// This function consumes `self`.
-    ///
-    /// # Arguments
-    ///
-    /// * `num_target` - The number of target recipients
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// * `OutgoingCmd` - The prepared outgoing command with tokens and formatting
-    /// * `String` - The formatted command string with internal token prepended
-    #[inline]
-    pub fn prepare_to_send(self, num_target: u32, out_src: OutputSource) -> (OutgoingCmd, String) {
-        let cmd = self.internal_cmd();
-        (
-            OutgoingCmd::new(
-                self.internal_token,
-                self.external_token,
-                cmd.clone(),
-                num_target,
-                out_src,
-                self.formatter,
-            ),
-            cmd,
-        )
-    }
-
-    pub fn new(
-        external_token: Option<u64>,
-        internal_token: u64,
-        raw_cmd: String,
-        formatter: F,
-    ) -> Self {
-        Command {
+impl Command {
+    pub fn new(external_token: Option<u64>, internal_token: u64, raw_cmd: String) -> Self {
+        Self {
             external_token,
             internal_token,
             raw_cmd,
-            formatter,
+            consistency: CompletionConsistency::StateConsistent,
         }
     }
 
-    #[inline]
+    pub fn new_with_parsed_cmd(parsed_cmd: ParsedInputCmd) -> (Self, Target) {
+        (
+            Self::new(
+                parsed_cmd.external_token,
+                parsed_cmd.internal_token,
+                parsed_cmd.full_cmd(),
+            ),
+            parsed_cmd.target,
+        )
+    }
+
+    pub fn with_consistency(mut self, consistency: CompletionConsistency) -> Self {
+        self.consistency = consistency;
+        self
+    }
+
     pub fn with_internal_token(mut self, internal_token: u64) -> Self {
         self.internal_token = internal_token;
         self
     }
 
-    #[inline]
     pub fn with_fresh_internal_token(self) -> Self {
         self.with_internal_token(crate::common::counter::next_token())
-    }
-
-    pub fn new_with_parsed_cmd(parsed_cmd: ParsedInputCmd, formatter: F) -> (Self, Target) {
-        (
-            Command {
-                external_token: parsed_cmd.external_token,
-                internal_token: parsed_cmd.internal_token,
-                raw_cmd: parsed_cmd.full_cmd(),
-                formatter,
-            },
-            parsed_cmd.target,
-        )
-    }
-
-    pub fn internal_cmd(&self) -> String {
-        let cmd = format!("{}{}", self.internal_token, self.raw_cmd);
-        if cmd.ends_with('\n') {
-            cmd
-        } else {
-            format!("{}\n", cmd)
-        }
-    }
-
-    pub fn external_cmd(&self) -> String {
-        let cmd = format!(
-            "{}{}",
-            self.external_token
-                .map(|t| t.to_string())
-                .unwrap_or("".to_string()),
-            self.raw_cmd
-        );
-        if cmd.ends_with('\n') {
-            cmd
-        } else {
-            format!("{}\n", cmd)
-        }
-    }
-}
-
-impl<F: DynFormatter + 'static + Clone> Command<F> {
-    #[inline]
-    pub fn into_null_formatter_cmd(self) -> Command<NullFormatter> {
-        Command {
-            external_token: self.external_token,
-            internal_token: self.internal_token,
-            raw_cmd: self.raw_cmd,
-            formatter: NullFormatter,
-        }
     }
 }
 
@@ -163,30 +84,12 @@ impl ParsedInputCmd {
     }
 
     #[inline]
-    pub fn to_command<F: DynFormatter + 'static + Clone>(
-        self,
-        formatter: F,
-    ) -> (Target, Command<F>) {
-        let raw_cmd = self.full_cmd();
+    pub fn to_command(self) -> (Target, Command) {
+        let target = self.target.clone();
         (
-            self.target,
-            Command::new(self.external_token, self.internal_token, raw_cmd, formatter),
+            target,
+            Command::new(self.external_token, self.internal_token, self.full_cmd()),
         )
-    }
-
-    #[inline]
-    pub fn send(self) -> SendBuilder {
-        Into::<SendBuilder>::into(self)
-    }
-
-    #[inline]
-    pub fn send_and_return(self) -> SendAndReturnBuilder {
-        Into::<SendAndReturnBuilder>::into(self)
-    }
-
-    #[inline]
-    pub fn send_and_forget(self) -> SendAndForgetBuilder {
-        Into::<SendAndForgetBuilder>::into(self)
     }
 }
 
@@ -195,9 +98,6 @@ pub struct InputCmdParser(String);
 impl InputCmdParser {
     /// Prepares command tokens by extracting external token (if present) and generating internal token
     ///
-    /// This is a core helper for token injection that maintains backward compatibility.
-    /// The external token comes from user input, while the internal token is auto-generated
-    /// for tracking purposes.
     ///
     /// # Returns
     /// - `external_token`: Optional user-provided token
@@ -570,7 +470,7 @@ impl CmdHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::ParsedInputCmd;
+    use super::{Command, ParsedInputCmd};
 
     #[test]
     pub fn test_simple_input_parser() {
@@ -638,21 +538,20 @@ mod tests {
     }
 
     #[test]
-    fn test_command_to_command_preserves_tokens() {
-        // Verify that ParsedInputCmd -> Command preserves both tokens
-        use super::Command;
-        use crate::cmd_flow::PlainFormatter;
-
+    fn test_command_conversion_preserves_semantics() {
         let parsed: ParsedInputCmd = "777-exec-continue".try_into().unwrap();
         let external_token = parsed.external_token;
         let internal_token = parsed.internal_token;
 
-        let (target, cmd): (super::Target, Command<PlainFormatter>) =
-            parsed.to_command(PlainFormatter);
+        let (target, command) = parsed.to_command();
 
-        // Tokens must be preserved through conversion
-        assert_eq!(cmd.external_token, external_token);
-        assert_eq!(cmd.internal_token, internal_token);
+        assert_eq!(command.external_token, external_token);
+        assert_eq!(command.internal_token, internal_token);
+        assert_eq!(command.raw_cmd, "-exec-continue");
+        assert_eq!(
+            command.consistency,
+            crate::cmd_flow::session_runtime::CompletionConsistency::StateConsistent
+        );
         assert!(matches!(
             target,
             super::Target::Broadcast | super::Target::CurrThread | super::Target::CurrSession
@@ -660,41 +559,14 @@ mod tests {
     }
 
     #[test]
-    fn test_internal_cmd_formatting_includes_internal_token() {
-        use super::Command;
-        use crate::cmd_flow::PlainFormatter;
+    fn test_command_completion_consistency_is_explicit() {
+        let command = Command::new(None, 200, "-thread-info".to_string()).with_consistency(
+            crate::cmd_flow::session_runtime::CompletionConsistency::ProtocolComplete,
+        );
 
-        let cmd = Command::new(Some(100), 200, "-thread-info".to_string(), PlainFormatter);
-        let internal_cmd = cmd.internal_cmd();
-
-        // Internal command should have internal token prepended
-        assert!(internal_cmd.starts_with("200"));
-        assert!(internal_cmd.contains("-thread-info"));
-    }
-
-    #[test]
-    fn test_external_cmd_formatting_includes_external_token() {
-        use super::Command;
-        use crate::cmd_flow::PlainFormatter;
-
-        let cmd = Command::new(Some(100), 200, "-thread-info".to_string(), PlainFormatter);
-        let external_cmd = cmd.external_cmd();
-
-        // External command should have external token prepended
-        assert!(external_cmd.starts_with("100"));
-        assert!(external_cmd.contains("-thread-info"));
-    }
-
-    #[test]
-    fn test_external_cmd_formatting_without_external_token() {
-        use super::Command;
-        use crate::cmd_flow::PlainFormatter;
-
-        let cmd = Command::new(None, 200, "-thread-info".to_string(), PlainFormatter);
-        let external_cmd = cmd.external_cmd();
-
-        // Without external token, should just have the command
-        assert!(external_cmd.starts_with("-thread-info"));
-        assert!(!external_cmd.starts_with("200"));
+        assert_eq!(
+            command.consistency,
+            crate::cmd_flow::session_runtime::CompletionConsistency::ProtocolComplete
+        );
     }
 }

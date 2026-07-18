@@ -1,37 +1,29 @@
 use std::fmt::Debug;
 
-use crate::connection::{
-    ssh_client::{SSHConnection, SSHCred},
-    RemoteOperatable, SSHIo,
-};
+use crate::connection::{RemoteConnectable, RunningTransport};
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 
-pub type DbgController = Box<dyn DbgControllable<InputType = bytes::Bytes>>;
+pub type DebuggerTransportHandle = Box<dyn DebuggerTransport>;
 
 #[async_trait]
-pub trait DbgControllable: Debug + Sync + Send {
-    type InputType;
-
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo>;
-    // async fn write(&self, data: Self::InputType) -> Result<()>;
-    // async fn read(&mut self) -> Result<Bytes>;
+pub trait DebuggerTransport: Debug + Sync + Send {
+    async fn launch(&mut self, cmd: &str) -> Result<RunningTransport>;
     fn is_open(&self) -> bool;
     async fn close(&mut self) -> Result<()>;
 }
 
 #[derive(Debug)]
-pub struct BaseController<T>
+pub struct RemoteTransport<T>
 where
-    T: RemoteOperatable,
+    T: RemoteConnectable,
 {
     client: T,
 }
 
-impl<T> BaseController<T>
+impl<T> RemoteTransport<T>
 where
-    T: RemoteOperatable,
+    T: RemoteConnectable,
 {
     pub fn new(client: T) -> Self {
         Self { client }
@@ -39,13 +31,11 @@ where
 }
 
 #[async_trait]
-impl<T> DbgControllable for BaseController<T>
+impl<T> DebuggerTransport for RemoteTransport<T>
 where
-    T: RemoteOperatable + Debug,
+    T: RemoteConnectable + Debug,
 {
-    type InputType = Bytes;
-
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo> {
+    async fn launch(&mut self, cmd: &str) -> Result<RunningTransport> {
         self.client.connect().await?;
         self.client.start(cmd).await
     }
@@ -56,37 +46,5 @@ where
 
     async fn close(&mut self) -> Result<()> {
         self.client.disconnect().await
-    }
-}
-
-#[derive(Debug)]
-pub struct SSHAttachController {
-    ctrl: BaseController<SSHConnection>,
-}
-
-impl SSHAttachController {
-    pub fn new(cred: SSHCred) -> Self {
-        Self {
-            ctrl: BaseController::new(SSHConnection::new(cred, None)),
-        }
-    }
-}
-
-#[async_trait]
-impl DbgControllable for SSHAttachController {
-    type InputType = Bytes;
-
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo> {
-        // let cmd = format!("gdb -p {}", self.pid);
-        // TODO: move cmd to this function instead of an argument
-        self.ctrl.start(&cmd).await
-    }
-
-    fn is_open(&self) -> bool {
-        self.ctrl.is_open()
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        self.ctrl.close().await
     }
 }

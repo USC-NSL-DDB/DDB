@@ -17,14 +17,14 @@ use tokio::{
 };
 
 use crate::{
-    common::config::{
-        MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig, MockThreadConfig,
-    },
-    connection::SSHIo,
+    common::config::{MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig},
+    connection::{RunningTransport, TransportEvent, TransportRequest},
     dbg_parser::gdb_parser::MIFormatter,
 };
 
-use super::{DbgControllable, InputReceiver, OutputSender};
+use super::DebuggerTransport;
+
+type OutputSender = flume::Sender<TransportEvent>;
 
 #[derive(Debug, Clone)]
 struct MockBreakpoint {
@@ -57,14 +57,6 @@ impl MockDebuggerState {
             running: false,
             bootstrapped: false,
         }
-    }
-
-    fn primary_thread(&self) -> MockThreadConfig {
-        self.config
-            .threads
-            .first()
-            .cloned()
-            .unwrap_or_else(MockThreadConfig::default)
     }
 
     fn thread_ids(&self) -> Vec<u64> {
@@ -244,7 +236,7 @@ impl MockAttachController {
 
     async fn send_line(out_tx: &OutputSender, line: String) -> Result<()> {
         out_tx
-            .send_async(Bytes::from(format!("{}\n", line)))
+            .send_async(TransportEvent::Stdout(Bytes::from(format!("{}\n", line))))
             .await?;
         Ok(())
     }
@@ -276,7 +268,7 @@ impl MockAttachController {
 
     async fn emit_bootstrap_events(
         state: Arc<Mutex<MockDebuggerState>>,
-        out_tx: OutputSender,
+        out_tx: flume::Sender<TransportEvent>,
     ) -> Result<()> {
         let state = state.lock().await;
         let tgid = state.config.thread_group.clone();
@@ -422,7 +414,7 @@ impl MockAttachController {
 
     async fn schedule_continue_stop(
         state: Arc<Mutex<MockDebuggerState>>,
-        out_tx: OutputSender,
+        out_tx: flume::Sender<TransportEvent>,
         token: Option<u64>,
     ) {
         sleep(Duration::from_millis(25)).await;
@@ -475,7 +467,7 @@ impl MockAttachController {
 
     async fn schedule_interrupt_stop(
         state: Arc<Mutex<MockDebuggerState>>,
-        out_tx: OutputSender,
+        out_tx: flume::Sender<TransportEvent>,
         token: Option<u64>,
     ) {
         sleep(Duration::from_millis(10)).await;
@@ -498,7 +490,7 @@ impl MockAttachController {
 
     async fn handle_command(
         state: Arc<Mutex<MockDebuggerState>>,
-        out_tx: OutputSender,
+        out_tx: flume::Sender<TransportEvent>,
         token: Option<u64>,
         prefix: String,
         args: String,
@@ -639,25 +631,34 @@ impl MockAttachController {
 
     async fn run(
         state: Arc<Mutex<MockDebuggerState>>,
-        in_rx: InputReceiver,
-        out_tx: OutputSender,
+        requests: flume::Receiver<TransportRequest>,
+        out_tx: flume::Sender<TransportEvent>,
         open: Arc<AtomicBool>,
     ) {
-        while let Ok(data) = in_rx.recv_async().await {
-            let Ok(commands) = std::str::from_utf8(data.as_ref()) else {
-                continue;
-            };
-            for raw_cmd in commands.lines() {
-                let (token, prefix, args) = Self::parse_command(raw_cmd);
-                if prefix.is_empty() && args.is_empty() {
-                    continue;
+        while let Ok(TransportRequest::Write { data, written }) = requests.recv_async().await {
+            let result = async {
+                let commands = std::str::from_utf8(data.as_ref())?;
+                for raw_cmd in commands.lines() {
+                    let (token, prefix, args) = Self::parse_command(raw_cmd);
+                    if prefix.is_empty() && args.is_empty() {
+                        continue;
+                    }
+                    Self::handle_command(Arc::clone(&state), out_tx.clone(), token, prefix, args)
+                        .await?;
                 }
-                if Self::handle_command(Arc::clone(&state), out_tx.clone(), token, prefix, args)
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            let failure = result.as_ref().err().map(ToString::to_string);
+            let _ = written.send(result);
+            if let Some(error) = failure {
+                let _ = out_tx
+                    .send_async(TransportEvent::Fault(format!(
+                        "mock debugger command failed: {}",
+                        error
+                    )))
+                    .await;
+                break;
             }
         }
         open.store(false, Ordering::SeqCst);
@@ -665,12 +666,10 @@ impl MockAttachController {
 }
 
 #[async_trait]
-impl DbgControllable for MockAttachController {
-    type InputType = Bytes;
-
-    async fn start(&mut self, _cmd: &str) -> Result<SSHIo> {
-        let (in_tx, in_rx) = flume::bounded::<Bytes>(1024);
-        let (out_tx, out_rx) = flume::bounded::<Bytes>(1024);
+impl DebuggerTransport for MockAttachController {
+    async fn launch(&mut self, _cmd: &str) -> Result<RunningTransport> {
+        let (in_tx, in_rx) = flume::bounded::<TransportRequest>(1024);
+        let (out_tx, out_rx) = flume::bounded::<TransportEvent>(1024);
         self.open.store(true, Ordering::SeqCst);
         self.task = Some(tokio::spawn(Self::run(
             Arc::clone(&self.state),
@@ -678,7 +677,7 @@ impl DbgControllable for MockAttachController {
             out_tx,
             Arc::clone(&self.open),
         )));
-        Ok(SSHIo { in_tx, out_rx })
+        Ok(RunningTransport::new(in_tx, out_rx))
     }
 
     fn is_open(&self) -> bool {
@@ -706,7 +705,10 @@ mod tests {
         debugger::gdb::parser::GdbParser,
     };
 
-    fn result_payload(line: &Bytes) -> Dict {
+    fn result_payload(event: TransportEvent) -> Dict {
+        let TransportEvent::Stdout(line) = event else {
+            panic!("expected mock protocol output");
+        };
         let text = std::str::from_utf8(line.as_ref()).expect("mock output should be utf-8");
         let message = GdbParser::parse(text).expect("mock output should parse");
         match message {
@@ -747,20 +749,21 @@ mod tests {
         };
 
         let mut controller = MockAttachController::new(config, 7);
-        let io = controller
-            .start("")
+        let transport = controller
+            .launch("")
             .await
             .expect("mock controller should start");
 
-        io.in_tx
-            .send_async(Bytes::from(
+        let (writer, events) = transport.into_parts();
+        writer
+            .write(Bytes::from(
                 "-stack-list-frames\n-get-remote-bt\n-switch-context-custom pc=123 sp=456 fp=789\n",
             ))
             .await
             .expect("mock commands should send");
 
         let stack = result_payload(
-            &io.out_rx
+            events
                 .recv_async()
                 .await
                 .expect("stack-list-frames response should arrive"),
@@ -777,7 +780,7 @@ mod tests {
         );
 
         let dbt = result_payload(
-            &io.out_rx
+            events
                 .recv_async()
                 .await
                 .expect("remote-bt response should arrive"),
@@ -793,7 +796,7 @@ mod tests {
         );
 
         let switch = result_payload(
-            &io.out_rx
+            events
                 .recv_async()
                 .await
                 .expect("switch-context response should arrive"),
@@ -809,18 +812,19 @@ mod tests {
     #[tokio::test]
     async fn mock_remote_bt_without_parent_returns_failed_message() {
         let mut controller = MockAttachController::new(MockSessionConfig::default(), 8);
-        let io = controller
-            .start("")
+        let transport = controller
+            .launch("")
             .await
             .expect("mock controller should start");
 
-        io.in_tx
-            .send_async(Bytes::from("-get-remote-bt\n"))
+        let (writer, events) = transport.into_parts();
+        writer
+            .write(Bytes::from("-get-remote-bt\n"))
             .await
             .expect("mock command should send");
 
         let payload = result_payload(
-            &io.out_rx
+            events
                 .recv_async()
                 .await
                 .expect("remote-bt response should arrive"),

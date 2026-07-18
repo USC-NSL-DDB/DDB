@@ -5,7 +5,7 @@ use crate::{common::counter, discovery::discovery_message_producer::ServiceMeta}
 use super::{
     session_mgr,
     thread_mgr::{self, LocalThreadGroupId, LocalThreadId},
-    SessionMetaRef,
+    SessionRef,
 };
 
 #[derive(Default)]
@@ -272,13 +272,13 @@ impl StateMgr {
 
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     #[inline]
-    pub fn sessions(&self) -> Vec<SessionMetaRef> {
+    pub fn sessions(&self) -> Vec<SessionRef> {
         self.session_states.sessions()
     }
 
     #[inline]
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    pub fn session(&self, sid: u64) -> Option<SessionMetaRef> {
+    pub fn session(&self, sid: u64) -> Option<SessionRef> {
         self.session_states.session(sid)
     }
 
@@ -291,7 +291,7 @@ impl StateMgr {
     }
 
     #[inline]
-    pub fn session_by_tag(&self, tag: &str) -> Option<SessionMetaRef> {
+    pub fn session_by_tag(&self, tag: &str) -> Option<SessionRef> {
         self.session_states.session_by_tag(tag)
     }
 

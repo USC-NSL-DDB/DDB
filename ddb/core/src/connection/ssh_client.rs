@@ -1,21 +1,17 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 use russh::{
-    client::{self, Config, Handle, Handler, Msg, Session},
+    client::{self, Config, Handle, Handler, Session},
     keys::{key::PrivateKeyWithHashAlg, load_secret_key},
-    Channel, ChannelId, ChannelMsg, Disconnect,
+    ChannelId, Disconnect,
 };
 use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{sync::watch, time};
 use tracing::debug;
 
-use super::{RemoteConnectable, SSHIo};
-use crate::{
-    common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH,
-    dbg_ctrl::{InputReceiver, OutputSender},
-};
+use super::{RemoteConnectable, RunningTransport, TransportEvent, TransportRequest};
+use crate::common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH;
 
 #[derive(Debug, Error)]
 pub enum SSHConnectionError {
@@ -25,18 +21,6 @@ pub enum SSHConnectionError {
     /// Non-retryable errors (authentication failures)
     #[error(transparent)]
     NonRetryable(anyhow::Error),
-}
-
-impl SSHConnectionError {
-    fn is_retryable(&self) -> bool {
-        matches!(self, SSHConnectionError::Retryable(_))
-    }
-
-    fn into_inner(self) -> anyhow::Error {
-        match self {
-            SSHConnectionError::Retryable(e) | SSHConnectionError::NonRetryable(e) => e,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -174,42 +158,6 @@ impl SSHConnection {
         self.session = Some(session);
         Ok(())
     }
-
-    async fn poll(mut ssh_chan: Channel<Msg>, in_rx: InputReceiver, out_tx: OutputSender) {
-        loop {
-            tokio::select! {
-                Ok(data) = in_rx.recv_async() => {
-                    debug!("Sending data: {:?}", data);
-                    match ssh_chan.data(data.as_ref()).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            // if in_rx.is_closed() {
-                            //     debug!("Input channel closed.");
-                            //     break;
-                            // }
-                            debug!("Error sending input data: {}", e);
-                        }
-                    }
-                }
-                Some(msg) = ssh_chan.wait() => {
-                    match msg {
-                        ChannelMsg::Data { ref data } => {
-                            // debug!("Read data: {:?}", std::str::from_utf8(data.to_vec().as_slice()));
-                            if let Err(e) = out_tx.send_async(Bytes::from(data.to_vec())).await {
-                                debug!("Failed to send output data: {}", e);
-                                break;
-                            }
-                        }
-                        ChannelMsg::Eof => {}
-                        ChannelMsg::ExitStatus { exit_status: _ } => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -235,7 +183,7 @@ impl RemoteConnectable for SSHConnection {
         Ok(())
     }
 
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo> {
+    async fn start(&mut self, cmd: &str) -> Result<RunningTransport> {
         if let Some(s) = &self.session {
             let chan = s.channel_open_session().await?;
             chan.exec(true, cmd).await?;
@@ -243,26 +191,33 @@ impl RemoteConnectable for SSHConnection {
             // Create channel for sending data to SSH
             // This is a workaround for the issue that the SSH library doesn't provide a way to
             // send data to the remote program in a thread-safe concurrent manner.
-            let (in_tx, in_rx) = flume::bounded::<Bytes>(1024);
-            let (out_tx, out_rx) = flume::bounded::<Bytes>(1024);
+            let (in_tx, in_rx) = flume::bounded::<TransportRequest>(1024);
+            let (out_tx, out_rx) = flume::bounded::<TransportEvent>(1024);
 
-            self.poll_handle = Some(tokio::spawn(Self::poll(chan, in_rx, out_tx)));
+            self.poll_handle = Some(tokio::spawn(super::ssh_driver::run(
+                chan,
+                in_rx,
+                out_tx,
+                "direct SSH",
+            )));
 
-            return Ok(SSHIo { in_tx, out_rx });
+            return Ok(RunningTransport::new(in_tx, out_rx));
         }
         Err(anyhow::anyhow!("Session is not available."))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        if let Some(s) = self.session.take() {
+        let result = if let Some(s) = self.session.take() {
             s.disconnect(Disconnect::ByApplication, "Exit from DCore.", "en")
-                .await?;
-        }
-
+                .await
+                .map_err(anyhow::Error::from)
+        } else {
+            Ok(())
+        };
         if let Some(h) = self.poll_handle.take() {
             h.abort();
         }
-        Ok(())
+        result
     }
 
     #[inline]
@@ -270,77 +225,6 @@ impl RemoteConnectable for SSHConnection {
         // Note: this is not a perfect check, but it should be good enough for now.
         // Session keeps connected even if the remote program is closed.
         // Therefore, we need to check the exited flag.
-        !self.exited.borrow().clone()
+        !*self.exited.borrow()
     }
 }
-
-// #[async_trait]
-// impl RemoteWritable for SSHConnection {
-//     #[inline]
-//     async fn write(&self, data: Bytes) -> Result<()> {
-//         if let Some(c) = &self.in_tx {
-//             c.send_async(data).await?;
-//         }
-//         Ok(())
-//     }
-// }
-
-// #[async_trait]
-// impl RemoteReadable for SSHConnection {
-//     #[inline]
-//     async fn read(&mut self) -> Result<Bytes> {
-//         if let Some(c) = &mut self.channel {
-//             loop {
-//                 let msg = c.wait().await;
-//                 match msg {
-//                     Some(msg) => match msg {
-//                         ChannelMsg::Data { ref data } => {
-//                             debug!("Data: {:?}", data);
-//                             return Ok(Bytes::from(data.to_vec()));
-//                         }
-//                         _ => {
-//                             debug!("Other: {:?}", msg);
-//                             // return Ok(String::from_utf8(msg).unwrap());
-//                             continue;
-//                         }
-//                     },
-//                     None => {
-//                         debug!("Error reading");
-//                         anyhow::bail!("Error reading.");
-//                     }
-//                 }
-//             }
-//         }
-//         anyhow::bail!("Channel is not available.")
-//     }
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::sync::Arc;
-//     use tokio::runtime::Runtime;
-
-//     use crate::common::default_vals::DEFAULT_SSH_USER;
-
-//     #[test]
-//     fn test_ssh_connection() {
-//         let rt = Runtime::new().unwrap();
-//         rt.block_on(async {
-//             let cred = SSHCred::new("127.0.0.1", 22, &DEFAULT_SSH_USER, None);
-//             let config = Arc::new(Config::default());
-//             // let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(1024);
-//             let (tx, mut rx) = flume::bounded::<Bytes>(1024);
-//             let mut conn = SSHConnection::new(cred, Some(config));
-//             conn.connect().await.unwrap();
-//             assert!(conn.is_connected());
-//             conn.start("echo $USER").await.unwrap();
-
-//             let res = rx.recv_async().await.unwrap();
-//             let res = std::str::from_utf8(res.as_ref()).unwrap();
-//             assert_eq!(res.trim(), std::env::var("USER").unwrap());
-//             conn.disconnect().await.unwrap();
-//             assert_eq!(conn.is_connected(), false);
-//         });
-//     }
-// }

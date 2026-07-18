@@ -1,9 +1,9 @@
+use std::net::Ipv4Addr;
 use std::path::Path;
-use std::{net::Ipv4Addr, sync::Arc};
 
 use super::discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo};
 use crate::connection::ssh_client_channel::SSHProxyCred;
-use crate::dbg_ctrl::dbg_bridge_ctrl::SSHAttachController;
+use crate::dbg_ctrl::TransportSpec;
 use anyhow::Result;
 use flume::Sender;
 use futures::{StreamExt, TryStreamExt};
@@ -11,7 +11,6 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::api::{AttachParams, ListParams, WatchEvent, WatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config};
-use russh::client::Handle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -26,8 +25,6 @@ pub struct K8sProducer {
 
     config: crate::common::config::Config,
 
-    tunnel: Arc<Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>>,
-
     service_name: String,
 
     // Add client as a field so we don't have to recreate it for each pod
@@ -36,17 +33,12 @@ pub struct K8sProducer {
 
 impl K8sProducer {
     /// Create a new MqttProducer, optionally with an owned broker.
-    pub fn new(
-        config: crate::common::config::Config,
-        tunnel: Arc<Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>>,
-        service_name: String,
-    ) -> Self {
+    pub fn new(config: crate::common::config::Config, service_name: String) -> Self {
         let (sig_stop, _) = watch::channel(false);
         Self {
             sig_stop: sig_stop,
             handles: Vec::new(),
             config,
-            tunnel,
             service_name,
             client: None,
         }
@@ -134,7 +126,6 @@ impl DiscoveryMessageProducer for K8sProducer {
         let ssh_user = self.config.ssh.user.clone();
 
         let service_name = self.service_name.clone();
-        let tunnel = self.tunnel.clone();
         tokio::task::spawn(async move {
             while let Ok(Some(status)) = stream.try_next().await {
                 match status {
@@ -153,7 +144,6 @@ impl DiscoveryMessageProducer for K8sProducer {
                         );
 
                         // Get PID using Kubernetes exec
-                        let tunnel = tunnel.clone();
                         match get_pod_pid(&pods, &pod_name, &service_name).await {
                             Ok(pid) => {
                                 let ip: Ipv4Addr =
@@ -164,7 +154,7 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     pid as u64,
                                     "weaver".to_string(),
                                     pod_name.to_string(),
-                                    Box::new(SSHAttachController::new(ssh_cred, tunnel)),
+                                    TransportSpec::ProxySsh(ssh_cred),
                                     None,
                                 );
                                 tx.send_async(info).await.ok();

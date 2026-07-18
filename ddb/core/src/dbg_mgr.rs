@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
+use crate::dbg_ctrl::{build_transport, TransportSpec};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
@@ -58,6 +59,10 @@ pub struct ServiceDiscover {
     pub rx: Receiver<crate::discovery::ServiceInfo>,
 
     pub handle: Option<JoinHandle<()>>,
+
+    pub proxy_tunnel: Option<
+        Arc<russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>>,
+    >,
 }
 
 impl ServiceDiscover {
@@ -98,11 +103,17 @@ impl ServiceDiscover {
     pub fn new(
         producer: Box<dyn DiscoveryMessageProducer>,
         rx: Receiver<crate::discovery::ServiceInfo>,
+        proxy_tunnel: Option<
+            Arc<
+                russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>,
+            >,
+        >,
     ) -> Self {
         ServiceDiscover {
             producer,
             rx,
             handle: None,
+            proxy_tunnel,
         }
     }
 
@@ -110,9 +121,16 @@ impl ServiceDiscover {
 
     /// Handles creation of a new debug session for a discovered service.
     /// Called by the consumer loop that reads from a unified channel of `ServiceInfo<T>`.
-    async fn prepare_new_session(sessions: SessionsRef, info: crate::discovery::ServiceInfo) {
+    async fn prepare_new_session(
+        sessions: SessionsRef,
+        info: crate::discovery::ServiceInfo,
+        proxy_tunnel: Option<
+            Arc<
+                russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>,
+            >,
+        >,
+    ) {
         let service_meta = ServiceMeta::from(&info);
-        let hostname = info.ip;
         let pid = info.pid;
         let tag_str = info.tag;
         // if no such field is provided, it will be None.
@@ -123,28 +141,35 @@ impl ServiceDiscover {
             .tag(tag_str)
             // Possibly do something more direct with the `info.controller`
             // if your code needs to embed or pass it in.
-            .ssh_cred(hostname) // for example
             .mode(crate::session::DbgMode::REMOTE(
                 crate::session::DbgStartMode::ATTACH(pid),
             ))
             .add_prerun_debugger_cmd(
                 crate::dbg_cmd::GdbCmd::SetOption(crate::dbg_cmd::GdbOption::MiAsync(true)).into(),
             )
-            .with_debugger_controller(info.ssh_controller)
+            .transport(info.transport)
             .with_service_meta(service_meta)
             .build();
 
-        let dbg_session = crate::session::DbgSession::new(s_cfg);
+        let transport = match build_transport(&s_cfg.transport, proxy_tunnel) {
+            Ok(transport) => transport,
+            Err(error) => {
+                error!("Failed to construct debugger transport: {:?}", error);
+                return;
+            }
+        };
+        let dbg_session = crate::session::DbgSession::new(s_cfg, transport);
         Self::start_session(sessions, dbg_session, caladan_ip).await;
     }
 
     pub fn start(&mut self, sessions: SessionsRef) {
         let rx = self.rx.clone();
+        let proxy_tunnel = self.proxy_tunnel.clone();
         let handle = tokio::spawn(async move {
             while let Ok(info) = rx.recv_async().await {
                 // For each discovered service, create a new debug session.
                 debug!("Received service info: {:?}", info);
-                Self::prepare_new_session(sessions.clone(), info).await;
+                Self::prepare_new_session(sessions.clone(), info, proxy_tunnel.clone()).await;
             }
         });
         self.handle = Some(handle);
@@ -227,10 +252,11 @@ impl DbgManager {
                     // So that it can be cleaned up properly in case of failure (via `cleanup`).
                     let result = mqtt_producer.start_producing(producer_tx_clone).await;
 
-                    self.sd
-                        .lock()
-                        .await
-                        .replace(ServiceDiscover::new(Box::new(mqtt_producer), producer_rx));
+                    self.sd.lock().await.replace(ServiceDiscover::new(
+                        Box::new(mqtt_producer),
+                        producer_rx,
+                        None,
+                    ));
 
                     match result {
                         Ok(_) => {
@@ -293,9 +319,9 @@ impl DbgManager {
                 latency_channel.exec(true, "true").await.unwrap();
                 while latency_channel.wait().await.is_some() {}
 
+                let jump_host_session = Arc::new(jump_host_session);
                 let mut serviceweaver_producer = crate::discovery::k8s_producer::K8sProducer::new(
                     config.clone(),
-                    Arc::new(jump_host_session),
                     swc.service_name.clone(),
                 );
                 let producer_tx_clone = producer_tx.clone();
@@ -307,6 +333,7 @@ impl DbgManager {
                 self.sd.lock().await.replace(ServiceDiscover::new(
                     Box::new(serviceweaver_producer),
                     producer_rx,
+                    Some(jump_host_session),
                 ));
             }
             ServiceDiscoveryMode::None => {}
@@ -339,14 +366,13 @@ impl DbgManager {
 
         builder = match config.conf.debugger.backend {
             DebuggerBackendKind::Mock => builder
-                .ssh_cred(session.ip)
                 .mode(crate::session::DbgMode::REMOTE(
                     crate::session::DbgStartMode::ATTACH(session.pid),
                 ))
-                .with_debugger_controller(Box::new(crate::dbg_ctrl::MockAttachController::new(
-                    session.mock.clone(),
-                    session.pid,
-                ))),
+                .transport(TransportSpec::Mock {
+                    config: session.mock.clone(),
+                    pid: session.pid,
+                }),
             DebuggerBackendKind::Gdb => {
                 let mode = match session.start_mode {
                     StaticSessionStartMode::Attach => {
@@ -368,14 +394,14 @@ impl DbgManager {
                     }
                 };
 
-                builder.mode(mode).with_debugger_controller(Box::new(
-                    crate::dbg_ctrl::LocalProcessController::new(),
-                ))
+                builder.mode(mode).transport(TransportSpec::Local)
             }
             DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
         };
 
-        let dbg_session = crate::session::DbgSession::new(builder.build());
+        let session_config = builder.build();
+        let transport = build_transport(&session_config.transport, None)?;
+        let dbg_session = crate::session::DbgSession::new(session_config, transport);
         ServiceDiscover::start_session(sessions, dbg_session, None).await;
         Ok(())
     }

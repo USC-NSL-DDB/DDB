@@ -130,9 +130,6 @@ pub fn get_dbg_mgr() -> Arc<DbgManager> {
 }
 
 async fn run_command_flow(command_workers: usize) -> Result<()> {
-    let tracker = cmd_flow::get_cmd_tracker();
-    tracker.clone().start(command_workers);
-
     let cmd_handler = Arc::clone(get_cmd_handler());
     cmd_handler.clone().start(command_workers);
     get_rt_status().up(Component::CmdFlow);
@@ -141,7 +138,6 @@ async fn run_command_flow(command_workers: usize) -> Result<()> {
     get_shutdown_ctrl()
         .shutdown_cleanup(async {
             cmd_handler.stop();
-            tracker.stop();
         })
         .await;
     Ok(())

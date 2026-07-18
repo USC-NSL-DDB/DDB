@@ -48,25 +48,8 @@ use super::{
 /// 4. **Formatter Selection**: Handlers choose appropriate formatters based on command
 ///    type and expected output format (e.g., `ThreadInfoFormatter` for thread info)
 ///
-/// # Example Implementation
-///
-/// ```no_run
-/// # use async_trait::async_trait;
-/// # use super::{Handler, ParsedInputCmd, Router, PlainFormatter};
-/// # use std::sync::Arc;
-/// struct MyHandler {}
-///
-/// #[async_trait]
-/// impl Handler for MyHandler {
-///     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-///         // Convert parsed command to executable command with formatter
-///         let (target, cmd) = cmd.to_command(PlainFormatter);
-///         
-///         // Route via router (respects target semantics)
-///         self.router.send_to(target, cmd);
-///     }
-/// }
-/// ```
+/// Handlers use `crate::cmd_flow::api::parsed` to construct a semantic request,
+/// then choose `execute`, `emit`, or `submit` explicitly.
 #[async_trait]
 pub trait Handler: Send + Sync + std::fmt::Debug {
     async fn process_cmd(&self, cmd: ParsedInputCmd);
@@ -85,7 +68,7 @@ impl DefaultHandler {
 impl Handler for DefaultHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = cmd.send().with(PlainFormatter).to_default_target();
+        let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
     }
 }
 
@@ -136,9 +119,10 @@ impl BreakInsertHandler {
         // Only send breakpoint command if group has active sessions
         // If empty, the breakpoint will be applied later when sessions join via sync_bkpts_state()
         if !sids.is_empty() {
-            let ret = api::send_and_return(cmd)
+            let ret = api::command(cmd)
                 .unwrap()
-                .to(Target::Group(gid))
+                .target(Target::Group(gid))
+                .execute()
                 .await?;
             for resp in ret.get_responses() {
                 let bkpt_info = resp
@@ -173,9 +157,10 @@ impl BreakInsertHandler {
     }
 
     async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) -> Result<()> {
-        let ret = api::send_and_return(cmd)
+        let ret = api::command(cmd)
             .unwrap()
-            .to(Target::Session(sid))
+            .target(Target::Session(sid))
+            .execute()
             .await?;
         let bkpt_info = ret
             .get_responses()
@@ -366,9 +351,10 @@ impl BreakDeleteHandler {
 
 impl BreakDeleteHandler {
     async fn delete_local_bkpt(sid: u64, local_bkpt_id: u64) -> Result<BreakpointStateChange> {
-        let ret = api::send_and_return(&format!("-break-delete {}", local_bkpt_id))
+        let ret = api::command(&format!("-break-delete {}", local_bkpt_id))
             .unwrap()
-            .to(Target::Session(sid))
+            .target(Target::Session(sid))
+            .execute()
             .await?;
         let response = ret.get_responses().first().unwrap();
         if response.get_message() == "done" {
@@ -634,13 +620,14 @@ impl Handler for ThreadInfoHandler {
                         .unwrap_or("".to_string()),
                     ltid
                 );
-                let _ = api::send(&thrd_info_cmd)
+                let _ = api::command(&thrd_info_cmd)
                     .unwrap()
-                    .with(ThreadInfoFormatter)
-                    .to(Target::Thread(tid));
+                    .target(Target::Thread(tid))
+                    .emit(ThreadInfoFormatter)
+                    .await;
             }
             _ => {
-                let _ = cmd.send().with(ThreadInfoFormatter).to_default_target();
+                let _ = api::parsed(cmd).unwrap().emit(ThreadInfoFormatter).await;
             }
         }
     }
@@ -658,8 +645,12 @@ impl ContinueHandler {
 impl ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument)]
     async fn continue_session(cont_cmd: ParsedInputCmd, session: SessionRef) -> Result<()> {
-        let _tx = session.lock_transaction_owned().await;
-        let (sid, in_custom_context, current_context) = session
+        let sid = session.read_with(|meta| meta.sid()).await;
+        let tx = transaction::begin(sid)
+            .await
+            .map_err(|error| anyhow!(error.to_string()))?;
+        let (sid, in_custom_context, current_context) = tx
+            .session()
             .read_with(|meta| {
                 (
                     meta.sid(),
@@ -673,12 +664,13 @@ impl ContinueHandler {
             let Some(ctx) = current_context else {
                 return Ok(());
             };
-            let restore = api::send_and_return(&format!(
+            let restore = api::command(&format!(
                 "-switch-context-custom {}",
                 Self::prepare_ctx_switch_args(&ctx)
             ))
             .unwrap()
-            .to(Target::Thread(ctx.tid))
+            .target(Target::Thread(ctx.tid))
+            .execute_exclusive(tx.lease())
             .await?;
             let responses = restore.get_responses();
             let restored = responses.len() == 1
@@ -696,10 +688,11 @@ impl ContinueHandler {
             }
         }
 
-        let _ = cont_cmd
-            .send()
-            .with(PlainFormatter)
-            .to(Target::Session(sid));
+        let _ = api::parsed(cont_cmd)
+            .unwrap()
+            .target(Target::Session(sid))
+            .emit_exclusive(tx.lease(), PlainFormatter)
+            .await;
         session
             .write_with(|meta| meta.update_all_status(ThreadStatus::RUNNING))
             .await;
@@ -776,12 +769,16 @@ impl Handler for InterruptHandler {
                 if ss.is_some() {
                     // Note: send interrupt to running process. Ignore thread granularity.
                     // skips checking if the thread is running or not.
-                    let _ = cmd.send().with(PlainFormatter).to_default_target();
+                    let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
                 }
             }
             _ => {
                 // broadcast to all sessions
-                let _ = cmd.send().with(PlainFormatter).to(Target::Broadcast);
+                let _ = api::parsed(cmd)
+                    .unwrap()
+                    .target(Target::Broadcast)
+                    .emit(PlainFormatter)
+                    .await;
             }
         }
     }
@@ -803,7 +800,11 @@ impl Handler for ListHandler {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
         STATES.select_session(1);
-        let _ = cmd.send().with(PlainFormatter).to(Target::CurrSession);
+        let _ = api::parsed(cmd)
+            .unwrap()
+            .target(Target::CurrSession)
+            .emit(PlainFormatter)
+            .await;
     }
 }
 
@@ -825,12 +826,13 @@ impl Handler for ThreadSelectHandler {
             let gtid = parts.last().unwrap().parse::<u64>().unwrap();
             let (sid, tid) = STATES.local_thread_id(gtid).unwrap().into();
             let target = Target::Session(sid);
-            let _ = api::send(&format!("-thread-select {}", tid))
+            let _ = api::command(&format!("-thread-select {}", tid))
                 .unwrap()
-                .with(PlainFormatter)
-                .to(target);
+                .target(target)
+                .emit(PlainFormatter)
+                .await;
         } else {
-            let _ = cmd.send().with(PlainFormatter).to_default_target();
+            let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
         }
     }
 }
@@ -848,10 +850,11 @@ impl ListGroupsHandler {
 impl Handler for ListGroupsHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = cmd
-            .send()
-            .with(ProcessReadableFormatter)
-            .to(Target::Broadcast);
+        let _ = api::parsed(cmd)
+            .unwrap()
+            .target(Target::Broadcast)
+            .emit(ProcessReadableFormatter)
+            .await;
     }
 }
 
@@ -969,10 +972,15 @@ impl DistributeBacktraceHandler {
 }
 
 impl DistributeBacktraceHandler {
-    async fn get_bt_and_caller_meta_locked(&self, sid: u64, gtid: u64) -> Result<BacktraceData> {
-        let mut stack_resp = api::send_and_return(&format!("-stack-list-frames --thread {}", gtid))
+    async fn get_bt_and_caller_meta_locked(
+        &self,
+        tx: &transaction::SessionTransaction,
+        sid: u64,
+        gtid: u64,
+    ) -> Result<BacktraceData> {
+        let mut stack_resp = api::command(&format!("-stack-list-frames --thread {}", gtid))
             .unwrap()
-            .to_default_target()
+            .execute_exclusive(tx.lease())
             .await?;
 
         let stack = Self::get_stack_ref_mut(&mut stack_resp)
@@ -984,9 +992,10 @@ impl DistributeBacktraceHandler {
         }
 
         let dbt_cmd = self.adapter.get_bt_command_name();
-        let resp = api::send_and_return(&dbt_cmd)
+        let resp = api::command(&dbt_cmd)
             .unwrap()
-            .to(Target::Thread(gtid))
+            .target(Target::Thread(gtid))
+            .execute_exclusive(tx.lease())
             .await
             .unwrap();
 
@@ -1010,13 +1019,18 @@ impl DistributeBacktraceHandler {
         let (sid, _) = get_state_mgr().local_thread_id(gtid).unwrap().into();
 
         // Acquire transaction lock for exclusive command sequence access
-        let _tx = transaction::begin(sid)
+        let tx = transaction::begin(sid)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        self.get_bt_and_caller_meta_locked(sid, gtid).await
+        self.get_bt_and_caller_meta_locked(&tx, sid, gtid).await
     }
 
-    async fn handle_migration_if_enabled(&self, inspect_gtid: u64, parent_meta: &Dict) {
+    async fn handle_migration_if_enabled(
+        &self,
+        inspect_gtid: u64,
+        parent_meta: &Dict,
+        transaction: Option<&transaction::SessionTransaction>,
+    ) {
         if Config::global().handle_migration() {
             if let Some(LocalThreadId(sid, _)) = STATES.local_thread_id(inspect_gtid) {
                 let proclet_id = parent_meta
@@ -1026,7 +1040,7 @@ impl DistributeBacktraceHandler {
                     .unwrap()
                     .to_string();
                 match get_proclet_restore_mgr()
-                    .handle_proclet_restoration(sid, &proclet_id)
+                    .handle_proclet_restoration(sid, &proclet_id, transaction)
                     .await
                 {
                     Ok(_) => {
@@ -1154,7 +1168,31 @@ impl Handler for DistributeBacktraceHandler {
                     let bt_data = if !parent_in_custom_ctx {
                         debug!("try to swap context for {}", parent_sid);
 
-                        let tx = match transaction::begin(parent_sid).await {
+                        let related_session = if Config::global().handle_migration() {
+                            let proclet_id = parent_meta
+                                .get("proclet_id")
+                                .and_then(|value| value.expect_string_ref().ok())
+                                .filter(|proclet_id| !proclet_id.is_empty() && *proclet_id != "0");
+                            match proclet_id {
+                                Some(proclet_id) => match get_proclet_restore_mgr()
+                                    .related_session(parent_sid, &proclet_id.to_string())
+                                    .await
+                                {
+                                    Ok(related) => related,
+                                    Err(error) => {
+                                        error!(?error, "failed to resolve migration session");
+                                        break;
+                                    }
+                                },
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                        let tx = match transaction::begin_with_related(parent_sid, related_session)
+                            .await
+                        {
                             Ok(tx) => tx,
                             Err(e) => {
                                 error!(
@@ -1166,13 +1204,11 @@ impl Handler for DistributeBacktraceHandler {
                         };
 
                         // interrupt, switch context, get backtrace
-                        let intr_resp = api::send_and_return(&format!(
-                            "-exec-interrupt --session {}",
-                            parent_sid
-                        ))
-                        .unwrap()
-                        .to_default_target()
-                        .await;
+                        let intr_resp =
+                            api::command(&format!("-exec-interrupt --session {}", parent_sid))
+                                .unwrap()
+                                .execute_exclusive(tx.lease())
+                                .await;
 
                         if intr_resp.is_err() {
                             // TODO: maybe auto-retry?
@@ -1200,14 +1236,13 @@ impl Handler for DistributeBacktraceHandler {
                                 .expect_dict_ref()
                                 .unwrap(),
                         );
-                        let switch_resp = api::send_and_return(&format!(
-                            "-switch-context-custom {}",
-                            ctx_switch_args
-                        ))
-                        .unwrap()
-                        .to(Target::Thread(inspect_gtid))
-                        .await
-                        .unwrap();
+                        let switch_resp =
+                            api::command(&format!("-switch-context-custom {}", ctx_switch_args))
+                                .unwrap()
+                                .target(Target::Thread(inspect_gtid))
+                                .execute_exclusive(tx.lease())
+                                .await
+                                .unwrap();
 
                         let switch_resp = switch_resp
                             .get_responses()
@@ -1234,9 +1269,9 @@ impl Handler for DistributeBacktraceHandler {
                             })
                             .await;
 
-                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta)
+                        self.handle_migration_if_enabled(inspect_gtid, &parent_meta, Some(&tx))
                             .await;
-                        self.get_bt_and_caller_meta_locked(parent_sid, inspect_gtid)
+                        self.get_bt_and_caller_meta_locked(&tx, parent_sid, inspect_gtid)
                             .await
                     } else {
                         self.get_bt_and_caller_meta(inspect_gtid).await
@@ -1315,7 +1350,7 @@ impl Handler for ExecNextHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
-            let _ = cmd.send().with(NullFormatter).to_default_target();
+            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
         } else {
             error!("exec-next command should specify a thread id by --thread <gtid>");
         }
@@ -1336,7 +1371,7 @@ impl Handler for ExecFinishHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
-            let _ = cmd.send().with(NullFormatter).to_default_target();
+            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
         } else {
             error!("exec-finish command should specify a thread id by --thread <gtid>");
         }
@@ -1433,7 +1468,7 @@ impl Handler for ExecStepHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) {
         if let Target::Thread(_) = &cmd.target {
-            let _ = cmd.send().with(NullFormatter).to_default_target();
+            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
         } else {
             error!("exec-step command should specify a thread id by --thread <gtid>");
         }
@@ -1452,7 +1487,7 @@ impl Handler for ExecJumpHandler {
         // let (target, cmd) = cmd.to_command(PlainFormatter);
         match cmd.target {
             Target::Session(_) => {
-                let _ = cmd.send().with(PlainFormatter).to_default_target();
+                let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
             }
             _ => {
                 error!("exec-jump command should specify a session");
@@ -1480,28 +1515,27 @@ impl Handler for SendSignalHandler {
                 // Signal can only be delivered when the process is stopped in gdb.
                 // So first send an interrupt to stop the process.
                 let backend = get_debugger_backend();
-                api::send_and_return(&backend.interrupt_command())
+                api::command(&backend.interrupt_command())
                     .unwrap()
-                    .to(Target::Session(sid))
+                    .target(Target::Session(sid))
+                    .execute()
                     .await
                     .unwrap();
 
                 let signal_cmd =
                     backend.console_exec_command(&format!("signal {}", cmd.args.trim()));
-                if let Ok(sender) = api::send_and_forget(&signal_cmd) {
-                    match sender.to(cmd.target) {
-                        Ok(_) => {
-                            debug!("-send-signal command sent: {}", signal_cmd);
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to send -send-signal command. raw: {}, err: {}",
-                                signal_cmd, e
-                            );
-                        }
-                    }
-                } else {
-                    error!("Failed to send -send-signal command. raw: {}", signal_cmd);
+                match api::command(&signal_cmd) {
+                    Ok(request) => match request.target(Target::Session(sid)).submit().await {
+                        Ok(()) => debug!("-send-signal command sent: {}", signal_cmd),
+                        Err(error) => error!(
+                            "Failed to send -send-signal command. raw: {}, err: {}",
+                            signal_cmd, error
+                        ),
+                    },
+                    Err(error) => error!(
+                        "Failed to parse -send-signal command. raw: {}, err: {}",
+                        signal_cmd, error
+                    ),
                 }
             }
             _ => {
@@ -1524,7 +1558,7 @@ impl Handler for ListSignalsHandler {
         }
 
         match cmd.target {
-            Target::Session(_) => {
+            Target::Session(sid) => {
                 // TODO: use signal mgr to cache results?
                 // so that we can directly return if it is cached already.
                 let list_signal_cmd = format!(
@@ -1533,23 +1567,18 @@ impl Handler for ListSignalsHandler {
                         .map(|token| token.to_string())
                         .unwrap_or("".to_string())
                 );
-                if let Ok(sender) = api::send(&list_signal_cmd) {
-                    match sender.to::<false>(cmd.target) {
-                        Ok(_) => {
-                            debug!("-list-signals command sent: {}", list_signal_cmd);
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to send -list-signals command. raw: {}, err: {}",
-                                list_signal_cmd, e
-                            );
-                        }
-                    }
-                } else {
-                    error!(
-                        "Failed to send -list-signals command. raw: {}",
-                        list_signal_cmd
-                    );
+                match api::command(&list_signal_cmd) {
+                    Ok(request) => match request.target(Target::Session(sid)).emit_plain().await {
+                        Ok(()) => debug!("-list-signals command sent: {}", list_signal_cmd),
+                        Err(error) => error!(
+                            "Failed to send -list-signals command. raw: {}, err: {}",
+                            list_signal_cmd, error
+                        ),
+                    },
+                    Err(error) => error!(
+                        "Failed to parse -list-signals command. raw: {}, err: {}",
+                        list_signal_cmd, error
+                    ),
                 }
             }
             _ => {

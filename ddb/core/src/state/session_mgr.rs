@@ -5,9 +5,7 @@ use std::{
     fmt,
     sync::Arc,
 };
-use tokio::sync::{
-    Mutex as TokioMutex, OwnedMutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::discovery::discovery_message_producer::ServiceMeta;
 
@@ -362,17 +360,11 @@ impl SessionMeta {
 pub type SessionReadGuard<'a> = RwLockReadGuard<'a, SessionMeta>;
 pub type SessionWriteGuard<'a> = RwLockWriteGuard<'a, SessionMeta>;
 
-/// Wrapper containing session metadata and transaction lock.
-///
-/// The `meta` field holds the actual session state protected by RwLock.
-/// The `tx_lock` provides exclusive access for command transaction sequences.
+/// Wrapper containing session metadata.
 #[derive(Debug)]
 pub struct SessionWrapper {
     /// Session metadata protected by read-write lock
     meta: RwLock<SessionMeta>,
-    /// Transaction lock - acquire for exclusive command sequence access.
-    /// Uses Arc to support OwnedMutexGuard.
-    tx_lock: Arc<TokioMutex<()>>,
 }
 
 impl SessionWrapper {
@@ -403,18 +395,10 @@ impl SessionWrapper {
         let mut session = self.write().await;
         f(&mut session)
     }
-
-    #[inline]
-    pub async fn lock_transaction_owned(&self) -> OwnedMutexGuard<()> {
-        self.tx_lock.clone().lock_owned().await
-    }
 }
 
 /// Reference to a session wrapper
 pub type SessionRef = Arc<SessionWrapper>;
-
-/// Backward compatibility alias
-pub type SessionMetaRef = SessionRef;
 
 pub struct SessionStateMgr {
     // Avoid DashMap here because session operations frequently hold a session
@@ -438,7 +422,6 @@ impl SessionStateMgr {
             sid,
             Arc::new(SessionWrapper {
                 meta: RwLock::new(SessionMeta::new(sid, tag.to_string(), service_meta)),
-                tx_lock: Arc::new(TokioMutex::new(())),
             }),
         );
         self.tag_index.insert(tag.to_string(), sid);

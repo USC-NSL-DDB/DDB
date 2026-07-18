@@ -89,9 +89,10 @@ impl SourceMgr {
             debug!("Resolving sources for session: {}", sid);
             // Source is not ready for this session
             // Prepare to retrieve source files
-            let result = api::send_and_return("-file-list-exec-source-files")
+            let result = api::command("-file-list-exec-source-files")
                 .unwrap()
-                .to(api::Target::Session(sid))
+                .target(api::Target::Session(sid))
+                .execute()
                 .await?;
 
             let sources = Self::extract_source_paths(&result)?;
@@ -116,12 +117,13 @@ impl SourceMgr {
             .to_str()
             .ok_or(anyhow!("Path cannot be parsed into str representation."))?;
 
-        let result = api::send_and_return(&format!(
+        let result = api::command(&format!(
             "-file-list-exec-source-files --dirname {}",
             dirname
         ))
         .unwrap()
-        .to(api::Target::Session(sid))
+        .target(api::Target::Session(sid))
+        .execute()
         .await?;
 
         let sources = Self::extract_source_paths(&result)?;

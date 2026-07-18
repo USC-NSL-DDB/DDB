@@ -44,12 +44,20 @@ fn boots_static_sessions_and_reports_thread_info() {
     ddb.wait_for_stdout_count("thread-created", 3);
 
     let groups = ddb.api_get("/groups");
-    assert_eq!(groups.as_array().expect("groups should be an array").len(), 2);
+    assert_eq!(
+        groups.as_array().expect("groups should be an array").len(),
+        2
+    );
     let mut group_sizes = groups
         .as_array()
         .expect("groups should be an array")
         .iter()
-        .map(|group| group["sids"].as_array().expect("sids should be an array").len())
+        .map(|group| {
+            group["sids"]
+                .as_array()
+                .expect("sids should be an array")
+                .len()
+        })
         .collect::<Vec<_>>();
     group_sizes.sort_unstable();
     assert_eq!(group_sizes, vec![1, 2]);

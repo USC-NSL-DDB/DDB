@@ -1,20 +1,16 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 use russh::{
-    client::{self, Config, Handle, Handler, Msg, Session},
+    client::{self, Config, Handle, Handler, Session},
     keys::{key::PrivateKeyWithHashAlg, load_secret_key},
-    Channel, ChannelId, ChannelMsg, Disconnect,
+    ChannelId, Disconnect,
 };
 use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{sync::watch, time};
 use tracing::debug;
 
-use super::{RemoteConnectable, SSHIo};
-use crate::{
-    common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH,
-    dbg_ctrl::{InputReceiver, OutputSender},
-};
+use super::{RemoteConnectable, RunningTransport, TransportEvent, TransportRequest};
+use crate::common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH;
 /// SSHProxyCred holds the credentials to connect to the "inner" host
 /// (the one behind the bastion). We still need a private key for
 /// the second hop's authentication.
@@ -215,57 +211,6 @@ impl SSHProxyConnection {
         self.inner_session = Some(session);
         Ok(())
     }
-
-    /// This is identical to the polling logic in your original SSHConnection:
-    /// 1) read data from `in_rx` and send it over the SSH channel
-    /// 2) read data from the remote side and forward it to `out_tx`
-    async fn poll(mut ssh_chan: Channel<Msg>, in_rx: InputReceiver, out_tx: OutputSender) {
-        loop {
-            tokio::select! {
-                // Input from local -> remote
-                Ok(data) = in_rx.recv_async() => {
-                    debug!("(Proxy) Sending data: {:?}", data);
-                    match ssh_chan.data(data.as_ref()).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            debug!("(Proxy) Error sending input data: {}", e);
-                            // Typically break or keep going depending on your logic
-                            break;
-                        }
-                    }
-                }
-
-                // Output from remote -> local
-                Some(msg) = ssh_chan.wait() => {
-                    match msg {
-                        ChannelMsg::Data { ref data } => {
-                            debug!("(Proxy) Read data: {:?}", std::str::from_utf8(data));
-                            if let Err(e) = out_tx.send_async(Bytes::from(data.to_vec())).await {
-                                debug!("(Proxy) Failed to send output data: {}", e);
-                                break;
-                            }
-                        }
-                        ChannelMsg::Eof => {
-                            debug!("(Proxy) EOF received");
-                            break;
-                        }
-                        ChannelMsg::ExitStatus { .. } => {
-                            debug!("(Proxy) Exit status received");
-                            break;
-                        }
-                        other => {
-                            debug!("(Proxy) Ignoring other SSH message: {:?}", other);
-                        }
-                    }
-                }
-
-                else => {
-                    // If channels close, etc.
-                    break;
-                }
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -295,7 +240,7 @@ impl RemoteConnectable for SSHProxyConnection {
         ))
     }
 
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo> {
+    async fn start(&mut self, cmd: &str) -> Result<RunningTransport> {
         if let Some(s) = &self.inner_session {
             // Open a "session" channel in the inner SSH session
             let chan = s.channel_open_session().await?;
@@ -303,13 +248,18 @@ impl RemoteConnectable for SSHProxyConnection {
             chan.exec(true, cmd).await?;
 
             // Create a local channel for sending data to SSH
-            let (in_tx, in_rx) = flume::bounded::<Bytes>(1024);
-            let (out_tx, out_rx) = flume::bounded::<Bytes>(1024);
+            let (in_tx, in_rx) = flume::bounded::<TransportRequest>(1024);
+            let (out_tx, out_rx) = flume::bounded::<TransportEvent>(1024);
 
             // Start a background task to poll the SSH channel
-            self.poll_handle = Some(tokio::spawn(Self::poll(chan, in_rx, out_tx)));
+            self.poll_handle = Some(tokio::spawn(super::ssh_driver::run(
+                chan,
+                in_rx,
+                out_tx,
+                "proxy SSH",
+            )));
 
-            return Ok(SSHIo { in_tx, out_rx });
+            return Ok(RunningTransport::new(in_tx, out_rx));
         }
         Err(anyhow::anyhow!(
             "(Proxy) Inner session is not available (not connected)."
@@ -317,14 +267,17 @@ impl RemoteConnectable for SSHProxyConnection {
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        if let Some(s) = self.inner_session.take() {
+        let result = if let Some(s) = self.inner_session.take() {
             s.disconnect(Disconnect::ByApplication, "Exit from DCore (proxy).", "en")
-                .await?;
-        }
+                .await
+                .map_err(anyhow::Error::from)
+        } else {
+            Ok(())
+        };
         if let Some(h) = self.poll_handle.take() {
             h.abort();
         }
-        Ok(())
+        result
     }
 
     #[inline]

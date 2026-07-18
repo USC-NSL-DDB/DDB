@@ -37,7 +37,10 @@ fn group_breakpoints_hit_with_global_breakpoint_ids() {
     let sid_a = session_id_by_tag(&sessions, "svc-a");
     let sid_b = session_id_by_tag(&sessions, "svc-b");
 
-    ddb.send_cmd(&format!("201-break-insert --group {} src/main.rs:77", group_id));
+    ddb.send_cmd(&format!(
+        "201-break-insert --group {} src/main.rs:77",
+        group_id
+    ));
     ddb.wait_for_stdout_line("201^done");
 
     let bkpts = ddb.api_get("/bkpts");
@@ -102,7 +105,10 @@ fn late_joining_session_inherits_group_breakpoints() {
     let groups = ddb.api_get("/groups");
     let group_id = group_id_by_hash(&groups, "grp-a");
 
-    ddb.send_cmd(&format!("301-break-insert --group {} src/shared.rs:88", group_id));
+    ddb.send_cmd(&format!(
+        "301-break-insert --group {} src/shared.rs:88",
+        group_id
+    ));
     ddb.wait_for_stdout_line("301^done");
 
     let initial_bkpts = ddb.api_get("/bkpts");

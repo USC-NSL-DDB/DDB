@@ -14,9 +14,9 @@ use tokio::{
     process::{Child, Command},
 };
 
-use crate::connection::SSHIo;
+use crate::connection::{RunningTransport, TransportEvent, TransportRequest};
 
-use super::{DbgControllable, InputReceiver, OutputSender};
+use super::DebuggerTransport;
 
 #[derive(Debug)]
 pub struct LocalProcessController {
@@ -50,14 +50,27 @@ impl LocalProcessController {
 
     async fn forward_input(
         mut stdin: tokio::process::ChildStdin,
-        in_rx: InputReceiver,
+        requests: flume::Receiver<TransportRequest>,
+        events: flume::Sender<TransportEvent>,
         open: Arc<AtomicBool>,
     ) {
-        while let Ok(data) = in_rx.recv_async().await {
-            if stdin.write_all(data.as_ref()).await.is_err() {
-                break;
+        while let Ok(TransportRequest::Write { data, written }) = requests.recv_async().await {
+            let result = async {
+                stdin.write_all(data.as_ref()).await?;
+                stdin.flush().await?;
+                Ok::<_, std::io::Error>(())
             }
-            if stdin.flush().await.is_err() {
+            .await
+            .map_err(anyhow::Error::from);
+            let failure = result.as_ref().err().map(ToString::to_string);
+            let _ = written.send(result);
+            if let Some(error) = failure {
+                let _ = events
+                    .send_async(TransportEvent::Fault(format!(
+                        "local debugger stdin write failed: {}",
+                        error
+                    )))
+                    .await;
                 break;
             }
         }
@@ -67,9 +80,10 @@ impl LocalProcessController {
 
     async fn forward_output<R>(
         reader: R,
-        out_tx: OutputSender,
+        out_tx: flume::Sender<TransportEvent>,
         open: Arc<AtomicBool>,
         remaining_readers: Arc<AtomicUsize>,
+        stderr: bool,
     ) where
         R: tokio::io::AsyncRead + Unpin,
     {
@@ -79,24 +93,37 @@ impl LocalProcessController {
             match reader.read_until(b'\n', &mut line).await {
                 Ok(0) => break,
                 Ok(_) => {
-                    if out_tx.send_async(Bytes::from(line)).await.is_err() {
+                    let event = if stderr {
+                        TransportEvent::Stderr(Bytes::from(line))
+                    } else {
+                        TransportEvent::Stdout(Bytes::from(line))
+                    };
+                    if out_tx.send_async(event).await.is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(error) => {
+                    let stream = if stderr { "stderr" } else { "stdout" };
+                    let _ = out_tx
+                        .send_async(TransportEvent::Fault(format!(
+                            "local debugger {} read failed: {}",
+                            stream, error
+                        )))
+                        .await;
+                    break;
+                }
             }
         }
         if remaining_readers.fetch_sub(1, Ordering::SeqCst) == 1 {
             open.store(false, Ordering::SeqCst);
+            let _ = out_tx.send_async(TransportEvent::Exited(None)).await;
         }
     }
 }
 
 #[async_trait]
-impl DbgControllable for LocalProcessController {
-    type InputType = Bytes;
-
-    async fn start(&mut self, cmd: &str) -> Result<SSHIo> {
+impl DebuggerTransport for LocalProcessController {
+    async fn launch(&mut self, cmd: &str) -> Result<RunningTransport> {
         let (program, args) = Self::parse_command(cmd)?;
         let mut child = Command::new(program);
         child
@@ -120,14 +147,15 @@ impl DbgControllable for LocalProcessController {
             .take()
             .ok_or_else(|| anyhow!("failed to capture local debugger stderr"))?;
 
-        let (in_tx, in_rx) = flume::bounded::<Bytes>(1024);
-        let (out_tx, out_rx) = flume::bounded::<Bytes>(1024);
+        let (in_tx, in_rx) = flume::bounded::<TransportRequest>(1024);
+        let (out_tx, out_rx) = flume::bounded::<TransportEvent>(1024);
         let remaining_readers = Arc::new(AtomicUsize::new(2));
 
         self.open.store(true, Ordering::SeqCst);
         self.input_handle = Some(tokio::spawn(Self::forward_input(
             stdin,
             in_rx,
+            out_tx.clone(),
             Arc::clone(&self.open),
         )));
         self.output_handles.push(tokio::spawn(Self::forward_output(
@@ -135,15 +163,17 @@ impl DbgControllable for LocalProcessController {
             out_tx.clone(),
             Arc::clone(&self.open),
             Arc::clone(&remaining_readers),
+            false,
         )));
         self.output_handles.push(tokio::spawn(Self::forward_output(
             stderr,
             out_tx,
             Arc::clone(&self.open),
             remaining_readers,
+            true,
         )));
         self.child = Some(child);
-        Ok(SSHIo { in_tx, out_rx })
+        Ok(RunningTransport::new(in_tx, out_rx))
     }
 
     fn is_open(&self) -> bool {
