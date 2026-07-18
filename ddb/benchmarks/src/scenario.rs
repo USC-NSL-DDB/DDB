@@ -19,6 +19,7 @@ use crate::{
 pub enum ScenarioKind {
     Startup,
     ApiThreadInfo,
+    ApiThreadInfoBurst,
     ApiListGroups,
     CliThreadInfo,
     CliBreakInsert,
@@ -31,6 +32,7 @@ impl ScenarioKind {
         match self {
             Self::Startup => "startup",
             Self::ApiThreadInfo => "api-thread-info",
+            Self::ApiThreadInfoBurst => "api-thread-info-burst",
             Self::ApiListGroups => "api-list-groups",
             Self::CliThreadInfo => "cli-thread-info",
             Self::CliBreakInsert => "cli-break-insert",
@@ -45,7 +47,10 @@ impl ScenarioKind {
                 "Cold-start attach path for static mock sessions, including session registration and router wiring."
             }
             Self::ApiThreadInfo => {
-                "HTTP /send round-trip for a broadcast -thread-info command, exercising router fanout and tracker aggregation."
+                "HTTP /send round-trip for a broadcast -thread-info command, exercising router fanout and session-runtime aggregation."
+            }
+            Self::ApiThreadInfoBurst => {
+                "N concurrent HTTP requests each broadcast -thread-info to N sessions, stressing admission, per-session pipelining, correlation, and fanout."
             }
             Self::ApiListGroups => {
                 "HTTP /send round-trip for -list-thread-groups, covering broadcast fanout plus process/group response aggregation."
@@ -69,6 +74,7 @@ impl ScenarioKind {
         match self {
             Self::Startup => "cold_start_ms",
             Self::ApiThreadInfo
+            | Self::ApiThreadInfoBurst
             | Self::ApiListGroups
             | Self::CliThreadInfo
             | Self::CliBreakInsert
@@ -140,6 +146,35 @@ pub fn run_scenario(
                             scale,
                             responses.len()
                         );
+                    }
+                    Ok(start.elapsed())
+                })?,
+            ),
+            ScenarioKind::ApiThreadInfoBurst => SummaryStats::from_durations(
+                &measure_with_live_harness(scale, config, |harness, _, _| {
+                    let bodies = (0..scale)
+                        .map(|_| {
+                            json!({
+                                "wait": true,
+                                "cmd": "-thread-info",
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let start = Instant::now();
+                    let responses =
+                        harness.api_post_json_concurrent("/send", bodies, config.timeout)?;
+                    for response in responses {
+                        let response_count = response["payload"]["responses"]
+                            .as_array()
+                            .map(Vec::len)
+                            .context("missing burst thread-info responses")?;
+                        if response_count != scale {
+                            bail!(
+                                "expected {} responses per burst request, got {}",
+                                scale,
+                                response_count
+                            );
+                        }
                     }
                     Ok(start.elapsed())
                 })?,

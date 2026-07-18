@@ -348,6 +348,51 @@ impl DdbHarness {
             .with_context(|| format!("POST {} returned invalid json: {}", path, body_text))
     }
 
+    pub fn api_post_json_concurrent(
+        &self,
+        path: &str,
+        bodies: Vec<Value>,
+        timeout: Duration,
+    ) -> Result<Vec<Value>> {
+        let url = format!("http://127.0.0.1:{}{}", self.port, path);
+        let client = Client::builder()
+            .timeout(timeout)
+            .build()
+            .context("failed to build concurrent benchmark client")?;
+        bodies
+            .into_iter()
+            .map(|body| {
+                let client = client.clone();
+                let url = url.clone();
+                let path = path.to_string();
+                thread::spawn(move || -> Result<Value> {
+                    let response = client
+                        .post(url)
+                        .json(&body)
+                        .send()
+                        .with_context(|| format!("POST {} failed", path))?;
+                    let status = response.status();
+                    let body_text = response
+                        .text()
+                        .with_context(|| format!("POST {} returned unreadable body", path))?;
+                    if !status.is_success() {
+                        bail!("POST {} returned {}: {}", path, status, body_text);
+                    }
+                    serde_json::from_str(&body_text).with_context(|| {
+                        format!("POST {} returned invalid json: {}", path, body_text)
+                    })
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| anyhow!("concurrent benchmark request panicked"))?
+            })
+            .collect()
+    }
+
     pub fn send_cli_cmd(&mut self, cmd: &str) -> Result<usize> {
         let cursor = self.stdout.line_count();
         self.stdin

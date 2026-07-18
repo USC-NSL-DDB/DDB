@@ -44,6 +44,7 @@ struct Args {
         default_values_t = [
             ScenarioKind::Startup,
             ScenarioKind::ApiThreadInfo,
+            ScenarioKind::ApiThreadInfoBurst,
             ScenarioKind::ApiListGroups,
             ScenarioKind::CliThreadInfo,
             ScenarioKind::CliBreakInsert,
