@@ -4,6 +4,7 @@ mod arg;
 mod cmd_flow;
 mod common;
 mod connection;
+mod context;
 mod dbg_cmd;
 mod dbg_ctrl;
 mod dbg_mgr;
@@ -22,13 +23,10 @@ mod state;
 mod status;
 
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::Weak;
 
 use app::App;
 use cmd_flow::get_cmd_handler;
-use cmd_flow::init_cmd_handler;
-use cmd_flow::input::CmdHandler;
 use common::config::Config;
 use dbg_mgr::DbgManagable;
 use dbg_mgr::DbgManager;
@@ -119,31 +117,21 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-static DBG_MGR: OnceLock<Weak<DbgManager>> = OnceLock::new();
 pub fn init_dbg_mgr<F>(f: F)
 where
     F: FnOnce() -> Weak<DbgManager>,
 {
-    DBG_MGR.get_or_init(f);
+    context::app_context().set_debugger_manager(f());
 }
 
 pub fn get_dbg_mgr() -> Arc<DbgManager> {
-    // DBG_MGR.get().expect("DbgManager is not initialized.")
-    DBG_MGR
-        .get()
-        .and_then(|weak_mgr| weak_mgr.upgrade())
-        .expect("DbgManager is not initialized.")
+    context::app_context().debugger_manager()
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
 async fn run_main(command_workers: usize) -> Result<()> {
     let mut app = App::new(Config::global().conf.api_server_port);
     app.run(get_shutdown_ctrl().subscribe());
-
-    // Initialize notification manager
-    notification::init_notification_mgr();
-
-    init_cmd_handler(|| CmdHandler::new(get_framework_plugin().command_adapter()));
 
     let cmd_flow_handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -262,6 +250,7 @@ async fn main() -> Result<()> {
     Config::init_global(args.config)?;
     init_debugger_backend(|| resolve_debugger_backend(Config::global()));
     init_framework_plugin(|| resolve_framework_plugin(Config::global()));
+    context::init_app_context(get_framework_plugin().command_adapter());
     let app_dir_conf = AppDirConfig::from_config(Config::global());
 
     get_shutdown_ctrl().setup_signal_handling();

@@ -11,19 +11,7 @@ pub use message::{
     BreakpointChangeEvent, CustomEvent, Notification, NotificationPayload, SessionStatusEvent,
 };
 
-use std::sync::{Arc, OnceLock};
-
-static NOTIFICATION_MGR: OnceLock<Arc<NotificationManager>> = OnceLock::new();
-
-/// Initialize the global notification manager
-pub fn init_notification_mgr() {
-    NOTIFICATION_MGR.get_or_init(|| Arc::new(NotificationManager::new()));
-}
-
 /// Get the global notification manager
-pub fn get_notif_mgr() -> Arc<NotificationManager> {
-    NOTIFICATION_MGR
-        .get()
-        .expect("NotificationManager not initialized")
-        .clone()
+pub fn get_notif_mgr() -> std::sync::Arc<NotificationManager> {
+    crate::context::app_context().notification_manager().clone()
 }

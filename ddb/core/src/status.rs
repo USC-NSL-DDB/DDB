@@ -1,17 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::{Mutex, OnceLock},
-};
+use std::{collections::HashMap, sync::Mutex};
 use tracing::{debug, error, info};
 
-static RUNTIME_STATUS: OnceLock<RuntimeStatus> = OnceLock::new();
-
-fn init_rt_status() -> &'static RuntimeStatus {
-    RUNTIME_STATUS.get_or_init(|| RuntimeStatus::new())
-}
-
 pub fn get_rt_status() -> &'static RuntimeStatus {
-    init_rt_status()
+    crate::context::app_context().runtime_status()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

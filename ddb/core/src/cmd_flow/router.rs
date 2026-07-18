@@ -6,7 +6,6 @@ use serde::Deserialize;
 use tracing::{debug, error, info, warn};
 
 use super::{
-    get_cmd_tracker,
     input::{Command, ParsedInputCmd},
     DynFormatter, FinishedCmd, OutputSource, PlainFormatter, Tracker,
 };
@@ -45,10 +44,10 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new() -> Self {
+    pub fn new(tracker: Arc<Tracker>) -> Self {
         Self {
             sessions: DashMap::new(),
-            tracker: get_cmd_tracker(),
+            tracker,
         }
     }
 

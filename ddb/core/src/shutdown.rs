@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    future::IntoFuture,
-    sync::{Mutex, OnceLock},
-    time::Duration,
-};
+use std::{collections::HashMap, future::IntoFuture, sync::Mutex, time::Duration};
 use tokio::{
     signal::unix::{signal, SignalKind},
     sync::{oneshot, watch},
@@ -15,16 +10,9 @@ use crate::status::Component;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-static SHUTDOWN_CTRL: OnceLock<ShutdownCtrl> = OnceLock::new();
-static SHUTDOWN_ACKS: OnceLock<ShutdownAcks> = OnceLock::new();
-
 /// Returns the global shutdown controller instance.
 pub fn get_shutdown_ctrl() -> &'static ShutdownCtrl {
-    SHUTDOWN_CTRL.get_or_init(|| ShutdownCtrl::new())
-}
-
-fn get_shutdown_acks() -> &'static ShutdownAcks {
-    SHUTDOWN_ACKS.get_or_init(|| ShutdownAcks::new())
+    crate::context::app_context().shutdown()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +33,7 @@ pub struct ShutdownCtrl {
     rx: Mutex<watch::Receiver<bool>>,
     state: Mutex<Option<ShutdownCause>>, // None until first trigger
     shutdown_ack_pending: Mutex<Vec<(Component, oneshot::Receiver<()>)>>,
+    shutdown_acks: ShutdownAcks,
 }
 
 impl ShutdownCtrl {
@@ -56,6 +45,7 @@ impl ShutdownCtrl {
             rx: Mutex::new(rx),
             state: Mutex::new(None),
             shutdown_ack_pending: Mutex::new(vec![]),
+            shutdown_acks: ShutdownAcks::new(),
         }
     }
 
@@ -119,7 +109,7 @@ impl ShutdownCtrl {
 
     /// Registers a component that must acknowledge shutdown before completion.
     pub fn register_ack(&self, component: Component) {
-        let receiver = get_shutdown_acks().register(component);
+        let receiver = self.shutdown_acks.register(component);
         self.shutdown_ack_pending
             .lock()
             .unwrap()
@@ -135,7 +125,7 @@ impl ShutdownCtrl {
 
     /// Acknowledges that a component has completed its shutdown procedure.
     pub fn ack_shutdown(&self, component: Component) {
-        get_shutdown_acks().ack(component);
+        self.shutdown_acks.ack(component);
     }
 
     /// Sets up signal handling for SIGINT and SIGTERM.
