@@ -1,5 +1,5 @@
 use super::message::Notification;
-use super::subscriber::{SendError, Subscriber};
+use super::subscriber::Subscriber;
 use axum::extract::ws::Message;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 const MAX_SUBSCRIBERS: usize = 20;
+pub const SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct NotificationManager {
@@ -36,7 +37,7 @@ impl NotificationManager {
     }
 
     /// Subscribe a new WebSocket connection
-    pub fn subscribe(&self, tx: mpsc::UnboundedSender<Message>) -> Result<Uuid, SubscribeError> {
+    pub fn subscribe(&self, tx: mpsc::Sender<Message>) -> Result<Uuid, SubscribeError> {
         if self.subscribers.len() >= MAX_SUBSCRIBERS {
             return Err(SubscribeError::MaxSubscribersReached);
         }
@@ -87,7 +88,8 @@ impl NotificationManager {
             let id = *entry.key();
             let subscriber = entry.value();
 
-            if let Err(SendError::Disconnected) = subscriber.send(msg.clone()) {
+            if let Err(error) = subscriber.send(msg.clone()) {
+                warn!("Removing subscriber {} after send failed: {:?}", id, error);
                 failed.push(id);
             }
         }
@@ -124,6 +126,17 @@ impl NotificationManager {
         self.subscribers.len()
     }
 
+    /// Mark a subscriber as responsive after receiving its WebSocket pong.
+    pub async fn record_pong(&self, id: Uuid) {
+        let subscriber = self
+            .subscribers
+            .get(&id)
+            .map(|entry| Arc::clone(entry.value()));
+        if let Some(subscriber) = subscriber {
+            subscriber.heartbeat_success().await;
+        }
+    }
+
     /// Spawn heartbeat monitoring task
     fn spawn_heartbeat_task(&self) -> tokio::task::JoinHandle<()> {
         let subscribers = Arc::clone(&self.subscribers);
@@ -148,11 +161,12 @@ impl NotificationManager {
 
     async fn send_heartbeats(subscribers: &Arc<DashMap<Uuid, Arc<Subscriber>>>) {
         let mut to_remove = Vec::new();
+        let snapshot: Vec<_> = subscribers
+            .iter()
+            .map(|entry| (*entry.key(), Arc::clone(entry.value())))
+            .collect();
 
-        for entry in subscribers.iter() {
-            let id = *entry.key();
-            let subscriber = entry.value();
-
+        for (id, subscriber) in snapshot {
             // Check if subscriber exceeded max failed heartbeats
             if !subscriber.is_healthy().await {
                 warn!(
@@ -163,15 +177,16 @@ impl NotificationManager {
                 continue;
             }
 
-            // Send ping
+            // Count the heartbeat as pending until the WebSocket reader sees a
+            // pong. Enqueuing a ping alone does not prove that the peer is alive.
+            subscriber.heartbeat_failure().await;
             match subscriber.send(Message::Ping(vec![])) {
                 Ok(_) => {
-                    subscriber.heartbeat_success().await;
                     debug!("Heartbeat sent to subscriber {}", id);
                 }
-                Err(_) => {
-                    subscriber.heartbeat_failure().await;
-                    warn!("Failed to send heartbeat to subscriber {}", id);
+                Err(error) => {
+                    warn!("Failed to send heartbeat to subscriber {}: {:?}", id, error);
+                    to_remove.push(id);
                 }
             }
         }
@@ -221,7 +236,7 @@ mod tests {
     #[test]
     fn subscribe_and_unsubscribe_update_subscriber_count() {
         let manager = NotificationManager::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
 
         let id = manager
             .subscribe(tx)
@@ -235,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_sends_to_active_subscribers() {
         let manager = NotificationManager::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         manager
             .subscribe(tx)
             .expect("subscriber should be accepted");
@@ -261,12 +276,30 @@ mod tests {
     #[tokio::test]
     async fn broadcast_removes_disconnected_subscribers() {
         let manager = NotificationManager::new();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         manager
             .subscribe(tx)
             .expect("subscriber should be accepted");
         drop(rx);
 
+        manager
+            .broadcast(Notification::new(NotificationPayload::SessionListChanged))
+            .await;
+
+        assert_eq!(manager.subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn broadcast_removes_subscriber_when_its_queue_is_full() {
+        let manager = NotificationManager::new();
+        let (tx, _rx) = mpsc::channel(1);
+        manager
+            .subscribe(tx)
+            .expect("subscriber should be accepted");
+
+        manager
+            .broadcast(Notification::new(NotificationPayload::SessionListChanged))
+            .await;
         manager
             .broadcast(Notification::new(NotificationPayload::SessionListChanged))
             .await;

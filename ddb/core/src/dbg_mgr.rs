@@ -26,6 +26,8 @@ use crate::{
     discovery::DiscoveryMessageProducer,
 };
 
+const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
+
 #[async_trait]
 pub trait DbgManagable {
     async fn new() -> Self
@@ -196,7 +198,11 @@ impl DbgManager {
     async fn init_sd(&self) -> Result<()> {
         let config = self.config;
         let plugin = get_framework_plugin();
-        let (producer_tx, producer_rx) = flume::unbounded::<crate::discovery::ServiceInfo>();
+        // Discovery is bursty, but session creation is comparatively expensive.
+        // Bound the handoff so producers slow down instead of accumulating an
+        // unbounded number of pending sessions.
+        let (producer_tx, producer_rx) =
+            flume::bounded::<crate::discovery::ServiceInfo>(SERVICE_DISCOVERY_QUEUE_CAPACITY);
         match plugin.service_discovery_mode(config) {
             ServiceDiscoveryMode::MessageBroker => {
                 let sd = config

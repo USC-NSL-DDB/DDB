@@ -125,6 +125,8 @@ pub struct ProcletCtrlClient {
     inflights: Arc<DashMap<RPCToken, oneshot::Sender<ProcletCtrlCmdResp>>>,
 }
 
+const OUTGOING_QUEUE_CAPACITY: usize = 256;
+
 impl ProcletCtrlClient {
     /// Creates a new ProcletCtrlClient and connects to the specified address.
     pub async fn try_new(addr: &str) -> Result<Self> {
@@ -132,7 +134,7 @@ impl ProcletCtrlClient {
         let stream = TcpStream::connect(addr).await?;
         let (r, w) = stream.into_split();
 
-        let (to_send, sender_recv) = flume::unbounded();
+        let (to_send, sender_recv) = flume::bounded(OUTGOING_QUEUE_CAPACITY);
         let sender_handle = Self::start_sender(w, sender_recv);
         let receiver_handle = Self::start_receiver(r, inflights.clone());
 

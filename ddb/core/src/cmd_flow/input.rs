@@ -425,9 +425,13 @@ pub struct CmdHandler {
     worker_join_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
+const INPUT_QUEUE_CAPACITY: usize = 256;
+
 impl CmdHandler {
     pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>) -> Arc<Self> {
-        let (tx, rx) = flume::unbounded::<String>();
+        // Backpressure command producers instead of allowing input to consume
+        // memory without bound when handlers are slower than clients.
+        let (tx, rx) = flume::bounded::<String>(INPUT_QUEUE_CAPACITY);
 
         let handlers = handlers_map! {
             "-break-insert" => BreakInsertHandler::new(),

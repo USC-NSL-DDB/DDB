@@ -6,14 +6,14 @@ use uuid::Uuid;
 
 pub struct Subscriber {
     pub id: Uuid,
-    pub tx: mpsc::UnboundedSender<Message>,
+    pub tx: mpsc::Sender<Message>,
     pub connected_at: Instant,
     pub last_heartbeat: Arc<Mutex<Instant>>,
     pub failed_heartbeats: Arc<Mutex<u32>>,
 }
 
 impl Subscriber {
-    pub fn new(tx: mpsc::UnboundedSender<Message>) -> Self {
+    pub fn new(tx: mpsc::Sender<Message>) -> Self {
         Self {
             id: Uuid::new_v4(),
             tx,
@@ -25,7 +25,10 @@ impl Subscriber {
 
     /// Send a message to this subscriber
     pub fn send(&self, msg: Message) -> Result<(), SendError> {
-        self.tx.send(msg).map_err(|_| SendError::Disconnected)
+        self.tx.try_send(msg).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => SendError::Overloaded,
+            mpsc::error::TrySendError::Closed(_) => SendError::Disconnected,
+        })
     }
 
     /// Check if subscriber is still responsive
@@ -48,6 +51,7 @@ impl Subscriber {
 #[derive(Debug)]
 pub enum SendError {
     Disconnected,
+    Overloaded,
 }
 
 #[cfg(test)]
@@ -59,7 +63,7 @@ mod tests {
 
     #[tokio::test]
     async fn heartbeat_failures_flip_health_until_success_resets_it() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(1);
         let subscriber = Subscriber::new(tx);
 
         for _ in 0..4 {
@@ -76,13 +80,27 @@ mod tests {
 
     #[test]
     fn send_reports_disconnected_when_receiver_is_gone() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(1);
         let subscriber = Subscriber::new(tx);
         drop(rx);
 
         assert!(matches!(
             subscriber.send(Message::Text("payload".into())),
             Err(SendError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn send_reports_overload_when_queue_is_full() {
+        let (tx, _rx) = mpsc::channel(1);
+        let subscriber = Subscriber::new(tx);
+
+        subscriber
+            .send(Message::Text("first".into()))
+            .expect("first message should fit");
+        assert!(matches!(
+            subscriber.send(Message::Text("second".into())),
+            Err(SendError::Overloaded)
         ));
     }
 }

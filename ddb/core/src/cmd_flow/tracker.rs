@@ -264,6 +264,8 @@ pub struct Tracker {
     senders: DashMap<u64, flume::Sender<SessionResponse>>,
 }
 
+const RESPONSE_QUEUE_CAPACITY: usize = 1024;
+
 impl Tracker {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -278,7 +280,9 @@ impl Tracker {
         let mut handles = self.worker_handles.lock().unwrap();
 
         for idx in 0..num_workers {
-            let (tx, rx) = flume::unbounded::<SessionResponse>();
+            // A full response queue propagates pressure to the session reader,
+            // keeping a stalled parser from growing memory indefinitely.
+            let (tx, rx) = flume::bounded::<SessionResponse>(RESPONSE_QUEUE_CAPACITY);
 
             let tracker = Arc::clone(&self);
             let handle = tokio::spawn(async move {

@@ -1,4 +1,4 @@
-use super::manager::{NotificationManager, SubscribeError};
+use super::manager::{NotificationManager, SubscribeError, SUBSCRIBER_QUEUE_CAPACITY};
 use super::message::{CustomEvent, Notification, NotificationPayload};
 use axum::{
     extract::{
@@ -26,7 +26,7 @@ pub async fn notification_subscribe_handler(
 
 async fn handle_socket(socket: WebSocket, manager: Arc<NotificationManager>) {
     let (mut sender, mut receiver) = socket.split();
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
 
     // Subscribe to notifications
     let subscriber_id = match manager.subscribe(tx) {
@@ -72,6 +72,7 @@ async fn handle_socket(socket: WebSocket, manager: Arc<NotificationManager>) {
             match msg {
                 Message::Pong(_) => {
                     debug!("Received pong from subscriber {}", subscriber_id_clone);
+                    manager_clone.record_pong(subscriber_id_clone).await;
                 }
                 Message::Close(_) => {
                     info!("Client {} requested close", subscriber_id_clone);
