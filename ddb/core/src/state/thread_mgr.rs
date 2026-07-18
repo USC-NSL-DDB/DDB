@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use std::{collections::HashMap, sync::RwLock};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct LocalThreadId(pub u64, pub u64); // session id, thread id
@@ -26,13 +26,13 @@ impl LocalThreadId {
 }
 
 impl From<LocalThreadId> for (u64, u64) {
-    fn from(ltid: LocalThreadId) -> (u64, u64) {
+    fn from(ltid: LocalThreadId) -> Self {
         (ltid.0, ltid.1)
     }
 }
 
 impl From<&LocalThreadId> for (u64, u64) {
-    fn from(ltid: &LocalThreadId) -> (u64, u64) {
+    fn from(ltid: &LocalThreadId) -> Self {
         (ltid.0, ltid.1)
     }
 }
@@ -63,116 +63,132 @@ impl LocalThreadGroupId {
 }
 
 impl From<LocalThreadGroupId> for (u64, String) {
-    fn from(ltgid: LocalThreadGroupId) -> (u64, String) {
+    fn from(ltgid: LocalThreadGroupId) -> Self {
         (ltgid.0, ltgid.1)
     }
 }
 
 impl From<&LocalThreadGroupId> for (u64, String) {
-    fn from(ltgid: &LocalThreadGroupId) -> (u64, String) {
+    fn from(ltgid: &LocalThreadGroupId) -> Self {
         (ltgid.0, ltgid.1.clone())
     }
 }
 
+#[derive(Default)]
+struct ThreadIndexes {
+    ltid_to_gtid: HashMap<LocalThreadId, u64>,
+    gtid_to_ltid: HashMap<u64, LocalThreadId>,
+    ltgid_to_gtgid: HashMap<LocalThreadGroupId, u64>,
+    gtgid_to_ltgid: HashMap<u64, LocalThreadGroupId>,
+}
+
 #[allow(unused)]
 pub struct ThreadStateMgr {
-    // local thread id (session id + thread id) to global thread id
-    ltid_to_gtid: DashMap<LocalThreadId, u64>,
-    // global thread id to local thread id (session id + thread id)
-    gtid_to_ltid: DashMap<u64, LocalThreadId>,
-
-    // local thread group id (session id + thread group id) to global thread group id
-    ltgid_to_gtgid: DashMap<LocalThreadGroupId, u64>,
-    // global thread group id to local thread group id (session id + thread group id)
-    gtgid_to_ltgid: DashMap<u64, LocalThreadGroupId>,
+    // All four maps form two bidirectional indexes and must change together.
+    indexes: RwLock<ThreadIndexes>,
 }
 
 impl ThreadStateMgr {
     pub fn new() -> Self {
         Self {
-            ltid_to_gtid: DashMap::new(),
-            gtid_to_ltid: DashMap::new(),
-            ltgid_to_gtgid: DashMap::new(),
-            gtgid_to_ltgid: DashMap::new(),
+            indexes: RwLock::new(ThreadIndexes::default()),
         }
     }
 
     pub fn global_thread_id(&self, local_tid: &LocalThreadId) -> Option<u64> {
-        self.ltid_to_gtid.get(local_tid).map(|v| *v)
+        self.indexes
+            .read()
+            .unwrap()
+            .ltid_to_gtid
+            .get(local_tid)
+            .copied()
     }
 
     pub fn local_thread_id(&self, gtid: u64) -> Option<LocalThreadId> {
-        self.gtid_to_ltid.get(&gtid).map(|v| v.clone())
+        self.indexes
+            .read()
+            .unwrap()
+            .gtid_to_ltid
+            .get(&gtid)
+            .cloned()
     }
 
     pub fn global_thread_group_id(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
-        self.ltgid_to_gtgid.get(local_tgid).map(|v| *v)
+        self.indexes
+            .read()
+            .unwrap()
+            .ltgid_to_gtgid
+            .get(local_tgid)
+            .copied()
     }
 
-    #[allow(unused)]
     pub fn local_thread_group_id(&self, gtgid: u64) -> Option<LocalThreadGroupId> {
-        self.gtgid_to_ltgid.get(&gtgid).map(|v| v.clone())
+        self.indexes
+            .read()
+            .unwrap()
+            .gtgid_to_ltgid
+            .get(&gtgid)
+            .cloned()
     }
 
     pub fn insert_thread(&self, local_tid: &LocalThreadId, gtid: u64) {
-        self.ltid_to_gtid.insert(local_tid.clone(), gtid);
-        self.gtid_to_ltid.insert(gtid, local_tid.clone());
+        let mut indexes = self.indexes.write().unwrap();
+        if let Some(old_gtid) = indexes.ltid_to_gtid.insert(local_tid.clone(), gtid) {
+            indexes.gtid_to_ltid.remove(&old_gtid);
+        }
+        if let Some(old_local_tid) = indexes.gtid_to_ltid.insert(gtid, local_tid.clone()) {
+            indexes.ltid_to_gtid.remove(&old_local_tid);
+        }
     }
 
     pub fn insert_thread_group(&self, local_tgid: &LocalThreadGroupId, gtgid: u64) {
-        self.ltgid_to_gtgid.insert(local_tgid.clone(), gtgid);
-        self.gtgid_to_ltgid.insert(gtgid, local_tgid.clone());
+        let mut indexes = self.indexes.write().unwrap();
+        if let Some(old_gtgid) = indexes.ltgid_to_gtgid.insert(local_tgid.clone(), gtgid) {
+            indexes.gtgid_to_ltgid.remove(&old_gtgid);
+        }
+        if let Some(old_local_tgid) = indexes.gtgid_to_ltgid.insert(gtgid, local_tgid.clone()) {
+            indexes.ltgid_to_gtgid.remove(&old_local_tgid);
+        }
     }
 
     pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
-        self.ltid_to_gtid
+        self.indexes
+            .read()
+            .unwrap()
+            .ltid_to_gtid
             .iter()
-            .filter_map(|v| {
-                if v.key().session_id() == sid {
-                    Some(*v.value())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(local_tid, gtid)| (local_tid.session_id() == sid).then_some(*gtid))
             .collect()
     }
 
     pub fn remove_session(&self, sid: u64) {
-        let local_tids: Vec<_> = self
+        let mut indexes = self.indexes.write().unwrap();
+        indexes
             .ltid_to_gtid
-            .iter()
-            .filter_map(|entry| (entry.key().session_id() == sid).then(|| entry.key().clone()))
-            .collect();
-        for local_tid in local_tids {
-            self.remove_thread(&local_tid);
-        }
-
-        let local_tgids: Vec<_> = self
+            .retain(|local_tid, _| local_tid.session_id() != sid);
+        indexes
+            .gtid_to_ltid
+            .retain(|_, local_tid| local_tid.session_id() != sid);
+        indexes
             .ltgid_to_gtgid
-            .iter()
-            .filter_map(|entry| (entry.key().session_id() == sid).then(|| entry.key().clone()))
-            .collect();
-        for local_tgid in local_tgids {
-            self.remove_thread_group(&local_tgid);
-        }
+            .retain(|local_tgid, _| local_tgid.session_id() != sid);
+        indexes
+            .gtgid_to_ltgid
+            .retain(|_, local_tgid| local_tgid.session_id() != sid);
     }
 
     pub fn remove_thread(&self, local_tid: &LocalThreadId) -> Option<u64> {
-        if let Some(gtid) = self.global_thread_id(local_tid) {
-            self.ltid_to_gtid.remove(local_tid);
-            self.gtid_to_ltid.remove(&gtid);
-            return Some(gtid);
-        }
-        None
+        let mut indexes = self.indexes.write().unwrap();
+        let gtid = indexes.ltid_to_gtid.remove(local_tid)?;
+        indexes.gtid_to_ltid.remove(&gtid);
+        Some(gtid)
     }
 
     pub fn remove_thread_group(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
-        if let Some(gtgid) = self.global_thread_group_id(local_tgid) {
-            self.ltgid_to_gtgid.remove(local_tgid);
-            self.gtgid_to_ltgid.remove(&gtgid);
-            return Some(gtgid);
-        }
-        None
+        let mut indexes = self.indexes.write().unwrap();
+        let gtgid = indexes.ltgid_to_gtgid.remove(local_tgid)?;
+        indexes.gtgid_to_ltgid.remove(&gtgid);
+        Some(gtgid)
     }
 }
 
@@ -233,6 +249,21 @@ mod tests {
         assert_eq!(mgr.remove_thread_group(&ltgid), Some(300));
         assert!(mgr.global_thread_group_id(&ltgid).is_none());
         assert!(mgr.local_thread_group_id(300).is_none());
+    }
+
+    #[test]
+    fn replacing_thread_mapping_preserves_the_bijection() {
+        let mgr = ThreadStateMgr::new();
+        let first = LocalThreadId::new(1, 10);
+        let second = LocalThreadId::new(1, 11);
+
+        mgr.insert_thread(&first, 100);
+        mgr.insert_thread(&first, 101);
+        assert_eq!(mgr.local_thread_id(100), None);
+
+        mgr.insert_thread(&second, 101);
+        assert_eq!(mgr.global_thread_id(&first), None);
+        assert_eq!(mgr.local_thread_id(101), Some(second));
     }
 
     #[test]

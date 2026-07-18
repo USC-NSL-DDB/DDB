@@ -121,7 +121,7 @@ impl BreakInsertHandler {
     }
 
     async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) -> Result<()> {
-        let grp_bkpt = GroupSubBkpt::new(gid);
+        let mut grp_bkpt = GroupSubBkpt::new(gid);
 
         // Check if group exists and has active sessions
         let grp = match get_group_mgr().group_by_id(gid) {

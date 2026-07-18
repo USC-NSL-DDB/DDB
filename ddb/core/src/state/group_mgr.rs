@@ -1,6 +1,9 @@
-use dashmap::DashMap;
 use serde::Serialize;
-use std::{collections::HashSet, fmt::Debug};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    sync::RwLock,
+};
 
 use crate::common::counter::next_group_id;
 
@@ -58,24 +61,25 @@ impl GroupMeta {
     }
 }
 
+#[derive(Default)]
+struct GroupIndexes {
+    hash_to_group: HashMap<GroupHash, GroupMeta>,
+    id_to_hash: HashMap<GroupId, GroupHash>,
+    sid_to_hash: HashMap<SessionId, GroupHash>,
+}
+
 pub struct GroupMgr {
-    // maps from group hash (by default, when binary hash is used, this is a sha256 hash)
-    // to a set of dbg session ids
-    hash_to_grp: DashMap<GroupHash, GroupMeta>,
-
-    // maps from group ID to group hash
-    id_to_hash: DashMap<GroupId, GroupHash>,
-
-    // a reverse index
-    sid_to_grp: DashMap<SessionId, GroupHash>,
+    // These maps describe one relation and must never be observed half-updated.
+    indexes: RwLock<GroupIndexes>,
 }
 
 impl Debug for GroupMgr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let indexes = self.indexes.read().unwrap();
         f.debug_struct("GroupMgr")
-            .field("hash_to_grps", &self.hash_to_grp)
-            .field("id_to_hash", &self.id_to_hash)
-            .field("sid_to_group", &self.sid_to_grp)
+            .field("hash_to_groups", &indexes.hash_to_group)
+            .field("id_to_hash", &indexes.id_to_hash)
+            .field("sid_to_group", &indexes.sid_to_hash)
             .finish()
     }
 }
@@ -83,125 +87,138 @@ impl Debug for GroupMgr {
 impl GroupMgr {
     pub fn new() -> Self {
         Self {
-            hash_to_grp: DashMap::new(),
-            id_to_hash: DashMap::new(),
-            sid_to_grp: DashMap::new(),
+            indexes: RwLock::new(GroupIndexes::default()),
+        }
+    }
+
+    fn remove_session_locked(indexes: &mut GroupIndexes, sid: SessionId) {
+        let Some(group_hash) = indexes.sid_to_hash.remove(&sid) else {
+            return;
+        };
+        let remove_group_id = indexes
+            .hash_to_group
+            .get_mut(&group_hash)
+            .and_then(|group| {
+                group.remove_session(sid);
+                group.session_ids().is_empty().then_some(group.id())
+            });
+        if let Some(group_id) = remove_group_id {
+            indexes.hash_to_group.remove(&group_hash);
+            indexes.id_to_hash.remove(&group_id);
         }
     }
 
     #[inline]
     pub fn register_session(&self, group_hash: &str, alias: String, sid: SessionId) {
-        self.sid_to_grp.insert(sid, group_hash.to_string());
-        self.hash_to_grp
-            .entry(group_hash.to_string())
-            .or_insert_with(|| {
-                let grp_id = next_group_id();
-                self.id_to_hash.insert(grp_id, group_hash.to_string());
-                GroupMeta::new(grp_id, group_hash.to_string(), alias)
-            })
+        let mut indexes = self.indexes.write().unwrap();
+        if indexes
+            .sid_to_hash
+            .get(&sid)
+            .is_some_and(|current_hash| current_hash != group_hash)
+        {
+            Self::remove_session_locked(&mut indexes, sid);
+        }
+
+        let group_hash = group_hash.to_string();
+        if !indexes.hash_to_group.contains_key(&group_hash) {
+            let group_id = next_group_id();
+            indexes.id_to_hash.insert(group_id, group_hash.clone());
+            indexes.hash_to_group.insert(
+                group_hash.clone(),
+                GroupMeta::new(group_id, group_hash.clone(), alias),
+            );
+        }
+        indexes.sid_to_hash.insert(sid, group_hash.clone());
+        indexes
+            .hash_to_group
+            .get_mut(&group_hash)
+            .expect("group inserted above")
             .add_session(sid);
     }
 
     #[inline]
     pub fn remove_session(&self, sid: SessionId) {
-        if let Some((_, group_hash)) = self.sid_to_grp.remove(&sid) {
-            let remove_group_id = {
-                let mut group = match self.hash_to_grp.get_mut(&group_hash) {
-                    Some(group) => group,
-                    None => return,
-                };
-                group.remove_session(sid);
-                if group.session_ids().is_empty() {
-                    Some(group.id())
-                } else {
-                    None
-                }
-            };
-
-            if let Some(group_id) = remove_group_id {
-                self.hash_to_grp.remove(&group_hash);
-                self.id_to_hash.remove(&group_id);
-            }
-        }
+        Self::remove_session_locked(&mut self.indexes.write().unwrap(), sid);
     }
 
     #[inline]
     pub fn group_id_by_hash(&self, hash: &str) -> Option<GroupId> {
-        self.hash_to_grp.get(hash).map(|s| s.id)
+        self.indexes
+            .read()
+            .unwrap()
+            .hash_to_group
+            .get(hash)
+            .map(GroupMeta::id)
     }
 
     #[inline]
     pub fn group_info_by_session(&self, sid: SessionId) -> Option<(GroupId, GroupHash)> {
-        if let Some(group_hash) = self.group_hash_by_session(sid) {
-            if let Some(group_id) = self.group_id_by_session(sid) {
-                return Some((group_id, group_hash));
-            }
-        }
-        None
+        let indexes = self.indexes.read().unwrap();
+        let hash = indexes.sid_to_hash.get(&sid)?;
+        let group_id = indexes.hash_to_group.get(hash)?.id();
+        Some((group_id, hash.clone()))
     }
 
     #[inline]
     pub fn group_hash_by_session(&self, sid: SessionId) -> Option<GroupHash> {
-        self.sid_to_grp.get(&sid).map(|s| s.value().clone())
+        self.indexes.read().unwrap().sid_to_hash.get(&sid).cloned()
     }
 
     #[inline]
     pub fn group_id_by_session(&self, sid: SessionId) -> Option<GroupId> {
-        if let Some(group_hash) = self.group_hash_by_session(sid) {
-            self.group_id_by_hash(&group_hash)
-        } else {
-            None
-        }
+        self.group_info_by_session(sid)
+            .map(|(group_id, _)| group_id)
     }
 
     #[inline]
     pub fn group_by_hash(&self, hash: &str) -> Option<GroupMeta> {
-        self.hash_to_grp.get(hash).map(|s| s.clone())
+        self.indexes
+            .read()
+            .unwrap()
+            .hash_to_group
+            .get(hash)
+            .cloned()
     }
 
     #[inline]
     pub fn group_by_id(&self, id: GroupId) -> Option<GroupMeta> {
-        if let Some(hash) = self.id_to_hash.get(&id) {
-            self.group_by_hash(&hash)
-        } else {
-            None
-        }
+        let indexes = self.indexes.read().unwrap();
+        let hash = indexes.id_to_hash.get(&id)?;
+        indexes.hash_to_group.get(hash).cloned()
     }
 
     #[inline]
     pub fn groups(&self) -> Vec<GroupMeta> {
-        self.hash_to_grp.iter().map(|s| s.value().clone()).collect()
+        self.indexes
+            .read()
+            .unwrap()
+            .hash_to_group
+            .values()
+            .cloned()
+            .collect()
     }
 
     #[inline]
-    pub fn matching_groups<P>(&self, f: P) -> Vec<GroupMeta>
+    pub fn matching_groups<P>(&self, predicate: P) -> Vec<GroupMeta>
     where
         P: Fn(&GroupMeta) -> bool,
     {
-        self.hash_to_grp
-            .iter()
-            .filter_map(|s| {
-                if f(s.value()) {
-                    Some(s.value().clone())
-                } else {
-                    None
-                }
-            })
+        self.groups()
+            .into_iter()
+            .filter(|group| predicate(group))
             .collect()
     }
+
     #[inline]
-    pub fn matching_group_map<P>(&self, f: P) -> std::collections::HashMap<GroupHash, GroupMeta>
+    pub fn matching_group_map<P>(&self, predicate: P) -> HashMap<GroupHash, GroupMeta>
     where
         P: Fn(&GroupHash, &GroupMeta) -> bool,
     {
-        self.hash_to_grp
-            .iter()
-            .filter_map(|s| {
-                if f(s.key(), s.value()) {
-                    Some((s.key().clone(), s.value().clone()))
-                } else {
-                    None
-                }
+        self.groups()
+            .into_iter()
+            .filter_map(|group| {
+                let hash = group.hash().clone();
+                predicate(&hash, &group).then_some((hash, group))
             })
             .collect()
     }
@@ -221,13 +238,26 @@ mod tests {
         let group = mgr
             .group_by_hash("hash-a")
             .expect("group should exist for hash");
-        let grp_id = group.id();
+        let group_id = group.id();
 
         assert_eq!(group.session_ids().len(), 2);
         assert!(group.session_ids().contains(&11));
         assert!(group.session_ids().contains(&12));
-        assert_eq!(mgr.group_id_by_session(11), Some(grp_id));
-        assert_eq!(mgr.group_id_by_session(12), Some(grp_id));
+        assert_eq!(mgr.group_id_by_session(11), Some(group_id));
+        assert_eq!(mgr.group_id_by_session(12), Some(group_id));
+    }
+
+    #[test]
+    fn registering_session_in_new_group_removes_old_membership() {
+        let mgr = GroupMgr::new();
+        mgr.register_session("hash-a", "svc-a".to_string(), 11);
+        let old_group_id = mgr.group_id_by_session(11).unwrap();
+
+        mgr.register_session("hash-b", "svc-b".to_string(), 11);
+
+        assert!(mgr.group_by_id(old_group_id).is_none());
+        assert!(mgr.group_by_hash("hash-a").is_none());
+        assert_eq!(mgr.group_hash_by_session(11), Some("hash-b".to_string()));
     }
 
     #[test]
@@ -235,7 +265,7 @@ mod tests {
         let mgr = GroupMgr::new();
 
         mgr.register_session("hash-a", "svc-a".to_string(), 11);
-        let grp_id = mgr
+        let group_id = mgr
             .group_id_by_session(11)
             .expect("session should be indexed");
 
@@ -243,7 +273,7 @@ mod tests {
 
         assert!(mgr.group_hash_by_session(11).is_none());
         assert!(mgr.group_by_hash("hash-a").is_none());
-        assert!(mgr.group_by_id(grp_id).is_none());
+        assert!(mgr.group_by_id(group_id).is_none());
         assert!(mgr.groups().is_empty());
     }
 
@@ -255,7 +285,7 @@ mod tests {
         mgr.register_session("hash-b", "svc-b".to_string(), 21);
         mgr.register_session("hash-b", "svc-b".to_string(), 22);
 
-        let populated = mgr.matching_group_map(|_, grp| grp.session_ids().len() > 1);
+        let populated = mgr.matching_group_map(|_, group| group.session_ids().len() > 1);
 
         assert_eq!(populated.len(), 1);
         assert!(populated.contains_key("hash-b"));

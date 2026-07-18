@@ -142,7 +142,7 @@ impl Router {
                     .local_thread_id(*gtid)
                     .ok_or_else(|| anyhow!("Thread (gtid: {}) is not in a session group", gtid))?;
                 let route = self.session_route(sid, Some(thread_id))?;
-                STATES.select_session(sid);
+                STATES.select_thread_context(sid, *gtid);
                 Ok(vec![route])
             }
             Target::Group(gid) => {

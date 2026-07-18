@@ -9,45 +9,49 @@ use super::{
 };
 
 #[derive(Default)]
+struct Selection {
+    curr_session: Option<u64>,
+    selected_gthread: Option<u64>,
+}
+
+#[derive(Default)]
 struct SelectionState {
-    curr_session: Mutex<Option<u64>>,
-    selected_gthread: Mutex<Option<u64>>,
+    current: Mutex<Selection>,
 }
 
 impl SelectionState {
     #[inline]
     fn select_session(&self, sid: u64) {
-        self.curr_session.lock().unwrap().replace(sid);
+        let mut current = self.current.lock().unwrap();
+        if current.curr_session != Some(sid) {
+            current.selected_gthread = None;
+        }
+        current.curr_session = Some(sid);
     }
 
     #[inline]
     fn current_session_id(&self) -> Option<u64> {
-        *self.curr_session.lock().unwrap()
+        self.current.lock().unwrap().curr_session
     }
 
     #[inline]
-    fn select_thread(&self, gtid: u64) {
-        self.selected_gthread.lock().unwrap().replace(gtid);
+    fn select_thread(&self, sid: u64, gtid: u64) {
+        let mut current = self.current.lock().unwrap();
+        current.curr_session = Some(sid);
+        current.selected_gthread = Some(gtid);
     }
 
     #[inline]
     fn current_thread_id(&self) -> Option<u64> {
-        *self.selected_gthread.lock().unwrap()
+        self.current.lock().unwrap().selected_gthread
     }
 
     #[inline]
     fn clear_session(&self, sid: u64) {
-        let mut current = self.curr_session.lock().unwrap();
-        if *current == Some(sid) {
-            current.take();
-        }
-    }
-
-    #[inline]
-    fn clear_thread(&self, gtid: u64) {
-        let mut current = self.selected_gthread.lock().unwrap();
-        if *current == Some(gtid) {
-            current.take();
+        let mut current = self.current.lock().unwrap();
+        if current.curr_session == Some(sid) {
+            current.curr_session = None;
+            current.selected_gthread = None;
         }
     }
 }
@@ -114,15 +118,6 @@ impl StateMgr {
 
     #[inline]
     pub async fn remove_session(&self, sid: u64) {
-        if let Some(gtid) = self.selection.current_thread_id() {
-            if self
-                .thread_states
-                .local_thread_id(gtid)
-                .is_some_and(|local_tid| local_tid.session_id() == sid)
-            {
-                self.selection.clear_thread(gtid);
-            }
-        }
         self.selection.clear_session(sid);
         self.thread_states.remove_session(sid);
         self.session_states.remove_session(sid).await;
@@ -229,7 +224,12 @@ impl StateMgr {
     pub async fn select_local_thread(&self, sid: u64, tid: u64) {
         self.session_states.set_curr_tid(sid, tid).await;
         let gtid = self.global_thread_id(sid, tid).unwrap();
-        self.selection.select_thread(gtid);
+        self.selection.select_thread(sid, gtid);
+    }
+
+    #[inline]
+    pub fn select_thread_context(&self, sid: u64, gtid: u64) {
+        self.selection.select_thread(sid, gtid);
     }
 
     #[inline]
@@ -391,5 +391,29 @@ mod tests {
         assert_eq!(mgr.current_thread_id(), None);
         assert_eq!(mgr.session_tag_and_thread_id(gtid).await, None);
         assert!(gtgid > 0);
+    }
+
+    #[tokio::test]
+    async fn selection_switches_session_and_thread_as_one_state() {
+        let mgr = StateMgr::new();
+
+        mgr.register_session(1, "svc-a", None).await;
+        mgr.add_thread_group(1, "i1").await;
+        let (first_gtid, _) = mgr.create_thread(1, 10, "i1").await;
+        mgr.register_session(2, "svc-b", None).await;
+        mgr.add_thread_group(2, "i2").await;
+        let (second_gtid, _) = mgr.create_thread(2, 20, "i2").await;
+
+        mgr.select_thread(first_gtid).await;
+        assert_eq!(mgr.current_session_id(), Some(1));
+        assert_eq!(mgr.current_thread_id(), Some(first_gtid));
+
+        mgr.select_session(2);
+        assert_eq!(mgr.current_session_id(), Some(2));
+        assert_eq!(mgr.current_thread_id(), None);
+
+        mgr.select_thread(second_gtid).await;
+        assert_eq!(mgr.current_session_id(), Some(2));
+        assert_eq!(mgr.current_thread_id(), Some(second_gtid));
     }
 }
