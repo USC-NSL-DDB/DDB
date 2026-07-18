@@ -1,12 +1,14 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use dashmap::DashMap;
 use serde::Deserialize;
+use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 use super::{
     input::{Command, ParsedInputCmd},
+    tracker::COMMAND_TIMEOUT,
     DynFormatter, FinishedCmd, OutputSource, PlainFormatter, Tracker,
 };
 use crate::{
@@ -18,6 +20,8 @@ use crate::{
         STATES,
     },
 };
+
+const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum Target {
@@ -35,6 +39,43 @@ pub enum Target {
 impl Default for Target {
     fn default() -> Self {
         Target::Broadcast
+    }
+}
+
+#[derive(Clone)]
+struct SessionRoute {
+    sid: u64,
+    sender: InputSender,
+    thread_id: Option<u64>,
+}
+
+impl SessionRoute {
+    fn wire_command(&self, command: &str) -> String {
+        match self.thread_id {
+            Some(thread_id) => format!("-thread-select {}\n{}", thread_id, command),
+            None => command.to_string(),
+        }
+    }
+}
+
+/// Removes tracker state if dispatch fails, times out, or its caller is cancelled.
+struct TrackingGuard<'a> {
+    tracker: &'a Tracker,
+    token: u64,
+    armed: bool,
+}
+
+impl TrackingGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TrackingGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.tracker.cancel_cmd(self.token);
+        }
     }
 }
 
@@ -58,66 +99,215 @@ impl Router {
     pub fn remove_session(&self, sid: u64) {
         self.sessions.remove(&sid);
     }
-}
 
-impl Router {
-    fn live_session_ids<'a>(&self, sids: impl IntoIterator<Item = &'a u64>) -> Vec<u64> {
-        sids.into_iter()
-            .filter(|sid| self.sessions.contains_key(sid))
-            .copied()
-            .collect()
+    fn session_route(&self, sid: u64, thread_id: Option<u64>) -> Result<SessionRoute> {
+        let sender = self
+            .sessions
+            .get(&sid)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| anyhow!("Session {} does not exist", sid))?;
+        Ok(SessionRoute {
+            sid,
+            sender,
+            thread_id,
+        })
     }
 
-    fn write_to(&self, sid: u64, cmd_str: String) {
-        debug!("Router writing to session: {}, command: {}", sid, cmd_str);
-        if let Some(session) = self.sessions.get(&sid) {
-            let s = session.clone();
-            drop(session);
-            tokio::spawn(async move {
-                match s.send_async(cmd_str.into()).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("Router failed to send command to session: {:?}", e);
-                    }
-                }
-            });
-        } else {
-            warn!("Router attempted to write to non-existent session: {}", sid);
+    fn session_set_routes(
+        &self,
+        sids: &HashSet<u64>,
+        empty_error: impl FnOnce() -> anyhow::Error,
+    ) -> Result<Vec<SessionRoute>> {
+        let routes = sids
+            .iter()
+            .filter_map(|sid| self.session_route(*sid, None).ok())
+            .collect::<Vec<_>>();
+        if routes.is_empty() {
+            return Err(empty_error());
         }
+        Ok(routes)
     }
 
-    fn write_to_all(&self, cmd_str: String) {
-        debug!("Router writing to all sessions. command {}", cmd_str);
-        for session in self.sessions.iter() {
-            let s = session.clone();
-            let cmd = cmd_str.clone();
-            drop(session);
-
-            tokio::spawn(async move {
-                match s.send_async(cmd.into()).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("Router failed to send command to session: {:?}", e);
-                    }
-                }
-            });
-        }
-    }
-
-    pub fn send_to<F: DynFormatter + Clone>(&self, target: Target, cmd: Command<F>) {
+    /// Resolve a target to a stable sender snapshot before registering response
+    /// tracking. The snapshot size is therefore the exact expected response count.
+    fn resolve_target(&self, target: &Target) -> Result<Vec<SessionRoute>> {
         match target {
-            Target::Session(sid) => self.send_to_session::<F, false>(sid, cmd),
-            Target::Thread(gtid) => self.send_to_thread::<F, false>(gtid, cmd),
-            Target::CurrThread => self.send_to_current_thread::<F, false>(cmd),
-            Target::CurrSession => self.send_to_current_session::<F, false>(cmd),
-            Target::Broadcast => self.broadcast::<F, false>(cmd),
-            Target::First => self.send_to_first::<F, false>(cmd),
-            Target::SessionSet(sids) => self.send_to_session_set::<F, false>(&sids, cmd),
-            Target::Group(gid) => self.send_to_group::<F, false>(gid, cmd),
-            Target::Multiple(targets) => {
-                self.send_to_multiple::<F, false>(targets, cmd);
+            Target::Session(sid) => {
+                let route = self.session_route(*sid, None)?;
+                STATES.select_session(*sid);
+                Ok(vec![route])
             }
+            Target::Thread(gtid) => {
+                let LocalThreadId(sid, thread_id) = STATES
+                    .local_thread_id(*gtid)
+                    .ok_or_else(|| anyhow!("Thread (gtid: {}) is not in a session group", gtid))?;
+                let route = self.session_route(sid, Some(thread_id))?;
+                STATES.select_session(sid);
+                Ok(vec![route])
+            }
+            Target::Group(gid) => {
+                let group = get_group_mgr()
+                    .group_by_id(*gid)
+                    .ok_or_else(|| anyhow!("Group (id: {}) doesn't exist", gid))?;
+                let session_ids = group.session_ids().clone();
+                drop(group);
+                self.session_set_routes(&session_ids, || {
+                    anyhow!("No live sessions matched group {}", gid)
+                })
+            }
+            Target::CurrThread => {
+                let gtid = STATES.current_thread_id().ok_or_else(|| {
+                    anyhow!("use -thread-select #gtid to select the thread first.")
+                })?;
+                self.resolve_target(&Target::Thread(gtid))
+            }
+            Target::CurrSession => {
+                let sid = STATES
+                    .current_session_id()
+                    .ok_or_else(|| anyhow!("No current session selected."))?;
+                self.resolve_target(&Target::Session(sid))
+            }
+            Target::SessionSet(sids) => {
+                self.session_set_routes(sids, || anyhow!("No live sessions matched the target set"))
+            }
+            Target::Broadcast => {
+                let routes = self
+                    .sessions
+                    .iter()
+                    .map(|entry| SessionRoute {
+                        sid: *entry.key(),
+                        sender: entry.value().clone(),
+                        thread_id: None,
+                    })
+                    .collect::<Vec<_>>();
+                if routes.is_empty() {
+                    bail!("No active sessions available for broadcast target");
+                }
+                Ok(routes)
+            }
+            Target::First => {
+                let route = self
+                    .sessions
+                    .iter()
+                    .next()
+                    .map(|entry| SessionRoute {
+                        sid: *entry.key(),
+                        sender: entry.value().clone(),
+                        thread_id: None,
+                    })
+                    .ok_or_else(|| anyhow!("No session available."))?;
+                STATES.select_session(route.sid);
+                Ok(vec![route])
+            }
+            Target::Multiple(_) => unreachable!("multiple targets are dispatched individually"),
         }
+    }
+
+    fn dispatch<F: DynFormatter + Clone>(
+        &self,
+        routes: Vec<SessionRoute>,
+        cmd: Command<F>,
+        output: OutputSource,
+    ) -> Result<()> {
+        let tracked = !matches!(&output, OutputSource::DISCARD);
+        let token = cmd.internal_token;
+        let (outgoing, command) = cmd.prepare_to_send(routes.len() as u32, output);
+
+        let mut tracking = tracked.then(|| {
+            self.tracker.add_cmd(outgoing);
+            TrackingGuard {
+                tracker: &self.tracker,
+                token,
+                armed: true,
+            }
+        });
+
+        for route in routes {
+            debug!(
+                "Router writing to session: {}, command: {}",
+                route.sid, command
+            );
+            route
+                .sender
+                .try_send(route.wire_command(&command).into())
+                .map_err(|error| {
+                    anyhow!(
+                        "Session {} command queue rejected token {}: {}",
+                        route.sid,
+                        token,
+                        error
+                    )
+                })?;
+        }
+
+        if let Some(tracking) = &mut tracking {
+            // Responses now own completion of the tracker entry.
+            tracking.disarm();
+        }
+        Ok(())
+    }
+
+    async fn dispatch_and_wait<F: DynFormatter + Clone>(
+        &self,
+        routes: Vec<SessionRoute>,
+        cmd: Command<F>,
+    ) -> Result<FinishedCmd> {
+        let token = cmd.internal_token;
+        let (return_tx, return_rx) = tokio::sync::oneshot::channel();
+        let (outgoing, command) =
+            cmd.prepare_to_send(routes.len() as u32, OutputSource::RETURN(return_tx));
+        self.tracker.add_cmd(outgoing);
+        let _tracking = TrackingGuard {
+            tracker: &self.tracker,
+            token,
+            armed: true,
+        };
+
+        for route in routes {
+            debug!(
+                "Router writing to session: {}, command: {}",
+                route.sid, command
+            );
+            timeout(
+                COMMAND_SEND_TIMEOUT,
+                route.sender.send_async(route.wire_command(&command).into()),
+            )
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "Timed out enqueueing command token {} for session {}",
+                    token,
+                    route.sid
+                )
+            })?
+            .map_err(|error| {
+                anyhow!(
+                    "Failed to enqueue command token {} for session {}: {}",
+                    token,
+                    route.sid,
+                    error
+                )
+            })?;
+        }
+
+        timeout(COMMAND_TIMEOUT, return_rx)
+            .await
+            .map_err(|_| anyhow!("Timed out waiting for command token {}", token))?
+            .map_err(|error| anyhow!("Command token {} was cancelled: {}", token, error))
+    }
+
+    pub fn send_to<F: DynFormatter + Clone>(&self, target: Target, cmd: Command<F>) -> Result<()> {
+        if let Target::Multiple(targets) = target {
+            if targets.is_empty() {
+                bail!("No targets provided for multiple target");
+            }
+            for target in targets {
+                self.send_to(target, cmd.clone().with_fresh_internal_token())?;
+            }
+            return Ok(());
+        }
+        let routes = self.resolve_target(&target)?;
+        self.dispatch(routes, cmd, OutputSource::STDOUT)
     }
 
     pub async fn send_to_ret<F: DynFormatter + Clone>(
@@ -125,330 +315,44 @@ impl Router {
         target: Target,
         cmd: Command<F>,
     ) -> Result<FinishedCmd> {
-        match target {
-            Target::Session(sid) => self.send_to_session_ret(sid, cmd).await,
-            Target::Thread(gtid) => self.send_to_thread_ret(gtid, cmd).await,
-            Target::CurrThread => self.send_to_current_thread_ret(cmd).await,
-            Target::CurrSession => self.send_to_current_session_ret(cmd).await,
-            Target::Broadcast => self.broadcast_ret(cmd).await,
-            Target::First => self.send_to_first_ret(cmd).await,
-            Target::SessionSet(sids) => self.send_to_session_set_ret(&sids, cmd).await,
-            Target::Group(gid) => self.send_to_group_ret(gid, cmd).await,
-            Target::Multiple(targets) => self.send_to_multiple_ret(targets, cmd).await,
-        }
-    }
-
-    pub fn send_to_and_forget(&self, target: Target, cmd: Command<NullFormatter>) {
-        type F = NullFormatter;
-        match target {
-            Target::Session(sid) => self.send_to_session::<F, true>(sid, cmd),
-            Target::Thread(gtid) => self.send_to_thread::<F, true>(gtid, cmd),
-            Target::CurrThread => self.send_to_current_thread::<F, true>(cmd),
-            Target::CurrSession => self.send_to_current_session::<F, true>(cmd),
-            Target::Broadcast => self.broadcast::<F, true>(cmd),
-            Target::First => self.send_to_first::<F, true>(cmd),
-            Target::SessionSet(sids) => self.send_to_session_set::<F, true>(&sids, cmd),
-            Target::Group(gid) => self.send_to_group::<F, true>(gid, cmd),
-            Target::Multiple(targets) => {
-                self.send_to_multiple::<F, true>(targets, cmd);
+        if let Target::Multiple(targets) = target {
+            if targets.is_empty() {
+                bail!("No targets provided for multiple target");
             }
-        }
-    }
-
-    pub fn send_to_multiple<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        targets: Vec<Target>,
-        cmd: Command<F>,
-    ) {
-        for target in targets {
-            let cmd = cmd.clone().with_fresh_internal_token();
-            if FORGET {
-                self.send_to_and_forget(target, cmd.into_null_formatter_cmd());
-            } else {
-                self.send_to(target, cmd);
+            let futures = targets.into_iter().map(|target| {
+                Box::pin(self.send_to_ret(target, cmd.clone().with_fresh_internal_token()))
+            });
+            let results = futures::future::join_all(futures)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            let mut results = results.into_iter();
+            let mut combined = results
+                .next()
+                .ok_or_else(|| anyhow!("No results from multiple target"))?;
+            for result in results {
+                combined
+                    .get_responses_mut()
+                    .extend(result.get_responses().clone());
             }
+            return Ok(combined);
         }
+        let routes = self.resolve_target(&target)?;
+        self.dispatch_and_wait(routes, cmd).await
     }
 
-    pub async fn send_to_multiple_ret<F: DynFormatter + Clone>(
-        &self,
-        targets: Vec<Target>,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if targets.is_empty() {
-            bail!("No targets provided for send_to_multiple_ret");
-        }
-
-        let futures: Vec<_> = targets
-            .into_iter()
-            .map(|target| {
-                let cmd = cmd.clone().with_fresh_internal_token();
-                async move { self.send_to_ret(target, cmd).await }
-            })
-            .collect();
-        let results = futures::future::join_all(futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-        if results.is_empty() {
-            bail!("No results from send_to_multiple_ret");
-        }
-        if results.len() == 1 {
-            return Ok(results.into_iter().next().unwrap());
-        }
-        // Combine all FinishedCmd into one
-        let mut head_cmd = results[0].clone();
-        let combined_resps = head_cmd.get_responses_mut();
-        for resp in results.into_iter().skip(1) {
-            combined_resps.extend(resp.get_responses().clone());
-        }
-        Ok(head_cmd)
-    }
-
-    pub fn send_to_group<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        gid: GroupId,
-        cmd: Command<F>,
-    ) {
-        if let Some(grp) = get_group_mgr().group_by_id(gid) {
-            self.send_to_session_set::<F, FORGET>(grp.session_ids(), cmd);
-        } else {
-            warn!("Group (id: {}) doesn't exist", gid);
-        }
-    }
-
-    pub async fn send_to_group_ret<F: DynFormatter + Clone>(
-        &self,
-        gid: GroupId,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if let Some(grp) = get_group_mgr().group_by_id(gid) {
-            self.send_to_session_set_ret(grp.session_ids(), cmd).await
-        } else {
-            bail!("Group (id: {}) doesn't exist", gid);
-        }
-    }
-
-    pub fn send_to_session_set<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        sids: &HashSet<u64>,
-        cmd: Command<F>,
-    ) {
-        // perform some sanity checks to remove all non-existent sessions
-        let sids = self.live_session_ids(sids.iter());
-        if sids.is_empty() {
-            warn!("Router attempted to send to an empty session set");
-            return;
-        }
-
-        let out_src = if FORGET {
-            OutputSource::DISCARD
-        } else {
-            OutputSource::STDOUT
-        };
-
-        let (out_meta, cmd) = cmd.prepare_to_send(sids.len() as u32, out_src);
-        if !FORGET {
-            self.tracker.add_cmd(out_meta);
-        }
-
-        for sid in sids {
-            self.write_to(sid, cmd.clone());
-        }
-    }
-
-    pub async fn send_to_session_set_ret<F: DynFormatter + Clone>(
-        &self,
-        sids: &HashSet<u64>,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        // perform some sanity checks to remove all non-existent sessions
-        let sids = self.live_session_ids(sids.iter());
-        if sids.is_empty() {
-            bail!("No live sessions matched the target set");
-        }
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let out_src = OutputSource::RETURN(tx);
-        let (out_meta, cmd) = cmd.prepare_to_send(sids.len() as u32, out_src);
-        self.tracker.add_cmd(out_meta);
-
-        for sid in sids {
-            self.write_to(sid, cmd.clone());
-        }
-        Ok(rx.await?)
-    }
-
-    pub fn send_to_session<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        sid: u64,
-        cmd: Command<F>,
-    ) {
-        STATES.select_session(sid);
-        let out_src = if FORGET {
-            OutputSource::DISCARD
-        } else {
-            OutputSource::STDOUT
-        };
-        let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-        if !FORGET {
-            self.tracker.add_cmd(out_meta);
-        }
-        self.write_to(sid, cmd);
-    }
-
-    pub async fn send_to_session_ret<F: DynFormatter + Clone>(
-        &self,
-        sid: u64,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        self.sessions
-            .get(&sid)
-            .ok_or_else(|| anyhow::anyhow!("Session {} does not exist", sid))?;
-        STATES.select_session(sid);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let out_src = OutputSource::RETURN(tx);
-        let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-        self.tracker.add_cmd(out_meta);
-        self.write_to(sid, cmd);
-        Ok(rx.await?)
-    }
-
-    pub fn send_to_thread<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        gtid: u64,
-        cmd: Command<F>,
-    ) {
-        if let Some(LocalThreadId(sid, tid)) = STATES.local_thread_id(gtid) {
-            STATES.select_session(sid);
-            let out_src = if FORGET {
-                OutputSource::DISCARD
-            } else {
-                OutputSource::STDOUT
-            };
-            let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-            if !FORGET {
-                self.tracker.add_cmd(out_meta);
+    pub fn send_to_and_forget(&self, target: Target, cmd: Command<NullFormatter>) -> Result<()> {
+        if let Target::Multiple(targets) = target {
+            if targets.is_empty() {
+                bail!("No targets provided for multiple target");
             }
-            self.write_to(sid, format!("-thread-select {}\n{}", tid, cmd));
+            for target in targets {
+                self.send_to_and_forget(target, cmd.clone().with_fresh_internal_token())?;
+            }
+            return Ok(());
         }
-    }
-
-    pub async fn send_to_thread_ret<F: DynFormatter + Clone>(
-        &self,
-        gtid: u64,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if let Some(LocalThreadId(sid, tid)) = STATES.local_thread_id(gtid) {
-            STATES.select_session(sid);
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let out_src = OutputSource::RETURN(tx);
-            let (out_meta, cmd) = cmd.prepare_to_send(1, out_src);
-            self.tracker.add_cmd(out_meta);
-            self.write_to(sid, format!("-thread-select {}\n{}", tid, cmd));
-
-            Ok(rx.await?)
-        } else {
-            bail!("Thread (gtid: {}) is not in a session group", gtid);
-        }
-    }
-
-    pub fn send_to_current_thread<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        cmd: Command<F>,
-    ) {
-        if let Some(gtid) = STATES.current_thread_id() {
-            self.send_to_thread::<F, FORGET>(gtid, cmd);
-        } else {
-            println!("use -thread-select #gtid to select the thread first.");
-        }
-    }
-
-    pub async fn send_to_current_thread_ret<F: DynFormatter + Clone>(
-        &self,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if let Some(gtid) = STATES.current_thread_id() {
-            self.send_to_thread_ret(gtid, cmd).await
-        } else {
-            bail!("use -thread-select #gtid to select the thread first.");
-        }
-    }
-
-    pub fn send_to_current_session<F: DynFormatter + Clone, const FORGET: bool>(
-        &self,
-        cmd: Command<F>,
-    ) {
-        if let Some(sid) = STATES.current_session_id() {
-            self.send_to_session::<F, FORGET>(sid, cmd);
-        }
-    }
-
-    pub async fn send_to_current_session_ret<F: DynFormatter + Clone>(
-        &self,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if let Some(sid) = STATES.current_session_id() {
-            return self.send_to_session_ret(sid, cmd).await;
-        }
-        bail!("No current session selected.");
-    }
-
-    pub fn broadcast<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
-        let num_sessions = self.sessions.len() as u32;
-        if num_sessions == 0 {
-            warn!("Router attempted to broadcast with no active sessions");
-            return;
-        }
-        let out_src = if FORGET {
-            OutputSource::DISCARD
-        } else {
-            OutputSource::STDOUT
-        };
-        let (out_meta, cmd) = cmd.prepare_to_send(num_sessions, out_src);
-        if !FORGET {
-            self.tracker.add_cmd(out_meta);
-        }
-        self.write_to_all(cmd);
-    }
-
-    pub async fn broadcast_ret<F: DynFormatter + Clone>(
-        &self,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        let num_sessions = self.sessions.len() as u32;
-        if num_sessions == 0 {
-            bail!("No active sessions available for broadcast target");
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let out_src = OutputSource::RETURN(tx);
-        let (out_meta, cmd) = cmd.prepare_to_send(num_sessions, out_src);
-        self.tracker.add_cmd(out_meta);
-        self.write_to_all(cmd);
-        Ok(rx.await?)
-    }
-
-    pub fn send_to_first<F: DynFormatter + Clone, const FORGET: bool>(&self, cmd: Command<F>) {
-        if let Some(s) = self.sessions.iter().next() {
-            let sid = s.key().clone();
-            drop(s);
-            self.send_to_session::<F, FORGET>(sid, cmd);
-        } else {
-            error!("No session available.");
-        }
-    }
-
-    pub async fn send_to_first_ret<F: DynFormatter + Clone>(
-        &self,
-        cmd: Command<F>,
-    ) -> Result<FinishedCmd> {
-        if let Some(s) = self.sessions.iter().next() {
-            let sid = s.key().clone();
-            drop(s);
-            self.send_to_session_ret(sid, cmd).await
-        } else {
-            bail!("No session available.");
-        }
+        let routes = self.resolve_target(&target)?;
+        self.dispatch(routes, cmd, OutputSource::DISCARD)
     }
 
     pub fn handle_internal_cmd(&self, cmd: &str) {
@@ -501,8 +405,10 @@ impl Router {
             let cmd_to_send = parts[2..].join(" ");
             let parsed: Result<ParsedInputCmd> = cmd_to_send.clone().try_into();
             if let Ok(parsed) = parsed {
-                let (_, cmd) = parsed.to_command(PlainFormatter);
-                self.send_to_session::<PlainFormatter, false>(sid, cmd);
+                let (_, command) = parsed.to_command(PlainFormatter);
+                if let Err(error) = self.send_to(Target::Session(sid), command) {
+                    warn!("Failed to send command: {:?}", error);
+                }
             } else {
                 warn!("Failed to parse command: {:?}", cmd);
             }
@@ -527,5 +433,71 @@ impl Router {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(token: u64) -> Command<PlainFormatter> {
+        Command::new(None, token, "-thread-info".to_string(), PlainFormatter)
+    }
+
+    #[test]
+    fn broadcast_tracks_the_resolved_session_snapshot() {
+        let tracker = Tracker::new();
+        let router = Router::new(Arc::clone(&tracker));
+        let (first_tx, _first_rx) = flume::bounded(1);
+        let (second_tx, _second_rx) = flume::bounded(1);
+        router.add_session(1, first_tx);
+        router.add_session(2, second_tx);
+
+        router
+            .send_to(Target::Broadcast, command(100))
+            .expect("broadcast should be enqueued");
+
+        let inflight = tracker.get_inflight_cmds_copy();
+        assert_eq!(inflight.len(), 1);
+        assert_eq!(inflight[0].target_num_resp, 2);
+    }
+
+    #[test]
+    fn rejected_dispatch_removes_tracker_state() {
+        let tracker = Tracker::new();
+        let router = Router::new(Arc::clone(&tracker));
+        let (tx, rx) = flume::bounded(1);
+        drop(rx);
+        router.add_session(1, tx);
+
+        let result = router.send_to(Target::Broadcast, command(101));
+
+        assert!(result.is_err());
+        assert!(tracker.get_inflight_cmds_copy().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelling_waited_dispatch_removes_tracker_state() {
+        let tracker = Tracker::new();
+        let router = Arc::new(Router::new(Arc::clone(&tracker)));
+        let (tx, _rx) = flume::bounded(1);
+        router.add_session(1, tx);
+
+        let task = tokio::spawn({
+            let router = Arc::clone(&router);
+            async move { router.send_to_ret(Target::Broadcast, command(102)).await }
+        });
+
+        for _ in 0..10 {
+            if tracker.get_inflight_cmds_copy().len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(tracker.get_inflight_cmds_copy().len(), 1);
+
+        task.abort();
+        let _ = task.await;
+        assert!(tracker.get_inflight_cmds_copy().is_empty());
     }
 }

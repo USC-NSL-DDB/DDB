@@ -51,17 +51,13 @@ pub mod input;
 pub mod output;
 pub mod router;
 pub mod tracker;
-pub mod transaction;
+pub(crate) mod transaction;
 
 use std::sync::Arc;
 use thiserror::Error;
 
 pub use output::*;
 pub use tracker::*;
-pub use transaction::{
-    begin, begin_multi, try_begin, MultiSessionTransaction, SessionTransaction, TransactionError,
-};
-
 // Re-export facade API for convenient access
 #[allow(unused_imports)]
 pub use api::{send, send_and_return, Error as ApiError, Target};

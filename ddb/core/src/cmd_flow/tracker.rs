@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -168,6 +169,7 @@ pub struct OutgoingCmd {
     responses: Vec<ParsedSessionResponse>,
     out_src: OutputSource,
     formatter: Box<dyn DynFormatter>,
+    created_at: Instant,
 }
 
 // This is a copy of OutgoingCmd without the out_src and formatter field.
@@ -239,6 +241,7 @@ impl OutgoingCmd {
             responses: Vec::with_capacity(target_num_resp as usize),
             out_src,
             formatter: Box::new(formatter),
+            created_at: Instant::now(),
         }
     }
 
@@ -256,6 +259,10 @@ impl OutgoingCmd {
         let type_name = std::any::type_name_of_val(&*self.formatter);
         type_name.to_string()
     }
+
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() >= COMMAND_TIMEOUT
+    }
 }
 
 pub struct Tracker {
@@ -265,6 +272,8 @@ pub struct Tracker {
 }
 
 const RESPONSE_QUEUE_CAPACITY: usize = 1024;
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const COMMAND_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
 impl Tracker {
     pub fn new() -> Arc<Self> {
@@ -291,6 +300,15 @@ impl Tracker {
             handles.push(handle);
             self.senders.insert(idx as u64, tx);
         }
+
+        let tracker = Arc::clone(&self);
+        handles.push(tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(COMMAND_SWEEP_INTERVAL);
+            loop {
+                ticker.tick().await;
+                tracker.expire_stale_commands();
+            }
+        }));
     }
 
     #[inline]
@@ -311,6 +329,27 @@ impl Tracker {
             return;
         }
         self.inflight_cmds.insert(cmd.id, cmd);
+    }
+
+    pub fn cancel_cmd(&self, token: u64) {
+        self.inflight_cmds.remove(&token);
+    }
+
+    fn expire_stale_commands(&self) {
+        let expired = self
+            .inflight_cmds
+            .iter()
+            .filter(|entry| entry.value().is_expired())
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        for token in expired {
+            if self.inflight_cmds.remove(&token).is_some() {
+                warn!(
+                    "Expired command token {} after {:?}",
+                    token, COMMAND_TIMEOUT
+                );
+            }
+        }
     }
 
     pub fn stop(&self) {

@@ -99,11 +99,11 @@ impl SendBuilder {
         match SUPPRESS_OUTPUT {
             true => {
                 let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
-                get_router().send_to(target, cmd_to_send);
+                get_router().send_to(target, cmd_to_send)?;
             }
             false => {
                 let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-                get_router().send_to(target, cmd_to_send);
+                get_router().send_to(target, cmd_to_send)?;
             }
         }
         Ok(())
@@ -114,10 +114,10 @@ impl SendBuilder {
     pub fn to_default_target<const SUPPRESS_OUTPUT: bool>(self) -> Result<()> {
         if SUPPRESS_OUTPUT {
             let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
-            get_router().send_to(target, cmd_to_send);
+            get_router().send_to(target, cmd_to_send)?;
         } else {
             let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, PlainFormatter)?;
-            get_router().send_to(target, cmd_to_send);
+            get_router().send_to(target, cmd_to_send)?;
         }
         Ok(())
     }
@@ -143,7 +143,7 @@ impl SendAndForgetBuilder {
     /// Route the command to the specified target
     pub fn to(self, target: Target) -> Result<()> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
-        get_router().send_to_and_forget(target, cmd_to_send);
+        get_router().send_to_and_forget(target, cmd_to_send)?;
         Ok(())
     }
 
@@ -151,7 +151,7 @@ impl SendAndForgetBuilder {
     /// If the command does not specify a target, it defaults to the default target.
     pub fn to_default_target(self) -> Result<()> {
         let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, NullFormatter)?;
-        get_router().send_to_and_forget(target, cmd_to_send);
+        get_router().send_to_and_forget(target, cmd_to_send)?;
         Ok(())
     }
 
@@ -210,7 +210,7 @@ impl<F: DynFormatter + 'static + Clone> SendWithFormatterBuilder<F> {
     /// Route the command to the specified target with custom formatter (fire-and-forget)
     pub fn to(self, target: Target) -> Result<()> {
         let (cmd_to_send, _) = prepare_to_send(self.parsed_cmd, self.formatter)?;
-        get_router().send_to(target, cmd_to_send);
+        get_router().send_to(target, cmd_to_send)?;
         Ok(())
     }
 
@@ -228,7 +228,7 @@ impl<F: DynFormatter + 'static + Clone> SendWithFormatterBuilder<F> {
     /// If the command does not specify a target, it defaults to the default target.
     pub fn to_default_target(self) -> Result<()> {
         let (cmd_to_send, target) = prepare_to_send(self.parsed_cmd, self.formatter)?;
-        get_router().send_to(target, cmd_to_send);
+        get_router().send_to(target, cmd_to_send)?;
         Ok(())
     }
 }

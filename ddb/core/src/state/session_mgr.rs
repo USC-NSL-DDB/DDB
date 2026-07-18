@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{
-    Mutex as TokioMutex, OwnedMutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError,
+    Mutex as TokioMutex, OwnedMutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 
 use crate::discovery::discovery_message_producer::ServiceMeta;
@@ -407,11 +407,6 @@ impl SessionWrapper {
     #[inline]
     pub async fn lock_transaction_owned(&self) -> OwnedMutexGuard<()> {
         self.tx_lock.clone().lock_owned().await
-    }
-
-    #[inline]
-    pub fn try_lock_transaction_owned(&self) -> Result<OwnedMutexGuard<()>, TryLockError> {
-        self.tx_lock.clone().try_lock_owned()
     }
 }
 
