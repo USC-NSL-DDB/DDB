@@ -6,7 +6,7 @@ use tracing::{debug, error};
 
 use super::get_router;
 use super::{
-    framework_adapter::FrameworkCommandAdapter, handler::*, router::Target,
+    format_error, framework_adapter::FrameworkCommandAdapter, handler::*, router::Target,
     session_runtime::CompletionConsistency,
 };
 use crate::{handlers_map, state::get_state_mgr};
@@ -425,6 +425,7 @@ impl CmdHandler {
         let parsed: Result<ParsedInputCmd> = cmd.try_into();
         match parsed {
             Ok(parsed) => {
+                let external_token = parsed.external_token;
                 let default_target = get_state_mgr()
                     .current_thread_id()
                     .map(Target::Thread)
@@ -432,12 +433,21 @@ impl CmdHandler {
                 let parsed = parsed.with_default_target(default_target);
                 let prefix = parsed.prefix.clone();
                 let handler = self.handlers.get(&prefix);
-                match handler {
-                    Some(handler) => {
-                        handler.process_cmd(parsed).await;
+                let outcome = match handler {
+                    Some(handler) => handler.process_cmd(parsed).await,
+                    None => self.default_handler.process_cmd(parsed).await,
+                };
+                match outcome {
+                    Ok(outcome) => {
+                        for output in outcome.render_cli() {
+                            println!("{}", output);
+                            debug!("output: {}", output);
+                        }
                     }
-                    None => {
-                        self.default_handler.process_cmd(parsed).await;
+                    Err(error) => {
+                        let output = format_error(&error.to_string(), external_token);
+                        println!("{}", output);
+                        debug!("output: {}", output);
                     }
                 }
                 #[cfg(feature = "profile")]

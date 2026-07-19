@@ -10,6 +10,7 @@ pub(crate) mod event;
 pub mod framework_adapter;
 pub mod handler;
 pub mod input;
+pub mod outcome;
 pub mod output;
 pub mod response;
 pub mod router;
@@ -19,6 +20,7 @@ pub(crate) mod transaction;
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use outcome::*;
 pub use output::*;
 pub use response::*;
 // Re-export facade API for convenient access

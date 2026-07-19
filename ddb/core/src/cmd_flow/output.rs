@@ -661,8 +661,13 @@ pub fn emit(finished: FinishedCmd, formatter: Box<dyn DynFormatter>) {
 
 #[inline]
 pub fn emit_error(err_msg: &str, token: Option<u64>) {
-    let payload: Dict = HashMap::from([("msg".to_string(), err_msg.to_string().into())]).into();
-    let output = MIFormatter::format("^", "error", Some(&payload), token);
+    let output = format_error(err_msg, token);
     println!("{}", output);
     debug!("output: {}", output);
+}
+
+#[inline]
+pub fn format_error(err_msg: &str, token: Option<u64>) -> String {
+    let payload: Dict = HashMap::from([("msg".to_string(), err_msg.to_string().into())]).into();
+    MIFormatter::format("^", "error", Some(&payload), token)
 }

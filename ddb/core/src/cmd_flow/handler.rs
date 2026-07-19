@@ -4,14 +4,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 
 use crate::{
-    cmd_flow::{emit_error, transaction},
+    cmd_flow::transaction,
     common::Config,
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     debugger::get_debugger_backend,
@@ -25,12 +25,11 @@ use crate::{
 };
 
 use super::{
-    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, output, router::Target,
-    DebuggerDataErr, FinishedCmd, NullFormatter, PlainFormatter, ProcessReadableFormatter,
-    ThreadInfoFormatter,
+    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, router::Target,
+    CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse, Presentation,
 };
 
-/// Handler trait for processing parsed commands with routing and formatting logic
+/// Command operation selected by the engine after parsing and target resolution.
 ///
 /// # Contract Semantics
 ///
@@ -42,17 +41,11 @@ use super::{
 /// 2. **Async Execution**: All command processing is async to support routing operations
 ///    that may involve network I/O to distributed debuggee processes.
 ///
-/// 3. **Error Handling**: Handlers should log errors appropriately but may choose to
-///    emit error responses rather than propagating errors upward
-///
-/// 4. **Formatter Selection**: Handlers choose appropriate formatters based on command
-///    type and expected output format (e.g., `ThreadInfoFormatter` for thread info)
-///
-/// Handlers use `crate::cmd_flow::api::parsed` to construct a semantic request,
-/// then choose `execute`, `emit`, or `submit` explicitly.
+/// 3. **Structured Completion**: Handlers return a semantic outcome. They never
+///    print, format an error, or detach work; those are ingress responsibilities.
 #[async_trait]
 pub trait Handler: Send + Sync + std::fmt::Debug {
-    async fn process_cmd(&self, cmd: ParsedInputCmd);
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome>;
 }
 
 #[derive(Debug)]
@@ -67,8 +60,9 @@ impl DefaultHandler {
 #[async_trait]
 impl Handler for DefaultHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let response = api::parsed(cmd)?.execute().await?;
+        Ok(CommandOutcome::response(response, Presentation::Plain))
     }
 }
 
@@ -196,52 +190,38 @@ impl BreakInsertHandler {
 #[async_trait]
 impl Handler for BreakInsertHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if !matches!(
             cmd.target,
             Target::Session(_) | Target::Group(_) | Target::Multiple(_)
         ) {
-            warn!(
-                "Unsupported target for BreakInsertHandler: {:?}",
-                cmd.target
-            );
-            return;
+            bail!("break-insert requires a session, group, or multiple target");
         }
 
         let full_cmd = cmd.full_cmd();
         let args = &cmd.args;
-        let bkpt_loc = match Self::parse_breakpoint_location(args) {
-            Ok(location) => location,
-            Err(error) => {
-                emit_error(&error.to_string(), cmd.external_token);
-                return;
-            }
-        };
+        let bkpt_loc = Self::parse_breakpoint_location(args)?;
         let bkpt_id = get_bkpt_mgr().add_breakpoint(bkpt_loc);
 
         match cmd.target {
             Target::Session(sid) => {
                 if let Err(e) = Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await {
                     get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                    let err_msg = format!(
+                    bail!(
                         "Failed to insert breakpoint into session {}: {}",
                         sid,
                         e.to_string()
                     );
-                    emit_error(&err_msg, cmd.external_token);
-                    return;
                 }
             }
             Target::Group(gid) => {
                 if let Err(e) = Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await {
                     get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                    let err_msg = format!(
+                    bail!(
                         "Failed to insert breakpoint into group {}: {}",
                         gid,
                         e.to_string()
                     );
-                    emit_error(&err_msg, cmd.external_token);
-                    return;
                 }
             }
             Target::Multiple(targets) => {
@@ -300,43 +280,33 @@ impl Handler for BreakInsertHandler {
             }
             _ => {
                 get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                warn!(
-                    "Unsupported target for BreakInsertHandler: {:?}",
-                    cmd.target
-                );
-                return;
+                bail!("unsupported breakpoint target: {:?}", cmd.target);
             }
         }
 
         if get_bkpt_mgr().breakpoint_is_empty(bkpt_id) == Some(true) {
             get_bkpt_mgr().remove_breakpoint(bkpt_id);
-            emit_error(
-                "Failed to insert breakpoint into any target.",
-                cmd.external_token,
-            );
-            return;
+            bail!("Failed to insert breakpoint into any target.");
         }
 
         match get_bkpt_mgr().breakpoint(bkpt_id) {
             Some(bkpt) => {
-                let out = MIFormatter::format(
-                    "^",
-                    "done",
-                    Some(&bkpt.clone().into()),
-                    cmd.external_token,
-                );
-                println!("{}", out);
-                debug!("output: {}", out);
+                let payload = bkpt.clone().into();
 
                 get_notif_mgr()
                     .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
                         BreakpointChangeEvent::Added((&bkpt).into()),
                     )))
                     .await;
+                Ok(CommandOutcome::completed(
+                    cmd.external_token,
+                    0,
+                    "done",
+                    Some(payload),
+                    Presentation::Plain,
+                ))
             }
-            None => {
-                warn!("Failed to find inserted breakpoint with id {}", bkpt_id);
-            }
+            None => bail!("Failed to find inserted breakpoint with id {}", bkpt_id),
         }
     }
 }
@@ -469,96 +439,76 @@ impl BreakDeleteHandler {
 #[async_trait]
 impl Handler for BreakDeleteHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         let args = cmd.args.trim();
         if args.is_empty() {
-            warn!("No breakpoint id provided for deletion.");
-            return;
+            bail!("No breakpoint id provided for deletion.");
         }
 
         let bkpt_id: u64;
         if let Some((bkpt_id_str, subbkpt_id_str)) = args.split_once(char::is_whitespace) {
-            bkpt_id = match bkpt_id_str.parse::<u64>() {
-                Ok(id) => id,
-                Err(e) => {
-                    emit_error(
-                        &format!("Invalid breakpoint id {}: {:?}", bkpt_id_str, e),
-                        cmd.external_token,
-                    );
-                    return;
-                }
-            };
-            let subbkpt_id = match subbkpt_id_str.parse::<u64>() {
-                Ok(id) => id,
-                Err(e) => {
-                    emit_error(
-                        &format!("Invalid sub-breakpoint id {}: {:?}", subbkpt_id_str, e),
-                        cmd.external_token,
-                    );
-                    return;
-                }
-            };
-            match Self::delete_sub_breakpoint(bkpt_id, subbkpt_id).await {
-                Ok(BreakpointStateChange::TargetChanged(bkpt_id)) => {
+            bkpt_id = bkpt_id_str
+                .parse::<u64>()
+                .with_context(|| format!("Invalid breakpoint id {}", bkpt_id_str))?;
+            let subbkpt_id = subbkpt_id_str
+                .parse::<u64>()
+                .with_context(|| format!("Invalid sub-breakpoint id {}", subbkpt_id_str))?;
+            match Self::delete_sub_breakpoint(bkpt_id, subbkpt_id).await? {
+                BreakpointStateChange::TargetChanged(bkpt_id) => {
                     if let Some(bkpt) = get_bkpt_mgr().breakpoint(bkpt_id) {
-                        let out = MIFormatter::format("^", "done", None, cmd.external_token);
-                        println!("{}", out);
-                        debug!("output: {}", out);
-
-                        let out = MIFormatter::format(
+                        let record = MIFormatter::format(
                             "=",
                             "breakpoint-modified",
                             Some(&bkpt.clone().into()),
                             None,
                         );
-                        println!("{}", out);
-                        debug!("output: {}", out);
 
                         get_notif_mgr()
                             .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
                                 BreakpointChangeEvent::Updated((&bkpt).into()),
                             )))
                             .await;
+                        let mut outcome = CommandOutcome::completed(
+                            cmd.external_token,
+                            0,
+                            "done",
+                            None,
+                            Presentation::Plain,
+                        );
+                        outcome.push_record(record);
+                        return Ok(outcome);
                     }
+                    bail!("Breakpoint {} disappeared after deletion", bkpt_id);
                 }
-                Ok(BreakpointStateChange::Removed(bkpt_id)) => {
-                    let out = MIFormatter::format("^", "done", None, cmd.external_token);
-                    println!("{}", out);
-                    debug!("output: {}", out);
-                    let out = MIFormatter::format(
+                BreakpointStateChange::Removed(bkpt_id) => {
+                    let record = MIFormatter::format(
                         "=",
                         "breakpoint-deleted",
                         Some(&bkpt_deleted_payload(bkpt_id)),
                         None,
                     );
-                    println!("{}", out);
-                    debug!("output: {}", out);
 
                     get_notif_mgr()
                         .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
                             BreakpointChangeEvent::Removed(bkpt_id),
                         )))
                         .await;
-                }
-                Ok(BreakpointStateChange::None) => {}
-                Err(e) => {
-                    warn!(
-                        "Failed to delete sub-breakpoint {} of breakpoint {}: {:?}",
-                        subbkpt_id, bkpt_id, e
+                    let mut outcome = CommandOutcome::completed(
+                        cmd.external_token,
+                        0,
+                        "done",
+                        None,
+                        Presentation::Plain,
                     );
+                    outcome.push_record(record);
+                    return Ok(outcome);
                 }
+                BreakpointStateChange::None => return Ok(CommandOutcome::empty()),
             }
         } else {
-            bkpt_id = match args.parse::<u64>() {
-                Ok(id) => id,
-                Err(e) => {
-                    emit_error(
-                        &format!("Invalid breakpoint id {}: {:?}", args, e),
-                        cmd.external_token,
-                    );
-                    return;
-                }
-            };
+            bkpt_id = args
+                .parse::<u64>()
+                .with_context(|| format!("Invalid breakpoint id {}", args))?;
             for (sid, local_bkpt_id) in get_bkpt_mgr().local_breakpoint_ids(bkpt_id) {
                 match Self::delete_local_bkpt(sid, local_bkpt_id).await {
                     Ok(_) => {}
@@ -574,24 +524,22 @@ impl Handler for BreakDeleteHandler {
             }
 
             get_bkpt_mgr().remove_breakpoint(bkpt_id);
-            let out = MIFormatter::format(
+            let record = MIFormatter::format(
                 "=",
                 "breakpoint-deleted",
                 Some(&bkpt_deleted_payload(bkpt_id)),
                 None,
             );
-            println!("{}", out);
-            debug!("output: {}", out);
-
-            let out = MIFormatter::format("^", "done", None, cmd.external_token);
-            println!("{}", out);
-            debug!("output: {}", out);
 
             get_notif_mgr()
                 .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
                     BreakpointChangeEvent::Removed(bkpt_id),
                 )))
                 .await;
+            let mut outcome =
+                CommandOutcome::completed(cmd.external_token, 0, "done", None, Presentation::Plain);
+            outcome.insert_record(0, record);
+            Ok(outcome)
         }
     }
 }
@@ -608,26 +556,29 @@ impl ThreadInfoHandler {
 #[async_trait]
 impl Handler for ThreadInfoHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         match cmd.target {
             Target::Thread(tid) => {
-                // args can only be "--thread <local_tid>" in this case.
-                let (_, ltid) = cmd.args.split_once(char::is_whitespace).unwrap();
+                let (_, local_tid) = STATES
+                    .local_thread_id(tid)
+                    .ok_or_else(|| anyhow!("Unknown global thread {}", tid))?
+                    .into();
                 let thrd_info_cmd = format!(
                     "{}-thread-info {}",
                     cmd.external_token
                         .map(|token| { token.to_string() })
                         .unwrap_or("".to_string()),
-                    ltid
+                    local_tid
                 );
-                let _ = api::command(&thrd_info_cmd)
-                    .unwrap()
+                let response = api::command(&thrd_info_cmd)?
                     .target(Target::Thread(tid))
-                    .emit(ThreadInfoFormatter)
-                    .await;
+                    .execute()
+                    .await?;
+                Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
             _ => {
-                let _ = api::parsed(cmd).unwrap().emit(ThreadInfoFormatter).await;
+                let response = api::parsed(cmd)?.execute().await?;
+                Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
         }
     }
@@ -644,7 +595,10 @@ impl ContinueHandler {
 
 impl ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument)]
-    async fn continue_session(cont_cmd: ParsedInputCmd, session: SessionRef) -> Result<()> {
+    async fn continue_session(
+        cont_cmd: ParsedInputCmd,
+        session: SessionRef,
+    ) -> Result<FinishedCmd> {
         let sid = session.read_with(|meta| meta.sid()).await;
         let tx = transaction::begin(sid)
             .await
@@ -662,7 +616,7 @@ impl ContinueHandler {
 
         if in_custom_context {
             let Some(ctx) = current_context else {
-                return Ok(());
+                bail!("Session {} has no context to restore", sid);
             };
             let restore = api::command(&format!(
                 "-switch-context-custom {}",
@@ -688,15 +642,14 @@ impl ContinueHandler {
             }
         }
 
-        let _ = api::parsed(cont_cmd)
-            .unwrap()
+        let response = api::parsed(cont_cmd)?
             .target(Target::Session(sid))
-            .emit_exclusive(tx.lease(), PlainFormatter)
-            .await;
+            .execute_exclusive(tx.lease())
+            .await?;
         session
             .write_with(|meta| meta.update_all_status(ThreadStatus::RUNNING))
             .await;
-        Ok(())
+        Ok(response)
     }
 
     #[inline]
@@ -714,13 +667,14 @@ impl ContinueHandler {
 #[async_trait]
 impl Handler for ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if Config::global().conf.support_migration {
             // reset all proclet cache and clean up restored proclet heap.
             get_proclet_restore_mgr().reset().await;
         }
 
-        let tasks: Vec<JoinHandle<Result<()>>> = match &cmd.target {
+        let external_token = cmd.external_token;
+        let tasks: Vec<JoinHandle<Result<FinishedCmd>>> = match &cmd.target {
             Target::Session(sid) => get_state_mgr()
                 .session(*sid)
                 .into_iter()
@@ -739,13 +693,18 @@ impl Handler for ContinueHandler {
                 .collect(),
         };
 
+        let mut responses = Vec::<ParsedSessionResponse>::new();
         for result in futures::future::join_all(tasks).await {
             match result {
-                Err(e) => error!("Failed to continue: {:?}", e),
-                Ok(Err(e)) => error!("Failed to continue: {:?}", e),
-                Ok(Ok(())) => {}
+                Err(e) => return Err(anyhow!("Continue task failed: {e}")),
+                Ok(Err(e)) => return Err(e.context("Failed to continue")),
+                Ok(Ok(response)) => responses.extend(response.get_responses().iter().cloned()),
             }
         }
+        Ok(CommandOutcome::response(
+            FinishedCmd::new(external_token, 0, responses),
+            Presentation::Unit,
+        ))
     }
 }
 
@@ -761,7 +720,7 @@ impl InterruptHandler {
 #[async_trait]
 impl Handler for InterruptHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         let cmd = cmd.with_prefix("-exec-interrupt-if-running");
         match cmd.target {
             Target::Session(sid) => {
@@ -769,16 +728,19 @@ impl Handler for InterruptHandler {
                 if ss.is_some() {
                     // Note: send interrupt to running process. Ignore thread granularity.
                     // skips checking if the thread is running or not.
-                    let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
+                    let response = api::parsed(cmd)?.execute().await?;
+                    Ok(CommandOutcome::response(response, Presentation::Plain))
+                } else {
+                    Ok(CommandOutcome::empty())
                 }
             }
             _ => {
                 // broadcast to all sessions
-                let _ = api::parsed(cmd)
-                    .unwrap()
+                let response = api::parsed(cmd)?
                     .target(Target::Broadcast)
-                    .emit(PlainFormatter)
-                    .await;
+                    .execute()
+                    .await?;
+                Ok(CommandOutcome::response(response, Presentation::Plain))
             }
         }
     }
@@ -796,15 +758,14 @@ impl ListHandler {
 #[async_trait]
 impl Handler for ListHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
-        STATES.select_session(1);
-        let _ = api::parsed(cmd)
-            .unwrap()
-            .target(Target::CurrSession)
-            .emit(PlainFormatter)
-            .await;
+        let response = api::parsed(cmd)?
+            .target(Target::Session(1))
+            .execute()
+            .await?;
+        Ok(CommandOutcome::response(response, Presentation::Plain))
     }
 }
 
@@ -820,19 +781,23 @@ impl ThreadSelectHandler {
 #[async_trait]
 impl Handler for ThreadSelectHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
         if !parts.is_empty() {
-            let gtid = parts.last().unwrap().parse::<u64>().unwrap();
-            let (sid, tid) = STATES.local_thread_id(gtid).unwrap().into();
+            let gtid = parts.last().unwrap().parse::<u64>()?;
+            let (sid, tid) = STATES
+                .local_thread_id(gtid)
+                .ok_or_else(|| anyhow!("Unknown global thread {}", gtid))?
+                .into();
             let target = Target::Session(sid);
-            let _ = api::command(&format!("-thread-select {}", tid))
-                .unwrap()
+            let response = api::command(&format!("-thread-select {}", tid))?
                 .target(target)
-                .emit(PlainFormatter)
-                .await;
+                .execute()
+                .await?;
+            Ok(CommandOutcome::response(response, Presentation::Plain))
         } else {
-            let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
+            let response = api::parsed(cmd)?.execute().await?;
+            Ok(CommandOutcome::response(response, Presentation::Plain))
         }
     }
 }
@@ -849,12 +814,15 @@ impl ListGroupsHandler {
 #[async_trait]
 impl Handler for ListGroupsHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
-        let _ = api::parsed(cmd)
-            .unwrap()
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let response = api::parsed(cmd)?
             .target(Target::Broadcast)
-            .emit(ProcessReadableFormatter)
-            .await;
+            .execute()
+            .await?;
+        Ok(CommandOutcome::response(
+            response,
+            Presentation::ProcessReadable,
+        ))
     }
 }
 
@@ -1115,7 +1083,7 @@ impl DistributeBacktraceHandler {
 #[async_trait]
 impl Handler for DistributeBacktraceHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if let Target::Thread(gtid) = &cmd.target {
             let mut out_result: FinishedCmd;
             let mut inspect_gtid = *gtid;
@@ -1135,8 +1103,7 @@ impl Handler for DistributeBacktraceHandler {
                         inspect_gtid, e
                     );
                     error!(err_msg);
-                    emit_error(&err_msg, cmd.external_token);
-                    return;
+                    return Err(anyhow!(err_msg));
                 }
             };
             if let Some(external_token) = cmd.external_token {
@@ -1331,7 +1298,9 @@ impl Handler for DistributeBacktraceHandler {
             // finally, add a reordered frame levels
             // This ensures the reordered levels are incrementally increased from 0..n
             Self::add_reordered_frame_levels(&mut out_result);
-            output::emit_static(out_result, PlainFormatter);
+            Ok(CommandOutcome::response(out_result, Presentation::Plain))
+        } else {
+            bail!("bt-remote requires a thread target")
         }
     }
 }
@@ -1348,11 +1317,12 @@ impl ExecNextHandler {
 #[async_trait]
 impl Handler for ExecNextHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if let Target::Thread(_) = &cmd.target {
-            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
+            let response = api::parsed(cmd)?.execute().await?;
+            Ok(CommandOutcome::silent(response))
         } else {
-            error!("exec-next command should specify a thread id by --thread <gtid>");
+            bail!("exec-next command should specify a thread id by --thread <gtid>")
         }
     }
 }
@@ -1369,11 +1339,12 @@ impl ExecFinishHandler {
 #[async_trait]
 impl Handler for ExecFinishHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if let Target::Thread(_) = &cmd.target {
-            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
+            let response = api::parsed(cmd)?.execute().await?;
+            Ok(CommandOutcome::silent(response))
         } else {
-            error!("exec-finish command should specify a thread id by --thread <gtid>");
+            bail!("exec-finish command should specify a thread id by --thread <gtid>")
         }
     }
 }
@@ -1466,11 +1437,12 @@ impl ExecStepHandler {
 #[async_trait]
 impl Handler for ExecStepHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if let Target::Thread(_) = &cmd.target {
-            let _ = api::parsed(cmd).unwrap().emit(NullFormatter).await;
+            let response = api::parsed(cmd)?.execute().await?;
+            Ok(CommandOutcome::silent(response))
         } else {
-            error!("exec-step command should specify a thread id by --thread <gtid>");
+            bail!("exec-step command should specify a thread id by --thread <gtid>")
         }
     }
 }
@@ -1481,17 +1453,16 @@ pub struct ExecJumpHandler;
 #[async_trait]
 impl Handler for ExecJumpHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         // Note: `exec-jump` should only be used when session is specified at the moment.
         // otherwise it will be ambiguous which process to jump to.
         // let (target, cmd) = cmd.to_command(PlainFormatter);
         match cmd.target {
             Target::Session(_) => {
-                let _ = api::parsed(cmd).unwrap().emit(PlainFormatter).await;
+                let response = api::parsed(cmd)?.execute().await?;
+                Ok(CommandOutcome::response(response, Presentation::Plain))
             }
-            _ => {
-                error!("exec-jump command should specify a session");
-            }
+            _ => bail!("exec-jump command should specify a session"),
         }
     }
 }
@@ -1502,10 +1473,9 @@ pub struct SendSignalHandler;
 #[async_trait]
 impl Handler for SendSignalHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if cmd.args.trim().is_empty() {
-            error!("-send-signal command requires a signal argument");
-            return;
+            bail!("-send-signal command requires a signal argument");
         }
 
         match cmd.target {
@@ -1515,32 +1485,24 @@ impl Handler for SendSignalHandler {
                 // Signal can only be delivered when the process is stopped in gdb.
                 // So first send an interrupt to stop the process.
                 let backend = get_debugger_backend();
-                api::command(&backend.interrupt_command())
-                    .unwrap()
+                api::command(&backend.interrupt_command())?
                     .target(Target::Session(sid))
                     .execute()
-                    .await
-                    .unwrap();
+                    .await?;
 
                 let signal_cmd =
                     backend.console_exec_command(&format!("signal {}", cmd.args.trim()));
-                match api::command(&signal_cmd) {
-                    Ok(request) => match request.target(Target::Session(sid)).submit().await {
-                        Ok(()) => debug!("-send-signal command sent: {}", signal_cmd),
-                        Err(error) => error!(
-                            "Failed to send -send-signal command. raw: {}, err: {}",
-                            signal_cmd, error
-                        ),
-                    },
-                    Err(error) => error!(
-                        "Failed to parse -send-signal command. raw: {}, err: {}",
-                        signal_cmd, error
-                    ),
+                let mut response = api::command(&signal_cmd)?
+                    .target(Target::Session(sid))
+                    .execute()
+                    .await?;
+                if let Some(token) = cmd.external_token {
+                    response.set_external_token(token);
                 }
+                debug!("-send-signal command completed: {}", signal_cmd);
+                Ok(CommandOutcome::silent(response))
             }
-            _ => {
-                error!("-send-signal command should specify a session");
-            }
+            _ => bail!("-send-signal command should specify a session"),
         }
     }
 }
@@ -1551,10 +1513,9 @@ pub struct ListSignalsHandler;
 #[async_trait]
 impl Handler for ListSignalsHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
-    async fn process_cmd(&self, cmd: ParsedInputCmd) {
+    async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         if !cmd.args.trim().is_empty() {
-            error!("-list-signals command needs no argument. raw: {}", cmd.args);
-            return;
+            bail!("-list-signals command needs no argument. raw: {}", cmd.args);
         }
 
         match cmd.target {
@@ -1567,23 +1528,14 @@ impl Handler for ListSignalsHandler {
                         .map(|token| token.to_string())
                         .unwrap_or("".to_string())
                 );
-                match api::command(&list_signal_cmd) {
-                    Ok(request) => match request.target(Target::Session(sid)).emit_plain().await {
-                        Ok(()) => debug!("-list-signals command sent: {}", list_signal_cmd),
-                        Err(error) => error!(
-                            "Failed to send -list-signals command. raw: {}, err: {}",
-                            list_signal_cmd, error
-                        ),
-                    },
-                    Err(error) => error!(
-                        "Failed to parse -list-signals command. raw: {}, err: {}",
-                        list_signal_cmd, error
-                    ),
-                }
+                let response = api::command(&list_signal_cmd)?
+                    .target(Target::Session(sid))
+                    .execute()
+                    .await?;
+                debug!("-list-signals command completed: {}", list_signal_cmd);
+                Ok(CommandOutcome::response(response, Presentation::Plain))
             }
-            _ => {
-                error!("-list-signals command should specify a session");
-            }
+            _ => bail!("-list-signals command should specify a session"),
         }
     }
 }
