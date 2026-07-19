@@ -76,6 +76,15 @@ impl ParsedInputCmd {
     }
 
     #[inline]
+    pub fn with_default_target(self, target: Target) -> Self {
+        if matches!(self.target, Target::Unspecified) {
+            self.with_target(target)
+        } else {
+            self
+        }
+    }
+
+    #[inline]
     pub fn with_prefix(self, prefix: &str) -> Self {
         ParsedInputCmd {
             prefix: prefix.to_string(),
@@ -175,26 +184,8 @@ impl InputCmdParser {
                     "Invalid gtid provided for --thread flag. Command: {}",
                     raw_cmd
                 ))?;
-                let (_, tid) = get_state_mgr()
-                    .local_thread_id(gtid)
-                    .ok_or(anyhow!(
-                        "Unable to extract local tid correctly by gtid for command: {}",
-                        raw_cmd
-                    ))?
-                    .into();
                 let target = Target::Thread(gtid);
-                return Ok((
-                    target,
-                    prefix,
-                    format!(
-                        "{} {} {}",
-                        rest[..=index].join(" "),
-                        tid,
-                        rest[index + 2..].join(" ")
-                    )
-                    .trim()
-                    .to_string(),
-                ));
+                return Ok((target, prefix, rest.join(" ")));
             }
         }
 
@@ -267,11 +258,6 @@ impl InputCmdParser {
                 rest.remove(index); // the next element is shifted after the first remove
                 return Ok((target, prefix, rest.join(" ").trim().to_string()));
             }
-        }
-
-        if let Some(gtid) = get_state_mgr().current_thread_id() {
-            // if there is a current global thread selected, use it as the target
-            return Ok((Target::Thread(gtid), prefix, rest.join(" ")));
         }
 
         Ok((Target::default(), prefix, rest.join(" ")))
@@ -439,6 +425,11 @@ impl CmdHandler {
         let parsed: Result<ParsedInputCmd> = cmd.try_into();
         match parsed {
             Ok(parsed) => {
+                let default_target = get_state_mgr()
+                    .current_thread_id()
+                    .map(Target::Thread)
+                    .unwrap_or(Target::Broadcast);
+                let parsed = parsed.with_default_target(default_target);
                 let prefix = parsed.prefix.clone();
                 let handler = self.handlers.get(&prefix);
                 match handler {
@@ -552,10 +543,14 @@ mod tests {
             command.consistency,
             crate::cmd_flow::session_runtime::CompletionConsistency::StateConsistent
         );
-        assert!(matches!(
-            target,
-            super::Target::Broadcast | super::Target::CurrThread | super::Target::CurrSession
-        ));
+        assert!(matches!(target, super::Target::Unspecified));
+    }
+
+    #[test]
+    fn thread_target_parsing_does_not_require_live_state() {
+        let parsed: ParsedInputCmd = "-stack-list-frames --thread 9001".try_into().unwrap();
+        assert_eq!(parsed.target, super::Target::Thread(9001));
+        assert_eq!(parsed.args, "--thread 9001");
     }
 
     #[test]

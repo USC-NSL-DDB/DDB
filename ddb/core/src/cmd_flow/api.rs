@@ -35,7 +35,7 @@ impl ExecutionRequest {
             return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()).into());
         }
         Ok(Self {
-            parsed,
+            parsed: parsed.with_default_target(Target::Broadcast),
             consistency: super::session_runtime::CompletionConsistency::StateConsistent,
         })
     }

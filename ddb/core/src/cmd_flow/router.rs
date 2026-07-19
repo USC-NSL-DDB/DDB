@@ -28,6 +28,9 @@ const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum Target {
+    /// No target was supplied by the command text or caller. Ingress adapters
+    /// must resolve this explicitly before routing.
+    Unspecified,
     Session(u64),
     Thread(u64),
     Group(GroupId),
@@ -41,7 +44,7 @@ pub enum Target {
 
 impl Default for Target {
     fn default() -> Self {
-        Self::Broadcast
+        Self::Unspecified
     }
 }
 
@@ -53,9 +56,13 @@ struct SessionRoute {
 
 impl SessionRoute {
     fn command(&self, command: &Command, token: u64) -> SessionCommand {
+        let wire_command = match self.thread_id {
+            Some(thread_id) => rewrite_thread_argument(&command.raw_cmd, thread_id),
+            None => command.raw_cmd.clone(),
+        };
         SessionCommand {
             token,
-            command: command.raw_cmd.clone(),
+            command: wire_command,
             thread_id: self.thread_id,
             consistency: command.consistency,
         }
@@ -112,15 +119,12 @@ impl Router {
 
     fn resolve_target(&self, target: &Target) -> Result<Vec<SessionRoute>> {
         match target {
-            Target::Session(sid) => {
-                STATES.select_session(*sid);
-                Ok(vec![self.session_route(*sid, None)?])
-            }
+            Target::Unspecified => bail!("command target was not resolved before routing"),
+            Target::Session(sid) => Ok(vec![self.session_route(*sid, None)?]),
             Target::Thread(gtid) => {
                 let LocalThreadId(sid, thread_id) = STATES
                     .local_thread_id(*gtid)
                     .ok_or_else(|| anyhow!("Thread {} is not in a session", gtid))?;
-                STATES.select_thread_context(sid, *gtid);
                 Ok(vec![self.session_route(sid, Some(thread_id))?])
             }
             Target::Group(gid) => {
@@ -172,7 +176,6 @@ impl Router {
                         thread_id: None,
                     })
                     .ok_or_else(|| anyhow!("No session available"))?;
-                STATES.select_session(route.handle.sid());
                 Ok(vec![route])
             }
             Target::Multiple(targets) => {
@@ -273,18 +276,13 @@ impl Router {
                 lease.sid()
             );
         }
-        let thread_id = routes.pop().and_then(|route| route.thread_id);
-        let response = timeout(
-            COMMAND_TIMEOUT,
-            lease.execute(SessionCommand {
-                token: command.internal_token,
-                command: command.raw_cmd,
-                thread_id,
-                consistency: command.consistency,
-            }),
-        )
-        .await
-        .map_err(|_| anyhow!("Timed out waiting for exclusive command"))??;
+        let route = routes
+            .pop()
+            .expect("exclusive target has exactly one route");
+        let session_command = route.command(&command, command.internal_token);
+        let response = timeout(COMMAND_TIMEOUT, lease.execute(session_command))
+            .await
+            .map_err(|_| anyhow!("Timed out waiting for exclusive command"))??;
         Ok(FinishedCmd::new(
             command.external_token,
             lease.sid(),
@@ -357,5 +355,36 @@ impl Router {
             }
             _ => {}
         }
+    }
+}
+
+fn rewrite_thread_argument(command: &str, local_thread_id: u64) -> String {
+    let mut parts = command
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if let Some(index) = parts.iter().position(|part| *part == "--thread") {
+        if let Some(thread_id) = parts.get_mut(index + 1) {
+            *thread_id = local_thread_id.to_string();
+            return parts.join(" ");
+        }
+    }
+    command.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_thread_argument;
+
+    #[test]
+    fn thread_argument_is_localized_at_the_route_boundary() {
+        assert_eq!(
+            rewrite_thread_argument("-stack-list-frames --thread 9001 0 5", 7),
+            "-stack-list-frames --thread 7 0 5"
+        );
+        assert_eq!(
+            rewrite_thread_argument("-exec-interrupt", 7),
+            "-exec-interrupt"
+        );
     }
 }
