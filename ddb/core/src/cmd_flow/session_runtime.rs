@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    event::project_event,
+    event::{decode_event, project_event, DebuggerEvent},
     response::{ParsedSessionResponse, SessionRuntimeStatus},
 };
 
@@ -138,9 +138,7 @@ fn await_write(
 
 struct ProjectedEvent {
     sequence: u64,
-    token: Option<gdbmi::Token>,
-    message: String,
-    payload: gdbmi::raw::Dict,
+    event: DebuggerEvent,
 }
 
 pub struct SessionTicket {
@@ -334,7 +332,9 @@ async fn run_projector(
         if !projection_delay.is_zero() {
             tokio::time::sleep(projection_delay).await;
         }
-        project_event(event.token, event.message, event.payload, sid).await;
+        if let Err(error) = project_event(event.event, sid).await {
+            warn!(sid, ?error, "failed to project debugger event");
+        }
         let _ = applied.send(event.sequence);
     }
 }
@@ -405,13 +405,18 @@ async fn process_stdout(
                 message,
                 payload,
             }) => {
+                let event = match decode_event(token, message, payload) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        warn!(sid, ?error, "discarding malformed debugger event");
+                        continue;
+                    }
+                };
                 *event_sequence += 1;
                 event_tx
                     .send(ProjectedEvent {
                         sequence: *event_sequence,
-                        token,
-                        message,
-                        payload,
+                        event,
                     })
                     .await
                     .map_err(|_| anyhow!("session {} event projector is closed", sid))?;
