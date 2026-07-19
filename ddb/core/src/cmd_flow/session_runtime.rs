@@ -19,6 +19,7 @@ use tracing::{debug, trace, warn};
 use crate::{
     connection::{RunningTransport, TransportEvent},
     dbg_parser::gdb_parser::GdbParser,
+    session::lifecycle::{SessionTerminationCause, SessionTerminationReporter},
 };
 
 use super::{
@@ -146,6 +147,12 @@ struct ProjectedEvent {
     event: DebuggerEvent,
 }
 
+struct RuntimeShared {
+    in_flight: Arc<AtomicUsize>,
+    closed: Arc<AtomicBool>,
+    termination: SessionTerminationReporter,
+}
+
 pub struct SessionTicket {
     sid: u64,
     token: u64,
@@ -191,13 +198,18 @@ impl std::fmt::Debug for SessionHandle {
 }
 
 impl SessionHandle {
-    pub fn spawn(sid: u64, transport: RunningTransport) -> (Self, tokio::task::JoinHandle<()>) {
-        Self::spawn_with_config(sid, transport, RuntimeConfig::default())
+    pub fn spawn(
+        sid: u64,
+        transport: RunningTransport,
+        termination: SessionTerminationReporter,
+    ) -> (Self, tokio::task::JoinHandle<()>) {
+        Self::spawn_with_config(sid, transport, termination, RuntimeConfig::default())
     }
 
     fn spawn_with_config(
         sid: u64,
         transport: RunningTransport,
+        termination: SessionTerminationReporter,
         config: RuntimeConfig,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (requests, request_rx) = mpsc::channel(COMMAND_MAILBOX_CAPACITY);
@@ -213,7 +225,16 @@ impl SessionHandle {
             closed: Arc::clone(&closed),
         };
         let task = tokio::spawn(run_session(
-            sid, request_rx, control_rx, transport, in_flight, closed, config,
+            sid,
+            request_rx,
+            control_rx,
+            transport,
+            RuntimeShared {
+                in_flight,
+                closed,
+                termination,
+            },
+            config,
         ));
         (handle, task)
     }
@@ -331,6 +352,7 @@ async fn run_projector(
     mut events: mpsc::Receiver<ProjectedEvent>,
     applied: watch::Sender<u64>,
     publisher: EventPublisher,
+    termination: SessionTerminationReporter,
     #[cfg(test)] projection_delay: Duration,
 ) {
     while let Some(event) = events.recv().await {
@@ -345,10 +367,8 @@ async fn run_projector(
                         warn!(sid, ?error, "failed to publish debugger event");
                     }
                 }
-                if projection.lifecycle.is_some() {
-                    tokio::spawn(async move {
-                        crate::get_dbg_mgr().remove_session(sid).await;
-                    });
+                if let Some(cause) = projection.lifecycle {
+                    termination.terminate(cause);
                 }
             }
             Err(error) => warn!(sid, ?error, "failed to project debugger event"),
@@ -475,10 +495,14 @@ async fn run_session(
     mut requests: mpsc::Receiver<RuntimeRequest>,
     mut control: mpsc::UnboundedReceiver<ControlRequest>,
     transport: RunningTransport,
-    in_flight: Arc<AtomicUsize>,
-    closed: Arc<AtomicBool>,
+    shared: RuntimeShared,
     config: RuntimeConfig,
 ) {
+    let RuntimeShared {
+        in_flight,
+        closed,
+        termination,
+    } = shared;
     let (writer, events) = transport.into_parts();
     let (event_tx, event_rx) = mpsc::channel(EVENT_MAILBOX_CAPACITY);
     let (applied_tx, applied) = watch::channel(0_u64);
@@ -491,6 +515,7 @@ async fn run_session(
         event_rx,
         applied_tx,
         publisher,
+        termination.clone(),
         #[cfg(test)]
         config.projector_delay,
     ));
@@ -613,6 +638,9 @@ async fn run_session(
                         if let Err(error) = result {
                             warn!(sid, ?error, "failed to process debugger output");
                             fail_pending(&mut pending, &in_flight, &error.to_string());
+                            termination.terminate(SessionTerminationCause::ProtocolFault {
+                                message: error.to_string(),
+                            });
                             break;
                         }
                     }
@@ -625,14 +653,19 @@ async fn run_session(
                             &in_flight,
                             &format!("transport exited with status {:?}", status),
                         );
+                        termination.terminate(SessionTerminationCause::TransportExited { status });
                         break;
                     }
                     Ok(TransportEvent::Fault(error)) => {
                         fail_pending(&mut pending, &in_flight, &error);
+                        termination.terminate(SessionTerminationCause::TransportFault {
+                            message: error,
+                        });
                         break;
                     }
                     Err(_) => {
                         fail_pending(&mut pending, &in_flight, "transport event stream closed");
+                        termination.terminate(SessionTerminationCause::EventStreamClosed);
                         break;
                     }
                 }
@@ -673,6 +706,7 @@ async fn run_session(
 mod tests {
     use super::*;
     use crate::connection::{RunningTransport, TransportEvent, TransportRequest};
+    use crate::session::lifecycle::{self, SessionTermination, SessionTerminationCause};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -699,6 +733,34 @@ mod tests {
             thread_id: None,
             consistency: CompletionConsistency::ProtocolComplete,
         }
+    }
+
+    fn spawn_runtime(
+        sid: u64,
+        transport: RunningTransport,
+    ) -> (
+        SessionHandle,
+        tokio::task::JoinHandle<()>,
+        mpsc::UnboundedReceiver<SessionTermination>,
+    ) {
+        let (lifecycle, terminations) = lifecycle::channel();
+        let (handle, task) = SessionHandle::spawn(sid, transport, lifecycle.bind(sid));
+        (handle, task, terminations)
+    }
+
+    fn spawn_runtime_with_config(
+        sid: u64,
+        transport: RunningTransport,
+        config: RuntimeConfig,
+    ) -> (
+        SessionHandle,
+        tokio::task::JoinHandle<()>,
+        mpsc::UnboundedReceiver<SessionTermination>,
+    ) {
+        let (lifecycle, terminations) = lifecycle::channel();
+        let (handle, task) =
+            SessionHandle::spawn_with_config(sid, transport, lifecycle.bind(sid), config);
+        (handle, task, terminations)
     }
 
     async fn receive_write(
@@ -739,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn pipelines_and_correlates_out_of_order_coalesced_results() {
         let (transport, requests, events) = test_transport(8);
-        let (handle, task) = SessionHandle::spawn(41, transport);
+        let (handle, task, _terminations) = spawn_runtime(41, transport);
 
         let first = handle.submit(command(1)).await.unwrap();
         let second = handle.submit(command(2)).await.unwrap();
@@ -781,7 +843,7 @@ mod tests {
     #[tokio::test]
     async fn buffers_fragmented_protocol_records() {
         let (transport, requests, events) = test_transport(4);
-        let (handle, task) = SessionHandle::spawn(42, transport);
+        let (handle, task, _terminations) = spawn_runtime(42, transport);
         let ticket = handle.submit(command(7)).await.unwrap();
         let (_, acknowledgement) = receive_write(&requests).await;
         acknowledgement.send(Ok(())).unwrap();
@@ -817,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn exclusive_lease_blocks_normal_commands_until_released() {
         let (transport, requests, events) = test_transport(8);
-        let (handle, task) = SessionHandle::spawn(43, transport);
+        let (handle, task, _terminations) = spawn_runtime(43, transport);
         let lease = handle.exclusive().await.unwrap();
 
         let normal_handle = handle.clone();
@@ -855,7 +917,7 @@ mod tests {
     #[tokio::test]
     async fn transport_fault_fails_pending_and_closes_runtime() {
         let (transport, requests, events) = test_transport(4);
-        let (handle, task) = SessionHandle::spawn(44, transport);
+        let (handle, task, mut terminations) = spawn_runtime(44, transport);
         let ticket = handle.submit(command(21)).await.unwrap();
         let (_, acknowledgement) = receive_write(&requests).await;
         acknowledgement.send(Ok(())).unwrap();
@@ -874,6 +936,43 @@ mod tests {
             .unwrap();
         assert!(handle.status().closed);
         assert_eq!(handle.status().in_flight, 0);
+        assert_eq!(
+            terminations.recv().await.unwrap(),
+            SessionTermination {
+                sid: 44,
+                cause: SessionTerminationCause::TransportFault {
+                    message: "injected transport fault".into(),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn protocol_exit_requests_supervised_termination() {
+        let (transport, _requests, events) = test_transport(2);
+        let (handle, task, mut terminations) = spawn_runtime(50, transport);
+
+        events
+            .send_async(TransportEvent::Stdout(Bytes::from_static(
+                b"*stopped,reason=\"exited-normally\"\n",
+            )))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tokio::time::timeout(TEST_TIMEOUT, terminations.recv())
+                .await
+                .expect("protocol exit should reach lifecycle supervision")
+                .unwrap(),
+            SessionTermination {
+                sid: 50,
+                cause: SessionTerminationCause::ProtocolExit {
+                    reasons: vec!["exited-normally".into()],
+                },
+            }
+        );
+
+        stop(&handle, task).await;
     }
 
     #[tokio::test]
@@ -885,7 +984,7 @@ mod tests {
             projector_delay: Duration::ZERO,
             publisher_delay: Duration::ZERO,
         };
-        let (handle, task) = SessionHandle::spawn_with_config(45, transport, config);
+        let (handle, task, _terminations) = spawn_runtime_with_config(45, transport, config);
 
         let timed_out = handle.submit(command(31)).await.unwrap();
         let (_, acknowledgement) = receive_write(&requests).await;
@@ -919,7 +1018,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_interrupts_transport_backpressure() {
         let (transport, _requests, _events) = test_transport(1);
-        let (handle, task) = SessionHandle::spawn(46, transport);
+        let (handle, task, _terminations) = spawn_runtime(46, transport);
 
         let first = handle.submit(command(41)).await.unwrap();
         let second = handle.submit(command(42)).await.unwrap();
@@ -943,7 +1042,7 @@ mod tests {
             projector_delay: Duration::from_secs(5),
             publisher_delay: Duration::ZERO,
         };
-        let (handle, task) = SessionHandle::spawn_with_config(48, transport, config);
+        let (handle, task, _terminations) = spawn_runtime_with_config(48, transport, config);
         let notifications = (0..EVENT_MAILBOX_CAPACITY + 8)
             .map(|id| format!("=breakpoint-modified,id=\"{}\"\n", id))
             .collect::<String>();
@@ -971,7 +1070,7 @@ mod tests {
             projector_delay: Duration::from_millis(100),
             publisher_delay: Duration::ZERO,
         };
-        let (handle, task) = SessionHandle::spawn_with_config(47, transport, config);
+        let (handle, task, _terminations) = spawn_runtime_with_config(47, transport, config);
 
         let mut state_consistent = command(51);
         state_consistent.consistency = CompletionConsistency::StateConsistent;
@@ -1018,7 +1117,7 @@ mod tests {
             projector_delay: Duration::ZERO,
             publisher_delay: Duration::from_millis(250),
         };
-        let (handle, task) = SessionHandle::spawn_with_config(49, transport, config);
+        let (handle, task, _terminations) = spawn_runtime_with_config(49, transport, config);
 
         let ticket = handle.submit(command(61)).await.unwrap();
         let (_, acknowledgement) = receive_write(&requests).await;

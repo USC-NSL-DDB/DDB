@@ -28,7 +28,6 @@ use std::sync::Weak;
 use app::App;
 use cmd_flow::{format_error, get_command_engine};
 use common::config::Config;
-use dbg_mgr::DbgManagable;
 use dbg_mgr::DbgManager;
 use debugger::{init_debugger_backend, resolve_debugger_backend};
 use plugin::{get_framework_plugin, init_framework_plugin, resolve_framework_plugin};
@@ -165,7 +164,7 @@ async fn run_command_flow() -> Result<()> {
 }
 
 async fn run_debugger_manager() -> Result<()> {
-    let dbg_mgr = Arc::new(DbgManager::new().await);
+    let dbg_mgr = DbgManager::new().await;
     init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
 
     if let Err(error) = dbg_mgr.start().await {

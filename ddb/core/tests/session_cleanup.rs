@@ -41,3 +41,25 @@ fn exiting_session_cleans_breakpoints_and_session_state() {
         .expect("bkpts should be an array")
         .is_empty());
 }
+
+#[test]
+fn transport_exit_during_bootstrap_never_activates_a_stale_session() {
+    let mut ddb = DdbProcess::spawn_with_bootstrap_exit(&[SessionSpec {
+        tag: "svc-bootstrap-exit",
+        alias: "bootstrap-exit-worker",
+        hash: "grp-bootstrap-exit",
+        pid: 502,
+        start_delay_ms: 0,
+        source_file: "src/bootstrap_exit.rs",
+        source_line: 71,
+        function: "serve_bootstrap_exit",
+        exit_on_continue: false,
+    }]);
+
+    ddb.wait_for_sessions_len(0);
+    assert!(ddb
+        .api_get("/groups")
+        .as_array()
+        .expect("groups should be an array")
+        .is_empty());
+}

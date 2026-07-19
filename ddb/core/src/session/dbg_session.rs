@@ -9,6 +9,7 @@ use crate::common::Config;
 use crate::dbg_ctrl::DebuggerTransportHandle;
 use crate::debugger::get_debugger_backend;
 use crate::plugin::get_framework_plugin;
+use crate::session::lifecycle::SessionTerminationReporter;
 #[cfg(not(feature = "lazy_source_map"))]
 use crate::state::get_source_mgr;
 use crate::state::{get_bkpt_mgr, get_group_mgr, get_state_mgr, STATES};
@@ -36,7 +37,10 @@ impl DbgSession {
         }
     }
 
-    pub async fn start(&mut self) -> Result<SessionHandle> {
+    pub async fn start(
+        &mut self,
+        termination: SessionTerminationReporter,
+    ) -> Result<SessionHandle> {
         STATES
             .register_session(
                 self.sid,
@@ -49,7 +53,7 @@ impl DbgSession {
             )
             .await;
 
-        let handle = match self.launch_runtime().await {
+        let handle = match self.launch_runtime(termination).await {
             Ok(handle) => handle,
             Err(error) => {
                 if let Err(cleanup_error) = self.cleanup().await {
@@ -82,7 +86,10 @@ impl DbgSession {
         Ok(handle)
     }
 
-    async fn launch_runtime(&mut self) -> Result<SessionHandle> {
+    async fn launch_runtime(
+        &mut self,
+        termination: SessionTerminationReporter,
+    ) -> Result<SessionHandle> {
         let config = Config::global();
         let backend = get_debugger_backend();
         let plugin = get_framework_plugin();
@@ -90,7 +97,7 @@ impl DbgSession {
         let launch_command = backend.build_start_command(config.conf.sudo);
 
         let running = self.transport.launch(&launch_command).await?;
-        let (handle, task) = SessionHandle::spawn(self.sid, running);
+        let (handle, task) = SessionHandle::spawn(self.sid, running, termination);
         self.runtime = Some(handle.clone());
         self.runtime_task = Some(task);
 

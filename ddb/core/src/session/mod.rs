@@ -1,4 +1,5 @@
 pub mod dbg_session;
+pub(crate) mod lifecycle;
 
 pub use dbg_session::*;
 

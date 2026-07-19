@@ -144,6 +144,8 @@ pub struct MockSessionConfig {
     #[serde(default)]
     pub exit_on_continue: bool,
     #[serde(default)]
+    pub exit_on_bootstrap: bool,
+    #[serde(default)]
     pub stack_frames: Vec<MockStackFrameConfig>,
     #[serde(default)]
     pub dbt_parent: Option<MockDbtParentConfig>,
@@ -161,6 +163,7 @@ impl Default for MockSessionConfig {
             function: default_mock_function(),
             executable: String::new(),
             exit_on_continue: false,
+            exit_on_bootstrap: false,
             stack_frames: Vec::new(),
             dbt_parent: None,
             context_regs: default_mock_context_regs(),

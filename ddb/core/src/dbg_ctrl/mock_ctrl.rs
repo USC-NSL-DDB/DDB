@@ -498,14 +498,16 @@ impl MockAttachController {
         match prefix.as_str() {
             "" => {}
             "-mock-bootstrap" => {
-                let should_bootstrap = {
+                let (should_bootstrap, exit_on_bootstrap) = {
                     let mut state = state.lock().await;
                     let should_bootstrap = !state.bootstrapped;
                     state.bootstrapped = true;
-                    should_bootstrap
+                    (should_bootstrap, state.config.exit_on_bootstrap)
                 };
                 Self::send_result(&out_tx, token, "done", None).await?;
-                if should_bootstrap {
+                if should_bootstrap && exit_on_bootstrap {
+                    out_tx.send_async(TransportEvent::Exited(Some(0))).await?;
+                } else if should_bootstrap {
                     Self::emit_bootstrap_events(state, out_tx).await?;
                 }
             }
@@ -619,8 +621,12 @@ impl MockAttachController {
                     tokio::spawn(Self::schedule_interrupt_stop(state, out_tx, token));
                 }
             }
-            "detach" | "kill" | "exit" => {
+            "detach" | "kill" => {
                 Self::send_result(&out_tx, token, "done", None).await?;
+            }
+            "exit" => {
+                Self::send_result(&out_tx, token, "done", None).await?;
+                out_tx.send_async(TransportEvent::Exited(Some(0))).await?;
             }
             _ => {
                 Self::send_result(&out_tx, token, "done", None).await?;

@@ -87,8 +87,13 @@ pub struct DdbProcess {
 
 impl DdbProcess {
     pub fn spawn(sessions: &[SessionSpec<'_>]) -> Self {
-        let config_contents = render_mock_config(sessions);
+        let config_contents = render_mock_config(sessions, false);
         Self::spawn_with_config("ddb-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_with_bootstrap_exit(sessions: &[SessionSpec<'_>]) -> Self {
+        let config_contents = render_mock_config(sessions, true);
+        Self::spawn_with_config("ddb-bootstrap-exit-integration.yaml", config_contents)
     }
 
     pub fn spawn_real_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
@@ -404,7 +409,7 @@ fn reserve_port() -> u16 {
         .port()
 }
 
-fn render_mock_config(sessions: &[SessionSpec<'_>]) -> String {
+fn render_mock_config(sessions: &[SessionSpec<'_>], exit_on_bootstrap: bool) -> String {
     let sessions_yaml = sessions
         .iter()
         .map(|session| {
@@ -418,7 +423,8 @@ fn render_mock_config(sessions: &[SessionSpec<'_>]) -> String {
       source_file: "{source_file}"
       source_line: {source_line}
       function: "{function}"
-      exit_on_continue: {exit_on_continue}"#,
+      exit_on_continue: {exit_on_continue}
+      exit_on_bootstrap: {exit_on_bootstrap}"#,
                 tag = session.tag,
                 alias = session.alias,
                 hash = session.hash,
@@ -428,6 +434,7 @@ fn render_mock_config(sessions: &[SessionSpec<'_>]) -> String {
                 source_line = session.source_line,
                 function = session.function,
                 exit_on_continue = session.exit_on_continue,
+                exit_on_bootstrap = exit_on_bootstrap,
             )
         })
         .collect::<Vec<_>>()

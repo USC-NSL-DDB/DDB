@@ -1,13 +1,12 @@
 use anyhow::{anyhow, bail, Result};
-use async_trait::async_trait;
 use dashmap::DashMap;
 use flume::Receiver;
 use futures::future::join_all;
 use russh::client::Config as RusshClientConfig;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::task::{JoinHandle, JoinSet};
+use tracing::{debug, error, info, trace};
 
 use crate::dbg_ctrl::{build_transport, TransportSpec};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
@@ -15,6 +14,7 @@ use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
+use crate::session::lifecycle::{self, SessionLifecycleHandle, SessionTermination};
 use crate::shutdown::get_shutdown_ctrl;
 use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
 use crate::{
@@ -29,25 +29,10 @@ use crate::{
 
 const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
 
-#[async_trait]
-pub trait DbgManagable {
-    async fn new() -> Self
-    where
-        Self: Sized,
-    {
-        let gconf = DDBConfig::global();
-        Self::new_with_config(gconf).await
-    }
-
-    async fn new_with_config(config: &'static DDBConfig) -> Self;
-    async fn start(&self) -> Result<()>;
-    async fn cleanup(&self);
-}
-
-pub type DebuggerSessionRef = crate::session::DbgSession;
+type DebuggerSessionRef = Arc<Mutex<crate::session::DbgSession>>;
 
 /// For convenience, a type alias to store sessions in a DashMap (sid -> session).
-pub type SessionsRef = Arc<DashMap<u64, DebuggerSessionRef>>;
+type SessionsRef = Arc<DashMap<u64, DebuggerSessionRef>>;
 
 pub struct ServiceDiscover {
     /// The service discovery producer that will send `ServiceInfo` events.
@@ -66,40 +51,6 @@ pub struct ServiceDiscover {
 }
 
 impl ServiceDiscover {
-    async fn start_session(
-        sessions: SessionsRef,
-        mut dbg_session: crate::session::DbgSession,
-        caladan_ip: Option<u32>,
-    ) {
-        let new_sid = dbg_session.sid;
-
-        match dbg_session.start().await {
-            Ok(_) => {
-                if let Err(e) = dbg_session.post_start().await {
-                    error!("Post-start actions for session {} failed: {:?}", new_sid, e);
-                    let _ = dbg_session.cleanup().await;
-                    return;
-                }
-
-                let g_cfg = DDBConfig::global();
-                if get_framework_plugin().should_register_caladan_ip(g_cfg) {
-                    if let Some(caladan_ip) = caladan_ip {
-                        get_proclet_mgr().register_owner_session(caladan_ip, new_sid);
-                    }
-                }
-
-                sessions.insert(new_sid, dbg_session);
-                debug!("Session {} started successfully.", new_sid);
-                let notification = Notification::new(NotificationPayload::SessionListChanged);
-                get_notif_mgr().broadcast(notification).await;
-            }
-            Err(e) => {
-                error!("Failed to start session {}: {:?}", new_sid, e);
-                let _ = dbg_session.cleanup().await;
-            }
-        }
-    }
-
     pub fn new(
         producer: Box<dyn DiscoveryMessageProducer>,
         rx: Receiver<crate::discovery::ServiceInfo>,
@@ -122,7 +73,7 @@ impl ServiceDiscover {
     /// Handles creation of a new debug session for a discovered service.
     /// Called by the consumer loop that reads from a unified channel of `ServiceInfo<T>`.
     async fn prepare_new_session(
-        sessions: SessionsRef,
+        manager: Arc<DbgManager>,
         info: crate::discovery::ServiceInfo,
         proxy_tunnel: Option<
             Arc<
@@ -159,17 +110,20 @@ impl ServiceDiscover {
             }
         };
         let dbg_session = crate::session::DbgSession::new(s_cfg, transport);
-        Self::start_session(sessions, dbg_session, caladan_ip).await;
+        manager.start_session(dbg_session, caladan_ip).await;
     }
 
-    pub fn start(&mut self, sessions: SessionsRef) {
+    pub fn start(&mut self, manager: std::sync::Weak<DbgManager>) {
         let rx = self.rx.clone();
         let proxy_tunnel = self.proxy_tunnel.clone();
         let handle = tokio::spawn(async move {
             while let Ok(info) = rx.recv_async().await {
+                let Some(manager) = manager.upgrade() else {
+                    break;
+                };
                 // For each discovered service, create a new debug session.
                 debug!("Received service info: {:?}", info);
-                Self::prepare_new_session(sessions.clone(), info, proxy_tunnel.clone()).await;
+                Self::prepare_new_session(manager, info, proxy_tunnel.clone()).await;
             }
         });
         self.handle = Some(handle);
@@ -199,20 +153,119 @@ pub struct DbgManager {
     config: &'static DDBConfig,
 
     static_session_handles: Mutex<Vec<JoinHandle<()>>>,
+
+    lifecycle: SessionLifecycleHandle,
+    lifecycle_events: Mutex<Option<mpsc::UnboundedReceiver<SessionTermination>>>,
+    lifecycle_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    lifecycle_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl DbgManager {
-    /// Removes (and cleans up) a given session, for external calls or internal use.
-    pub async fn remove_session(&self, sid: u64) {
-        if let Some((_, mut s)) = self.sessions.remove(&sid) {
-            let _ = s.cleanup().await;
+    async fn start_lifecycle_supervisor(self: &Arc<Self>) -> Result<()> {
+        let mut events = self.lifecycle_events.lock().await;
+        let mut events = events
+            .take()
+            .ok_or_else(|| anyhow!("debugger lifecycle supervisor is already started"))?;
+        let (shutdown, mut shutdown_requested) = oneshot::channel();
+        self.lifecycle_shutdown.lock().await.replace(shutdown);
+        let manager = Arc::downgrade(self);
+        let task = tokio::spawn(async move {
+            let mut cleanups = JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_requested => break,
+                    termination = events.recv() => {
+                        let Some(termination) = termination else {
+                            break;
+                        };
+                        let Some(manager) = manager.upgrade() else {
+                            break;
+                        };
+                        cleanups.spawn(async move {
+                            manager.finish_session(termination).await;
+                        });
+                    }
+                    Some(result) = cleanups.join_next(), if !cleanups.is_empty() => {
+                        if let Err(error) = result {
+                            error!(?error, "session lifecycle cleanup task failed");
+                        }
+                    }
+                }
+            }
+            while let Some(result) = cleanups.join_next().await {
+                if let Err(error) = result {
+                    error!(?error, "session lifecycle cleanup task failed");
+                }
+            }
+        });
+        self.lifecycle_task.lock().await.replace(task);
+        Ok(())
+    }
+
+    async fn start_session(
+        &self,
+        dbg_session: crate::session::DbgSession,
+        caladan_ip: Option<u32>,
+    ) {
+        let sid = dbg_session.sid;
+        let termination = self.lifecycle.bind(sid);
+        let session = Arc::new(Mutex::new(dbg_session));
+        self.sessions.insert(sid, Arc::clone(&session));
+
+        let start_result = {
+            let mut session = session.lock().await;
+            match session.start(termination.clone()).await {
+                Ok(_) => session.post_start().await,
+                Err(error) => Err(error),
+            }
+        };
+
+        match start_result {
+            Ok(_) if !termination.termination_requested() && self.sessions.contains_key(&sid) => {
+                if get_framework_plugin().should_register_caladan_ip(self.config) {
+                    if let Some(caladan_ip) = caladan_ip {
+                        get_proclet_mgr().register_owner_session(caladan_ip, sid);
+                    }
+                }
+
+                debug!(sid, "session started successfully");
+                let notification = Notification::new(NotificationPayload::SessionListChanged);
+                get_notif_mgr().broadcast(notification).await;
+            }
+            Ok(_) => {
+                debug!(sid, "session terminated before startup completed");
+            }
+            Err(error) => {
+                error!(sid, ?error, "failed to start session");
+                self.sessions.remove(&sid);
+                let _ = session.lock().await.cleanup().await;
+            }
+        }
+    }
+
+    async fn finish_session(&self, termination: SessionTermination) {
+        debug!(
+            sid = termination.sid,
+            cause = ?termination.cause,
+            "session termination requested"
+        );
+        self.remove_session(termination.sid).await;
+    }
+
+    async fn remove_session(&self, sid: u64) {
+        let Some((_, session)) = self.sessions.remove(&sid) else {
+            trace!(sid, "ignoring termination for an unregistered session");
+            return;
+        };
+
+        if let Err(error) = session.lock().await.cleanup().await {
+            error!(sid, ?error, "session cleanup failed");
         }
 
         let notification = Notification::new(NotificationPayload::SessionListChanged);
         get_notif_mgr().broadcast(notification).await;
 
-        let config = DDBConfig::global();
-        if config.conf.auto_shutdown {
+        if self.config.conf.auto_shutdown {
             if self.sessions.is_empty() {
                 debug!("No more sessions in DbgManager. Possibly shutting down…");
                 get_shutdown_ctrl().trigger_once(crate::shutdown::ShutdownCause::NoSessions);
@@ -341,11 +394,7 @@ impl DbgManager {
         Ok(())
     }
 
-    async fn start_static_session(
-        sessions: SessionsRef,
-        config: &'static DDBConfig,
-        session: StaticSessionConfig,
-    ) -> Result<()> {
+    async fn start_static_session(&self, session: StaticSessionConfig) -> Result<()> {
         if session.start_delay_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(session.start_delay_ms)).await;
         }
@@ -364,7 +413,7 @@ impl DbgManager {
             .stop_at_entry(session.stop_at_entry)
             .with_service_meta(service_meta);
 
-        builder = match config.conf.debugger.backend {
+        builder = match self.config.conf.debugger.backend {
             DebuggerBackendKind::Mock => builder
                 .mode(crate::session::DbgMode::REMOTE(
                     crate::session::DbgStartMode::ATTACH(session.pid),
@@ -402,23 +451,24 @@ impl DbgManager {
         let session_config = builder.build();
         let transport = build_transport(&session_config.transport, None)?;
         let dbg_session = crate::session::DbgSession::new(session_config, transport);
-        ServiceDiscover::start_session(sessions, dbg_session, None).await;
+        self.start_session(dbg_session, None).await;
         Ok(())
     }
 
-    async fn init_static_sessions(&self) -> Result<()> {
+    async fn init_static_sessions(self: &Arc<Self>) -> Result<()> {
         let mut delayed_handles = self.static_session_handles.lock().await;
         delayed_handles.clear();
 
         for session in self.config.static_sessions.clone() {
             if session.start_delay_ms == 0 {
-                Self::start_static_session(self.sessions.clone(), self.config, session).await?;
+                self.start_static_session(session).await?;
             } else {
-                let sessions = self.sessions.clone();
-                let config = self.config;
+                let manager = Arc::downgrade(self);
                 delayed_handles.push(tokio::spawn(async move {
-                    if let Err(error) = Self::start_static_session(sessions, config, session).await
-                    {
+                    let Some(manager) = manager.upgrade() else {
+                        return;
+                    };
+                    if let Err(error) = manager.start_static_session(session).await {
                         error!("Failed to start delayed static session: {:?}", error);
                     }
                 }));
@@ -428,10 +478,14 @@ impl DbgManager {
     }
 }
 
-#[async_trait]
-impl DbgManagable for DbgManager {
-    async fn new_with_config(config: &'static DDBConfig) -> Self {
+impl DbgManager {
+    pub async fn new() -> Arc<Self> {
+        Self::new_with_config(DDBConfig::global()).await
+    }
+
+    pub async fn new_with_config(config: &'static DDBConfig) -> Arc<Self> {
         let sessions: SessionsRef = Arc::new(DashMap::new());
+        let (lifecycle, lifecycle_events) = lifecycle::channel();
         let plugin = get_framework_plugin();
 
         let proclet_ctrl = if plugin.supports_migration(config) {
@@ -446,24 +500,29 @@ impl DbgManagable for DbgManager {
             None
         };
 
-        DbgManager {
-            sessions: sessions.clone(),
+        Arc::new(DbgManager {
+            sessions,
             sd: Mutex::new(None),
             proclet_ctrl,
             config,
             static_session_handles: Mutex::new(Vec::new()),
-        }
+            lifecycle,
+            lifecycle_events: Mutex::new(Some(lifecycle_events)),
+            lifecycle_shutdown: Mutex::new(None),
+            lifecycle_task: Mutex::new(None),
+        })
     }
 
-    async fn start(&self) -> Result<()> {
-        if let Some(_) = DDBConfig::global().service_discovery {
+    pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.start_lifecycle_supervisor().await?;
+        if self.config.service_discovery.is_some() {
             info!("[Service Discovery]: ENABLED. INIT service discovery...");
             self.init_sd().await?;
         } else {
             info!("[Service Discovery]: DISABLED. SKIP service discovery initialization.");
         }
         if let Some(sd) = &mut *self.sd.lock().await {
-            sd.start(self.sessions.clone());
+            sd.start(Arc::downgrade(self));
             debug!("DbgManager is now listening for discovered services.");
         }
         if !self.config.static_sessions.is_empty() {
@@ -476,32 +535,44 @@ impl DbgManagable for DbgManager {
         Ok(())
     }
 
-    async fn cleanup(&self) {
-        let mut handles = self.static_session_handles.lock().await;
-        for handle in handles.drain(..) {
-            handle.abort();
+    pub async fn cleanup(&self) {
+        {
+            let mut handles = self.static_session_handles.lock().await;
+            for handle in handles.drain(..) {
+                handle.abort();
+            }
         }
 
-        // 1) Shutdown the service discovery if it exists
         if let Some(sd) = &mut *self.sd.lock().await {
             debug!("Shutting down ServiceDiscovery...");
             sd.shutdown().await;
         }
 
-        // 2) Clean up all existing sessions
+        if let Some(shutdown) = self.lifecycle_shutdown.lock().await.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.lifecycle_task.lock().await.take() {
+            let _ = task.await;
+        }
+
         let keys: Vec<_> = self.sessions.iter().map(|e| *e.key()).collect();
-        let mut tasks = vec![];
+        let mut sessions = Vec::with_capacity(keys.len());
         for sid in keys {
-            if let Some((_, mut session)) = self.sessions.remove(&sid) {
-                crate::cmd_flow::get_router().remove_session(sid);
-                tasks.push(tokio::spawn(async move {
-                    let _ = session.cleanup().await;
-                    crate::state::STATES.remove_session(sid).await;
-                }));
+            if let Some((_, session)) = self.sessions.remove(&sid) {
+                sessions.push((sid, session));
             }
         }
 
-        join_all(tasks).await;
+        join_all(sessions.into_iter().map(|(sid, session)| async move {
+            if let Err(error) = session.lock().await.cleanup().await {
+                error!(
+                    sid,
+                    ?error,
+                    "session cleanup failed during manager shutdown"
+                );
+            }
+        }))
+        .await;
         debug!("[DbgManager]: Cleanup complete.");
     }
 }

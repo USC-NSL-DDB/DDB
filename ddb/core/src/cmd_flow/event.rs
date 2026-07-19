@@ -4,7 +4,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use gdbmi::{raw::Dict, Token};
 use tracing::trace;
 
-use crate::state::{get_bkpt_mgr, get_group_mgr, ThreadStatus, STATES};
+use crate::{
+    session::lifecycle::SessionTerminationCause,
+    state::{get_bkpt_mgr, get_group_mgr, ThreadStatus, STATES},
+};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum ThreadSet {
@@ -72,15 +75,10 @@ pub(crate) struct ProjectedDebuggerOutput {
     pub records: Vec<ProjectedDebuggerRecord>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum SessionLifecycleEffect {
-    Exited { reasons: Vec<String> },
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EventProjection {
     pub output: Option<ProjectedDebuggerOutput>,
-    pub lifecycle: Option<SessionLifecycleEffect>,
+    pub lifecycle: Option<SessionTerminationCause>,
 }
 
 impl EventProjection {
@@ -108,7 +106,7 @@ impl EventProjection {
     fn exited(reasons: Vec<String>) -> Self {
         Self {
             output: None,
-            lifecycle: Some(SessionLifecycleEffect::Exited { reasons }),
+            lifecycle: Some(SessionTerminationCause::ProtocolExit { reasons }),
         }
     }
 }
