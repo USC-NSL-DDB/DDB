@@ -8,13 +8,12 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use super::{
-    emit,
     input::{Command, ParsedInputCmd},
+    output::{emit_static, PlainFormatter},
     response::{FinishedCmd, SessionRuntimeStatus},
     session_runtime::{
         SessionCommand, SessionHandle, SessionLease, SessionTicket, COMMAND_TIMEOUT,
     },
-    DynFormatter, PlainFormatter,
 };
 use crate::{
     get_dbg_mgr,
@@ -241,28 +240,6 @@ impl Router {
         Self::collect(command.external_token, tickets).await
     }
 
-    pub async fn emit<F>(&self, target: Target, command: Command, formatter: F) -> Result<()>
-    where
-        F: DynFormatter + 'static,
-    {
-        let routes = self.resolve_target(&target)?;
-        let tickets = self.submit_routes(routes, &command).await?;
-        tokio::spawn(async move {
-            match Self::collect(command.external_token, tickets).await {
-                Ok(finished) => emit(finished, Box::new(formatter)),
-                Err(error) => warn!(?error, "detached command failed"),
-            }
-        });
-        Ok(())
-    }
-
-    pub async fn submit(&self, target: Target, command: Command) -> Result<()> {
-        let routes = self.resolve_target(&target)?;
-        let tickets = self.submit_routes(routes, &command).await?;
-        drop(tickets);
-        Ok(())
-    }
-
     pub async fn execute_exclusive(
         &self,
         lease: &SessionLease,
@@ -331,11 +308,12 @@ impl Router {
                     match parsed {
                         Ok(parsed) => {
                             let (_, command) = parsed.to_command();
-                            if let Err(error) = crate::cmd_flow::get_router()
-                                .emit(Target::Session(sid), command, PlainFormatter)
+                            match crate::cmd_flow::get_router()
+                                .execute(Target::Session(sid), command)
                                 .await
                             {
-                                warn!(?error, "failed to send internal command");
+                                Ok(response) => emit_static(response, PlainFormatter),
+                                Err(error) => warn!(?error, "failed to send internal command"),
                             }
                         }
                         Err(error) => warn!(?error, "failed to parse internal command"),

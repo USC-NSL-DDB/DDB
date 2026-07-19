@@ -1,7 +1,6 @@
 pub mod config;
 pub mod counter;
 pub mod default_vals;
-pub mod macros;
 pub mod sd_defaults;
 pub mod utils;
 

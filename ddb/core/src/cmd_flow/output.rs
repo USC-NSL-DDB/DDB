@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap};
+use std::collections::HashMap;
 
 use gdbmi::raw::{Dict, Value};
 use tracing::{debug, error};
@@ -10,33 +10,6 @@ use crate::{
 };
 
 use super::{FinishedCmd, ParsedSessionResponse};
-
-/// Dynamic formatter trait for type-erased formatting operations
-///
-/// This trait enables formatters to be stored in containers and passed through
-/// channels while maintaining type safety via downcasting.
-pub trait DynFormatter: Send + Sync {
-    fn transform_dyn(&self, responses: FinishedCmd) -> Box<dyn Any>;
-    fn format_dyn(&self, input: &Box<dyn Any>) -> String;
-}
-
-impl<T: Formatter> DynFormatter for T
-where
-    T: Send + Sync,
-    T::Transformed: 'static + Any, // Ensures type erasure compatibility
-{
-    fn transform_dyn(&self, responses: FinishedCmd) -> Box<dyn Any> {
-        Box::new(self.transform(responses)) // Convert to Box<dyn Any>
-    }
-
-    fn format_dyn(&self, input: &Box<dyn Any>) -> String {
-        input
-            .downcast_ref::<T::Transformed>() // Attempt to cast back
-            .map(|t| self.format(t))
-            .ok_or("Failed to downcast")
-            .expect(format!("Formatter type {}", std::any::type_name::<T>()).as_str())
-    }
-}
 
 /// Formatter trait for transforming and formatting GDB responses
 ///
@@ -55,7 +28,6 @@ where
 /// # Default Implementations
 ///
 /// - **`PlainFormatter`** (default): Returns first response in MI format, no transformation
-/// - **`NullFormatter`**: Discards all output (returns empty string)
 /// - **`ThreadInfoFormatter`**: Swaps local thread IDs → global IDs, formats as JSON
 /// - **`UnitFormatter`**: Returns all responses in original form (multi-response)
 ///
@@ -86,23 +58,6 @@ pub trait Formatter: Clone {
     fn transform(&self, responses: FinishedCmd) -> Self::Transformed;
     // format the responses into a string. (ready to be printed)
     fn format(&self, input: &Self::Transformed) -> String;
-}
-
-#[derive(Clone, Debug)]
-pub struct NullFormatter;
-impl Formatter for NullFormatter {
-    type Transformed = FinishedCmd;
-
-    #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
-        responses
-    }
-
-    #[inline]
-    #[allow(unused_variables)]
-    fn format(&self, input: &Self::Transformed) -> String {
-        "".to_string()
-    }
 }
 
 #[derive(Clone)]
@@ -647,23 +602,6 @@ pub fn emit_static<T: Formatter>(finished: FinishedCmd, formatter: T) {
     let formatted = formatter.format(&transformed);
     println!("{}", formatted);
     debug!("output: {}", formatted);
-}
-
-/// dynamic dispatched version of the emit based on the formatter.
-/// If possible, we can figure out a way to combine these two functions into one.
-#[inline]
-pub fn emit(finished: FinishedCmd, formatter: Box<dyn DynFormatter>) {
-    let transformed = formatter.transform_dyn(finished);
-    let formatted = formatter.format_dyn(&transformed);
-    println!("{}", formatted);
-    debug!("output: {}", formatted);
-}
-
-#[inline]
-pub fn emit_error(err_msg: &str, token: Option<u64>) {
-    let output = format_error(err_msg, token);
-    println!("{}", output);
-    debug!("output: {}", output);
 }
 
 #[inline]

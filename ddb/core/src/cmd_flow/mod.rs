@@ -6,6 +6,7 @@
 //! projection. No transport channels cross component boundaries.
 
 pub mod api;
+pub mod engine;
 pub(crate) mod event;
 pub mod framework_adapter;
 pub mod handler;
@@ -27,12 +28,12 @@ pub use response::*;
 #[allow(unused_imports)]
 pub use api::{command, Error as ApiError, Target};
 
-use input::CmdHandler;
+use engine::CommandEngine;
 use router::Router;
 
 #[inline]
-pub fn get_cmd_handler() -> &'static Arc<CmdHandler> {
-    crate::context::app_context().command_handler()
+pub fn get_command_engine() -> &'static Arc<CommandEngine> {
+    crate::context::app_context().command_engine()
 }
 
 #[inline]

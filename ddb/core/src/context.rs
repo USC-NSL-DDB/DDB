@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use crate::{
-    cmd_flow::{input::CmdHandler, router::Router},
+    cmd_flow::{engine::CommandEngine, router::Router},
     dbg_mgr::DbgManager,
     notification::NotificationManager,
     plugin::FrameworkCommandAdapter,
@@ -11,7 +11,7 @@ use crate::{
 
 /// Owns the process-wide services and their dependency boundaries.
 pub struct AppContext {
-    command_handler: Arc<CmdHandler>,
+    command_engine: Arc<CommandEngine>,
     command_router: Arc<Router>,
     notification_manager: Arc<NotificationManager>,
     shutdown: ShutdownCtrl,
@@ -22,9 +22,10 @@ pub struct AppContext {
 impl AppContext {
     fn new(command_adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
         let command_router = Arc::new(Router::new());
+        let command_engine = CommandEngine::new(command_adapter, Arc::clone(&command_router));
 
         Self {
-            command_handler: CmdHandler::new(command_adapter),
+            command_engine,
             command_router,
             notification_manager: Arc::new(NotificationManager::new()),
             shutdown: ShutdownCtrl::new(),
@@ -33,8 +34,8 @@ impl AppContext {
         }
     }
 
-    pub fn command_handler(&self) -> &Arc<CmdHandler> {
-        &self.command_handler
+    pub fn command_engine(&self) -> &Arc<CommandEngine> {
+        &self.command_engine
     }
 
     pub fn command_router(&self) -> &Arc<Router> {

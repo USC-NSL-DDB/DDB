@@ -12,7 +12,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{api as cmd_flow_api, router::Target, FinishedCmd},
+    cmd_flow::{get_command_engine, router::Target, FinishedCmd},
     notification,
     state::{get_bkpt_mgr, BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
     status::{get_rt_status, Component},
@@ -244,16 +244,13 @@ async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
 
     let result: Result<Option<FinishedCmd>> = async {
         if send_cmd.wait {
-            Ok(Some(
-                cmd_flow_api::command(&send_cmd.cmd)?
-                    .target_or_default(send_cmd.target)
-                    .execute()
-                    .await?,
-            ))
+            Ok(get_command_engine()
+                .execute_api(&send_cmd.cmd, send_cmd.target)
+                .await?
+                .into_response())
         } else {
-            cmd_flow_api::command(&send_cmd.cmd)?
-                .target_or_default(send_cmd.target)
-                .submit()
+            get_command_engine()
+                .submit_api(&send_cmd.cmd, send_cmd.target)
                 .await?;
             Ok(None)
         }

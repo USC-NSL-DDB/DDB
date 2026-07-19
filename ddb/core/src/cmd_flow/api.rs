@@ -1,16 +1,15 @@
-//! Semantic command execution API.
+//! Low-level semantic command execution used by command operations.
 //!
-//! A request carries parsed debugger command data and an explicit target. Its
-//! terminal operation states the caller's intent: `execute` awaits responses,
-//! `emit` formats responses asynchronously, and `submit` deliberately discards
-//! them after admission. Transport channels and correlation plumbing never escape.
+//! User ingress belongs to `CommandEngine`. This API is intentionally
+//! completion-oriented for operations that need to compose several debugger
+//! commands without exposing transport channels or presentation concerns.
 
 use anyhow::{Context, Result};
 
 use super::{
     get_router,
     input::{Command, ParsedInputCmd},
-    DynFormatter, FinishedCmd, PlainFormatter,
+    FinishedCmd,
 };
 
 pub use super::router::Target;
@@ -55,13 +54,6 @@ impl ExecutionRequest {
         self
     }
 
-    pub fn target_or_default(self, target: Option<Target>) -> Self {
-        match target {
-            Some(target) => self.target(target),
-            None => self,
-        }
-    }
-
     fn into_parts(self) -> (Target, Command) {
         let (target, command) = self.parsed.to_command();
         (target, command.with_consistency(self.consistency))
@@ -88,36 +80,6 @@ impl ExecutionRequest {
             Some(lease) => self.execute_exclusive(lease).await,
             None => self.execute().await,
         }
-    }
-
-    pub(crate) async fn emit_exclusive<F>(
-        self,
-        lease: &super::session_runtime::SessionLease,
-        formatter: F,
-    ) -> Result<()>
-    where
-        F: DynFormatter + 'static,
-    {
-        let finished = self.execute_exclusive(lease).await?;
-        super::emit(finished, Box::new(formatter));
-        Ok(())
-    }
-
-    pub async fn emit<F>(self, formatter: F) -> Result<()>
-    where
-        F: DynFormatter + 'static,
-    {
-        let (target, command) = self.into_parts();
-        get_router().emit(target, command, formatter).await
-    }
-
-    pub async fn emit_plain(self) -> Result<()> {
-        self.emit(PlainFormatter).await
-    }
-
-    pub async fn submit(self) -> Result<()> {
-        let (target, command) = self.into_parts();
-        get_router().submit(target, command).await
     }
 }
 

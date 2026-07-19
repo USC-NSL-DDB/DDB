@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use app::App;
-use cmd_flow::get_cmd_handler;
+use cmd_flow::{format_error, get_command_engine};
 use common::config::Config;
 use dbg_mgr::DbgManagable;
 use dbg_mgr::DbgManager;
@@ -65,7 +65,7 @@ fn init_console_subscriber() {
     // No-op in release builds
 }
 
-async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
+async fn run_cmd_loop(command_workers: usize, mut stop_sig: tokio::sync::watch::Receiver<bool>) {
     // wait for all components to be up to receive input
     // Or immediately exit if stop signal is received
     tokio::select! {
@@ -78,21 +78,28 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
 
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin).lines();
+    let mut commands = JoinSet::new();
+    println!("(ddb) ");
 
     loop {
-        println!("(ddb) ");
         tokio::select! {
             _ = stop_sig.changed() => {
                 println!("Received stop signal, exiting command loop...");
                 break;
             }
             // Read a line from stdin
-            line = reader.next_line() => {
+            joined = commands.join_next(), if !commands.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    error!("[Command]: task failed: {:?}", error);
+                }
+            }
+            line = reader.next_line(), if commands.len() < command_workers => {
                 match line {
                     Ok(Some(line)) => {
                         let input = line.trim();
                         if input.is_empty() {
                             // ignore empty inputs
+                            println!("(ddb) ");
                             continue;
                         }
                         if input == "exit" {
@@ -100,7 +107,27 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
                             println!("Exiting command loop...");
                             break;
                         }
-                        get_cmd_handler().input(input).await;
+                        let engine = Arc::clone(get_command_engine());
+                        let command = input.to_string();
+                        commands.spawn(async move {
+                            match engine.execute_cli(&command).await {
+                                Ok(outcome) => {
+                                    for output in outcome.render_cli() {
+                                        println!("{}", output);
+                                        debug!("output: {}", output);
+                                    }
+                                }
+                                Err(error) => {
+                                    let output = format_error(
+                                        &error.to_string(),
+                                        error.external_token(),
+                                    );
+                                    println!("{}", output);
+                                    debug!("output: {}", output);
+                                }
+                            }
+                        });
+                        println!("(ddb) ");
                     }
                     Ok(None) => {
                         get_shutdown_ctrl().trigger_once(ShutdownCause::StdinEof);
@@ -116,6 +143,8 @@ async fn run_cmd_loop(mut stop_sig: tokio::sync::watch::Receiver<bool>) {
             }
         }
     }
+    commands.abort_all();
+    while commands.join_next().await.is_some() {}
 }
 
 pub fn init_dbg_mgr<F>(f: F)
@@ -129,17 +158,9 @@ pub fn get_dbg_mgr() -> Arc<DbgManager> {
     context::app_context().debugger_manager()
 }
 
-async fn run_command_flow(command_workers: usize) -> Result<()> {
-    let cmd_handler = Arc::clone(get_cmd_handler());
-    cmd_handler.clone().start(command_workers);
+async fn run_command_flow() -> Result<()> {
     get_rt_status().up(Component::CmdFlow);
-
     ShutdownCtrl::wait_for_exit().await;
-    get_shutdown_ctrl()
-        .shutdown_cleanup(async {
-            cmd_handler.stop();
-        })
-        .await;
     Ok(())
 }
 
@@ -182,7 +203,7 @@ async fn run_main(command_workers: usize) -> Result<()> {
     let app = App::new(Config::global().conf.api_server_port);
     let mut tasks = JoinSet::new();
 
-    tasks.spawn(async move { ("command-flow", run_command_flow(command_workers).await) });
+    tasks.spawn(async { ("command-flow", run_command_flow().await) });
     tasks.spawn(async { ("debugger-manager", run_debugger_manager().await) });
     tasks.spawn(async { ("notification-manager", run_notification_manager().await) });
     tasks.spawn(async move { ("api-server", app.run(get_shutdown_ctrl().subscribe()).await) });
@@ -190,9 +211,9 @@ async fn run_main(command_workers: usize) -> Result<()> {
         get_shutdown_ctrl().wait_for_signal().await;
         ("signal-handler", Ok(()))
     });
-    tasks.spawn(async {
+    tasks.spawn(async move {
         ("command-loop", {
-            run_cmd_loop(get_shutdown_ctrl().subscribe()).await;
+            run_cmd_loop(command_workers, get_shutdown_ctrl().subscribe()).await;
             Ok(())
         })
     });
