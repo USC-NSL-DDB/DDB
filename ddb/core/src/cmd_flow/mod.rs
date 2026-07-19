@@ -8,6 +8,7 @@
 pub mod api;
 pub mod engine;
 pub(crate) mod event;
+pub(crate) mod event_publisher;
 pub mod framework_adapter;
 pub mod handler;
 pub mod input;

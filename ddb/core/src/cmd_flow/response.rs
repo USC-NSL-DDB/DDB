@@ -33,10 +33,6 @@ impl ParsedSessionResponse {
     pub fn get_payload_mut(&mut self) -> Option<&mut Dict> {
         self.payload.as_mut()
     }
-
-    pub fn to_finished_cmd(self, external_token: Option<u64>, sid: u64) -> FinishedCmd {
-        FinishedCmd::new(external_token, sid, vec![self])
-    }
 }
 
 /// Aggregated completion for a command sent to one or more sessions.

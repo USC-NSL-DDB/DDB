@@ -23,6 +23,7 @@ use crate::{
 
 use super::{
     event::{decode_event, project_event, DebuggerEvent},
+    event_publisher::EventPublisher,
     response::{ParsedSessionResponse, SessionRuntimeStatus},
 };
 
@@ -37,6 +38,8 @@ struct RuntimeConfig {
     sweep_interval: Duration,
     #[cfg(test)]
     projector_delay: Duration,
+    #[cfg(test)]
+    publisher_delay: Duration,
 }
 
 impl Default for RuntimeConfig {
@@ -46,6 +49,8 @@ impl Default for RuntimeConfig {
             sweep_interval: COMMAND_SWEEP_INTERVAL,
             #[cfg(test)]
             projector_delay: Duration::ZERO,
+            #[cfg(test)]
+            publisher_delay: Duration::ZERO,
         }
     }
 }
@@ -325,6 +330,7 @@ async fn run_projector(
     sid: u64,
     mut events: mpsc::Receiver<ProjectedEvent>,
     applied: watch::Sender<u64>,
+    publisher: EventPublisher,
     #[cfg(test)] projection_delay: Duration,
 ) {
     while let Some(event) = events.recv().await {
@@ -332,8 +338,20 @@ async fn run_projector(
         if !projection_delay.is_zero() {
             tokio::time::sleep(projection_delay).await;
         }
-        if let Err(error) = project_event(event.event, sid).await {
-            warn!(sid, ?error, "failed to project debugger event");
+        match project_event(event.event, sid).await {
+            Ok(projection) => {
+                if let Some(output) = projection.output {
+                    if let Err(error) = publisher.publish(output).await {
+                        warn!(sid, ?error, "failed to publish debugger event");
+                    }
+                }
+                if projection.lifecycle.is_some() {
+                    tokio::spawn(async move {
+                        crate::get_dbg_mgr().remove_session(sid).await;
+                    });
+                }
+            }
+            Err(error) => warn!(sid, ?error, "failed to project debugger event"),
         }
         let _ = applied.send(event.sequence);
     }
@@ -464,10 +482,15 @@ async fn run_session(
     let (writer, events) = transport.into_parts();
     let (event_tx, event_rx) = mpsc::channel(EVENT_MAILBOX_CAPACITY);
     let (applied_tx, applied) = watch::channel(0_u64);
+    #[cfg(not(test))]
+    let (publisher, publisher_task) = EventPublisher::spawn();
+    #[cfg(test)]
+    let (publisher, publisher_task) = EventPublisher::spawn_with_delay(config.publisher_delay);
     let projector = tokio::spawn(run_projector(
         sid,
         event_rx,
         applied_tx,
+        publisher,
         #[cfg(test)]
         config.projector_delay,
     ));
@@ -640,6 +663,7 @@ async fn run_session(
         projector.abort();
     }
     let _ = projector.await;
+    let _ = publisher_task.await;
     if let Some(stopped) = shutdown_ack {
         let _ = stopped.send(());
     }
@@ -859,6 +883,7 @@ mod tests {
             command_timeout: Duration::from_millis(25),
             sweep_interval: Duration::from_millis(5),
             projector_delay: Duration::ZERO,
+            publisher_delay: Duration::ZERO,
         };
         let (handle, task) = SessionHandle::spawn_with_config(45, transport, config);
 
@@ -916,6 +941,7 @@ mod tests {
             command_timeout: TEST_TIMEOUT,
             sweep_interval: Duration::from_millis(10),
             projector_delay: Duration::from_secs(5),
+            publisher_delay: Duration::ZERO,
         };
         let (handle, task) = SessionHandle::spawn_with_config(48, transport, config);
         let notifications = (0..EVENT_MAILBOX_CAPACITY + 8)
@@ -943,6 +969,7 @@ mod tests {
             command_timeout: TEST_TIMEOUT,
             sweep_interval: Duration::from_millis(10),
             projector_delay: Duration::from_millis(100),
+            publisher_delay: Duration::ZERO,
         };
         let (handle, task) = SessionHandle::spawn_with_config(47, transport, config);
 
@@ -977,6 +1004,35 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(50), protocol_complete.complete())
             .await
             .expect("protocol-complete response should not wait for projection")
+            .unwrap();
+
+        stop(&handle, task).await;
+    }
+
+    #[tokio::test]
+    async fn presentation_io_is_not_part_of_state_consistency() {
+        let (transport, requests, events) = test_transport(2);
+        let config = RuntimeConfig {
+            command_timeout: TEST_TIMEOUT,
+            sweep_interval: Duration::from_millis(10),
+            projector_delay: Duration::ZERO,
+            publisher_delay: Duration::from_millis(250),
+        };
+        let (handle, task) = SessionHandle::spawn_with_config(49, transport, config);
+
+        let ticket = handle.submit(command(61)).await.unwrap();
+        let (_, acknowledgement) = receive_write(&requests).await;
+        acknowledgement.send(Ok(())).unwrap();
+        events
+            .send_async(TransportEvent::Stdout(Bytes::from_static(
+                b"*stopped,reason=\"end-stepping-range\"\n61^done\n",
+            )))
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_millis(100), ticket.complete())
+            .await
+            .expect("state-consistent response should wait for publication admission, not output")
             .unwrap();
 
         stop(&handle, task).await;
