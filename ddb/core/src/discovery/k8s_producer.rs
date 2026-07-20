@@ -11,36 +11,24 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::api::{AttachParams, ListParams, WatchEvent, WatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-/// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
-/// `ServiceInfo` events and send them through a channel.
+/// Watches Kubernetes pods and emits debugger-session discovery records.
 pub struct K8sProducer {
-    /// We'll use this watch channel to gracefully tell our tasks to stop.
-    sig_stop: watch::Sender<bool>,
-
     /// Keep track of spawned tasks for `start_producing`. We'll abort them in `stop_producing`.
     handles: Vec<JoinHandle<()>>,
 
     config: crate::common::config::Config,
 
     service_name: String,
-
-    // Add client as a field so we don't have to recreate it for each pod
-    client: Option<Client>,
 }
 
 impl K8sProducer {
-    /// Create a new MqttProducer, optionally with an owned broker.
     pub fn new(config: crate::common::config::Config, service_name: String) -> Self {
-        let (sig_stop, _) = watch::channel(false);
         Self {
-            sig_stop: sig_stop,
             handles: Vec::new(),
             config,
             service_name,
-            client: None,
         }
     }
 }
@@ -101,7 +89,6 @@ impl DiscoveryMessageProducer for K8sProducer {
             Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;
         config.accept_invalid_certs = true;
         let client = Client::try_from(config)?;
-        self.client = Some(client.clone());
         let pods: Api<Pod> = Api::namespaced(client, "default");
 
         let selector_string = format!("serviceweaver/app={}", self.service_name);
@@ -126,7 +113,7 @@ impl DiscoveryMessageProducer for K8sProducer {
         let ssh_user = self.config.ssh.user.clone();
 
         let service_name = self.service_name.clone();
-        tokio::task::spawn(async move {
+        let handle = tokio::task::spawn(async move {
             while let Ok(Some(status)) = stream.try_next().await {
                 match status {
                     WatchEvent::Added(pod) => {
@@ -146,9 +133,19 @@ impl DiscoveryMessageProducer for K8sProducer {
                         // Get PID using Kubernetes exec
                         match get_pod_pid(&pods, &pod_name, &service_name).await {
                             Ok(pid) => {
-                                let ip: Ipv4Addr =
-                                    ip_str.parse().expect("Invalid IP address format");
-                                let info: ServiceInfo = ServiceInfo::new(
+                                let ip = match ip_str.parse::<Ipv4Addr>() {
+                                    Ok(ip) => ip,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            pod = %pod_name,
+                                            %ip_str,
+                                            ?error,
+                                            "ignoring pod with invalid IP address"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let info = ServiceInfo::new(
                                     ip,
                                     ip_str.to_string(),
                                     pid as u64,
@@ -157,7 +154,10 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     TransportSpec::ProxySsh(ssh_cred),
                                     None,
                                 );
-                                tx.send_async(info).await.ok();
+                                if let Err(error) = tx.send_async(info).await {
+                                    tracing::debug!(?error, "discovery receiver closed");
+                                    break;
+                                }
                             }
                             Err(e) => {
                                 println!("Failed to get PID for pod {}: {}", pod_name, e);
@@ -179,27 +179,19 @@ impl DiscoveryMessageProducer for K8sProducer {
                 }
             }
         });
+        self.handles.push(handle);
 
         Ok(())
     }
 
-    /// Stop producing:
-    /// 1. Abort all spawned tasks,
-    /// 2. Signal "stop" to the monitor task,
-    /// 3. Stop the broker if we started it.
+    /// Stop the owned Kubernetes watch task.
     async fn stop_producing(&mut self) -> Result<()> {
-        //
-        // 1. Abort tasks
-        //
         for handle in &self.handles {
             handle.abort();
         }
-        self.handles.clear();
-
-        //
-        // 2. Send stop signal to the monitor task
-        //
-        let _ = self.sig_stop.send(true);
+        for handle in self.handles.drain(..) {
+            let _ = handle.await;
+        }
 
         Ok(())
     }

@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
-use rumqttc::{Client, MqttOptions, QoS};
+use rumqttc::{MqttOptions, QoS};
 use std::time::Duration;
-use tokio::{
-    sync::watch,
-    time::{self, Instant},
-};
+use tokio::time::{self, Instant};
 use tracing::{debug, error};
 
-use crate::{common::Config, shutdown::get_shutdown_ctrl};
+use crate::shutdown::get_shutdown_ctrl;
 
 pub struct AsyncDiscoverClient {
     client: rumqttc::AsyncClient,
@@ -28,16 +25,8 @@ impl AsyncDiscoverClient {
         AsyncDiscoverClient { client, el }
     }
 
-    pub async fn check_broker_online(&mut self) -> Result<()> {
+    pub async fn check_broker_online(&mut self, timeout: Duration) -> Result<()> {
         let start_time = Instant::now();
-        let user_defined_timeout = Config::global()
-            .service_discovery
-            .as_ref()
-            .and_then(|sd_cfg| sd_cfg.broker.max_timeout_secs);
-        let timeout = match user_defined_timeout {
-            Some(secs) => Duration::from_secs(secs),
-            None => Duration::from_secs(30),
-        };
 
         loop {
             // Try connecting and poll for events
@@ -84,70 +73,22 @@ impl AsyncDiscoverClient {
     }
 
     #[inline]
-    pub async fn handle(
-        &mut self,
-        sender: flume::Sender<rumqttc::Event>,
-        mut sig_stop: watch::Receiver<bool>,
-    ) -> Result<()> {
+    pub async fn handle(&mut self, sender: flume::Sender<rumqttc::Event>) -> Result<()> {
         let mut failure_count: u32 = 0;
         loop {
-            tokio::select! {
-                event = self.el.poll() => {
-                    match event {
-                        Ok(event) => {
-                            sender.send_async(event).await?;
-                        },
-                        Err(e) => {
-                            failure_count += 1;
-                            error!("Error to poll from broker: {:?}", e);
-                            if failure_count >= 5 {
-                                return Err(anyhow::anyhow!("Exceeded maximum poll failures."));
-                            }
-                        }
-                    }
-                },
-                _ = sig_stop.changed() => {
-                    if *sig_stop.borrow() {
-                        debug!("Stopping AsyncDiscoverClient polling...");
-                        break;
+            match self.el.poll().await {
+                Ok(event) => {
+                    failure_count = 0;
+                    sender.send_async(event).await?;
+                }
+                Err(error) => {
+                    failure_count += 1;
+                    error!(?error, failure_count, "failed to poll discovery broker");
+                    if failure_count >= 5 {
+                        return Err(anyhow::anyhow!("exceeded maximum broker poll failures"));
                     }
                 }
             }
-        }
-        Ok(())
-    }
-}
-
-#[allow(dead_code)]
-pub struct DiscoverClient {
-    client: Client,
-    connection: rumqttc::Connection,
-}
-
-#[allow(dead_code)]
-impl DiscoverClient {
-    pub fn new(client_id: &str, host: &str, port: u16) -> Self {
-        let mut mqttoptions = MqttOptions::new(client_id, host, port);
-        mqttoptions.set_keep_alive(Duration::from_secs(5));
-
-        let (client, connection) = Client::new(mqttoptions, 10);
-
-        DiscoverClient { client, connection }
-    }
-
-    pub fn subscribe(&mut self, topic: &str, qos: QoS) {
-        self.client.subscribe(topic, qos).unwrap();
-    }
-
-    pub fn publish(&mut self, topic: &str, qos: QoS, retain: bool, payload: &str) {
-        self.client.publish(topic, qos, retain, payload).unwrap();
-    }
-
-    #[inline]
-    pub fn handle<F>(&mut self) -> Result<rumqttc::Event> {
-        match self.connection.recv() {
-            Ok(notification) => Ok(notification?),
-            Err(e) => Err(anyhow::anyhow!("Error: {:?}", e)),
         }
     }
 }

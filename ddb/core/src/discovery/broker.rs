@@ -74,7 +74,7 @@ impl MessageBroker for MosquittoBroker {
             .and_then(|brker_conf| brker_conf.config_path.as_ref());
 
         let mqtt_conf_path = match config_path {
-            Some(path) => path,
+            Some(path) => path.to_string(),
             None => {
                 let conf = Asset::get("conf/mosquitto.conf")
                     .context("Failed to get Mosquitto config file")?;
@@ -82,15 +82,16 @@ impl MessageBroker for MosquittoBroker {
                 self.temp_config_file = Some(temp_conf_file);
                 self.temp_config_file
                     .as_ref()
-                    .unwrap()
+                    .context("temporary broker config was not retained")?
                     .path()
                     .to_str()
-                    .unwrap()
+                    .context("temporary broker config path is not UTF-8")?
+                    .to_string()
             }
         };
 
         fs::create_dir_all("/tmp/ddb/brokers/mosquitto")?;
-        let result = run_command::<true, true>("mosquitto", &["-c", mqtt_conf_path, "-d"]);
+        let result = run_command::<true, true>("mosquitto", &["-c", &mqtt_conf_path, "-d"]);
         match result {
             Ok(_) => {
                 info!("Mosquitto broker started successfully!");
@@ -151,7 +152,7 @@ impl MessageBroker for EMQXBroker {
             .as_ref()
             .and_then(|brker_conf| brker_conf.config_path.as_ref());
         let mqtt_conf_path = match config_path {
-            Some(path) => path,
+            Some(path) => path.to_string(),
             None => {
                 let conf =
                     Asset::get("conf/emqx.conf").context("Failed to get EMQX config file")?;
@@ -159,10 +160,11 @@ impl MessageBroker for EMQXBroker {
                 self.temp_config_file = Some(temp_conf_file);
                 self.temp_config_file
                     .as_ref()
-                    .unwrap()
+                    .context("temporary broker config was not retained")?
                     .path()
                     .to_str()
-                    .unwrap()
+                    .context("temporary broker config path is not UTF-8")?
+                    .to_string()
             }
         };
 

@@ -4,14 +4,14 @@ use std::{
     io::Write,
     net::Ipv4Addr,
     path::Path,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use flume::Sender;
 use rumqttc::{Event, Packet};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use super::{
     broker::{BrokerInfo, MessageBroker},
@@ -52,9 +52,6 @@ pub struct MqttProducer<'a> {
     /// store it here. If `None`, we assume the broker is managed externally.
     managed_broker: Option<Box<dyn MessageBroker>>,
 
-    /// We’ll use this watch channel to gracefully tell our tasks to stop.
-    sig_stop: watch::Sender<bool>,
-
     /// Keep track of spawned tasks for `start_producing`. We’ll abort them in `stop_producing`.
     handles: Vec<JoinHandle<()>>,
 
@@ -67,10 +64,8 @@ impl<'a> MqttProducer<'a> {
         managed_broker: Option<Box<dyn MessageBroker>>,
         config: &'a crate::common::config::Config,
     ) -> Self {
-        let (sig_stop, _) = watch::channel(false);
         Self {
             managed_broker,
-            sig_stop,
             handles: Vec::new(),
             config,
         }
@@ -80,26 +75,9 @@ impl<'a> MqttProducer<'a> {
         mut client: AsyncDiscoverClient,
         sender: Sender<rumqttc::Event>,
     ) -> tokio::task::JoinHandle<()> {
-        let stop_rx = self.sig_stop.subscribe();
-        let sender = sender.clone();
-
         tokio::spawn(async move {
-            // We should respect ExactlyOnce semantics.
-            if let Ok(_) = client
-                .subscribe(sd_defaults::T_SERVICE_DISCOVERY, rumqttc::QoS::ExactlyOnce)
-                .await
-            {
-                if let Err(e) = client.handle(sender, stop_rx).await {
-                    error!(
-                        "Client handler error: {}. WARN: Service Discovery has been stopped.",
-                        e
-                    );
-                }
-            } else {
-                debug!(
-                    "Failed to subscribe to topic: {}",
-                    sd_defaults::T_SERVICE_DISCOVERY
-                );
+            if let Err(error) = client.handle(sender).await {
+                debug!(?error, "MQTT discovery monitor stopped");
             }
         })
     }
@@ -114,57 +92,68 @@ pub struct MqttPayload {
     pub user_data: Option<HashMap<String, String>>,
 }
 
-impl From<&str> for MqttPayload {
-    fn from(s: &str) -> Self {
-        let parts: Vec<&str> = s.split(':').collect();
+impl TryFrom<&str> for MqttPayload {
+    type Error = anyhow::Error;
 
-        let ip_int: u32 = parts[0].parse().unwrap();
-        let ip = Ipv4Addr::from(ip_int);
-        let pid = parts[2].parse().unwrap();
+    fn try_from(payload: &str) -> Result<Self> {
+        let mut parts = payload.split(':');
+        let ip_raw = parts
+            .next()
+            .context("MQTT discovery payload is missing its IP address")?;
+        parts
+            .next()
+            .context("MQTT discovery payload is missing its endpoint field")?;
+        let pid_raw = parts
+            .next()
+            .context("MQTT discovery payload is missing its process ID")?;
 
+        let ip = Ipv4Addr::from(
+            ip_raw
+                .parse::<u32>()
+                .context("MQTT discovery payload has an invalid IP address")?,
+        );
+        let pid = pid_raw
+            .parse::<u64>()
+            .context("MQTT discovery payload has an invalid process ID")?;
         let tag = format!("{}:-{}", ip, pid);
 
-        let (hash, alias) = parts
-            .get(3)
+        let remaining = parts.collect::<Vec<_>>();
+        let identifier = remaining
+            .first()
+            .copied()
+            .filter(|value| !value.starts_with('{'));
+        let (hash, alias) = identifier
             .map(|identifier| {
-                let identifier = *identifier;
-                let identifier_parts: Vec<_> = identifier.split('=').collect();
-                let hash = identifier_parts[0];
-                let alias = identifier_parts.get(1).unwrap_or(&"app").to_string();
-                (hash.to_string(), alias)
+                let (hash, alias) = identifier.split_once('=').unwrap_or((identifier, "app"));
+                (hash.to_string(), alias.to_string())
             })
-            .unwrap_or((String::new(), String::new()));
+            .unwrap_or_default();
 
-        let user_data = parts
+        let user_data = remaining
             .last()
-            .map(|&user_data| {
-                // if doesn't start with "{", meaning it is not a user_data field, then ignore it.
-                // we assume the user_data field is the last one in the payload if it exists.
-                user_data.starts_with("{").then(|| {
-                    let user_data = user_data.trim_start_matches('{').trim_end_matches('}');
-                    // example payload:
-                    // {key1=value1,key2=value2}
-                    user_data
-                        .split(",")
-                        .map(|kv| {
-                            let kv_parts: Vec<_> = kv.trim().split('=').collect();
-                            let key = kv_parts[0].trim().to_string();
-                            let value = kv_parts.get(1).unwrap_or(&"").trim().to_string();
-                            (key, value)
-                        })
-                        .collect::<HashMap<String, String>>()
-                })
-            })
-            .flatten();
+            .copied()
+            .filter(|value| value.starts_with('{'))
+            .map(|value| {
+                value
+                    .trim_start_matches('{')
+                    .trim_end_matches('}')
+                    .split(',')
+                    .filter_map(|pair| {
+                        let (key, value) = pair.trim().split_once('=').unwrap_or((pair, ""));
+                        let key = key.trim();
+                        (!key.is_empty()).then(|| (key.to_string(), value.trim().to_string()))
+                    })
+                    .collect::<HashMap<String, String>>()
+            });
 
-        MqttPayload {
+        Ok(Self {
             ip,
             tag,
             pid,
             hash,
             alias,
             user_data,
-        }
+        })
     }
 }
 
@@ -177,15 +166,15 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
     /// 4. Spawning a monitor task that feeds an internal channel with MQTT events,
     /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
-        // 1. Start the broker if we manage it
+        // 1. Resolve the configured endpoint and start the broker if we manage it.
+        let sd_config = self
+            .config
+            .service_discovery
+            .as_ref()
+            .context("MQTT discovery requires broker configuration")?;
+        let broker_config = &sd_config.broker;
         if let Some(broker) = &mut self.managed_broker {
             info!("Starting managed broker...");
-            let sd_config = &self
-                .config
-                .service_discovery
-                .as_ref()
-                .context("ERROR: broker is not specified.")?;
-            let broker_config = &sd_config.broker;
             let broker_info = BrokerInfo {
                 hostname: broker_config.hostname.clone(),
                 port: broker_config.port,
@@ -204,13 +193,19 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         // 2. Create an AsyncDiscoverClient and subscribe
         let mut client = AsyncDiscoverClient::new(
             sd_defaults::CLIENT_ID,
-            sd_defaults::DEFAULT_BROKER_HOSTNAME,
-            sd_defaults::BROKER_PORT,
+            &broker_config.hostname,
+            broker_config.port,
         );
-        client.check_broker_online().await?;
-        info!("Successfully connected to broker");
+        let connect_timeout = Duration::from_secs(broker_config.max_timeout_secs.unwrap_or(30));
+        client.check_broker_online(connect_timeout).await?;
+        client
+            .subscribe(sd_defaults::T_SERVICE_DISCOVERY, rumqttc::QoS::ExactlyOnce)
+            .await
+            .context("failed to subscribe to the service-discovery topic")?;
+        info!("Successfully connected and subscribed to broker");
         let (event_sender, event_receiver) = flume::bounded(1024);
-        self.monitor(client, event_sender.clone());
+        let monitor_handle = self.monitor(client, event_sender.clone());
+        self.handles.push(monitor_handle);
 
         // 3. Spawn consumer tasks that read from event_receiver and forward to `tx`.
         let concurrency = 3;
@@ -225,7 +220,17 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
                 while let Ok(event) = event_rx.recv_async().await {
                     if let Event::Incoming(Packet::Publish(publish)) = event {
                         if let Ok(payload_str) = std::str::from_utf8(&publish.payload) {
-                            let mqtt_payload = MqttPayload::from(payload_str);
+                            let mqtt_payload = match MqttPayload::try_from(payload_str) {
+                                Ok(payload) => payload,
+                                Err(error) => {
+                                    debug!(
+                                        ?error,
+                                        payload = %payload_str,
+                                        "ignoring malformed MQTT discovery payload"
+                                    );
+                                    continue;
+                                }
+                            };
                             let ssh_cred = SSHCred::new(
                                 mqtt_payload.ip.to_string().as_str(),
                                 ssh_port,
@@ -242,8 +247,9 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
                                 mqtt_payload.user_data,
                             );
 
-                            if let Err(e) = tx_clone.send_async(info).await {
-                                error!("Failed to send ServiceInfo: {}", e);
+                            if let Err(error) = tx_clone.send_async(info).await {
+                                debug!(?error, "discovery receiver closed");
+                                break;
                             }
                         } else {
                             debug!("Ignoring invalid UTF-8 payload.");
@@ -257,21 +263,18 @@ impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
         Ok(())
     }
 
-    /// Stop producing:
-    /// 1. Abort all spawned tasks,
-    /// 2. Signal “stop” to the monitor task,
-    /// 3. Stop the broker if we started it.
+    /// Stop all owned tasks, then stop the broker if we started it.
     async fn stop_producing(&mut self) -> Result<()> {
         debug!("Stopping MqttProducer…");
-        // 1. Send stop signal to the monitor/consumer tasks first
-        let _ = self.sig_stop.send(true);
-
-        // 2. Abort ongoing tasks
-        for handle in self.handles.drain(..) {
+        // Abort first so no task keeps running while another join is awaited.
+        for handle in &self.handles {
             handle.abort();
         }
+        for handle in self.handles.drain(..) {
+            let _ = handle.await;
+        }
 
-        // 3. Stop broker if we own it
+        // Stop the broker if we own it
         if let Some(broker) = &mut self.managed_broker {
             debug!("Stopping managed broker…");
             broker.stop().context("Failed to stop managed broker")?;
@@ -295,7 +298,7 @@ mod tests {
             u32::from(ip)
         );
 
-        let parsed = MqttPayload::from(payload.as_str());
+        let parsed = MqttPayload::try_from(payload.as_str()).expect("payload should be valid");
 
         assert_eq!(parsed.ip, ip);
         assert_eq!(parsed.tag, "10.0.0.5:-42");
@@ -325,7 +328,7 @@ mod tests {
         let ip = Ipv4Addr::new(127, 0, 0, 1);
         let payload = format!("{}:ignored:9", u32::from(ip));
 
-        let parsed = MqttPayload::from(payload.as_str());
+        let parsed = MqttPayload::try_from(payload.as_str()).expect("payload should be valid");
 
         assert_eq!(parsed.ip, ip);
         assert_eq!(parsed.tag, "127.0.0.1:-9");
@@ -333,6 +336,30 @@ mod tests {
         assert!(parsed.hash.is_empty());
         assert!(parsed.alias.is_empty());
         assert!(parsed.user_data.is_none());
+    }
+
+    #[test]
+    fn mqtt_payload_rejects_missing_and_invalid_required_fields() {
+        assert!(MqttPayload::try_from("1:missing-pid").is_err());
+        assert!(MqttPayload::try_from("not-an-ip:ignored:42").is_err());
+        assert!(MqttPayload::try_from("1:ignored:not-a-pid").is_err());
+    }
+
+    #[test]
+    fn mqtt_payload_accepts_user_data_without_an_identifier() {
+        let parsed = MqttPayload::try_from("2130706433:ignored:9:{role=leader}")
+            .expect("payload should be valid");
+
+        assert!(parsed.hash.is_empty());
+        assert!(parsed.alias.is_empty());
+        assert_eq!(
+            parsed
+                .user_data
+                .as_ref()
+                .and_then(|data| data.get("role"))
+                .map(String::as_str),
+            Some("leader")
+        );
     }
 
     #[test]
