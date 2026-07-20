@@ -24,25 +24,9 @@ pub mod router;
 pub mod session_runtime;
 pub(crate) mod transaction;
 
-use std::sync::Arc;
-
 pub use outcome::*;
 pub use output::*;
 pub use response::*;
 // Re-export facade API for convenient access
 #[allow(unused_imports)]
 pub use api::{command, Error as ApiError, Target};
-
-use engine::CommandEngine;
-use router::Router;
-
-#[inline]
-pub fn get_command_engine() -> &'static Arc<CommandEngine> {
-    crate::context::app_context().command_engine()
-}
-
-#[inline]
-// FIXME: make this private
-pub fn get_router() -> &'static Arc<Router> {
-    crate::context::app_context().command_router()
-}

@@ -6,8 +6,13 @@ use async_trait::async_trait;
 use crate::state::StateMgr;
 
 use super::{
-    api, backtrace::DistributedBacktraceService, breakpoint::BreakpointService,
-    execution::ExecutionService, input::ParsedInputCmd, query::QueryProjector, router::Target,
+    api::{self, CommandExecutor},
+    backtrace::DistributedBacktraceService,
+    breakpoint::BreakpointService,
+    execution::ExecutionService,
+    input::ParsedInputCmd,
+    query::QueryProjector,
+    router::Target,
     CommandOutcome, Presentation,
 };
 
@@ -31,11 +36,13 @@ pub trait Handler: Send + Sync + std::fmt::Debug {
 }
 
 #[derive(Debug)]
-pub struct DefaultHandler;
+pub struct DefaultHandler {
+    executor: CommandExecutor,
+}
 
 impl DefaultHandler {
-    pub fn new() -> Self {
-        DefaultHandler
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self { executor }
     }
 }
 
@@ -43,7 +50,7 @@ impl DefaultHandler {
 impl Handler for DefaultHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let response = api::parsed(cmd)?.execute().await?;
+        let response = self.executor.execute_plan(api::parsed(cmd)?).await?;
         Ok(CommandOutcome::response(response, Presentation::Plain))
     }
 }
@@ -89,12 +96,14 @@ impl Handler for BreakDeleteHandler {
 #[derive(Debug)]
 pub struct ThreadInfoHandler {
     projector: QueryProjector,
+    executor: CommandExecutor,
 }
 
 impl ThreadInfoHandler {
-    pub fn new(state: Arc<StateMgr>) -> Self {
+    pub fn new(state: Arc<StateMgr>, executor: CommandExecutor) -> Self {
         Self {
             projector: QueryProjector::new(state),
+            executor,
         }
     }
 }
@@ -113,15 +122,15 @@ impl Handler for ThreadInfoHandler {
                         .unwrap_or("".to_string()),
                     local_tid
                 );
-                let response = api::command(&thrd_info_cmd)?
-                    .target(Target::Thread(tid))
-                    .execute()
+                let response = self
+                    .executor
+                    .execute_plan(api::command(&thrd_info_cmd)?.target(Target::Thread(tid)))
                     .await?;
                 let response = self.projector.project_threads(response)?;
                 Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
             _ => {
-                let response = api::parsed(cmd)?.execute().await?;
+                let response = self.executor.execute_plan(api::parsed(cmd)?).await?;
                 let response = self.projector.project_threads(response)?;
                 Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
@@ -168,11 +177,13 @@ impl Handler for InterruptHandler {
 }
 
 #[derive(Debug)]
-pub struct ListHandler;
+pub struct ListHandler {
+    executor: CommandExecutor,
+}
 
 impl ListHandler {
-    pub fn new() -> Self {
-        ListHandler
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self { executor }
     }
 }
 
@@ -182,9 +193,9 @@ impl Handler for ListHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         // FIXME: a naive implementation here, just select the first session
         // This command is need for CLI (to list out sources), but probably not for GUI?
-        let response = api::parsed(cmd)?
-            .target(Target::Session(1))
-            .execute()
+        let response = self
+            .executor
+            .execute_plan(api::parsed(cmd)?.target(Target::Session(1)))
             .await?;
         Ok(CommandOutcome::response(response, Presentation::Plain))
     }
@@ -192,6 +203,7 @@ impl Handler for ListHandler {
 
 pub struct ThreadSelectHandler {
     state: Arc<StateMgr>,
+    executor: CommandExecutor,
 }
 
 impl std::fmt::Debug for ThreadSelectHandler {
@@ -201,8 +213,8 @@ impl std::fmt::Debug for ThreadSelectHandler {
 }
 
 impl ThreadSelectHandler {
-    pub fn new(state: Arc<StateMgr>) -> Self {
-        Self { state }
+    pub fn new(state: Arc<StateMgr>, executor: CommandExecutor) -> Self {
+        Self { state, executor }
     }
 }
 
@@ -219,13 +231,13 @@ impl Handler for ThreadSelectHandler {
                 .ok_or_else(|| anyhow!("Unknown global thread {}", gtid))?
                 .into();
             let target = Target::Session(sid);
-            let response = api::command(&format!("-thread-select {}", tid))?
-                .target(target)
-                .execute()
+            let response = self
+                .executor
+                .execute_plan(api::command(&format!("-thread-select {}", tid))?.target(target))
                 .await?;
             Ok(CommandOutcome::response(response, Presentation::Plain))
         } else {
-            let response = api::parsed(cmd)?.execute().await?;
+            let response = self.executor.execute_plan(api::parsed(cmd)?).await?;
             Ok(CommandOutcome::response(response, Presentation::Plain))
         }
     }
@@ -234,12 +246,14 @@ impl Handler for ThreadSelectHandler {
 #[derive(Debug)]
 pub struct ListGroupsHandler {
     projector: QueryProjector,
+    executor: CommandExecutor,
 }
 
 impl ListGroupsHandler {
-    pub fn new(state: Arc<StateMgr>) -> Self {
+    pub fn new(state: Arc<StateMgr>, executor: CommandExecutor) -> Self {
         Self {
             projector: QueryProjector::new(state),
+            executor,
         }
     }
 }
@@ -248,9 +262,9 @@ impl ListGroupsHandler {
 impl Handler for ListGroupsHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let response = api::parsed(cmd)?
-            .target(Target::Broadcast)
-            .execute()
+        let response = self
+            .executor
+            .execute_plan(api::parsed(cmd)?.target(Target::Broadcast))
             .await?;
         let response = self.projector.project_processes(response)?;
         Ok(CommandOutcome::response(

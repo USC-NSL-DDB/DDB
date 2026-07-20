@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use std::{fmt, sync::Arc};
 
 use super::{
-    get_router,
     input::{Command, ParsedInputCmd},
     router::Router,
     FinishedCmd,
@@ -39,13 +38,12 @@ impl CommandExecutor {
     }
 
     pub(crate) async fn execute(&self, command_text: &str, target: Target) -> Result<FinishedCmd> {
-        self.execute_request(command(command_text)?.target(target))
+        self.execute_plan(command(command_text)?.target(target))
             .await
     }
 
     pub(crate) async fn execute_parsed(&self, command: ParsedInputCmd) -> Result<FinishedCmd> {
-        self.execute_request(ExecutionRequest::from_parsed(command)?)
-            .await
+        self.execute_plan(CommandPlan::from_parsed(command)?).await
     }
 
     pub(crate) async fn execute_exclusive(
@@ -54,7 +52,7 @@ impl CommandExecutor {
         target: Target,
         lease: &super::session_runtime::SessionLease,
     ) -> Result<FinishedCmd> {
-        self.execute_request_exclusive(command(command_text)?.target(target), lease)
+        self.execute_plan_exclusive(command(command_text)?.target(target), lease)
             .await
     }
 
@@ -64,25 +62,33 @@ impl CommandExecutor {
         target: Target,
         lease: &super::session_runtime::SessionLease,
     ) -> Result<FinishedCmd> {
-        self.execute_request_exclusive(
-            ExecutionRequest::from_parsed(command)?.target(target),
-            lease,
-        )
-        .await
+        self.execute_plan_exclusive(CommandPlan::from_parsed(command)?.target(target), lease)
+            .await
     }
 
-    async fn execute_request(&self, request: ExecutionRequest) -> Result<FinishedCmd> {
-        let (target, command) = request.into_parts();
+    pub(crate) async fn execute_plan(&self, plan: CommandPlan) -> Result<FinishedCmd> {
+        let (target, command) = plan.into_parts();
         self.router.execute(target, command).await
     }
 
-    async fn execute_request_exclusive(
+    pub(crate) async fn execute_plan_exclusive(
         &self,
-        request: ExecutionRequest,
+        plan: CommandPlan,
         lease: &super::session_runtime::SessionLease,
     ) -> Result<FinishedCmd> {
-        let (target, command) = request.into_parts();
+        let (target, command) = plan.into_parts();
         self.router.execute_exclusive(lease, target, command).await
+    }
+
+    pub(crate) async fn execute_plan_with_optional_lease(
+        &self,
+        plan: CommandPlan,
+        lease: Option<&super::session_runtime::SessionLease>,
+    ) -> Result<FinishedCmd> {
+        match lease {
+            Some(lease) => self.execute_plan_exclusive(plan, lease).await,
+            None => self.execute_plan(plan).await,
+        }
     }
 }
 
@@ -93,12 +99,12 @@ impl fmt::Debug for CommandExecutor {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExecutionRequest {
+pub struct CommandPlan {
     parsed: ParsedInputCmd,
     consistency: super::session_runtime::CompletionConsistency,
 }
 
-impl ExecutionRequest {
+impl CommandPlan {
     pub fn from_parsed(parsed: ParsedInputCmd) -> Result<Self> {
         if parsed.prefix.is_empty() {
             return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()).into());
@@ -123,40 +129,17 @@ impl ExecutionRequest {
         let (target, command) = self.parsed.to_command();
         (target, command.with_consistency(self.consistency))
     }
-
-    pub async fn execute(self) -> Result<FinishedCmd> {
-        let (target, command) = self.into_parts();
-        get_router().execute(target, command).await
-    }
-
-    pub(crate) async fn execute_exclusive(
-        self,
-        lease: &super::session_runtime::SessionLease,
-    ) -> Result<FinishedCmd> {
-        let (target, command) = self.into_parts();
-        get_router().execute_exclusive(lease, target, command).await
-    }
-
-    pub(crate) async fn execute_with_optional_lease(
-        self,
-        lease: Option<&super::session_runtime::SessionLease>,
-    ) -> Result<FinishedCmd> {
-        match lease {
-            Some(lease) => self.execute_exclusive(lease).await,
-            None => self.execute().await,
-        }
-    }
 }
 
-pub fn command(command: &str) -> Result<ExecutionRequest> {
+pub fn command(command: &str) -> Result<CommandPlan> {
     let parsed: ParsedInputCmd = command
         .try_into()
         .with_context(|| format!("Failed to parse command: {}", command))?;
-    ExecutionRequest::from_parsed(parsed)
+    CommandPlan::from_parsed(parsed)
 }
 
-pub fn parsed(command: ParsedInputCmd) -> Result<ExecutionRequest> {
-    ExecutionRequest::from_parsed(command)
+pub fn parsed(command: ParsedInputCmd) -> Result<CommandPlan> {
+    CommandPlan::from_parsed(command)
 }
 
 #[cfg(test)]
@@ -187,6 +170,6 @@ mod tests {
             args: String::new(),
             target: Target::Broadcast,
         };
-        assert!(ExecutionRequest::from_parsed(parsed).is_err());
+        assert!(CommandPlan::from_parsed(parsed).is_err());
     }
 }

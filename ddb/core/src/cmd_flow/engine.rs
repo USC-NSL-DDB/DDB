@@ -100,7 +100,7 @@ impl CommandEngine {
             adapter,
             Arc::clone(&state),
             config,
-            executor,
+            executor.clone(),
             transactions,
             proclet_restoration,
         ));
@@ -115,7 +115,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-thread-info".into(),
-            Arc::new(ThreadInfoHandler::new(Arc::clone(&state))),
+            Arc::new(ThreadInfoHandler::new(Arc::clone(&state), executor.clone())),
         );
         handlers.insert(
             "-exec-continue".into(),
@@ -129,10 +129,16 @@ impl CommandEngine {
             "-exec-interrupt".into(),
             Arc::new(InterruptHandler::new(Arc::clone(&execution_service))),
         );
-        handlers.insert("-file-list-lines".into(), Arc::new(ListHandler::new()));
+        handlers.insert(
+            "-file-list-lines".into(),
+            Arc::new(ListHandler::new(executor.clone())),
+        );
         handlers.insert(
             "-thread-select".into(),
-            Arc::new(ThreadSelectHandler::new(Arc::clone(&state))),
+            Arc::new(ThreadSelectHandler::new(
+                Arc::clone(&state),
+                executor.clone(),
+            )),
         );
         handlers.insert(
             "-bt-remote".into(),
@@ -140,7 +146,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-list-thread-groups".into(),
-            Arc::new(ListGroupsHandler::new(Arc::clone(&state))),
+            Arc::new(ListGroupsHandler::new(Arc::clone(&state), executor.clone())),
         );
         handlers.insert(
             "-exec-next".into(),
@@ -181,7 +187,7 @@ impl CommandEngine {
 
         Arc::new(Self {
             handlers,
-            default_handler: Arc::new(DefaultHandler::new()),
+            default_handler: Arc::new(DefaultHandler::new(executor)),
             router,
             state,
             source_resolver,

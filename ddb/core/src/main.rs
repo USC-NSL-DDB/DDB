@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use app::App;
-use cmd_flow::{format_error, get_command_engine};
+use cmd_flow::{engine::CommandEngine, format_error};
 use common::config::Config;
 use dbg_mgr::DbgManager;
 use debugger::resolve_debugger_backend;
@@ -65,7 +65,11 @@ fn init_console_subscriber() {
     // No-op in release builds
 }
 
-async fn run_cmd_loop(command_workers: usize, mut stop_sig: tokio::sync::watch::Receiver<bool>) {
+async fn run_cmd_loop(
+    engine: Arc<CommandEngine>,
+    command_workers: usize,
+    mut stop_sig: tokio::sync::watch::Receiver<bool>,
+) {
     // wait for all components to be up to receive input
     // Or immediately exit if stop signal is received
     tokio::select! {
@@ -107,7 +111,7 @@ async fn run_cmd_loop(command_workers: usize, mut stop_sig: tokio::sync::watch::
                             println!("Exiting command loop...");
                             break;
                         }
-                        let engine = Arc::clone(get_command_engine());
+                        let engine = Arc::clone(&engine);
                         let command = input.to_string();
                         commands.spawn(async move {
                             match engine.execute_cli(&command).await {
@@ -212,9 +216,15 @@ async fn run_main(command_workers: usize) -> Result<()> {
         get_shutdown_ctrl().wait_for_signal().await;
         ("signal-handler", Ok(()))
     });
+    let command_engine = Arc::clone(services.command_engine());
     tasks.spawn(async move {
         ("command-loop", {
-            run_cmd_loop(command_workers, get_shutdown_ctrl().subscribe()).await;
+            run_cmd_loop(
+                command_engine,
+                command_workers,
+                get_shutdown_ctrl().subscribe(),
+            )
+            .await;
             Ok(())
         })
     });

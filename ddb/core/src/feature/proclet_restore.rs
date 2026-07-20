@@ -10,7 +10,7 @@ use tracing::{debug, trace};
 
 use crate::{
     cmd_flow::{
-        api,
+        api::{self, CommandExecutor},
         decoder::{OperationStatus, ProcletHeap, ProcletLocality},
         session_runtime::SessionLease,
         transaction::SessionTransaction,
@@ -66,6 +66,7 @@ impl From<ProcletHeapInfo> for ProcletHeapMeta {
 /// We should keep states regarding where is a session proclet is restored so that we can properly clean up later.
 pub struct ProcletRestorationMgr {
     proclets: Arc<ProcletMgr>,
+    executor: CommandExecutor,
     // cache the result regarding whether the proclet is local to the session
     proclet_is_local_cache: DashMap<ProcletQueryTarget, Arc<tokio::sync::Mutex<bool>>>,
     // proclet_is_local_lock
@@ -79,9 +80,10 @@ pub struct ProcletRestorationMgr {
 }
 
 impl ProcletRestorationMgr {
-    pub fn new(proclets: Arc<ProcletMgr>) -> Self {
+    pub fn new(proclets: Arc<ProcletMgr>, executor: CommandExecutor) -> Self {
         Self {
             proclets,
+            executor,
             proclet_is_local_cache: DashMap::new(),
             proclet_loc_cache: DashMap::new(),
             proclet_restored_heap_meta: DashMap::new(),
@@ -112,10 +114,14 @@ impl ProcletRestorationMgr {
         proclet_id: &str,
         transaction: Option<&SessionTransaction>,
     ) -> Result<bool> {
-        let resp = api::command(&format!("-check-proclet {}", proclet_id))?
-            .target(api::Target::Session(sid))
-            .protocol_complete()
-            .execute_with_optional_lease(Self::transaction_lease(transaction, sid)?)
+        let resp = self
+            .executor
+            .execute_plan_with_optional_lease(
+                api::command(&format!("-check-proclet {}", proclet_id))?
+                    .target(api::Target::Session(sid))
+                    .protocol_complete(),
+                Self::transaction_lease(transaction, sid)?,
+            )
             .await
             .with_context(|| format!("Failed to send -check-proclet command to session {}", sid))?;
         Ok(ProcletLocality::decode(&resp)?.is_local)
@@ -160,10 +166,14 @@ impl ProcletRestorationMgr {
         proclet_id: &str,
         transaction: Option<&SessionTransaction>,
     ) -> Result<ProcletHeapInfo> {
-        let resp = api::command(&format!("-get-proclet-heap {}", proclet_id))?
-            .target(api::Target::Session(target_sid))
-            .protocol_complete()
-            .execute_with_optional_lease(Self::transaction_lease(transaction, target_sid)?)
+        let resp = self
+            .executor
+            .execute_plan_with_optional_lease(
+                api::command(&format!("-get-proclet-heap {}", proclet_id))?
+                    .target(api::Target::Session(target_sid))
+                    .protocol_complete(),
+                Self::transaction_lease(transaction, target_sid)?,
+            )
             .await
             .with_context(|| {
                 format!(
@@ -187,19 +197,23 @@ impl ProcletRestorationMgr {
         heap_info: &ProcletHeapInfo,
         transaction: Option<&SessionTransaction>,
     ) -> Result<()> {
-        let resp = api::command(&format!(
-            "-restore-proclet-heap {} {} {}",
-            heap_info.start_addr, heap_info.data_len, heap_info.data
-        ))?
-        .target(api::Target::Session(sid))
-        .execute_with_optional_lease(Self::transaction_lease(transaction, sid)?)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to send -get-proclet-heap command to session {}",
-                sid
+        let resp = self
+            .executor
+            .execute_plan_with_optional_lease(
+                api::command(&format!(
+                    "-restore-proclet-heap {} {} {}",
+                    heap_info.start_addr, heap_info.data_len, heap_info.data
+                ))?
+                .target(api::Target::Session(sid)),
+                Self::transaction_lease(transaction, sid)?,
             )
-        })?;
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to send -get-proclet-heap command to session {}",
+                    sid
+                )
+            })?;
         OperationStatus::decode(&resp)?.require_success("restore-proclet-heap")?;
         Ok(())
     }
@@ -311,19 +325,22 @@ impl ProcletRestorationMgr {
     }
 
     async fn _cleanup_heap_for(&self, sid: u64, h: &ProcletHeapMeta) -> Result<()> {
-        let resp = api::command(&format!(
-            "-clean-proclet-heap {} {}",
-            h.proclet_id, h.full_heap_size
-        ))?
-        .target(api::Target::Session(sid))
-        .execute()
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to send -cleanup-proclet-heap command to session {}",
-                sid
+        let resp = self
+            .executor
+            .execute_plan(
+                api::command(&format!(
+                    "-clean-proclet-heap {} {}",
+                    h.proclet_id, h.full_heap_size
+                ))?
+                .target(api::Target::Session(sid)),
             )
-        })?;
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to send -cleanup-proclet-heap command to session {}",
+                    sid
+                )
+            })?;
         OperationStatus::decode(&resp)?.require_success("clean-proclet-heap")?;
         Ok(())
     }

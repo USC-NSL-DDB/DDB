@@ -49,15 +49,17 @@ impl AppContext {
             Arc::clone(&runtime_model),
             Arc::clone(&notification_manager),
         );
-        let proclet_restoration = Arc::new(ProcletRestorationMgr::new(Arc::clone(
-            runtime_model.proclets(),
-        )));
         let command_router = Arc::new(Router::new(Arc::clone(&runtime_model)));
+        let command_executor = CommandExecutor::new(Arc::clone(&command_router));
+        let proclet_restoration = Arc::new(ProcletRestorationMgr::new(
+            Arc::clone(runtime_model.proclets()),
+            command_executor.clone(),
+        ));
         let group_operations = Arc::new(GroupOperationCoordinator::new());
         let source_resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
             Arc::clone(runtime_model.groups()),
-            CommandExecutor::new(Arc::clone(&command_router)),
+            command_executor,
             SourceResolutionPolicy::configured(),
         );
         let command_engine = CommandEngine::new(
