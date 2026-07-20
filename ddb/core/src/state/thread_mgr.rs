@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::RwLock};
+use std::{
+    collections::HashMap,
+    sync::{RwLock, RwLockReadGuard},
+};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct LocalThreadId(pub u64, pub u64); // session id, thread id
@@ -82,6 +85,30 @@ struct ThreadIndexes {
     gtgid_to_ltgid: HashMap<u64, LocalThreadGroupId>,
 }
 
+/// Consistent read view over thread and thread-group identifiers.
+///
+/// Callers use this for short synchronous projections so one logical read does
+/// not repeatedly acquire the index lock. The view must not cross an await.
+pub(crate) struct ThreadIdView<'a> {
+    indexes: RwLockReadGuard<'a, ThreadIndexes>,
+}
+
+impl ThreadIdView<'_> {
+    pub(crate) fn global_thread_id(&self, sid: u64, tid: u64) -> Option<u64> {
+        self.indexes
+            .ltid_to_gtid
+            .get(&LocalThreadId::new(sid, tid))
+            .copied()
+    }
+
+    pub(crate) fn global_thread_group_id(&self, sid: u64, tgid: &str) -> Option<u64> {
+        self.indexes
+            .ltgid_to_gtgid
+            .get(&LocalThreadGroupId::new(sid, tgid))
+            .copied()
+    }
+}
+
 #[allow(unused)]
 pub struct ThreadStateMgr {
     // All four maps form two bidirectional indexes and must change together.
@@ -92,6 +119,12 @@ impl ThreadStateMgr {
     pub fn new() -> Self {
         Self {
             indexes: RwLock::new(ThreadIndexes::default()),
+        }
+    }
+
+    pub(crate) fn read_ids(&self) -> ThreadIdView<'_> {
+        ThreadIdView {
+            indexes: self.indexes.read().unwrap(),
         }
     }
 

@@ -248,6 +248,11 @@ impl StateMgr {
     }
 
     #[inline]
+    pub(crate) fn read_thread_ids(&self) -> thread_mgr::ThreadIdView<'_> {
+        self.thread_states.read_ids()
+    }
+
+    #[inline]
     pub fn global_thread_id(&self, sid: u64, tid: u64) -> Option<u64> {
         self.thread_states
             .global_thread_id(&Self::thread_key(sid, tid))

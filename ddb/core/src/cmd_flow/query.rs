@@ -8,10 +8,7 @@ use std::fmt;
 
 use gdbmi::raw::{Dict, Value};
 
-use super::{
-    decoder::{DecodeError, Payload},
-    FinishedCmd,
-};
+use super::{decoder::DecodeError, FinishedCmd};
 use crate::state::StateMgr;
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -67,37 +64,27 @@ impl<'a> QueryProjector<'a> {
             .current_thread_id()
             .map(|id| id.to_string())
             .unwrap_or_default();
+        let thread_ids = self.state.read_thread_ids();
 
         for response in completion.get_responses_mut() {
             let sid = response.get_sid();
-            let projected = {
-                let payload = Payload::from_response(response)?;
-                payload
-                    .list("threads")?
-                    .iter()
-                    .map(|value| {
-                        let mut thread = record(value, sid, "thread")?;
-                        let local_id = required_string(&thread, sid, "thread", "id")?
-                            .parse::<u64>()
-                            .map_err(|error| QueryProjectionError::MalformedRecord {
-                                sid,
-                                collection: "thread",
-                                reason: format!("invalid id: {}", error),
-                            })?;
-                        let global_id = self
-                            .state
-                            .global_thread_id(sid, local_id)
-                            .ok_or(QueryProjectionError::UnknownThread { sid, local_id })?;
-                        thread.insert("id".to_string(), global_id.to_string().into());
-                        Ok(Value::Dict(thread))
-                    })
-                    .collect::<Result<Vec<_>, QueryProjectionError>>()?
-            };
-
             let payload = response
                 .get_payload_mut()
                 .ok_or(DecodeError::MissingPayload { sid })?;
-            payload.insert("threads".to_string(), Value::List(projected));
+            for value in list_mut(payload, sid, "threads")? {
+                let thread = record_mut(value, sid, "thread")?;
+                let local_id = required_string(thread, sid, "thread", "id")?
+                    .parse::<u64>()
+                    .map_err(|error| QueryProjectionError::MalformedRecord {
+                        sid,
+                        collection: "thread",
+                        reason: format!("invalid id: {}", error),
+                    })?;
+                let global_id = thread_ids
+                    .global_thread_id(sid, local_id)
+                    .ok_or(QueryProjectionError::UnknownThread { sid, local_id })?;
+                thread.insert("id".to_string(), global_id.to_string().into());
+            }
             payload.insert(
                 "current-thread-id".to_string(),
                 current_thread_id.clone().into(),
@@ -110,43 +97,54 @@ impl<'a> QueryProjector<'a> {
         &self,
         mut completion: FinishedCmd,
     ) -> Result<FinishedCmd, QueryProjectionError> {
+        let thread_ids = self.state.read_thread_ids();
         for response in completion.get_responses_mut() {
             let sid = response.get_sid();
-            let projected = {
-                let payload = Payload::from_response(response)?;
-                payload
-                    .list("groups")?
-                    .iter()
-                    .map(|value| {
-                        let mut process = record(value, sid, "process")?;
-                        let local_id = required_string(&process, sid, "process", "id")?;
-                        required_string(&process, sid, "process", "type")?;
-                        required_string(&process, sid, "process", "pid")?;
-                        let global_id = self
-                            .state
-                            .global_thread_group_id(sid, local_id)
-                            .ok_or_else(|| QueryProjectionError::UnknownThreadGroup {
-                                sid,
-                                local_id: local_id.to_string(),
-                            })?;
-                        process.insert("id".to_string(), global_id.to_string().into());
-                        Ok(Value::Dict(process))
-                    })
-                    .collect::<Result<Vec<_>, QueryProjectionError>>()?
-            };
-
             let payload = response
                 .get_payload_mut()
                 .ok_or(DecodeError::MissingPayload { sid })?;
-            payload.insert("groups".to_string(), Value::List(projected));
+            for value in list_mut(payload, sid, "groups")? {
+                let process = record_mut(value, sid, "process")?;
+                let local_id = required_string(process, sid, "process", "id")?;
+                required_string(process, sid, "process", "type")?;
+                required_string(process, sid, "process", "pid")?;
+                let global_id = thread_ids
+                    .global_thread_group_id(sid, local_id)
+                    .ok_or_else(|| QueryProjectionError::UnknownThreadGroup {
+                        sid,
+                        local_id: local_id.to_string(),
+                    })?;
+                process.insert("id".to_string(), global_id.to_string().into());
+            }
         }
         Ok(completion)
     }
 }
 
-fn record(value: &Value, sid: u64, collection: &'static str) -> Result<Dict, QueryProjectionError> {
+fn list_mut<'a>(
+    payload: &'a mut Dict,
+    sid: u64,
+    field: &'static str,
+) -> Result<&'a mut Vec<Value>, QueryProjectionError> {
+    match payload.get_mut(field) {
+        Some(Value::List(values)) => Ok(values),
+        Some(_) => Err(DecodeError::UnexpectedType {
+            sid,
+            field,
+            expected: "a list",
+        }
+        .into()),
+        None => Err(DecodeError::MissingField { sid, field }.into()),
+    }
+}
+
+fn record_mut<'a>(
+    value: &'a mut Value,
+    sid: u64,
+    collection: &'static str,
+) -> Result<&'a mut Dict, QueryProjectionError> {
     match value {
-        Value::Dict(record) => Ok(record.clone()),
+        Value::Dict(record) => Ok(record),
         _ => Err(QueryProjectionError::MalformedRecord {
             sid,
             collection,
@@ -226,6 +224,40 @@ mod tests {
             payload["current-thread-id"].expect_string_ref().unwrap(),
             global_id.to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn thread_projection_reuses_the_owned_record_list() {
+        let state = StateMgr::new();
+        state.add_thread_group(3, "i1").await;
+        state.create_thread(3, 9, "i1").await;
+        state.create_thread(3, 10, "i1").await;
+        let input = completion(
+            3,
+            "threads",
+            vec![
+                Value::Dict(Dict::from(HashMap::from([(
+                    "id".to_string(),
+                    Value::from("9"),
+                )]))),
+                Value::Dict(Dict::from(HashMap::from([(
+                    "id".to_string(),
+                    Value::from("10"),
+                )]))),
+            ],
+        );
+        let records_before = input.get_responses()[0].get_payload().unwrap()["threads"]
+            .expect_list_ref()
+            .unwrap()
+            .as_ptr();
+
+        let projected = QueryProjector::new(&state).project_threads(input).unwrap();
+        let records_after = projected.get_responses()[0].get_payload().unwrap()["threads"]
+            .expect_list_ref()
+            .unwrap()
+            .as_ptr();
+
+        assert_eq!(records_before, records_after);
     }
 
     #[tokio::test]
