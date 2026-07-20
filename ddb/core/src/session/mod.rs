@@ -1,6 +1,7 @@
 pub(crate) mod activation;
 pub(crate) mod lifecycle;
 pub mod process;
+pub(crate) mod supervisor;
 
 pub use process::*;
 

@@ -1,24 +1,17 @@
 use anyhow::{anyhow, bail, Result};
-use dashmap::DashMap;
 use flume::Receiver;
-use futures::future::join_all;
 use russh::client::Config as RusshClientConfig;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::task::{JoinHandle, JoinSet};
-use tracing::{debug, error, info, trace};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tracing::{debug, error, info};
 
 use crate::dbg_ctrl::{build_transport, TransportSpec};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
 use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
-use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
-use crate::session::{
-    activation::SessionActivation,
-    lifecycle::{self, SessionLifecycleHandle, SessionTermination},
-};
-use crate::shutdown::get_shutdown_ctrl;
+use crate::session::supervisor::SessionSupervisor;
 use crate::state::get_caladan_ip_from_user_data;
 use crate::{
     common::{
@@ -31,11 +24,6 @@ use crate::{
 };
 
 const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
-
-type SessionProcessRef = Arc<Mutex<crate::session::SessionProcess>>;
-
-/// For convenience, a type alias to store sessions in a DashMap (sid -> session).
-type SessionsRef = Arc<DashMap<u64, SessionProcessRef>>;
 
 pub struct ServiceDiscover {
     /// The service discovery producer that will send `ServiceInfo` events.
@@ -112,7 +100,7 @@ impl ServiceDiscover {
             }
         };
         let process = crate::session::SessionProcess::new(request, transport);
-        if let Err(error) = manager.start_session(process).await {
+        if let Err(error) = manager.supervisor.admit(process).await {
             error!(?error, "failed to admit discovered session");
         }
     }
@@ -142,9 +130,7 @@ impl ServiceDiscover {
 
 /// The manager that can handle multiple producers, each sending discovered services.
 pub struct DbgManager {
-    /// All active GDB sessions (keyed by session id).
-    sessions: SessionsRef,
-    activation: SessionActivation,
+    supervisor: Arc<SessionSupervisor>,
 
     /// We keep the producers in a vector (each implements `DiscoveryMessageProducer<T>`).
     // producers: Mutex<Vec<Box<dyn crate::discovery::DiscoveryMessageProducer>>>,
@@ -158,128 +144,9 @@ pub struct DbgManager {
     config: &'static DDBConfig,
 
     static_session_handles: Mutex<Vec<JoinHandle<()>>>,
-
-    lifecycle: SessionLifecycleHandle,
-    lifecycle_events: Mutex<Option<mpsc::UnboundedReceiver<SessionTermination>>>,
-    lifecycle_shutdown: Mutex<Option<oneshot::Sender<()>>>,
-    lifecycle_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl DbgManager {
-    async fn start_lifecycle_supervisor(self: &Arc<Self>) -> Result<()> {
-        let mut events = self.lifecycle_events.lock().await;
-        let mut events = events
-            .take()
-            .ok_or_else(|| anyhow!("debugger lifecycle supervisor is already started"))?;
-        let (shutdown, mut shutdown_requested) = oneshot::channel();
-        self.lifecycle_shutdown.lock().await.replace(shutdown);
-        let manager = Arc::downgrade(self);
-        let task = tokio::spawn(async move {
-            let mut cleanups = JoinSet::new();
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_requested => break,
-                    termination = events.recv() => {
-                        let Some(termination) = termination else {
-                            break;
-                        };
-                        let Some(manager) = manager.upgrade() else {
-                            break;
-                        };
-                        cleanups.spawn(async move {
-                            manager.finish_session(termination).await;
-                        });
-                    }
-                    Some(result) = cleanups.join_next(), if !cleanups.is_empty() => {
-                        if let Err(error) = result {
-                            error!(?error, "session lifecycle cleanup task failed");
-                        }
-                    }
-                }
-            }
-            while let Some(result) = cleanups.join_next().await {
-                if let Err(error) = result {
-                    error!(?error, "session lifecycle cleanup task failed");
-                }
-            }
-        });
-        self.lifecycle_task.lock().await.replace(task);
-        Ok(())
-    }
-
-    async fn start_session(&self, process: crate::session::SessionProcess) -> Result<u64> {
-        let sid = process.sid();
-        let termination = self.lifecycle.bind(sid);
-        let session = Arc::new(Mutex::new(process));
-        self.sessions.insert(sid, Arc::clone(&session));
-
-        let start_result = self
-            .activation
-            .activate(&mut *session.lock().await, termination.clone())
-            .await;
-
-        match start_result {
-            Ok(()) if !termination.termination_requested() && self.sessions.contains_key(&sid) => {
-                debug!(sid, "session started successfully");
-                let notification = Notification::new(NotificationPayload::SessionListChanged);
-                get_notif_mgr().broadcast(notification).await;
-                Ok(sid)
-            }
-            Ok(()) => {
-                if let Some((_, process)) = self.sessions.remove(&sid) {
-                    if let Err(error) = self.activation.deactivate(&mut *process.lock().await).await
-                    {
-                        error!(sid, ?error, "failed to roll back terminated session");
-                    }
-                }
-                Err(anyhow!(
-                    "session {} terminated before activation completed",
-                    sid
-                ))
-            }
-            Err(error) => {
-                if let Some((_, process)) = self.sessions.remove(&sid) {
-                    if let Err(cleanup_error) =
-                        self.activation.deactivate(&mut *process.lock().await).await
-                    {
-                        error!(sid, ?cleanup_error, "failed to roll back session startup");
-                    }
-                }
-                Err(error)
-            }
-        }
-    }
-
-    async fn finish_session(&self, termination: SessionTermination) {
-        debug!(
-            sid = termination.sid,
-            cause = ?termination.cause,
-            "session termination requested"
-        );
-        self.remove_session(termination.sid).await;
-    }
-
-    async fn remove_session(&self, sid: u64) {
-        let Some((_, session)) = self.sessions.remove(&sid) else {
-            trace!(sid, "ignoring termination for an unregistered session");
-            return;
-        };
-
-        if let Err(error) = self.activation.deactivate(&mut *session.lock().await).await {
-            error!(sid, ?error, "session cleanup failed");
-        }
-
-        let notification = Notification::new(NotificationPayload::SessionListChanged);
-        get_notif_mgr().broadcast(notification).await;
-
-        if self.config.conf.auto_shutdown {
-            if self.sessions.is_empty() {
-                debug!("No more sessions in DbgManager. Possibly shutting down…");
-                get_shutdown_ctrl().trigger_once(crate::shutdown::ShutdownCause::NoSessions);
-            }
-        }
-    }
-
     async fn init_sd(&self) -> Result<()> {
         let config = self.config;
         let plugin = get_framework_plugin();
@@ -457,7 +324,7 @@ impl DbgManager {
         let request = builder.build()?;
         let transport = build_transport(&request.transport, None)?;
         let process = crate::session::SessionProcess::new(request, transport);
-        self.start_session(process).await?;
+        self.supervisor.admit(process).await?;
         Ok(())
     }
 
@@ -490,8 +357,6 @@ impl DbgManager {
     }
 
     pub async fn new_with_config(config: &'static DDBConfig) -> Arc<Self> {
-        let sessions: SessionsRef = Arc::new(DashMap::new());
-        let (lifecycle, lifecycle_events) = lifecycle::channel();
         let plugin = get_framework_plugin();
 
         let proclet_ctrl = if plugin.supports_migration(config) {
@@ -507,21 +372,16 @@ impl DbgManager {
         };
 
         Arc::new(DbgManager {
-            sessions,
-            activation: SessionActivation::new(config),
+            supervisor: SessionSupervisor::new(config),
             sd: Mutex::new(None),
             proclet_ctrl,
             config,
             static_session_handles: Mutex::new(Vec::new()),
-            lifecycle,
-            lifecycle_events: Mutex::new(Some(lifecycle_events)),
-            lifecycle_shutdown: Mutex::new(None),
-            lifecycle_task: Mutex::new(None),
         })
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<()> {
-        self.start_lifecycle_supervisor().await?;
+        self.supervisor.start().await?;
         if self.config.service_discovery.is_some() {
             info!("[Service Discovery]: ENABLED. INIT service discovery...");
             self.init_sd().await?;
@@ -555,31 +415,7 @@ impl DbgManager {
             sd.shutdown().await;
         }
 
-        if let Some(shutdown) = self.lifecycle_shutdown.lock().await.take() {
-            let _ = shutdown.send(());
-        }
-        if let Some(task) = self.lifecycle_task.lock().await.take() {
-            let _ = task.await;
-        }
-
-        let keys: Vec<_> = self.sessions.iter().map(|e| *e.key()).collect();
-        let mut sessions = Vec::with_capacity(keys.len());
-        for sid in keys {
-            if let Some((_, session)) = self.sessions.remove(&sid) {
-                sessions.push((sid, session));
-            }
-        }
-
-        join_all(sessions.into_iter().map(|(sid, session)| async move {
-            if let Err(error) = self.activation.deactivate(&mut *session.lock().await).await {
-                error!(
-                    sid,
-                    ?error,
-                    "session cleanup failed during manager shutdown"
-                );
-            }
-        }))
-        .await;
+        self.supervisor.shutdown().await;
         debug!("[DbgManager]: Cleanup complete.");
     }
 }
