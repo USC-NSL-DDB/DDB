@@ -199,8 +199,9 @@ mod tests {
     #[tokio::test]
     async fn thread_projection_replaces_local_and_current_ids() {
         let state = StateMgr::new();
-        state.add_thread_group(3, "i1").await;
-        let (global_id, _) = state.create_thread(3, 9, "i1").await;
+        state.register_session(3, "svc", None).await;
+        state.register_thread_group(3, "i1").await.unwrap();
+        let global_id = state.register_thread(3, 9, "i1").await.unwrap().thread_id;
         state.select_thread_context(3, global_id);
         let input = completion(
             3,
@@ -229,9 +230,10 @@ mod tests {
     #[tokio::test]
     async fn thread_projection_reuses_the_owned_record_list() {
         let state = StateMgr::new();
-        state.add_thread_group(3, "i1").await;
-        state.create_thread(3, 9, "i1").await;
-        state.create_thread(3, 10, "i1").await;
+        state.register_session(3, "svc", None).await;
+        state.register_thread_group(3, "i1").await.unwrap();
+        state.register_thread(3, 9, "i1").await.unwrap();
+        state.register_thread(3, 10, "i1").await.unwrap();
         let input = completion(
             3,
             "threads",
@@ -263,7 +265,8 @@ mod tests {
     #[tokio::test]
     async fn process_projection_replaces_local_group_ids() {
         let state = StateMgr::new();
-        let global_id = state.add_thread_group(4, "i7").await;
+        state.register_session(4, "svc", None).await;
+        let global_id = state.register_thread_group(4, "i7").await.unwrap();
         let process = Value::Dict(Dict::from(HashMap::from([
             ("id".to_string(), Value::from("i7")),
             ("type".to_string(), Value::from("process")),

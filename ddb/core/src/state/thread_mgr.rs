@@ -184,6 +184,38 @@ impl ThreadStateMgr {
         }
     }
 
+    pub fn get_or_insert_thread_with<F>(&self, local_tid: &LocalThreadId, create: F) -> u64
+    where
+        F: FnOnce() -> u64,
+    {
+        let mut indexes = self.indexes.write().unwrap();
+        if let Some(gtid) = indexes.ltid_to_gtid.get(local_tid) {
+            return *gtid;
+        }
+        let gtid = create();
+        indexes.ltid_to_gtid.insert(local_tid.clone(), gtid);
+        indexes.gtid_to_ltid.insert(gtid, local_tid.clone());
+        gtid
+    }
+
+    pub fn get_or_insert_thread_group_with<F>(
+        &self,
+        local_tgid: &LocalThreadGroupId,
+        create: F,
+    ) -> u64
+    where
+        F: FnOnce() -> u64,
+    {
+        let mut indexes = self.indexes.write().unwrap();
+        if let Some(gtgid) = indexes.ltgid_to_gtgid.get(local_tgid) {
+            return *gtgid;
+        }
+        let gtgid = create();
+        indexes.ltgid_to_gtgid.insert(local_tgid.clone(), gtgid);
+        indexes.gtgid_to_ltgid.insert(gtgid, local_tgid.clone());
+        gtgid
+    }
+
     pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
         self.indexes
             .read()

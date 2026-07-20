@@ -83,6 +83,11 @@ impl SessionThreadRegistry {
     }
 
     #[inline]
+    fn contains_group(&self, tgid: &str) -> bool {
+        self.groups.contains_key(tgid)
+    }
+
+    #[inline]
     fn add_thread_group(&mut self, tgid: &str) {
         self.ensure_group(tgid);
     }
@@ -93,7 +98,10 @@ impl SessionThreadRegistry {
         tid: u64,
         tgid: &str,
         thread_statuses: &mut HashMap<u64, ThreadStatus>,
-    ) {
+    ) -> bool {
+        if self.tid_to_group.contains_key(&tid) {
+            return false;
+        }
         thread_statuses.insert(tid, ThreadStatus::INIT);
 
         let per_inferior_tid = {
@@ -105,6 +113,21 @@ impl SessionThreadRegistry {
 
         self.tid_to_group.insert(tid, tgid.to_string());
         self.tid_to_per_inferior_tid.insert(tid, per_inferior_tid);
+        true
+    }
+
+    #[inline]
+    fn remove_thread(
+        &mut self,
+        tid: u64,
+        thread_statuses: &mut HashMap<u64, ThreadStatus>,
+    ) -> Option<String> {
+        let tgid = self.tid_to_group.get(&tid)?.clone();
+        if let Some(group) = self.groups.get_mut(&tgid) {
+            group.threads.remove(&tid);
+        }
+        self.remove_thread_metadata(tid, thread_statuses);
+        Some(tgid)
     }
 
     #[inline]
@@ -132,14 +155,21 @@ impl SessionThreadRegistry {
     }
 
     #[inline]
-    fn exit_thread_group(&mut self, tgid: &str, thread_statuses: &mut HashMap<u64, ThreadStatus>) {
-        let group = self.ensure_group(tgid);
+    fn exit_thread_group(
+        &mut self,
+        tgid: &str,
+        thread_statuses: &mut HashMap<u64, ThreadStatus>,
+    ) -> HashSet<u64> {
+        let Some(group) = self.groups.get_mut(tgid) else {
+            return HashSet::new();
+        };
         group.status = ThreadGroupStatus::EXITED;
 
         let threads = std::mem::take(&mut group.threads);
-        for tid in threads {
-            self.remove_thread_metadata(tid, thread_statuses);
+        for tid in &threads {
+            self.remove_thread_metadata(*tid, thread_statuses);
         }
+        threads
     }
 
     #[allow(unused)]
@@ -166,7 +196,6 @@ impl SessionThreadRegistry {
         self.tid_to_per_inferior_tid.get(&tid).copied()
     }
 
-    #[cfg(test)]
     #[inline]
     fn thread_group_for(&self, tid: u64) -> Option<&str> {
         self.tid_to_group.get(&tid).map(String::as_str)
@@ -222,8 +251,23 @@ impl SessionMeta {
     }
 
     #[inline]
-    pub fn create_thread(&mut self, tid: u64, tgid: &str) {
-        self.threads.create_thread(tid, tgid, &mut self.t_status);
+    pub fn create_thread(&mut self, tid: u64, tgid: &str) -> bool {
+        self.threads.create_thread(tid, tgid, &mut self.t_status)
+    }
+
+    #[inline]
+    pub fn contains_thread_group(&self, tgid: &str) -> bool {
+        self.threads.contains_group(tgid)
+    }
+
+    #[inline]
+    pub fn thread_group_for(&self, tid: u64) -> Option<&str> {
+        self.threads.thread_group_for(tid)
+    }
+
+    #[inline]
+    pub fn remove_thread(&mut self, tid: u64) -> Option<String> {
+        self.threads.remove_thread(tid, &mut self.t_status)
     }
 
     #[inline]
@@ -242,8 +286,8 @@ impl SessionMeta {
     }
 
     #[inline]
-    pub fn exit_thread_group(&mut self, tgid: &str) {
-        self.threads.exit_thread_group(tgid, &mut self.t_status);
+    pub fn exit_thread_group(&mut self, tgid: &str) -> HashSet<u64> {
+        self.threads.exit_thread_group(tgid, &mut self.t_status)
     }
 
     #[allow(unused)]
@@ -316,8 +360,14 @@ impl SessionMeta {
     }
 
     #[inline]
-    pub fn update_t_status(&mut self, tid: u64, status: ThreadStatus) {
-        self.t_status.insert(tid, status);
+    pub fn update_thread_statuses(&mut self, tids: &[u64], status: ThreadStatus) -> bool {
+        if tids.iter().any(|tid| !self.t_status.contains_key(tid)) {
+            return false;
+        }
+        for tid in tids {
+            self.t_status.insert(*tid, status);
+        }
+        true
     }
 
     #[inline]
@@ -336,12 +386,6 @@ impl SessionMeta {
     #[inline]
     fn per_inferior_tid(&self, tid: u64) -> Option<u64> {
         self.threads.per_inferior_tid(tid)
-    }
-
-    #[cfg(test)]
-    #[inline]
-    fn thread_group_for(&self, tid: u64) -> Option<&str> {
-        self.threads.thread_group_for(tid)
     }
 
     #[cfg(test)]
@@ -480,57 +524,8 @@ impl SessionStateMgr {
     }
 
     #[inline]
-    pub async fn add_thread_group(&self, sid: u64, tgid: &str) {
-        self.update_session_with(sid, |session| session.add_thread_group(tgid))
-            .await;
-    }
-
-    #[inline]
-    pub async fn create_thread(&self, sid: u64, tid: u64, tgid: &str) {
-        self.update_session_with(sid, |session| session.create_thread(tid, tgid))
-            .await;
-    }
-
-    #[inline]
-    pub async fn remove_thread_group(&self, sid: u64, tgid: &str) -> HashSet<u64> {
-        self.with_session_mut(sid, |session| session.remove_thread_group(tgid))
-            .await
-            .unwrap_or_default()
-    }
-
-    #[inline]
-    pub async fn start_thread_group(&self, sid: u64, tgid: &str, pid: u64) {
-        self.update_session_with(sid, |session| session.start_thread_group(tgid, pid))
-            .await;
-    }
-
-    #[inline]
-    pub async fn exit_thread_group(&self, sid: u64, tgid: &str) {
-        self.update_session_with(sid, |session| session.exit_thread_group(tgid))
-            .await;
-    }
-
-    #[inline]
-    pub async fn update_t_status(&self, sid: u64, tid: u64, status: ThreadStatus) {
-        self.update_session_with(sid, |session| session.update_t_status(tid, status))
-            .await;
-    }
-
-    #[inline]
-    pub async fn update_all_status(&self, sid: u64, new_status: ThreadStatus) {
-        self.update_session_with(sid, |session| session.update_all_status(new_status))
-            .await;
-    }
-
-    #[inline]
     pub async fn update_session_with<F: FnOnce(&mut SessionMeta)>(&self, sid: u64, f: F) {
         let _ = self.with_session_mut(sid, f).await;
-    }
-
-    #[inline]
-    pub async fn set_curr_tid(&self, sid: u64, tid: u64) {
-        self.update_session_with(sid, |session| session.set_curr_tid(tid))
-            .await;
     }
 
     #[inline]

@@ -296,19 +296,9 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             local_thread_id,
             local_group_id,
         } => {
-            let gtgid = STATES
-                .global_thread_group_id(sid, &local_group_id)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "thread creation references unknown group: sid {}, group {}",
-                        sid,
-                        local_group_id
-                    )
-                })?;
-            let (gtid, created_gtgid) = STATES
-                .create_thread(sid, local_thread_id, &local_group_id)
-                .await;
-            debug_assert_eq!(created_gtgid, gtgid);
+            let identity = STATES
+                .register_thread(sid, local_thread_id, &local_group_id)
+                .await?;
             let service_meta = STATES.session_service_meta(sid).await;
             let alias = service_meta
                 .map(|meta| meta.alias)
@@ -317,8 +307,11 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
                 .group_hash_by_session(sid)
                 .unwrap_or_else(|| "UNKNOWN".to_string());
             let projected_payload = HashMap::from([
-                ("id".to_string(), gtid.to_string().into()),
-                ("group-id".to_string(), format!("i{}", gtgid).into()),
+                ("id".to_string(), identity.thread_id.to_string().into()),
+                (
+                    "group-id".to_string(),
+                    format!("i{}", identity.thread_group_id).into(),
+                ),
                 ("group-hash".to_string(), group_hash.into()),
                 ("session-id".to_string(), sid.to_string().into()),
                 ("session-alias".to_string(), alias.into()),
@@ -335,25 +328,15 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             local_thread_id,
             local_group_id,
         } => {
-            let gtid = STATES.remove_thread(sid, local_thread_id).ok_or_else(|| {
-                anyhow!(
-                    "thread exit references unknown thread: sid {}, tid {}",
-                    sid,
-                    local_thread_id
-                )
-            })?;
-            let gtgid = STATES
-                .global_thread_group_id(sid, &local_group_id)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "thread exit references unknown group: sid {}, group {}",
-                        sid,
-                        local_group_id
-                    )
-                })?;
+            let identity = STATES
+                .remove_thread(sid, local_thread_id, &local_group_id)
+                .await?;
             let projected_payload = HashMap::from([
-                ("id".to_string(), gtid.to_string().into()),
-                ("group-id".to_string(), format!("i{}", gtgid).into()),
+                ("id".to_string(), identity.thread_id.to_string().into()),
+                (
+                    "group-id".to_string(),
+                    format!("i{}", identity.thread_group_id).into(),
+                ),
                 ("session-id".to_string(), sid.to_string().into()),
             ])
             .into();
@@ -369,19 +352,17 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
                 ThreadSet::All => {
                     STATES
                         .update_all_thread_status(sid, ThreadStatus::RUNNING)
-                        .await;
+                        .await?;
                 }
                 ThreadSet::One(local_thread_id) => {
                     STATES
-                        .update_thread_status(sid, *local_thread_id, ThreadStatus::RUNNING)
-                        .await;
+                        .update_thread_statuses(sid, &[*local_thread_id], ThreadStatus::RUNNING)
+                        .await?;
                 }
                 ThreadSet::Many(local_thread_ids) => {
-                    for local_thread_id in local_thread_ids {
-                        STATES
-                            .update_thread_status(sid, *local_thread_id, ThreadStatus::RUNNING)
-                            .await;
-                    }
+                    STATES
+                        .update_thread_statuses(sid, local_thread_ids, ThreadStatus::RUNNING)
+                        .await?;
                 }
             }
             let records = global_threads(sid, &threads)?
@@ -416,22 +397,20 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
                 Some(ThreadSet::All) => {
                     STATES
                         .update_all_thread_status(sid, ThreadStatus::STOPPED)
-                        .await;
+                        .await?;
                 }
                 Some(ThreadSet::One(local_thread_id)) => {
                     STATES
-                        .update_thread_status(sid, *local_thread_id, ThreadStatus::STOPPED)
-                        .await;
+                        .update_thread_statuses(sid, &[*local_thread_id], ThreadStatus::STOPPED)
+                        .await?;
                     if is_breakpoint {
-                        STATES.select_local_thread(sid, *local_thread_id).await;
+                        STATES.select_local_thread(sid, *local_thread_id).await?;
                     }
                 }
                 Some(ThreadSet::Many(local_thread_ids)) => {
-                    for local_thread_id in local_thread_ids {
-                        STATES
-                            .update_thread_status(sid, *local_thread_id, ThreadStatus::STOPPED)
-                            .await;
-                    }
+                    STATES
+                        .update_thread_statuses(sid, local_thread_ids, ThreadStatus::STOPPED)
+                        .await?;
                 }
                 None => {
                     return Ok(EventProjection::record("*", message, payload, token));
@@ -442,19 +421,17 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
                 Some(ThreadSet::All) => {
                     STATES
                         .update_all_thread_status(sid, ThreadStatus::STOPPED)
-                        .await;
+                        .await?;
                 }
                 Some(ThreadSet::One(local_thread_id)) => {
                     STATES
-                        .update_thread_status(sid, *local_thread_id, ThreadStatus::STOPPED)
-                        .await;
+                        .update_thread_statuses(sid, &[*local_thread_id], ThreadStatus::STOPPED)
+                        .await?;
                 }
                 Some(ThreadSet::Many(local_thread_ids)) => {
-                    for local_thread_id in local_thread_ids {
-                        STATES
-                            .update_thread_status(sid, *local_thread_id, ThreadStatus::STOPPED)
-                            .await;
-                    }
+                    STATES
+                        .update_thread_statuses(sid, local_thread_ids, ThreadStatus::STOPPED)
+                        .await?;
                 }
                 None => {
                     return Ok(EventProjection::default());
@@ -509,7 +486,7 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             ))
         }
         DebuggerEventKind::ThreadGroupAdded { local_group_id } => {
-            let gtgid = STATES.add_thread_group(sid, &local_group_id).await;
+            let gtgid = STATES.register_thread_group(sid, &local_group_id).await?;
             let mut projected_payload = payload;
             projected_payload.insert("id".into(), gtgid.to_string().into());
             Ok(EventProjection::record(
@@ -520,12 +497,7 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             ))
         }
         DebuggerEventKind::ThreadGroupRemoved { local_group_id } => {
-            let gtgid = STATES
-                .remove_thread_group(sid, &local_group_id)
-                .await
-                .ok_or_else(|| {
-                    anyhow!("unknown thread group {} in session {}", local_group_id, sid)
-                })?;
+            let gtgid = STATES.remove_thread_group(sid, &local_group_id).await?;
             let mut projected_payload = payload;
             projected_payload.insert("id".into(), gtgid.to_string().into());
             Ok(EventProjection::record(
@@ -539,12 +511,7 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             local_group_id,
             pid,
         } => {
-            let gtgid = STATES
-                .start_thread_group(sid, &local_group_id, pid)
-                .await
-                .ok_or_else(|| {
-                    anyhow!("unknown thread group {} in session {}", local_group_id, sid)
-                })?;
+            let gtgid = STATES.start_thread_group(sid, &local_group_id, pid).await?;
             let mut projected_payload = payload;
             projected_payload.insert("id".into(), gtgid.to_string().into());
             Ok(EventProjection::record(
@@ -555,12 +522,7 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             ))
         }
         DebuggerEventKind::ThreadGroupExited { local_group_id } => {
-            let gtgid = STATES
-                .exit_thread_group(sid, &local_group_id)
-                .await
-                .ok_or_else(|| {
-                    anyhow!("unknown thread group {} in session {}", local_group_id, sid)
-                })?;
+            let gtgid = STATES.exit_thread_group(sid, &local_group_id).await?;
             let mut projected_payload = payload;
             projected_payload.insert("id".into(), gtgid.to_string().into());
             Ok(EventProjection::record(
