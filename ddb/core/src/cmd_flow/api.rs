@@ -114,11 +114,6 @@ impl ExecutionRequest {
         self
     }
 
-    pub fn state_consistent(mut self) -> Self {
-        self.consistency = super::session_runtime::CompletionConsistency::StateConsistent;
-        self
-    }
-
     pub fn target(mut self, target: Target) -> Self {
         self.parsed.target = target;
         self
