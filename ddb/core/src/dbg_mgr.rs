@@ -12,6 +12,7 @@ use crate::discovery::{
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
+use crate::source::resolver::SourceResolver;
 use crate::{
     common::{
         self,
@@ -189,11 +190,14 @@ impl DbgManager {
 }
 
 impl DbgManager {
-    pub async fn new() -> Result<Arc<Self>> {
-        Self::new_with_config(DDBConfig::global()).await
+    pub(crate) async fn new(source_resolver: Arc<SourceResolver>) -> Result<Arc<Self>> {
+        Self::new_with_config(DDBConfig::global(), source_resolver).await
     }
 
-    pub async fn new_with_config(config: &'static DDBConfig) -> Result<Arc<Self>> {
+    pub(crate) async fn new_with_config(
+        config: &'static DDBConfig,
+        source_resolver: Arc<SourceResolver>,
+    ) -> Result<Arc<Self>> {
         let plugin = get_framework_plugin();
 
         let proclet_ctrl = if plugin.supports_migration(config) {
@@ -209,7 +213,7 @@ impl DbgManager {
         };
 
         Ok(Arc::new(DbgManager {
-            supervisor: SessionSupervisor::new(config),
+            supervisor: SessionSupervisor::new(config, source_resolver),
             factory: SessionFactory::new(config),
             discovery: Mutex::new(None),
             proclet_ctrl,

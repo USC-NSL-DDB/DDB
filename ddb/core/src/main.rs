@@ -35,6 +35,7 @@ use plugin::{get_framework_plugin, init_framework_plugin, resolve_framework_plug
 use setup::LoggingSettings;
 use setup::{AppDirConfig, SetupProcedure};
 use shutdown::{get_shutdown_ctrl, ShutdownCause, ShutdownCtrl};
+use source::resolver::SourceResolver;
 use status::*;
 
 use anyhow::Result;
@@ -164,8 +165,8 @@ async fn run_command_flow() -> Result<()> {
     Ok(())
 }
 
-async fn run_debugger_manager() -> Result<()> {
-    let dbg_mgr = DbgManager::new().await?;
+async fn run_debugger_manager(source_resolver: Arc<SourceResolver>) -> Result<()> {
+    let dbg_mgr = DbgManager::new(source_resolver).await?;
     init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
 
     if let Err(error) = dbg_mgr.start().await {
@@ -200,11 +201,22 @@ async fn run_notification_manager() -> Result<()> {
 
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
 async fn run_main(command_workers: usize) -> Result<()> {
-    let app = App::new(Config::global().conf.api_server_port);
+    let services = context::app_context();
+    let source_resolver = Arc::clone(services.source_resolver());
+    let app = App::new(
+        Config::global().conf.api_server_port,
+        Arc::clone(services.notification_manager()),
+        Arc::clone(&source_resolver),
+    );
     let mut tasks = JoinSet::new();
 
     tasks.spawn(async { ("command-flow", run_command_flow().await) });
-    tasks.spawn(async { ("debugger-manager", run_debugger_manager().await) });
+    tasks.spawn(async move {
+        (
+            "debugger-manager",
+            run_debugger_manager(source_resolver).await,
+        )
+    });
     tasks.spawn(async { ("notification-manager", run_notification_manager().await) });
     tasks.spawn(async move { ("api-server", app.run(get_shutdown_ctrl().subscribe()).await) });
     tasks.spawn(async {

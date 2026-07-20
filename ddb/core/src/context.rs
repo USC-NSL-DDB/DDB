@@ -1,11 +1,16 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use crate::{
-    cmd_flow::{engine::CommandEngine, router::Router},
+    cmd_flow::{api::CommandExecutor, engine::CommandEngine, router::Router},
     dbg_mgr::DbgManager,
     notification::NotificationManager,
     plugin::FrameworkCommandAdapter,
     shutdown::ShutdownCtrl,
+    source::{
+        catalog::SourceCatalog,
+        resolver::{SourceResolutionPolicy, SourceResolver},
+    },
+    state::get_group_mgr,
     status::RuntimeStatus,
 };
 
@@ -14,6 +19,7 @@ pub struct AppContext {
     command_engine: Arc<CommandEngine>,
     command_router: Arc<Router>,
     notification_manager: Arc<NotificationManager>,
+    source_resolver: Arc<SourceResolver>,
     shutdown: ShutdownCtrl,
     runtime_status: RuntimeStatus,
     debugger_manager: OnceLock<Weak<DbgManager>>,
@@ -23,16 +29,24 @@ impl AppContext {
     fn new(command_adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
         let command_router = Arc::new(Router::new());
         let notification_manager = Arc::new(NotificationManager::new());
+        let source_resolver = SourceResolver::new(
+            Arc::new(SourceCatalog::new()),
+            Arc::clone(get_group_mgr()),
+            CommandExecutor::new(Arc::clone(&command_router)),
+            SourceResolutionPolicy::configured(),
+        );
         let command_engine = CommandEngine::new(
             command_adapter,
             Arc::clone(&command_router),
             Arc::clone(&notification_manager),
+            Arc::clone(&source_resolver),
         );
 
         Self {
             command_engine,
             command_router,
             notification_manager,
+            source_resolver,
             shutdown: ShutdownCtrl::new(),
             runtime_status: RuntimeStatus::new(),
             debugger_manager: OnceLock::new(),
@@ -49,6 +63,10 @@ impl AppContext {
 
     pub fn notification_manager(&self) -> &Arc<NotificationManager> {
         &self.notification_manager
+    }
+
+    pub(crate) fn source_resolver(&self) -> &Arc<SourceResolver> {
+        &self.source_resolver
     }
 
     pub fn shutdown(&self) -> &ShutdownCtrl {

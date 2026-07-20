@@ -18,6 +18,7 @@ use crate::{
     common::Config,
     notification::{get_notif_mgr, Notification, NotificationPayload},
     shutdown::{get_shutdown_ctrl, ShutdownCause},
+    source::resolver::SourceResolver,
 };
 
 type ManagedSessionRef = Arc<Mutex<ManagedSession>>;
@@ -37,6 +38,7 @@ struct ManagedSession {
 pub(crate) struct SessionSupervisor {
     sessions: DashMap<u64, ManagedSessionRef>,
     activation: SessionActivation,
+    source_resolver: Arc<SourceResolver>,
     lifecycle: SessionLifecycleHandle,
     lifecycle_events: Mutex<Option<mpsc::UnboundedReceiver<SessionTermination>>>,
     lifecycle_shutdown: Mutex<Option<oneshot::Sender<()>>>,
@@ -46,11 +48,12 @@ pub(crate) struct SessionSupervisor {
 }
 
 impl SessionSupervisor {
-    pub(crate) fn new(config: &'static Config) -> Arc<Self> {
+    pub(crate) fn new(config: &'static Config, source_resolver: Arc<SourceResolver>) -> Arc<Self> {
         let (lifecycle, lifecycle_events) = lifecycle::channel();
         Arc::new(Self {
             sessions: DashMap::new(),
-            activation: SessionActivation::new(config),
+            activation: SessionActivation::new(config, Arc::clone(&source_resolver)),
+            source_resolver,
             lifecycle,
             lifecycle_events: Mutex::new(Some(lifecycle_events)),
             lifecycle_shutdown: Mutex::new(None),
@@ -251,5 +254,6 @@ impl SessionSupervisor {
             }
         }))
         .await;
+        self.source_resolver.shutdown().await;
     }
 }

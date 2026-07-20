@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::{
     api::CommandExecutor,
@@ -25,6 +25,7 @@ use crate::{
     debugger::get_debugger_backend,
     feature::get_proclet_restore_mgr,
     notification::NotificationManager,
+    source::resolver::SourceResolver,
     state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
 };
 
@@ -62,6 +63,7 @@ pub struct CommandEngine {
     handlers: HashMap<String, Arc<dyn Handler>>,
     default_handler: Arc<dyn Handler>,
     router: Arc<Router>,
+    source_resolver: Arc<SourceResolver>,
     detached_slots: Arc<Semaphore>,
 }
 
@@ -70,6 +72,7 @@ impl CommandEngine {
         adapter: Arc<dyn FrameworkCommandAdapter>,
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
+        source_resolver: Arc<SourceResolver>,
     ) -> Arc<Self> {
         let state = get_state_mgr();
         let executor = CommandExecutor::new(Arc::clone(&router));
@@ -172,6 +175,7 @@ impl CommandEngine {
             handlers,
             default_handler: Arc::new(DefaultHandler::new()),
             router,
+            source_resolver,
             detached_slots: Arc::new(Semaphore::new(DETACHED_COMMAND_LIMIT)),
         })
     }
@@ -180,7 +184,16 @@ impl CommandEngine {
     /// explicit target follow the currently selected thread, then broadcast.
     pub async fn execute_cli(&self, raw: &str) -> Result<CommandOutcome, CommandError> {
         if let Some(internal) = raw.trim().strip_prefix(':') {
-            self.router.handle_internal_cmd(internal);
+            if internal == "p-source-resolver" {
+                info!("p-source-resolver: {:#?}", self.source_resolver);
+            } else if let Some(path) = internal.strip_prefix("p-resolve-src ") {
+                self.source_resolver
+                    .resolve_path(path)
+                    .await
+                    .map_err(|source| CommandError::new(None, source))?;
+            } else {
+                self.router.handle_internal_cmd(internal);
+            }
             return Ok(CommandOutcome::empty());
         }
 

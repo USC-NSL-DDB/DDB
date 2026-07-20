@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use axum::{
-    extract::Query,
+    extract::{FromRef, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -13,7 +15,8 @@ use tracing::{debug, info};
 
 use crate::{
     cmd_flow::{get_command_engine, router::Target, FinishedCmd},
-    notification,
+    notification::{self, NotificationManager},
+    source::resolver::SourceResolver,
     state::{get_bkpt_mgr, BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
     status::{get_rt_status, Component},
 };
@@ -41,7 +44,7 @@ struct GetGroupQuery {
 }
 
 #[derive(Deserialize, Debug)]
-struct SourceResolver {
+struct SourceQuery {
     src: String,
 }
 
@@ -137,15 +140,41 @@ impl From<&BkptMeta> for BkptJson {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
+struct ApiState {
+    notifications: Arc<NotificationManager>,
+    source_resolver: Arc<SourceResolver>,
+}
+
+impl FromRef<ApiState> for Arc<NotificationManager> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.notifications)
+    }
+}
+
+impl FromRef<ApiState> for Arc<SourceResolver> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.source_resolver)
+    }
+}
+
 pub struct ApiServer {
     addr: String,
+    state: ApiState,
 }
 
 impl ApiServer {
-    pub fn new(addr: &str) -> Self {
-        ApiServer {
-            addr: addr.to_string(),
+    pub fn new(
+        addr: impl Into<String>,
+        notifications: Arc<NotificationManager>,
+        source_resolver: Arc<SourceResolver>,
+    ) -> Self {
+        Self {
+            addr: addr.into(),
+            state: ApiState {
+                notifications,
+                source_resolver,
+            },
         }
     }
 
@@ -176,7 +205,7 @@ impl ApiServer {
                 "/notifications/test",
                 post(notification::test_notification_handler),
             )
-            .with_state(notification::get_notif_mgr())
+            .with_state(self.state.clone())
             .layer(TraceLayer::new_for_http());
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone()).await?;
@@ -194,12 +223,6 @@ impl ApiServer {
     }
 }
 
-impl Default for ApiServer {
-    fn default() -> Self {
-        ApiServer::new("localhost:5000")
-    }
-}
-
 // Root handler
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn root_handler() -> Json<ApiResponse> {
@@ -208,34 +231,40 @@ async fn root_handler() -> Json<ApiResponse> {
     })
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
-async fn resolve_src_to_group_ids(Query(src): Query<SourceResolver>) -> impl IntoResponse {
-    let src = src.src;
-    #[cfg(feature = "lazy_source_map")]
-    let grp_ids = crate::state::get_source_mgr()
-        .resolve_src_to_group_ids(&src)
-        .await;
-
-    #[cfg(not(feature = "lazy_source_map"))]
-    let grp_ids = crate::state::get_source_mgr().resolve_src_to_group_ids(&src);
-
-    let grp_ids = grp_ids.unwrap_or_default().into_iter().collect::<Vec<_>>();
-    (StatusCode::OK, Json(GroupIdsResponse { grp_ids: grp_ids }))
+fn source_resolution_error(error: anyhow::Error) -> (StatusCode, Json<ApiResponse>) {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(ApiResponse {
+            message: format!("Failed to resolve debugger sources: {error:#}"),
+        }),
+    )
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn resolve_src_to_groups(Query(src): Query<SourceResolver>) -> impl IntoResponse {
-    let src = src.src;
-    #[cfg(feature = "lazy_source_map")]
-    let grps = crate::state::get_source_mgr()
-        .resolve_src_to_groups(&src)
-        .await;
+async fn resolve_src_to_group_ids(
+    State(resolver): State<Arc<SourceResolver>>,
+    Query(src): Query<SourceQuery>,
+) -> std::result::Result<Json<GroupIdsResponse>, (StatusCode, Json<ApiResponse>)> {
+    let mut grp_ids = resolver
+        .group_ids_for(&src.src)
+        .await
+        .map_err(source_resolution_error)?
+        .into_iter()
+        .collect::<Vec<_>>();
+    grp_ids.sort_unstable();
+    Ok(Json(GroupIdsResponse { grp_ids }))
+}
 
-    #[cfg(not(feature = "lazy_source_map"))]
-    let grps = crate::state::get_source_mgr().resolve_src_to_groups(&src);
-
-    let grps = grps.unwrap_or_default();
-    (StatusCode::OK, Json(GroupsResponse { grps: grps }))
+#[cfg_attr(feature = "profile", tracing::instrument)]
+async fn resolve_src_to_groups(
+    State(resolver): State<Arc<SourceResolver>>,
+    Query(src): Query<SourceQuery>,
+) -> std::result::Result<Json<GroupsResponse>, (StatusCode, Json<ApiResponse>)> {
+    let grps = resolver
+        .groups_for(&src.src)
+        .await
+        .map_err(source_resolution_error)?;
+    Ok(Json(GroupsResponse { grps }))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]

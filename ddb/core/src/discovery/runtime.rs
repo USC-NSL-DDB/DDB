@@ -92,7 +92,15 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::common::Config;
+    use crate::{
+        cmd_flow::{api::CommandExecutor, router::Router},
+        common::Config,
+        source::{
+            catalog::SourceCatalog,
+            resolver::{SourceResolutionPolicy, SourceResolver},
+        },
+        state::GroupMgr,
+    };
 
     struct TestProducer {
         stopped: Arc<AtomicBool>,
@@ -114,7 +122,14 @@ mod tests {
     async fn runtime_starts_once_and_stops_its_producer() {
         let config = Box::leak(Box::new(Config::default()));
         let factory = SessionFactory::new(config);
-        let supervisor = SessionSupervisor::new(config);
+        let router = Arc::new(Router::new());
+        let source_resolver = SourceResolver::new(
+            Arc::new(SourceCatalog::new()),
+            Arc::new(GroupMgr::new()),
+            CommandExecutor::new(router),
+            SourceResolutionPolicy::OnDemand,
+        );
+        let supervisor = SessionSupervisor::new(config, source_resolver);
         let stopped = Arc::new(AtomicBool::new(false));
         let (_services_tx, services) = flume::bounded(1);
         let mut runtime = DiscoveryRuntime::new(

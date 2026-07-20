@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use futures::future::join_all;
 use serde::Deserialize;
 use tokio::time::timeout;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use super::{
     input::{Command, ParsedInputCmd},
@@ -17,10 +17,7 @@ use super::{
 };
 use crate::{
     get_dbg_mgr,
-    state::{
-        get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_source_mgr, GroupId, LocalThreadId,
-        STATES,
-    },
+    state::{get_bkpt_mgr, get_group_mgr, get_proclet_mgr, GroupId, LocalThreadId, STATES},
 };
 
 const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -281,17 +278,8 @@ impl Router {
         match command {
             "p-session-meta" => info!("p-session-meta: {:?}", STATES.sessions()),
             "p-group-mgr" => info!("p-group-mgr: {:#?}", get_group_mgr()),
-            "p-source-mgr" => info!("p-source-mgr: {:#?}", get_source_mgr()),
             "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", get_bkpt_mgr()),
             "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", get_proclet_mgr()),
-            _ if command.starts_with("p-resolve-src ") => {
-                let path = command["p-resolve-src ".len()..].to_string();
-                tokio::spawn(async move {
-                    if let Err(error) = get_source_mgr().resolve_src_by_path(&path).await {
-                        debug!(?error, "failed to resolve source path");
-                    }
-                });
-            }
             _ if command.starts_with("s-cmd ") => {
                 let parts = command.split_whitespace().collect::<Vec<_>>();
                 if parts.len() < 3 {

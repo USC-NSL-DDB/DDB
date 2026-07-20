@@ -54,11 +54,6 @@ impl GroupMeta {
     pub fn id(&self) -> GroupId {
         self.id
     }
-
-    #[inline]
-    pub fn hash(&self) -> &GroupHash {
-        &self.hash
-    }
 }
 
 #[derive(Default)]
@@ -142,16 +137,6 @@ impl GroupMgr {
     }
 
     #[inline]
-    pub fn group_id_by_hash(&self, hash: &str) -> Option<GroupId> {
-        self.indexes
-            .read()
-            .unwrap()
-            .hash_to_group
-            .get(hash)
-            .map(GroupMeta::id)
-    }
-
-    #[inline]
     pub fn group_info_by_session(&self, sid: SessionId) -> Option<(GroupId, GroupHash)> {
         let indexes = self.indexes.read().unwrap();
         let hash = indexes.sid_to_hash.get(&sid)?;
@@ -208,20 +193,6 @@ impl GroupMgr {
             .filter(|group| predicate(group))
             .collect()
     }
-
-    #[inline]
-    pub fn matching_group_map<P>(&self, predicate: P) -> HashMap<GroupHash, GroupMeta>
-    where
-        P: Fn(&GroupHash, &GroupMeta) -> bool,
-    {
-        self.groups()
-            .into_iter()
-            .filter_map(|group| {
-                let hash = group.hash().clone();
-                predicate(&hash, &group).then_some((hash, group))
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -275,20 +246,5 @@ mod tests {
         assert!(mgr.group_by_hash("hash-a").is_none());
         assert!(mgr.group_by_id(group_id).is_none());
         assert!(mgr.groups().is_empty());
-    }
-
-    #[test]
-    fn get_all_grps_if_filters_groups_using_predicate() {
-        let mgr = GroupMgr::new();
-
-        mgr.register_session("hash-a", "svc-a".to_string(), 11);
-        mgr.register_session("hash-b", "svc-b".to_string(), 21);
-        mgr.register_session("hash-b", "svc-b".to_string(), 22);
-
-        let populated = mgr.matching_group_map(|_, group| group.session_ids().len() > 1);
-
-        assert_eq!(populated.len(), 1);
-        assert!(populated.contains_key("hash-b"));
-        assert_eq!(populated["hash-b"].session_ids().len(), 2);
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 
 use super::{lifecycle::SessionTerminationReporter, SessionProcess};
@@ -11,17 +13,22 @@ use crate::{
     common::Config,
     notification::get_notif_mgr,
     plugin::get_framework_plugin,
+    source::resolver::SourceResolver,
     state::{get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_state_mgr, STATES},
 };
 
 /// Applies and removes every application projection associated with a process.
 pub(crate) struct SessionActivation {
     config: &'static Config,
+    source_resolver: Arc<SourceResolver>,
 }
 
 impl SessionActivation {
-    pub(crate) fn new(config: &'static Config) -> Self {
-        Self { config }
+    pub(crate) fn new(config: &'static Config, source_resolver: Arc<SourceResolver>) -> Self {
+        Self {
+            config,
+            source_resolver,
+        }
     }
 
     pub(crate) async fn activate(
@@ -56,20 +63,12 @@ impl SessionActivation {
         }
 
         get_router().add_session(handle);
+        self.source_resolver.session_activated(sid);
 
         if get_framework_plugin().should_register_caladan_ip(self.config) {
             if let Some(caladan_ip) = caladan_ip {
                 get_proclet_mgr().register_owner_session(caladan_ip, sid);
             }
-        }
-
-        #[cfg(not(feature = "lazy_source_map"))]
-        {
-            tokio::spawn(async move {
-                if let Err(error) = crate::state::get_source_mgr().resolve_src_for(sid).await {
-                    tracing::debug!(sid, ?error, "failed to resolve session source files");
-                }
-            });
         }
 
         STATES.update_session_status_on(sid).await;
@@ -115,6 +114,7 @@ impl SessionActivation {
     pub(crate) async fn deactivate(&self, process: &mut SessionProcess) -> Result<()> {
         let sid = process.sid();
 
+        self.source_resolver.cancel_session(sid).await;
         get_router().remove_session(sid);
         get_state_mgr().update_session_status_off(sid).await;
 
@@ -132,6 +132,10 @@ impl SessionActivation {
         .await;
 
         groups.remove_session(sid);
+        if let Some(group_id) = group_id.filter(|group_id| groups.group_by_id(*group_id).is_none())
+        {
+            self.source_resolver.remove_group(group_id).await;
+        }
         get_proclet_mgr().remove_owner_session(sid);
         get_state_mgr().remove_session(sid).await;
         process.shutdown().await
