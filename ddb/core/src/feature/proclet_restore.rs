@@ -15,7 +15,7 @@ use crate::{
         session_runtime::SessionLease,
         transaction::SessionTransaction,
     },
-    get_dbg_mgr,
+    feature::proclet_query::ProcletQueryService,
     state::ProcletMgr,
 };
 
@@ -67,6 +67,7 @@ impl From<ProcletHeapInfo> for ProcletHeapMeta {
 pub struct ProcletRestorationMgr {
     proclets: Arc<ProcletMgr>,
     executor: CommandExecutor,
+    proclet_queries: Arc<ProcletQueryService>,
     // cache the result regarding whether the proclet is local to the session
     proclet_is_local_cache: DashMap<ProcletQueryTarget, Arc<tokio::sync::Mutex<bool>>>,
     // proclet_is_local_lock
@@ -80,10 +81,15 @@ pub struct ProcletRestorationMgr {
 }
 
 impl ProcletRestorationMgr {
-    pub fn new(proclets: Arc<ProcletMgr>, executor: CommandExecutor) -> Self {
+    pub fn new(
+        proclets: Arc<ProcletMgr>,
+        executor: CommandExecutor,
+        proclet_queries: Arc<ProcletQueryService>,
+    ) -> Self {
         Self {
             proclets,
             executor,
+            proclet_queries,
             proclet_is_local_cache: DashMap::new(),
             proclet_loc_cache: DashMap::new(),
             proclet_restored_heap_meta: DashMap::new(),
@@ -141,8 +147,9 @@ impl ProcletRestorationMgr {
             return Ok(loc.clone());
         }
 
-        let resp = get_dbg_mgr()
-            .query_proclet(proclet_id)
+        let resp = self
+            .proclet_queries
+            .query(proclet_id)
             .await
             .with_context(|| format!("Failed to query proclet {} from ProcletMgr", proclet_id))?;
 

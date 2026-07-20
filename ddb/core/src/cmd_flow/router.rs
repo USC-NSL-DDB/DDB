@@ -5,18 +5,15 @@ use dashmap::DashMap;
 use futures::future::join_all;
 use serde::Deserialize;
 use tokio::time::timeout;
-use tracing::{info, warn};
 
 use super::{
-    input::{Command, ParsedInputCmd},
-    output::{emit_static, PlainFormatter},
+    input::Command,
     response::{FinishedCmd, SessionRuntimeStatus},
     session_runtime::{
         SessionCommand, SessionHandle, SessionLease, SessionTicket, COMMAND_TIMEOUT,
     },
 };
 use crate::{
-    get_dbg_mgr,
     runtime_model::RuntimeModel,
     state::{GroupId, LocalThreadId},
 };
@@ -281,53 +278,6 @@ impl Router {
             .collect::<Vec<_>>();
         statuses.sort_by_key(|status| status.sid);
         statuses
-    }
-
-    pub fn handle_internal_cmd(self: &Arc<Self>, command: &str) {
-        match command {
-            "p-session-meta" => info!("p-session-meta: {:?}", self.model.state().sessions()),
-            "p-group-mgr" => info!("p-group-mgr: {:#?}", self.model.groups()),
-            "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", self.model.breakpoints()),
-            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", self.model.proclets()),
-            _ if command.starts_with("s-cmd ") => {
-                let parts = command.split_whitespace().collect::<Vec<_>>();
-                if parts.len() < 3 {
-                    info!("Usage: s-cmd <session_id> <cmd>");
-                    return;
-                }
-                let Ok(sid) = parts[1].parse::<u64>() else {
-                    warn!("Invalid session id: {}", parts[1]);
-                    return;
-                };
-                let raw = parts[2..].join(" ");
-                let router = Arc::clone(self);
-                tokio::spawn(async move {
-                    let parsed: Result<ParsedInputCmd> = raw.try_into();
-                    match parsed {
-                        Ok(parsed) => {
-                            let (_, command) = parsed.to_command();
-                            match router.execute(Target::Session(sid), command).await {
-                                Ok(response) => emit_static(response, PlainFormatter),
-                                Err(error) => warn!(?error, "failed to send internal command"),
-                            }
-                        }
-                        Err(error) => warn!(?error, "failed to parse internal command"),
-                    }
-                });
-            }
-            _ if command.starts_with("q-proclet ") => {
-                let parts = command.split_whitespace().collect::<Vec<_>>();
-                if let Some(Ok(proclet_id)) = parts.get(1).map(|id| id.parse::<u64>()) {
-                    tokio::spawn(async move {
-                        match get_dbg_mgr().query_proclet(proclet_id).await {
-                            Ok(proclet) => info!("Proclet: {:?}", proclet),
-                            Err(error) => warn!(?error, "failed to query proclet"),
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
     }
 }
 

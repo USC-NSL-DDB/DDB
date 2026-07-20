@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::{
     api::CommandExecutor,
@@ -12,14 +12,20 @@ use super::{
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
     input::ParsedInputCmd,
+    output::{emit_static, PlainFormatter},
     router::{Router, Target},
     transaction::TransactionCoordinator,
     CommandOutcome,
 };
 use crate::{
-    common::Config, debugger::DebuggerBackend, feature::proclet_restore::ProcletRestorationMgr,
-    group_operation::GroupOperationCoordinator, notification::NotificationManager,
-    runtime_model::RuntimeModel, source::resolver::SourceResolver, state::StateMgr,
+    common::Config,
+    debugger::DebuggerBackend,
+    feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
+    group_operation::GroupOperationCoordinator,
+    notification::NotificationManager,
+    runtime_model::RuntimeModel,
+    source::resolver::SourceResolver,
+    state::StateMgr,
 };
 
 const DETACHED_COMMAND_LIMIT: usize = 256;
@@ -57,6 +63,8 @@ pub struct CommandEngine {
     router: Arc<Router>,
     state: Arc<StateMgr>,
     source_resolver: Arc<SourceResolver>,
+    model: Arc<RuntimeModel>,
+    proclet_queries: Arc<ProcletQueryService>,
     detached_slots: Arc<Semaphore>,
 }
 
@@ -71,6 +79,7 @@ impl CommandEngine {
         config: Arc<Config>,
         backend: Arc<dyn DebuggerBackend>,
         proclet_restoration: Arc<ProcletRestorationMgr>,
+        proclet_queries: Arc<ProcletQueryService>,
     ) -> Arc<Self> {
         let state = Arc::clone(model.state());
         let executor = CommandExecutor::new(Arc::clone(&router));
@@ -111,6 +120,8 @@ impl CommandEngine {
             router,
             state,
             source_resolver,
+            model,
+            proclet_queries,
             detached_slots: Arc::new(Semaphore::new(DETACHED_COMMAND_LIMIT)),
         })
     }
@@ -127,7 +138,7 @@ impl CommandEngine {
                     .await
                     .map_err(|source| CommandError::new(None, source))?;
             } else {
-                self.router.handle_internal_cmd(internal);
+                self.execute_internal(internal).await;
             }
             return Ok(CommandOutcome::empty());
         }
@@ -140,6 +151,48 @@ impl CommandEngine {
         let parsed = Self::prepare(raw, None, default_target)
             .map_err(|source| CommandError::new(None, source))?;
         self.dispatch(parsed).await
+    }
+
+    async fn execute_internal(&self, command: &str) {
+        match command {
+            "p-session-meta" => info!("p-session-meta: {:?}", self.model.state().sessions()),
+            "p-group-mgr" => info!("p-group-mgr: {:#?}", self.model.groups()),
+            "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", self.model.breakpoints()),
+            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", self.model.proclets()),
+            _ if command.starts_with("s-cmd ") => {
+                let parts = command.split_whitespace().collect::<Vec<_>>();
+                if parts.len() < 3 {
+                    info!("Usage: s-cmd <session_id> <cmd>");
+                    return;
+                }
+                let Ok(sid) = parts[1].parse::<u64>() else {
+                    warn!("Invalid session id: {}", parts[1]);
+                    return;
+                };
+                let raw = parts[2..].join(" ");
+                match raw.try_into() {
+                    Ok(parsed) => {
+                        let parsed: ParsedInputCmd = parsed;
+                        let (_, command) = parsed.to_command();
+                        match self.router.execute(Target::Session(sid), command).await {
+                            Ok(response) => emit_static(response, PlainFormatter),
+                            Err(error) => warn!(?error, "failed to send internal command"),
+                        }
+                    }
+                    Err(error) => warn!(?error, "failed to parse internal command"),
+                }
+            }
+            _ if command.starts_with("q-proclet ") => {
+                let parts = command.split_whitespace().collect::<Vec<_>>();
+                if let Some(Ok(proclet_id)) = parts.get(1).map(|id| id.parse::<u64>()) {
+                    match self.proclet_queries.query(proclet_id).await {
+                        Ok(proclet) => info!("Proclet: {:?}", proclet),
+                        Err(error) => warn!(?error, "failed to query proclet"),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Execute one API command to semantic completion. API commands without an

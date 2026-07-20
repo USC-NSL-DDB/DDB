@@ -5,14 +5,21 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-use crate::context::AppContext;
 use crate::discovery::{
     broker::{EMQXBroker, MessageBroker, MosquittoBroker},
     runtime::DiscoveryRuntime,
 };
-use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::plugin::{FrameworkPlugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
+use crate::{
+    cmd_flow::{event::DebuggerEventReducer, router::Router},
+    debugger::DebuggerBackend,
+    group_operation::GroupOperationCoordinator,
+    notification::NotificationManager,
+    runtime_model::RuntimeModel,
+    shutdown::ShutdownCtrl,
+    source::resolver::SourceResolver,
+};
 use crate::{
     common::{
         self,
@@ -30,11 +37,9 @@ pub struct DbgManager {
 
     discovery: Mutex<Option<DiscoveryRuntime>>,
 
-    // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
-    proclet_ctrl: Option<ProcletCtrlClient>,
-
     config: Arc<DDBConfig>,
     plugin: Arc<dyn FrameworkPlugin>,
+    shutdown: Arc<ShutdownCtrl>,
 
     static_session_handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -69,6 +74,7 @@ impl DbgManager {
                 let mut producer = crate::discovery::mqtt_producer::MqttProducer::new(
                     managed_broker,
                     Arc::clone(&self.config),
+                    Arc::clone(&self.shutdown),
                 );
                 let start_result = producer.start_producing(producer_tx.clone()).await;
                 self.discovery.lock().await.replace(DiscoveryRuntime::new(
@@ -196,47 +202,44 @@ impl DbgManager {
 }
 
 impl DbgManager {
-    pub(crate) async fn new(services: &AppContext) -> Result<Arc<Self>> {
-        let config = Arc::clone(services.config());
-        let plugin = Arc::clone(services.plugin());
-
-        let proclet_ctrl = if plugin.supports_migration(config.as_ref()) {
-            debug!("Migration support is ENABLED, initializing proxy proclet controller.");
-            Some(
-                ProcletCtrlClient::try_connect_default()
-                    .await
-                    .context("failed to connect to proclet controller")?,
-            )
-        } else {
-            debug!("[Migration SUPPORT]: DISABLED. SKIP initializing proxy proclet controller.");
-            None
-        };
-
+    pub(crate) fn new(
+        config: Arc<DDBConfig>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        backend: Arc<dyn DebuggerBackend>,
+        model: Arc<RuntimeModel>,
+        router: Arc<Router>,
+        notifications: Arc<NotificationManager>,
+        group_operations: Arc<GroupOperationCoordinator>,
+        source_resolver: Arc<SourceResolver>,
+        event_reducer: Arc<DebuggerEventReducer>,
+        shutdown: Arc<ShutdownCtrl>,
+    ) -> Arc<Self> {
         let supervisor = SessionSupervisor::new(
             Arc::clone(&config),
             Arc::clone(&plugin),
-            Arc::clone(services.runtime_model()),
-            Arc::clone(services.command_router()),
-            Arc::clone(services.notification_manager()),
-            Arc::clone(services.group_operations()),
-            Arc::clone(services.source_resolver()),
+            model,
+            router,
+            notifications,
+            group_operations,
+            source_resolver,
+            Arc::clone(&shutdown),
         );
         let factory = SessionFactory::new(
             Arc::clone(&config),
-            Arc::clone(services.backend()),
+            backend,
             Arc::clone(&plugin),
-            Arc::clone(services.event_reducer()),
+            event_reducer,
         );
 
-        Ok(Arc::new(DbgManager {
+        Arc::new(DbgManager {
             supervisor,
             factory,
             discovery: Mutex::new(None),
-            proclet_ctrl,
             config,
             plugin,
+            shutdown,
             static_session_handles: Mutex::new(Vec::new()),
-        }))
+        })
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<()> {
@@ -278,14 +281,5 @@ impl DbgManager {
 
         self.supervisor.shutdown().await;
         debug!("[DbgManager]: Cleanup complete.");
-    }
-}
-
-impl DbgManager {
-    pub async fn query_proclet(&self, proclet_id: u64) -> Result<QueryProcletResp> {
-        if let Some(ctrl) = &self.proclet_ctrl {
-            return ctrl.query_proclet(proclet_id).await;
-        }
-        bail!("Proclet controller not available.")
     }
 }

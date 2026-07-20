@@ -98,6 +98,7 @@ mod tests {
         group_operation::GroupOperationCoordinator,
         notification::NotificationManager,
         runtime_model::RuntimeModel,
+        shutdown::ShutdownCtrl,
         source::{
             catalog::SourceCatalog,
             resolver::{SourceResolutionPolicy, SourceResolver},
@@ -145,6 +146,7 @@ mod tests {
             notifications,
             Arc::new(GroupOperationCoordinator::new()),
             source_resolver,
+            Arc::new(ShutdownCtrl::new()),
         );
         let stopped = Arc::new(AtomicBool::new(false));
         let (_services_tx, services) = flume::bounded(1);

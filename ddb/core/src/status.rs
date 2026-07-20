@@ -1,10 +1,6 @@
 use std::{collections::HashMap, sync::Mutex};
 use tracing::{debug, error, info};
 
-pub fn get_rt_status() -> &'static RuntimeStatus {
-    crate::context::app_context().runtime_status()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Component {
     CmdFlow,

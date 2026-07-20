@@ -1,18 +1,19 @@
 use anyhow::{Context, Result};
 use rumqttc::{MqttOptions, QoS};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::time::{self, Instant};
 use tracing::{debug, error};
 
-use crate::shutdown::get_shutdown_ctrl;
+use crate::shutdown::ShutdownCtrl;
 
 pub struct AsyncDiscoverClient {
     client: rumqttc::AsyncClient,
     el: rumqttc::EventLoop,
+    shutdown: Arc<ShutdownCtrl>,
 }
 
 impl AsyncDiscoverClient {
-    pub fn new(client_id: &str, host: &str, port: u16) -> Self {
+    pub fn new(client_id: &str, host: &str, port: u16, shutdown: Arc<ShutdownCtrl>) -> Self {
         use crate::common::{sd_defaults, utils};
 
         let mut mqttoptions = MqttOptions::new(client_id, host, port);
@@ -22,7 +23,11 @@ impl AsyncDiscoverClient {
         mqttoptions.set_keep_alive(Duration::from_secs(5));
 
         let (client, el) = rumqttc::AsyncClient::new(mqttoptions, 100);
-        AsyncDiscoverClient { client, el }
+        AsyncDiscoverClient {
+            client,
+            el,
+            shutdown,
+        }
     }
 
     pub async fn check_broker_online(&mut self, timeout: Duration) -> Result<()> {
@@ -39,7 +44,7 @@ impl AsyncDiscoverClient {
                 }
             }
 
-            if get_shutdown_ctrl().should_shutdown() {
+            if self.shutdown.should_shutdown() {
                 return Err(anyhow::anyhow!("Expect shutdown."))
                     .context("Aborting broker connection attempts due to shutdown signal.");
             }

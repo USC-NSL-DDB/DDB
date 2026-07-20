@@ -21,7 +21,7 @@ use crate::{
     notification::{Notification, NotificationManager, NotificationPayload},
     plugin::FrameworkPlugin,
     runtime_model::RuntimeModel,
-    shutdown::{get_shutdown_ctrl, ShutdownCause},
+    shutdown::{ShutdownCause, ShutdownCtrl},
     source::resolver::SourceResolver,
 };
 
@@ -50,6 +50,7 @@ pub(crate) struct SessionSupervisor {
     transitions: Mutex<()>,
     notifications: Arc<NotificationManager>,
     auto_shutdown: bool,
+    shutdown: Arc<ShutdownCtrl>,
 }
 
 impl SessionSupervisor {
@@ -61,6 +62,7 @@ impl SessionSupervisor {
         notifications: Arc<NotificationManager>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
+        shutdown: Arc<ShutdownCtrl>,
     ) -> Arc<Self> {
         let (lifecycle, lifecycle_events) = lifecycle::channel();
         Arc::new(Self {
@@ -82,6 +84,7 @@ impl SessionSupervisor {
             transitions: Mutex::new(()),
             notifications,
             auto_shutdown: config.conf.auto_shutdown,
+            shutdown,
         })
     }
 
@@ -228,7 +231,7 @@ impl SessionSupervisor {
         }
         if self.auto_shutdown && self.sessions.is_empty() {
             debug!("No more sessions. Possibly shutting down...");
-            get_shutdown_ctrl().trigger_once(ShutdownCause::NoSessions);
+            self.shutdown.trigger_once(ShutdownCause::NoSessions);
         }
     }
 

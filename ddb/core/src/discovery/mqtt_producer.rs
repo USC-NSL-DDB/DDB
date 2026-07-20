@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     common::sd_defaults, connection::ssh_client::SSHCred, dbg_ctrl::TransportSpec,
-    discovery::subscriber::AsyncDiscoverClient,
+    discovery::subscriber::AsyncDiscoverClient, shutdown::ShutdownCtrl,
 };
 
 fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
@@ -57,6 +57,7 @@ pub struct MqttProducer {
     handles: Vec<JoinHandle<()>>,
 
     config: Arc<crate::common::config::Config>,
+    shutdown: Arc<ShutdownCtrl>,
 }
 
 impl MqttProducer {
@@ -64,11 +65,13 @@ impl MqttProducer {
     pub fn new(
         managed_broker: Option<Box<dyn MessageBroker>>,
         config: Arc<crate::common::config::Config>,
+        shutdown: Arc<ShutdownCtrl>,
     ) -> Self {
         Self {
             managed_broker,
             handles: Vec::new(),
             config,
+            shutdown,
         }
     }
     fn monitor(
@@ -196,6 +199,7 @@ impl DiscoveryMessageProducer for MqttProducer {
             sd_defaults::CLIENT_ID,
             &broker_config.hostname,
             broker_config.port,
+            Arc::clone(&self.shutdown),
         );
         let connect_timeout = Duration::from_secs(broker_config.max_timeout_secs.unwrap_or(30));
         client.check_broker_online(connect_timeout).await?;

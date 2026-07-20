@@ -1,4 +1,6 @@
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::Arc;
+
+use anyhow::Result;
 
 use crate::{
     cmd_flow::{
@@ -7,7 +9,7 @@ use crate::{
     common::Config,
     dbg_mgr::DbgManager,
     debugger::DebuggerBackend,
-    feature::proclet_restore::ProcletRestorationMgr,
+    feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
     group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
     plugin::FrameworkPlugin,
@@ -20,29 +22,24 @@ use crate::{
     status::RuntimeStatus,
 };
 
-/// Owns process-wide services and wires their dependency boundaries once.
-pub struct AppContext {
+/// Immutable service graph owned by one application runtime.
+pub(crate) struct ApplicationServices {
     config: Arc<Config>,
-    plugin: Arc<dyn FrameworkPlugin>,
-    backend: Arc<dyn DebuggerBackend>,
     runtime_model: Arc<RuntimeModel>,
-    event_reducer: Arc<DebuggerEventReducer>,
     command_engine: Arc<CommandEngine>,
     command_router: Arc<Router>,
     notification_manager: Arc<NotificationManager>,
-    group_operations: Arc<GroupOperationCoordinator>,
     source_resolver: Arc<SourceResolver>,
-    shutdown: ShutdownCtrl,
-    runtime_status: RuntimeStatus,
-    debugger_manager: OnceLock<Weak<DbgManager>>,
+    debugger_manager: Arc<DbgManager>,
 }
 
-impl AppContext {
-    fn new(
+impl ApplicationServices {
+    async fn build(
         config: Arc<Config>,
         plugin: Arc<dyn FrameworkPlugin>,
         backend: Arc<dyn DebuggerBackend>,
-    ) -> Self {
+        shutdown: Arc<ShutdownCtrl>,
+    ) -> Result<Arc<Self>> {
         let runtime_model = RuntimeModel::new();
         let notification_manager = Arc::new(NotificationManager::new());
         let event_reducer = DebuggerEventReducer::new(
@@ -51,9 +48,12 @@ impl AppContext {
         );
         let command_router = Arc::new(Router::new(Arc::clone(&runtime_model)));
         let command_executor = CommandExecutor::new(Arc::clone(&command_router));
+        let proclet_queries =
+            ProcletQueryService::connect(config.as_ref(), plugin.as_ref()).await?;
         let proclet_restoration = Arc::new(ProcletRestorationMgr::new(
             Arc::clone(runtime_model.proclets()),
             command_executor.clone(),
+            Arc::clone(&proclet_queries),
         ));
         let group_operations = Arc::new(GroupOperationCoordinator::new());
         let source_resolver = SourceResolver::new(
@@ -71,107 +71,140 @@ impl AppContext {
             Arc::clone(&runtime_model),
             Arc::clone(&config),
             Arc::clone(&backend),
-            Arc::clone(&proclet_restoration),
+            proclet_restoration,
+            proclet_queries,
+        );
+        let debugger_manager = DbgManager::new(
+            Arc::clone(&config),
+            Arc::clone(&plugin),
+            Arc::clone(&backend),
+            Arc::clone(&runtime_model),
+            Arc::clone(&command_router),
+            Arc::clone(&notification_manager),
+            Arc::clone(&group_operations),
+            Arc::clone(&source_resolver),
+            Arc::clone(&event_reducer),
+            shutdown,
         );
 
-        Self {
+        Ok(Arc::new(Self {
             config,
-            plugin,
-            backend,
             runtime_model,
-            event_reducer,
             command_engine,
             command_router,
             notification_manager,
-            group_operations,
             source_resolver,
-            shutdown: ShutdownCtrl::new(),
-            runtime_status: RuntimeStatus::new(),
-            debugger_manager: OnceLock::new(),
-        }
+            debugger_manager,
+        }))
     }
 
-    pub fn config(&self) -> &Arc<Config> {
+    pub(crate) fn config(&self) -> &Arc<Config> {
         &self.config
     }
 
-    pub fn plugin(&self) -> &Arc<dyn FrameworkPlugin> {
-        &self.plugin
-    }
-
-    pub fn backend(&self) -> &Arc<dyn DebuggerBackend> {
-        &self.backend
-    }
-
-    pub fn runtime_model(&self) -> &Arc<RuntimeModel> {
+    pub(crate) fn runtime_model(&self) -> &Arc<RuntimeModel> {
         &self.runtime_model
     }
 
-    pub(crate) fn event_reducer(&self) -> &Arc<DebuggerEventReducer> {
-        &self.event_reducer
-    }
-
-    pub fn command_engine(&self) -> &Arc<CommandEngine> {
+    pub(crate) fn command_engine(&self) -> &Arc<CommandEngine> {
         &self.command_engine
     }
 
-    pub fn command_router(&self) -> &Arc<Router> {
+    pub(crate) fn command_router(&self) -> &Arc<Router> {
         &self.command_router
     }
 
-    pub fn notification_manager(&self) -> &Arc<NotificationManager> {
+    pub(crate) fn notification_manager(&self) -> &Arc<NotificationManager> {
         &self.notification_manager
-    }
-
-    pub(crate) fn group_operations(&self) -> &Arc<GroupOperationCoordinator> {
-        &self.group_operations
     }
 
     pub(crate) fn source_resolver(&self) -> &Arc<SourceResolver> {
         &self.source_resolver
     }
 
-    pub fn shutdown(&self) -> &ShutdownCtrl {
+    pub(crate) fn debugger_manager(&self) -> &Arc<DbgManager> {
+        &self.debugger_manager
+    }
+}
+
+/// Owns the service graph and lifecycle state for one DDB instance.
+pub(crate) struct ApplicationRuntime {
+    services: Arc<ApplicationServices>,
+    shutdown: Arc<ShutdownCtrl>,
+    status: Arc<RuntimeStatus>,
+}
+
+impl ApplicationRuntime {
+    pub(crate) async fn new(
+        config: Arc<Config>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        backend: Arc<dyn DebuggerBackend>,
+    ) -> Result<Self> {
+        let shutdown = Arc::new(ShutdownCtrl::new());
+        let status = Arc::new(RuntimeStatus::new());
+        let services =
+            ApplicationServices::build(config, plugin, backend, Arc::clone(&shutdown)).await?;
+        Ok(Self {
+            services,
+            shutdown,
+            status,
+        })
+    }
+
+    pub(crate) fn services(&self) -> &Arc<ApplicationServices> {
+        &self.services
+    }
+
+    pub(crate) fn shutdown(&self) -> &Arc<ShutdownCtrl> {
         &self.shutdown
     }
 
-    pub fn runtime_status(&self) -> &RuntimeStatus {
-        &self.runtime_status
-    }
-
-    pub fn set_debugger_manager(&self, manager: Weak<DbgManager>) {
-        self.debugger_manager
-            .set(manager)
-            .expect("DbgManager is already initialized");
-    }
-
-    pub fn debugger_manager(&self) -> Arc<DbgManager> {
-        self.debugger_manager
-            .get()
-            .and_then(Weak::upgrade)
-            .expect("DbgManager is not initialized")
+    pub(crate) fn status(&self) -> &Arc<RuntimeStatus> {
+        &self.status
     }
 }
 
-static APP_CONTEXT: OnceLock<AppContext> = OnceLock::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub fn init_app_context(
-    config: Arc<Config>,
-    plugin: Arc<dyn FrameworkPlugin>,
-    backend: Arc<dyn DebuggerBackend>,
-) -> &'static AppContext {
-    APP_CONTEXT.get_or_init(|| AppContext::new(config, plugin, backend))
-}
+    #[test]
+    fn lifecycle_state_is_owned_per_runtime() {
+        let first_shutdown = ShutdownCtrl::new();
+        let second_shutdown = ShutdownCtrl::new();
 
-pub fn app_context() -> &'static AppContext {
-    #[cfg(test)]
-    return APP_CONTEXT.get_or_init(|| {
+        first_shutdown.trigger_once(crate::shutdown::ShutdownCause::UserExit);
+
+        assert!(first_shutdown.should_shutdown());
+        assert!(!second_shutdown.should_shutdown());
+    }
+
+    #[tokio::test]
+    async fn complete_service_graphs_do_not_share_runtime_state() {
         let config = Arc::new(Config::default());
         let plugin = crate::plugin::resolve_framework_plugin(config.as_ref());
         let backend = crate::debugger::resolve_debugger_backend(config.as_ref());
-        AppContext::new(config, plugin, backend)
-    });
 
-    #[cfg(not(test))]
-    APP_CONTEXT.get().expect("AppContext is not initialized")
+        let first = ApplicationRuntime::new(
+            Arc::clone(&config),
+            Arc::clone(&plugin),
+            Arc::clone(&backend),
+        )
+        .await
+        .unwrap();
+        let second = ApplicationRuntime::new(config, plugin, backend)
+            .await
+            .unwrap();
+
+        assert!(!Arc::ptr_eq(
+            first.services().runtime_model(),
+            second.services().runtime_model(),
+        ));
+
+        first
+            .shutdown()
+            .trigger_once(crate::shutdown::ShutdownCause::UserExit);
+        assert!(first.shutdown().should_shutdown());
+        assert!(!second.shutdown().should_shutdown());
+    }
 }

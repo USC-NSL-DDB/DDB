@@ -8,11 +8,6 @@ use tracing::error;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Returns the global shutdown controller instance.
-pub fn get_shutdown_ctrl() -> &'static ShutdownCtrl {
-    crate::context::app_context().shutdown()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownCause {
     SigInt,
@@ -45,22 +40,13 @@ impl ShutdownCtrl {
 
     /// Waits asynchronously until a shutdown signal is triggered.
     ///
-    /// This function subscribes to the global shutdown controller and blocks until
+    /// This function subscribes to this controller and blocks until
     /// a shutdown event occurs (e.g., SIGINT, SIGTERM, or user exit).
     /// It returns immediately once the shutdown signal is received.
     ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use ddb::shutdown::ShutdownCtrl;
-    /// # async fn example() {
-    /// ShutdownCtrl::wait_for_exit().await;
-    /// println!("Shutdown signal received, cleaning up...");
-    /// # }
-    /// ```
     #[inline]
-    pub async fn wait_for_exit() {
-        let mut mgr_sig = get_shutdown_ctrl().subscribe();
+    pub async fn wait_for_exit(&self) {
+        let mut mgr_sig = self.subscribe();
         match mgr_sig.changed().await {
             Ok(_) => {}
             Err(e) => {

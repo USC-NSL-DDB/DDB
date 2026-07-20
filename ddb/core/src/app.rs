@@ -4,16 +4,23 @@ use tracing::{error, info};
 
 use crate::{
     api::server::ApiServer,
-    context::AppContext,
-    shutdown::{get_shutdown_ctrl, ShutdownCause},
+    context::ApplicationServices,
+    shutdown::{ShutdownCause, ShutdownCtrl},
+    status::RuntimeStatus,
 };
 
 pub struct App {
     api_svr: Arc<ApiServer>,
+    shutdown: Arc<ShutdownCtrl>,
 }
 
 impl App {
-    pub fn new(port: u16, services: &AppContext) -> Self {
+    pub fn new(
+        port: u16,
+        services: &ApplicationServices,
+        shutdown: Arc<ShutdownCtrl>,
+        status: Arc<RuntimeStatus>,
+    ) -> Self {
         let api_svr = Arc::new(ApiServer::new(
             format!("localhost:{port}"),
             Arc::clone(services.notification_manager()),
@@ -21,14 +28,16 @@ impl App {
             Arc::clone(services.command_engine()),
             Arc::clone(services.command_router()),
             Arc::clone(services.runtime_model()),
+            status,
         ));
-        App { api_svr }
+        App { api_svr, shutdown }
     }
 
     pub async fn run(&self, shutdown_rx: tokio::sync::watch::Receiver<bool>) -> anyhow::Result<()> {
         if let Err(error) = self.api_svr.run(shutdown_rx).await {
             error!("Error running server: {}", error);
-            get_shutdown_ctrl().trigger_once(ShutdownCause::ApiServerInitFailure);
+            self.shutdown
+                .trigger_once(ShutdownCause::ApiServerInitFailure);
             return Err(error.into());
         }
         info!("API server stopped");

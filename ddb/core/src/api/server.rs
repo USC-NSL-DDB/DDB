@@ -23,7 +23,7 @@ use crate::{
     runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
     state::{BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
-    status::{get_rt_status, Component},
+    status::{Component, RuntimeStatus},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -152,6 +152,7 @@ struct ApiState {
     command_engine: Arc<CommandEngine>,
     command_router: Arc<CommandRouter>,
     model: Arc<RuntimeModel>,
+    status: Arc<RuntimeStatus>,
 }
 
 impl FromRef<ApiState> for Arc<NotificationManager> {
@@ -178,6 +179,12 @@ impl FromRef<ApiState> for Arc<RuntimeModel> {
     }
 }
 
+impl FromRef<ApiState> for Arc<RuntimeStatus> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.status)
+    }
+}
+
 impl FromRef<ApiState> for Arc<SourceResolver> {
     fn from_ref(state: &ApiState) -> Self {
         Arc::clone(&state.source_resolver)
@@ -197,6 +204,7 @@ impl ApiServer {
         command_engine: Arc<CommandEngine>,
         command_router: Arc<CommandRouter>,
         model: Arc<RuntimeModel>,
+        status: Arc<RuntimeStatus>,
     ) -> Self {
         Self {
             addr: addr.into(),
@@ -206,6 +214,7 @@ impl ApiServer {
                 command_engine,
                 command_router,
                 model,
+                status,
             },
         }
     }
@@ -242,7 +251,7 @@ impl ApiServer {
 
         let listener = tokio::net::TcpListener::bind(self.addr.clone()).await?;
         info!("[API Server]: Listening on {}", listener.local_addr()?);
-        get_rt_status().up(Component::Api);
+        self.state.status.up(Component::Api);
 
         let shutdown = async move {
             let _ = shutdown_rx.changed().await;
@@ -348,8 +357,8 @@ async fn send_cmd(
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_status() -> impl IntoResponse {
-    let is_up = crate::status::get_rt_status().is_up();
+async fn get_status(State(status): State<Arc<RuntimeStatus>>) -> impl IntoResponse {
+    let is_up = status.is_up();
     if is_up {
         (StatusCode::OK, Json(json!({"status": "up"})))
     } else {
