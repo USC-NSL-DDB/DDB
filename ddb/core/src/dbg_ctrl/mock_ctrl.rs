@@ -391,6 +391,23 @@ impl MockAttachController {
         .into()
     }
 
+    fn source_files_payload(state: &MockDebuggerState) -> Dict {
+        vec![(
+            "files".to_string(),
+            Value::List(vec![Value::Dict(
+                vec![
+                    ("file".to_string(), state.config.source_file.clone().into()),
+                    (
+                        "fullname".to_string(),
+                        state.config.source_file.clone().into(),
+                    ),
+                ]
+                .into(),
+            )]),
+        )]
+        .into()
+    }
+
     fn breakpoint_payload(bkpt: &MockBreakpoint) -> Dict {
         vec![(
             "bkpt".to_string(),
@@ -526,6 +543,13 @@ impl MockAttachController {
                 let payload = {
                     let state = state.lock().await;
                     Self::list_thread_groups_payload(&state)
+                };
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
+            "-file-list-exec-source-files" => {
+                let payload = {
+                    let state = state.lock().await;
+                    Self::source_files_payload(&state)
                 };
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
