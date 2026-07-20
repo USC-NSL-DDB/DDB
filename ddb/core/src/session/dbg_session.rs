@@ -4,7 +4,12 @@ use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig, DbgStartMode};
 use crate::cmd_flow::{
-    api, decoder::BreakpointCreated, get_router, session_runtime::SessionHandle, Target,
+    api,
+    breakpoint::{publish_breakpoint_state_change, publish_breakpoint_state_changes},
+    decoder::BreakpointCreated,
+    get_router,
+    session_runtime::SessionHandle,
+    Target,
 };
 use crate::common;
 use crate::common::Config;
@@ -158,14 +163,19 @@ impl DbgSession {
                     .await
                     .with_context(|| format!("Failed to insert existing breakpoint at {}", path))?;
                 let local_id = BreakpointCreated::decode_first(&response)?.local_id;
-                get_bkpt_mgr()
-                    .attach_group_breakpoint_session_target(
-                        breakpoint.id(),
-                        group_id,
-                        self.sid,
-                        local_id,
-                    )
-                    .await;
+                let breakpoints = get_bkpt_mgr();
+                let change = breakpoints.attach_group_breakpoint_session_target(
+                    breakpoint.id(),
+                    group_id,
+                    self.sid,
+                    local_id,
+                );
+                publish_breakpoint_state_change(
+                    breakpoints,
+                    change,
+                    "setting up group breakpoint for new session",
+                )
+                .await;
             }
         }
         Ok(())
@@ -179,10 +189,17 @@ impl DbgSession {
         debug!("Cleaning up session with config: {:?}", self.config);
         get_state_mgr().update_session_status_off(self.sid).await;
         get_router().remove_session(self.sid);
-        get_bkpt_mgr()
-            .clean_bkpts_for_terminated_session(self.sid)
-            .await;
-        get_group_mgr().remove_session(self.sid);
+        let groups = get_group_mgr();
+        let group_id = groups.group_id_by_session(self.sid);
+        let breakpoints = get_bkpt_mgr();
+        let changes = breakpoints.clean_bkpts_for_terminated_session(self.sid, group_id);
+        publish_breakpoint_state_changes(
+            breakpoints,
+            changes,
+            "cleaning breakpoints for terminated session",
+        )
+        .await;
+        groups.remove_session(self.sid);
         get_state_mgr().remove_session(self.sid).await;
 
         let mut first_error = None;

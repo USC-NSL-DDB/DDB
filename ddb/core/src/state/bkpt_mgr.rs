@@ -6,15 +6,8 @@ use std::{
     },
 };
 
-use tracing::{debug, warn};
-
-use super::{get_group_mgr, GroupId};
-use crate::{
-    common::counter::SimpleCounter,
-    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
-    notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
-    state::SessionId,
-};
+use super::GroupId;
+use crate::{common::counter::SimpleCounter, state::SessionId};
 
 #[derive(Debug, Clone)]
 pub struct GroupBkptTarget {
@@ -509,13 +502,13 @@ impl BreakpointMgr {
             .collect()
     }
 
-    pub async fn attach_group_breakpoint_session_target(
+    pub fn attach_group_breakpoint_session_target(
         &self,
         bkpt_id: u64,
         grp_id: GroupId,
         sid: SessionId,
         local_bkpt_id: u64,
-    ) {
+    ) -> BreakpointStateChange {
         let updated = {
             let mut state = self.state.write().unwrap();
             let subbkpt_ids = if let Some(bkpt) = state.bkpts.get_mut(&bkpt_id) {
@@ -543,15 +536,20 @@ impl BreakpointMgr {
             }
             !subbkpt_ids.is_empty()
         };
+
         if updated {
-            self.emit_target_changed(bkpt_id, "setting up group bkpt for new session")
-                .await;
+            BreakpointStateChange::TargetChanged(bkpt_id)
+        } else {
+            BreakpointStateChange::None
         }
     }
 
-    pub async fn clean_bkpts_for_terminated_session(&self, sid: SessionId) {
-        let grp_id = get_group_mgr().group_id_by_session(sid);
-        let changes = {
+    pub fn clean_bkpts_for_terminated_session(
+        &self,
+        sid: SessionId,
+        grp_id: Option<GroupId>,
+    ) -> Vec<BreakpointStateChange> {
+        {
             let mut state = self.state.write().unwrap();
             let bkpt_ids = state.bkpts.keys().copied().collect::<Vec<_>>();
             let mut changes = Vec::new();
@@ -577,19 +575,6 @@ impl BreakpointMgr {
                 .local_bkpt_to_global
                 .retain(|(session_id, _), _| *session_id != sid);
             changes
-        };
-
-        for change in changes {
-            match change {
-                BreakpointStateChange::Removed(bkpt_id) => {
-                    self.emit_removed(bkpt_id).await;
-                }
-                BreakpointStateChange::TargetChanged(bkpt_id) => {
-                    self.emit_target_changed(bkpt_id, "cleaning bkpts for terminated session")
-                        .await;
-                }
-                BreakpointStateChange::None => {}
-            }
         }
     }
 
@@ -636,19 +621,6 @@ impl BreakpointMgr {
         }
     }
 
-    pub async fn delete_local_bkpt(&self, sid: SessionId, local_bkpt_id: u64) {
-        match self.record_local_bkpt_deletion(sid, local_bkpt_id) {
-            BreakpointStateChange::Removed(bkpt_id) => {
-                self.emit_removed(bkpt_id).await;
-            }
-            BreakpointStateChange::TargetChanged(bkpt_id) => {
-                self.emit_target_changed(bkpt_id, "deleting local breakpoint")
-                    .await;
-            }
-            BreakpointStateChange::None => {}
-        }
-    }
-
     fn register_subbkpt(state: &mut BreakpointState, subbkpt: &SubBkptMeta) {
         for (session_id, local_bkpt_id) in subbkpt.local_ids() {
             Self::insert_local_bkpt_id_index(
@@ -680,39 +652,6 @@ impl BreakpointMgr {
                 Self::delete_group_bkpt(state, group_id, subbkpt.major_bkpt_id);
             }
         }
-    }
-
-    async fn emit_target_changed(&self, bkpt_id: u64, context: &str) {
-        if let Some(bkpt) = self.breakpoint(bkpt_id) {
-            let out = MIFormatter::format("=", "breakpoint-modified", Some(&bkpt.into()), None);
-            println!("{}", out);
-            debug!("output: {}", out);
-
-            get_notif_mgr()
-                .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                    BreakpointChangeEvent::TargetChanged(bkpt_id),
-                )))
-                .await;
-        } else {
-            warn!("Failed to find bkpt {} when {}", bkpt_id, context);
-        }
-    }
-
-    async fn emit_removed(&self, bkpt_id: u64) {
-        let out = MIFormatter::format(
-            "=",
-            "breakpoint-deleted",
-            Some(&bkpt_deleted_payload(bkpt_id)),
-            None,
-        );
-        println!("{}", out);
-        debug!("output: {}", out);
-
-        get_notif_mgr()
-            .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                BreakpointChangeEvent::Removed(bkpt_id),
-            )))
-            .await;
     }
 }
 
@@ -806,5 +745,56 @@ mod tests {
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
         assert!(mgr.group_breakpoints(7).is_empty());
         assert!(!mgr.state.read().unwrap().group_bkpts.contains_key(&7));
+    }
+
+    #[test]
+    fn attaching_group_target_returns_change_without_publishing() {
+        let mgr = BreakpointMgr::new();
+        let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
+        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(GroupSubBkpt::new(7)));
+
+        assert_eq!(
+            mgr.attach_group_breakpoint_session_target(bkpt_id, 7, 11, 101),
+            BreakpointStateChange::TargetChanged(bkpt_id)
+        );
+        assert_eq!(
+            mgr.breakpoint_ids_by_local_id(11, 101).map(|ids| ids.0),
+            Some(bkpt_id)
+        );
+        assert_eq!(
+            mgr.attach_group_breakpoint_session_target(bkpt_id, 8, 12, 202),
+            BreakpointStateChange::None
+        );
+    }
+
+    #[test]
+    fn cleaning_session_returns_all_state_changes_and_keeps_indexes_consistent() {
+        let mgr = BreakpointMgr::new();
+
+        let retained_bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
+        let mut group_subbkpt = GroupSubBkpt::new(7);
+        group_subbkpt.add_local_bkpt(11, 101);
+        group_subbkpt.add_local_bkpt(12, 202);
+        mgr.add_sub_breakpoint(retained_bkpt_id, SubBkptType::Group(group_subbkpt));
+
+        let removed_bkpt_id = mgr.add_breakpoint(BkptLoc::from(["worker.rs", "20"]));
+        mgr.add_sub_breakpoint(
+            removed_bkpt_id,
+            SubBkptType::Session(SessionSubBkpt::new(303, 11)),
+        );
+
+        let changes = mgr.clean_bkpts_for_terminated_session(11, Some(7));
+
+        assert_eq!(changes.len(), 2);
+        assert!(changes.contains(&BreakpointStateChange::TargetChanged(retained_bkpt_id)));
+        assert!(changes.contains(&BreakpointStateChange::Removed(removed_bkpt_id)));
+        assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
+        assert_eq!(mgr.breakpoint_ids_by_local_id(11, 303), None);
+        assert_eq!(
+            mgr.breakpoint_ids_by_local_id(12, 202).map(|ids| ids.0),
+            Some(retained_bkpt_id)
+        );
+        assert!(mgr.breakpoint(retained_bkpt_id).is_some());
+        assert!(mgr.breakpoint(removed_bkpt_id).is_none());
     }
 }

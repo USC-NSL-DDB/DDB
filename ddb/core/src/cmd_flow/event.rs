@@ -5,6 +5,7 @@ use gdbmi::{raw::Dict, Token};
 use tracing::trace;
 
 use crate::{
+    cmd_flow::breakpoint::publish_breakpoint_state_change,
     session::lifecycle::SessionTerminationCause,
     state::{get_bkpt_mgr, get_group_mgr, ThreadStatus, STATES},
 };
@@ -278,9 +279,9 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
         DebuggerEventKind::BreakpointDeleted {
             local_breakpoint_id,
         } => {
-            get_bkpt_mgr()
-                .delete_local_bkpt(sid, local_breakpoint_id)
-                .await;
+            let breakpoints = get_bkpt_mgr();
+            let change = breakpoints.record_local_bkpt_deletion(sid, local_breakpoint_id);
+            publish_breakpoint_state_change(breakpoints, change, "deleting local breakpoint").await;
             Ok(EventProjection::default())
         }
         DebuggerEventKind::ThreadCreated {
