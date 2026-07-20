@@ -237,6 +237,51 @@ impl ProcletHeap {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct SourceFiles {
+    pub(crate) paths: Vec<String>,
+}
+
+impl SourceFiles {
+    pub(crate) fn decode(completion: &FinishedCmd) -> Result<Self, DecodeError> {
+        let payload = Payload::first(completion)?;
+        let files = match payload.value("files")? {
+            Value::List(files) => files,
+            _ => {
+                return Err(DecodeError::UnexpectedType {
+                    sid: payload.sid(),
+                    field: "files",
+                    expected: "a list",
+                });
+            }
+        };
+
+        let mut paths = Vec::with_capacity(files.len());
+        for file in files {
+            let Value::Dict(file) = file else {
+                return Err(DecodeError::UnexpectedType {
+                    sid: payload.sid(),
+                    field: "files[]",
+                    expected: "a dictionary",
+                });
+            };
+            match file.get("fullname") {
+                None => {}
+                Some(Value::String(path)) => paths.push(path.clone()),
+                Some(_) => {
+                    return Err(DecodeError::UnexpectedType {
+                        sid: payload.sid(),
+                        field: "fullname",
+                        expected: "a string",
+                    });
+                }
+            }
+        }
+
+        Ok(Self { paths })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -322,5 +367,50 @@ mod tests {
                 message: "heap unavailable".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn source_listing_skips_unresolved_files_and_preserves_full_paths() {
+        let payload: Dict = HashMap::from([(
+            "files".to_string(),
+            Value::List(vec![
+                Dict::from(HashMap::from([(
+                    "fullname".to_string(),
+                    Value::from("/src/main.rs"),
+                )]))
+                .into(),
+                Dict::from(HashMap::from([(
+                    "file".to_string(),
+                    Value::from("generated.rs"),
+                )]))
+                .into(),
+            ]),
+        )])
+        .into();
+
+        assert_eq!(
+            SourceFiles::decode(&completion(3, Some(payload))).unwrap(),
+            SourceFiles {
+                paths: vec!["/src/main.rs".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_source_listing_is_rejected_without_panicking() {
+        let payload: Dict = HashMap::from([(
+            "files".to_string(),
+            Value::List(vec![Value::from("not-a-record")]),
+        )])
+        .into();
+
+        assert!(matches!(
+            SourceFiles::decode(&completion(8, Some(payload))),
+            Err(DecodeError::UnexpectedType {
+                sid: 8,
+                field: "files[]",
+                ..
+            })
+        ));
     }
 }
