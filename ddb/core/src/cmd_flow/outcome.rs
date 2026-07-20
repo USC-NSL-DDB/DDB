@@ -27,7 +27,7 @@ enum CliOutputPart {
 ///
 /// `response` is shared by HTTP, CLI, and internal callers. `cli_output` only
 /// describes how the CLI adapter should present that same operation; command
-/// handlers never print directly.
+/// command operations never print directly.
 #[derive(Debug, Clone, Default)]
 pub struct CommandOutcome {
     response: Option<FinishedCmd>,

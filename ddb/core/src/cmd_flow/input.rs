@@ -139,7 +139,7 @@ impl InputCmdParser {
     // - 1. Extracts out the prefix, which is expected to be the command type, e.g. `-thread-select`.
     // - 2. Based on the command, it determines the routing target. `--all` can be recognized by DDB.
     // - 3. Extracts out the rest of the arguments, stripping/swaping out the custom args that gdb cannot recognize.
-    // Note: The routing target can be overwritten by the specific handler.
+    // Note: The routing target can be overwritten by the selected operation.
     // Returns:
     //   - Target, Command Prefix, Rest of the Command (stripped/swapped out of custom args)
     #[inline]

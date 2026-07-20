@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
@@ -8,14 +8,9 @@ use super::{
     api::CommandExecutor,
     backtrace::DistributedBacktraceService,
     breakpoint::BreakpointService,
+    dispatcher::CommandDispatcher,
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
-    handler::{
-        BreakDeleteHandler, BreakInsertHandler, ContinueHandler, DefaultHandler,
-        DistributeBacktraceHandler, ExecFinishHandler, ExecJumpHandler, ExecNextHandler,
-        ExecStepHandler, Handler, InterruptHandler, ListGroupsHandler, ListHandler,
-        ListSignalsHandler, SendSignalHandler, ThreadInfoHandler, ThreadSelectHandler,
-    },
     input::ParsedInputCmd,
     router::{Router, Target},
     transaction::TransactionCoordinator,
@@ -58,8 +53,7 @@ impl CommandError {
 /// detached-work admission. Session runtimes continue to own transport I/O,
 /// response correlation, and per-session ordering.
 pub struct CommandEngine {
-    handlers: HashMap<String, Arc<dyn Handler>>,
-    default_handler: Arc<dyn Handler>,
+    dispatcher: CommandDispatcher,
     router: Arc<Router>,
     state: Arc<StateMgr>,
     source_resolver: Arc<SourceResolver>,
@@ -104,90 +98,16 @@ impl CommandEngine {
             transactions,
             proclet_restoration,
         ));
-        let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
-        handlers.insert(
-            "-break-insert".into(),
-            Arc::new(BreakInsertHandler::new(Arc::clone(&breakpoint_service))),
-        );
-        handlers.insert(
-            "-break-delete".into(),
-            Arc::new(BreakDeleteHandler::new(breakpoint_service)),
-        );
-        handlers.insert(
-            "-thread-info".into(),
-            Arc::new(ThreadInfoHandler::new(Arc::clone(&state), executor.clone())),
-        );
-        handlers.insert(
-            "-exec-continue".into(),
-            Arc::new(ContinueHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-record-time-and-continue".into(),
-            Arc::new(ContinueHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-exec-interrupt".into(),
-            Arc::new(InterruptHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-file-list-lines".into(),
-            Arc::new(ListHandler::new(executor.clone())),
-        );
-        handlers.insert(
-            "-thread-select".into(),
-            Arc::new(ThreadSelectHandler::new(
-                Arc::clone(&state),
-                executor.clone(),
-            )),
-        );
-        handlers.insert(
-            "-bt-remote".into(),
-            Arc::new(DistributeBacktraceHandler::new(backtrace_service)),
-        );
-        handlers.insert(
-            "-list-thread-groups".into(),
-            Arc::new(ListGroupsHandler::new(Arc::clone(&state), executor.clone())),
-        );
-        handlers.insert(
-            "-exec-next".into(),
-            Arc::new(ExecNextHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-exec-step".into(),
-            Arc::new(ExecStepHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-exec-finish".into(),
-            Arc::new(ExecFinishHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-record-time-and-next".into(),
-            Arc::new(ExecNextHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-record-time-and-step".into(),
-            Arc::new(ExecStepHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-record-time-and-finish".into(),
-            Arc::new(ExecFinishHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-exec-jump".into(),
-            Arc::new(ExecJumpHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-send-signal".into(),
-            Arc::new(SendSignalHandler::new(Arc::clone(&execution_service))),
-        );
-        handlers.insert(
-            "-list-signals".into(),
-            Arc::new(ListSignalsHandler::new(Arc::clone(&execution_service))),
+        let dispatcher = CommandDispatcher::new(
+            breakpoint_service,
+            execution_service,
+            backtrace_service,
+            Arc::clone(&state),
+            executor,
         );
 
         Arc::new(Self {
-            handlers,
-            default_handler: Arc::new(DefaultHandler::new(executor)),
+            dispatcher,
             router,
             state,
             source_resolver,
@@ -263,9 +183,8 @@ impl CommandEngine {
         let external_token = parsed.external_token;
         let prefix = parsed.prefix.clone();
         debug!(%prefix, target = ?parsed.target, "dispatching command");
-        let handler = self.handlers.get(&prefix).unwrap_or(&self.default_handler);
-        handler
-            .process_cmd(parsed)
+        self.dispatcher
+            .dispatch(parsed)
             .await
             .map_err(|source| CommandError::new(external_token, source))
     }
