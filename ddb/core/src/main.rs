@@ -164,7 +164,7 @@ async fn run_command_flow() -> Result<()> {
 }
 
 async fn run_debugger_manager() -> Result<()> {
-    let dbg_mgr = DbgManager::new().await;
+    let dbg_mgr = DbgManager::new().await?;
     init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
 
     if let Err(error) = dbg_mgr.start().await {

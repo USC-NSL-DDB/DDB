@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use russh::client::Config as RusshClientConfig;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -41,93 +41,84 @@ impl DbgManager {
     async fn init_discovery(&self) -> Result<()> {
         let config = self.config;
         let plugin = get_framework_plugin();
-        // Discovery is bursty, but session creation is comparatively expensive.
-        // Bound the handoff so producers slow down instead of accumulating an
-        // unbounded number of pending sessions.
         let (producer_tx, producer_rx) =
             flume::bounded::<crate::discovery::ServiceInfo>(SERVICE_DISCOVERY_QUEUE_CAPACITY);
+
         match plugin.service_discovery_mode(config) {
             ServiceDiscoveryMode::MessageBroker => {
-                let sd = config
+                let discovery = config
                     .service_discovery
                     .as_ref()
-                    .ok_or(anyhow!("ERROR: broker is not specified when it is needed."))?;
-
-                if let Some(managed_broker_conf) = sd.broker.managed.as_ref() {
-                    let b: Box<dyn MessageBroker> = match managed_broker_conf.broker_type {
-                        common::config::BrokerType::Mosquitto => Box::new(MosquittoBroker::new()),
-                        common::config::BrokerType::Emqx => Box::new(EMQXBroker::new()),
-                        _ => {
-                            panic!("Broker type not supported yet.");
-                        }
+                    .ok_or_else(|| anyhow!("message-broker discovery requires configuration"))?;
+                let managed_broker: Option<Box<dyn MessageBroker>> =
+                    match discovery.broker.managed.as_ref() {
+                        Some(managed) => Some(match managed.broker_type {
+                            common::config::BrokerType::Mosquitto => {
+                                Box::new(MosquittoBroker::new())
+                            }
+                            common::config::BrokerType::Emqx => Box::new(EMQXBroker::new()),
+                            common::config::BrokerType::Unknown => {
+                                bail!("managed broker type must be mosquitto or emqx")
+                            }
+                        }),
+                        None => None,
                     };
-                    let mut mqtt_producer =
-                        crate::discovery::mqtt_producer::MqttProducer::new(Some(b), &config);
-                    let producer_tx_clone = producer_tx.clone();
 
-                    // Note: start_producing may fail if the broker is offline.
-                    // We delay the error checking as we want to have `sd` to be initialized first.
-                    // So that it can be cleaned up properly in case of failure (via `cleanup`).
-                    let result = mqtt_producer.start_producing(producer_tx_clone).await;
-
-                    self.discovery.lock().await.replace(DiscoveryRuntime::new(
-                        Box::new(mqtt_producer),
-                        producer_rx,
-                        None,
-                        self.factory,
-                        Arc::clone(&self.supervisor),
-                    ));
-
-                    match result {
-                        Ok(_) => {
-                            info!("MQTT broker/producer started successfully.");
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    }
-                }
+                let mut producer =
+                    crate::discovery::mqtt_producer::MqttProducer::new(managed_broker, config);
+                let start_result = producer.start_producing(producer_tx.clone()).await;
+                self.discovery.lock().await.replace(DiscoveryRuntime::new(
+                    Box::new(producer),
+                    producer_rx,
+                    None,
+                    self.factory,
+                    Arc::clone(&self.supervisor),
+                ));
+                start_result.context("failed to start MQTT discovery producer")?;
+                info!("MQTT discovery producer started successfully");
             }
             ServiceDiscoveryMode::Kubernetes => {
-                let swc = config
+                let service_weaver = config
                     .service_discovery
                     .as_ref()
-                    .and_then(|sd| sd.service_weaver_conf.as_ref())
-                    .expect("Service weaver config missing for service weaver auto discovery.");
+                    .and_then(|discovery| discovery.service_weaver_conf.as_ref())
+                    .ok_or_else(|| {
+                        anyhow!("Kubernetes discovery requires Service Weaver configuration")
+                    })?;
                 let (exited_sender, _exited) = tokio::sync::watch::channel(false);
                 let jump_client_config = RusshClientConfig {
                     nodelay: true,
                     ..RusshClientConfig::default()
                 };
-                let mut jump_host_session = russh::client::connect(
+                let mut jump_host = russh::client::connect(
                     Arc::new(jump_client_config),
-                    (swc.jump_client_host.clone(), swc.jump_client_port),
+                    (
+                        service_weaver.jump_client_host.clone(),
+                        service_weaver.jump_client_port,
+                    ),
                     crate::connection::ssh_client_channel::SSHProxyClientHandler(exited_sender),
                 )
                 .await
-                .unwrap();
-                match jump_host_session
+                .context("failed to connect to the Kubernetes SSH jump host")?;
+
+                match jump_host
                     .authenticate_password(
-                        swc.jump_client_user.clone(),
-                        swc.jump_client_password.clone(),
+                        service_weaver.jump_client_user.clone(),
+                        service_weaver.jump_client_password.clone(),
                     )
                     .await
+                    .context("failed to authenticate with the Kubernetes SSH jump host")?
                 {
-                    Ok(auth_result) => match auth_result {
-                        russh::client::AuthResult::Success => {
-                            debug!("Password authentication successful");
-                        }
-                        russh::client::AuthResult::Failure {
-                            remaining_methods, ..
-                        } => {
-                            panic!(
-                                "Password authentication failed. Available methods: {:?}",
-                                remaining_methods
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        panic!("Authentication error: {:?}", e);
+                    russh::client::AuthResult::Success => {
+                        debug!("jump-host password authentication succeeded");
+                    }
+                    russh::client::AuthResult::Failure {
+                        remaining_methods, ..
+                    } => {
+                        bail!(
+                            "jump-host password authentication failed; remaining methods: {:?}",
+                            remaining_methods
+                        );
                     }
                 }
 
@@ -135,28 +126,29 @@ impl DbgManager {
                 // but not for connections that only use direct-tcpip channels.
                 // Run a no-op command once so small forwarded replies are not
                 // held behind the peer's delayed ACK timer.
-                let mut latency_channel = jump_host_session.channel_open_session().await.unwrap();
-                latency_channel.exec(true, "true").await.unwrap();
-                while latency_channel.wait().await.is_some() {}
-
-                let jump_host_session = Arc::new(jump_host_session);
-                let mut serviceweaver_producer = crate::discovery::k8s_producer::K8sProducer::new(
-                    config.clone(),
-                    swc.service_name.clone(),
-                );
-                let producer_tx_clone = producer_tx.clone();
-                serviceweaver_producer
-                    .start_producing(producer_tx_clone)
+                let mut latency_channel = jump_host
+                    .channel_open_session()
                     .await
-                    .unwrap();
-
+                    .context("failed to open the Kubernetes SSH latency warm-up channel")?;
+                latency_channel
+                    .exec(true, "true")
+                    .await
+                    .context("failed to prime the Kubernetes SSH jump host")?;
+                while latency_channel.wait().await.is_some() {}
+                let jump_host = Arc::new(jump_host);
+                let mut producer = crate::discovery::k8s_producer::K8sProducer::new(
+                    config.clone(),
+                    service_weaver.service_name.clone(),
+                );
+                let start_result = producer.start_producing(producer_tx.clone()).await;
                 self.discovery.lock().await.replace(DiscoveryRuntime::new(
-                    Box::new(serviceweaver_producer),
+                    Box::new(producer),
                     producer_rx,
-                    Some(jump_host_session),
+                    Some(jump_host),
                     self.factory,
                     Arc::clone(&self.supervisor),
                 ));
+                start_result.context("failed to start Kubernetes discovery producer")?;
             }
             ServiceDiscoveryMode::None => {}
         }
@@ -197,11 +189,11 @@ impl DbgManager {
 }
 
 impl DbgManager {
-    pub async fn new() -> Arc<Self> {
+    pub async fn new() -> Result<Arc<Self>> {
         Self::new_with_config(DDBConfig::global()).await
     }
 
-    pub async fn new_with_config(config: &'static DDBConfig) -> Arc<Self> {
+    pub async fn new_with_config(config: &'static DDBConfig) -> Result<Arc<Self>> {
         let plugin = get_framework_plugin();
 
         let proclet_ctrl = if plugin.supports_migration(config) {
@@ -209,21 +201,21 @@ impl DbgManager {
             Some(
                 ProcletCtrlClient::try_connect_default()
                     .await
-                    .expect("Failed to connect to proclet controller"),
+                    .context("failed to connect to proclet controller")?,
             )
         } else {
             debug!("[Migration SUPPORT]: DISABLED. SKIP initializing proxy proclet controller.");
             None
         };
 
-        Arc::new(DbgManager {
+        Ok(Arc::new(DbgManager {
             supervisor: SessionSupervisor::new(config),
             factory: SessionFactory::new(config),
             discovery: Mutex::new(None),
             proclet_ctrl,
             config,
             static_session_handles: Mutex::new(Vec::new()),
-        })
+        }))
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<()> {
