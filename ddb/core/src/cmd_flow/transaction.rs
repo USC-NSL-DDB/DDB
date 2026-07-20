@@ -6,10 +6,8 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    cmd_flow::{get_router, router::Router, session_runtime::SessionLease},
-    state::{get_state_mgr, SessionRef, StateMgr},
-};
+use crate::cmd_flow::{router::Router, session_runtime::SessionLease};
+use crate::state::{SessionRef, StateMgr};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionError {
@@ -86,21 +84,10 @@ impl fmt::Debug for TransactionCoordinator {
     }
 }
 
-pub async fn begin(sid: u64) -> Result<SessionTransaction, TransactionError> {
-    begin_with_related(sid, std::iter::empty()).await
-}
-
 fn ordered_session_ids(primary_sid: u64, related: impl IntoIterator<Item = u64>) -> Vec<u64> {
     let mut session_ids = related.into_iter().collect::<BTreeSet<_>>();
     session_ids.insert(primary_sid);
     session_ids.into_iter().collect()
-}
-
-pub async fn begin_with_related(
-    primary_sid: u64,
-    related: impl IntoIterator<Item = u64>,
-) -> Result<SessionTransaction, TransactionError> {
-    acquire_transaction(get_state_mgr(), get_router().as_ref(), primary_sid, related).await
 }
 
 async fn acquire_transaction(

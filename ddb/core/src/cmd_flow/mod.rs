@@ -6,6 +6,7 @@
 //! projection. No transport channels cross component boundaries.
 
 pub mod api;
+pub(crate) mod backtrace;
 pub(crate) mod breakpoint;
 pub(crate) mod decoder;
 pub mod engine;
@@ -24,7 +25,6 @@ pub mod session_runtime;
 pub(crate) mod transaction;
 
 use std::sync::Arc;
-use thiserror::Error;
 
 pub use outcome::*;
 pub use output::*;
@@ -45,10 +45,4 @@ pub fn get_command_engine() -> &'static Arc<CommandEngine> {
 // FIXME: make this private
 pub fn get_router() -> &'static Arc<Router> {
     crate::context::app_context().command_router()
-}
-
-#[derive(Debug, Error)]
-pub enum DebuggerDataErr {
-    #[error("Missing entry: {0}")]
-    MissingEntry(String),
 }

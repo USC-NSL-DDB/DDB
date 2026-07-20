@@ -6,6 +6,7 @@ use tracing::{debug, error};
 
 use super::{
     api::CommandExecutor,
+    backtrace::DistributedBacktraceService,
     breakpoint::BreakpointService,
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
@@ -22,6 +23,7 @@ use super::{
 };
 use crate::{
     debugger::get_debugger_backend,
+    feature::get_proclet_restore_mgr,
     notification::NotificationManager,
     state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
 };
@@ -80,9 +82,16 @@ impl CommandEngine {
         ));
         let execution_service = Arc::new(ExecutionService::new(
             state,
+            executor.clone(),
+            transactions.clone(),
+            Arc::clone(get_debugger_backend()),
+        ));
+        let backtrace_service = Arc::new(DistributedBacktraceService::new(
+            adapter,
+            state,
             executor,
             transactions,
-            Arc::clone(get_debugger_backend()),
+            get_proclet_restore_mgr(),
         ));
         let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
         handlers.insert(
@@ -116,7 +125,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-bt-remote".into(),
-            Arc::new(DistributeBacktraceHandler::new(adapter)),
+            Arc::new(DistributeBacktraceHandler::new(backtrace_service)),
         );
         handlers.insert(
             "-list-thread-groups".into(),
