@@ -19,6 +19,7 @@ mod plugin;
 mod session;
 mod setup;
 mod shutdown;
+mod source;
 mod state;
 mod status;
 
