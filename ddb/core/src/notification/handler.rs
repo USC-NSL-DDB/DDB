@@ -1,4 +1,4 @@
-use super::manager::{NotificationManager, SubscribeError, SUBSCRIBER_QUEUE_CAPACITY};
+use super::manager::{NotificationManager, SubscribeError, MAX_SUBSCRIBERS};
 use super::message::{CustomEvent, Notification, NotificationPayload};
 use axum::{
     extract::{
@@ -13,7 +13,6 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// WebSocket subscription endpoint
@@ -26,73 +25,62 @@ pub async fn notification_subscribe_handler(
 
 async fn handle_socket(socket: WebSocket, manager: Arc<NotificationManager>) {
     let (mut sender, mut receiver) = socket.split();
-    let (tx, mut rx) = mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
-
-    // Subscribe to notifications
-    let subscriber_id = match manager.subscribe(tx) {
-        Ok(id) => id,
+    let mut subscription = match manager.subscribe() {
+        Ok(subscription) => subscription,
         Err(SubscribeError::MaxSubscribersReached) => {
             error!("Cannot accept new subscriber: max limit reached");
             return;
         }
     };
+    let subscriber_id = subscription.id();
 
     info!(
         "WebSocket connection established for subscriber {}",
         subscriber_id
     );
-
-    // Send welcome message with subscriber ID
     let welcome = json!({
         "type": "welcome",
         "subscriber_id": subscriber_id.to_string(),
-        "max_subscribers": 20,
+        "max_subscribers": MAX_SUBSCRIBERS,
     });
-
-    let welcome_msg = Message::Text(welcome.to_string());
-    if sender.send(welcome_msg).await.is_err() {
-        manager.unsubscribe(subscriber_id);
+    if sender
+        .send(Message::Text(welcome.to_string()))
+        .await
+        .is_err()
+    {
         return;
     }
 
-    // Forward messages from notification channel to WebSocket
-    let mut send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if sender.send(msg).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Handle incoming WebSocket messages (mostly pongs)
-    let subscriber_id_clone = subscriber_id;
-    let manager_clone = Arc::clone(&manager);
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            match msg {
-                Message::Pong(_) => {
-                    debug!("Received pong from subscriber {}", subscriber_id_clone);
-                    manager_clone.record_pong(subscriber_id_clone).await;
-                }
-                Message::Close(_) => {
-                    info!("Client {} requested close", subscriber_id_clone);
+    loop {
+        tokio::select! {
+            outgoing = subscription.recv() => {
+                let Some(message) = outgoing else {
+                    break;
+                };
+                if sender.send(message).await.is_err() {
                     break;
                 }
-                _ => {
-                    // Ignore other message types (we only send, don't receive commands)
+            }
+            incoming = receiver.next() => {
+                match incoming {
+                    Some(Ok(Message::Pong(_))) => {
+                        debug!("Received pong from subscriber {}", subscriber_id);
+                        manager.record_pong(subscriber_id);
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        info!("Client {} requested close", subscriber_id);
+                        break;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => {
+                        debug!(subscriber_id = %subscriber_id, ?error, "WebSocket receive failed");
+                        break;
+                    }
+                    None => break,
                 }
             }
         }
-        manager_clone.unsubscribe(subscriber_id_clone);
-    });
-
-    // Wait for either task to complete
-    tokio::select! {
-        _ = (&mut send_task) => recv_task.abort(),
-        _ = (&mut recv_task) => send_task.abort(),
     }
-
-    manager.unsubscribe(subscriber_id);
 }
 
 /// Status endpoint
@@ -103,7 +91,7 @@ pub async fn notification_status_handler(
         StatusCode::OK,
         Json(json!({
             "subscriber_count": manager.subscriber_count(),
-            "max_subscribers": 20,
+            "max_subscribers": MAX_SUBSCRIBERS,
         })),
     )
 }

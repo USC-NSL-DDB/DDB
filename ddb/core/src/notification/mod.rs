@@ -7,6 +7,4 @@ pub use handler::{
     notification_status_handler, notification_subscribe_handler, test_notification_handler,
 };
 pub use manager::NotificationManager;
-pub use message::{
-    BreakpointChangeEvent, CustomEvent, Notification, NotificationPayload, SessionStatusEvent,
-};
+pub use message::{BreakpointChangeEvent, Notification, NotificationPayload};
