@@ -24,6 +24,7 @@ use super::{
 use crate::{
     debugger::get_debugger_backend,
     feature::get_proclet_restore_mgr,
+    group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
     source::resolver::SourceResolver,
     state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
@@ -72,6 +73,7 @@ impl CommandEngine {
         adapter: Arc<dyn FrameworkCommandAdapter>,
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
+        group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Arc<Self> {
         let state = get_state_mgr();
@@ -82,6 +84,7 @@ impl CommandEngine {
             get_group_mgr(),
             notifications,
             executor.clone(),
+            group_operations,
         ));
         let execution_service = Arc::new(ExecutionService::new(
             state,

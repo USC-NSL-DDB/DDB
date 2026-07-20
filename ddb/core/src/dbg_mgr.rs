@@ -10,6 +10,7 @@ use crate::discovery::{
     runtime::DiscoveryRuntime,
 };
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
+use crate::group_operation::GroupOperationCoordinator;
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
 use crate::source::resolver::SourceResolver;
@@ -190,12 +191,16 @@ impl DbgManager {
 }
 
 impl DbgManager {
-    pub(crate) async fn new(source_resolver: Arc<SourceResolver>) -> Result<Arc<Self>> {
-        Self::new_with_config(DDBConfig::global(), source_resolver).await
+    pub(crate) async fn new(
+        group_operations: Arc<GroupOperationCoordinator>,
+        source_resolver: Arc<SourceResolver>,
+    ) -> Result<Arc<Self>> {
+        Self::new_with_config(DDBConfig::global(), group_operations, source_resolver).await
     }
 
     pub(crate) async fn new_with_config(
         config: &'static DDBConfig,
+        group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Result<Arc<Self>> {
         let plugin = get_framework_plugin();
@@ -213,7 +218,7 @@ impl DbgManager {
         };
 
         Ok(Arc::new(DbgManager {
-            supervisor: SessionSupervisor::new(config, source_resolver),
+            supervisor: SessionSupervisor::new(config, group_operations, source_resolver),
             factory: SessionFactory::new(config),
             discovery: Mutex::new(None),
             proclet_ctrl,

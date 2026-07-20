@@ -5,6 +5,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
+    group_operation::GroupOperationCoordinator,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
     state::{
         BkptLoc, BreakpointMgr, BreakpointStateChange, GroupMgr, GroupSubBkpt, SessionSubBkpt,
@@ -79,6 +80,7 @@ pub(crate) struct BreakpointService {
     groups: &'static GroupMgr,
     notifications: Arc<NotificationManager>,
     executor: CommandExecutor,
+    group_operations: Arc<GroupOperationCoordinator>,
 }
 
 impl BreakpointService {
@@ -87,13 +89,33 @@ impl BreakpointService {
         groups: &'static GroupMgr,
         notifications: Arc<NotificationManager>,
         executor: CommandExecutor,
+        group_operations: Arc<GroupOperationCoordinator>,
     ) -> Self {
         Self {
             breakpoints,
             groups,
             notifications,
             executor,
+            group_operations,
         }
+    }
+
+    fn group_ids_for_breakpoint(&self, breakpoint_id: u64) -> Vec<u64> {
+        self.breakpoints
+            .breakpoint(breakpoint_id)
+            .map(|breakpoint| {
+                breakpoint
+                    .sub_breakpoints()
+                    .iter()
+                    .filter_map(|sub_breakpoint| match sub_breakpoint.kind() {
+                        SubBkptType::Group(group_breakpoint) => {
+                            Some(group_breakpoint.target_group())
+                        }
+                        SubBkptType::Session(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) async fn insert(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
@@ -208,6 +230,10 @@ impl BreakpointService {
         let breakpoint_id = args
             .parse::<u64>()
             .with_context(|| format!("Invalid breakpoint id {}", args))?;
+        let group_operations = self
+            .group_operations
+            .lock_many(self.group_ids_for_breakpoint(breakpoint_id))
+            .await;
         for (session_id, local_breakpoint_id) in
             self.breakpoints.local_breakpoint_ids(breakpoint_id)
         {
@@ -225,6 +251,7 @@ impl BreakpointService {
         }
 
         self.breakpoints.remove_breakpoint(breakpoint_id);
+        drop(group_operations);
         let record = MIFormatter::format(
             "=",
             "breakpoint-deleted",
@@ -246,6 +273,7 @@ impl BreakpointService {
         debugger_command: &str,
         group_id: u64,
     ) -> Result<()> {
+        let _group_operation = self.group_operations.lock(group_id).await;
         let group = self
             .groups
             .group_by_id(group_id)
@@ -327,7 +355,7 @@ impl BreakpointService {
         breakpoint_id: u64,
         sub_breakpoint_id: u64,
     ) -> Result<BreakpointStateChange> {
-        let sub_breakpoint = self
+        let mut sub_breakpoint = self
             .breakpoints
             .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
             .ok_or_else(|| {
@@ -337,6 +365,26 @@ impl BreakpointService {
                     sub_breakpoint_id
                 )
             })?;
+        let group_operation = match sub_breakpoint.kind() {
+            SubBkptType::Group(group_breakpoint) => Some(
+                self.group_operations
+                    .lock(group_breakpoint.target_group())
+                    .await,
+            ),
+            SubBkptType::Session(_) => None,
+        };
+        if group_operation.is_some() {
+            sub_breakpoint = self
+                .breakpoints
+                .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Sub-breakpoint {} of breakpoint {} disappeared while waiting for its group operation",
+                        sub_breakpoint_id,
+                        breakpoint_id
+                    )
+                })?;
+        }
 
         match sub_breakpoint.kind() {
             SubBkptType::Session(session_breakpoint) => self

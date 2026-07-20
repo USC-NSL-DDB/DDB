@@ -16,6 +16,7 @@ use super::{
 };
 use crate::{
     common::Config,
+    group_operation::GroupOperationCoordinator,
     notification::{get_notif_mgr, Notification, NotificationPayload},
     shutdown::{get_shutdown_ctrl, ShutdownCause},
     source::resolver::SourceResolver,
@@ -48,11 +49,19 @@ pub(crate) struct SessionSupervisor {
 }
 
 impl SessionSupervisor {
-    pub(crate) fn new(config: &'static Config, source_resolver: Arc<SourceResolver>) -> Arc<Self> {
+    pub(crate) fn new(
+        config: &'static Config,
+        group_operations: Arc<GroupOperationCoordinator>,
+        source_resolver: Arc<SourceResolver>,
+    ) -> Arc<Self> {
         let (lifecycle, lifecycle_events) = lifecycle::channel();
         Arc::new(Self {
             sessions: DashMap::new(),
-            activation: SessionActivation::new(config, Arc::clone(&source_resolver)),
+            activation: SessionActivation::new(
+                config,
+                group_operations,
+                Arc::clone(&source_resolver),
+            ),
             source_resolver,
             lifecycle,
             lifecycle_events: Mutex::new(Some(lifecycle_events)),

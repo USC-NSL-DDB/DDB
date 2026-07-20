@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use crate::{
     cmd_flow::{api::CommandExecutor, engine::CommandEngine, router::Router},
     dbg_mgr::DbgManager,
+    group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
     plugin::FrameworkCommandAdapter,
     shutdown::ShutdownCtrl,
@@ -19,6 +20,7 @@ pub struct AppContext {
     command_engine: Arc<CommandEngine>,
     command_router: Arc<Router>,
     notification_manager: Arc<NotificationManager>,
+    group_operations: Arc<GroupOperationCoordinator>,
     source_resolver: Arc<SourceResolver>,
     shutdown: ShutdownCtrl,
     runtime_status: RuntimeStatus,
@@ -29,6 +31,7 @@ impl AppContext {
     fn new(command_adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
         let command_router = Arc::new(Router::new());
         let notification_manager = Arc::new(NotificationManager::new());
+        let group_operations = Arc::new(GroupOperationCoordinator::new());
         let source_resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
             Arc::clone(get_group_mgr()),
@@ -39,6 +42,7 @@ impl AppContext {
             command_adapter,
             Arc::clone(&command_router),
             Arc::clone(&notification_manager),
+            Arc::clone(&group_operations),
             Arc::clone(&source_resolver),
         );
 
@@ -46,6 +50,7 @@ impl AppContext {
             command_engine,
             command_router,
             notification_manager,
+            group_operations,
             source_resolver,
             shutdown: ShutdownCtrl::new(),
             runtime_status: RuntimeStatus::new(),
@@ -63,6 +68,10 @@ impl AppContext {
 
     pub fn notification_manager(&self) -> &Arc<NotificationManager> {
         &self.notification_manager
+    }
+
+    pub(crate) fn group_operations(&self) -> &Arc<GroupOperationCoordinator> {
+        &self.group_operations
     }
 
     pub(crate) fn source_resolver(&self) -> &Arc<SourceResolver> {

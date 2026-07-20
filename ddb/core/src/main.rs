@@ -13,6 +13,7 @@ mod debugger;
 mod discovery;
 mod feature;
 mod global;
+mod group_operation;
 mod logging;
 mod notification;
 mod plugin;
@@ -31,6 +32,7 @@ use cmd_flow::{format_error, get_command_engine};
 use common::config::Config;
 use dbg_mgr::DbgManager;
 use debugger::{init_debugger_backend, resolve_debugger_backend};
+use group_operation::GroupOperationCoordinator;
 use plugin::{get_framework_plugin, init_framework_plugin, resolve_framework_plugin};
 use setup::LoggingSettings;
 use setup::{AppDirConfig, SetupProcedure};
@@ -165,8 +167,11 @@ async fn run_command_flow() -> Result<()> {
     Ok(())
 }
 
-async fn run_debugger_manager(source_resolver: Arc<SourceResolver>) -> Result<()> {
-    let dbg_mgr = DbgManager::new(source_resolver).await?;
+async fn run_debugger_manager(
+    group_operations: Arc<GroupOperationCoordinator>,
+    source_resolver: Arc<SourceResolver>,
+) -> Result<()> {
+    let dbg_mgr = DbgManager::new(group_operations, source_resolver).await?;
     init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
 
     if let Err(error) = dbg_mgr.start().await {
@@ -202,6 +207,7 @@ async fn run_notification_manager() -> Result<()> {
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
 async fn run_main(command_workers: usize) -> Result<()> {
     let services = context::app_context();
+    let group_operations = Arc::clone(services.group_operations());
     let source_resolver = Arc::clone(services.source_resolver());
     let app = App::new(
         Config::global().conf.api_server_port,
@@ -214,7 +220,7 @@ async fn run_main(command_workers: usize) -> Result<()> {
     tasks.spawn(async move {
         (
             "debugger-manager",
-            run_debugger_manager(source_resolver).await,
+            run_debugger_manager(group_operations, source_resolver).await,
         )
     });
     tasks.spawn(async { ("notification-manager", run_notification_manager().await) });

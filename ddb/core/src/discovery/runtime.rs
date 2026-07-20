@@ -95,6 +95,7 @@ mod tests {
     use crate::{
         cmd_flow::{api::CommandExecutor, router::Router},
         common::Config,
+        group_operation::GroupOperationCoordinator,
         source::{
             catalog::SourceCatalog,
             resolver::{SourceResolutionPolicy, SourceResolver},
@@ -129,7 +130,11 @@ mod tests {
             CommandExecutor::new(router),
             SourceResolutionPolicy::OnDemand,
         );
-        let supervisor = SessionSupervisor::new(config, source_resolver);
+        let supervisor = SessionSupervisor::new(
+            config,
+            Arc::new(GroupOperationCoordinator::new()),
+            source_resolver,
+        );
         let stopped = Arc::new(AtomicBool::new(false));
         let (_services_tx, services) = flume::bounded(1);
         let mut runtime = DiscoveryRuntime::new(
