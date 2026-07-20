@@ -5,10 +5,12 @@
 //! commands without exposing transport channels or presentation concerns.
 
 use anyhow::{Context, Result};
+use std::{fmt, sync::Arc};
 
 use super::{
     get_router,
     input::{Command, ParsedInputCmd},
+    router::Router,
     FinishedCmd,
 };
 
@@ -20,6 +22,33 @@ pub enum Error {
     InvalidPrefix(String),
     #[error("Command execution failed: {0}")]
     Execution(#[from] anyhow::Error),
+}
+
+/// Executes internal debugger commands through an explicitly owned router.
+///
+/// Application services use this instead of rediscovering the process-wide
+/// router for every command they compose.
+#[derive(Clone)]
+pub(crate) struct CommandExecutor {
+    router: Arc<Router>,
+}
+
+impl CommandExecutor {
+    pub(crate) fn new(router: Arc<Router>) -> Self {
+        Self { router }
+    }
+
+    pub(crate) async fn execute(&self, command_text: &str, target: Target) -> Result<FinishedCmd> {
+        let request = command(command_text)?.target(target);
+        let (target, command) = request.into_parts();
+        self.router.execute(target, command).await
+    }
+}
+
+impl fmt::Debug for CommandExecutor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("CommandExecutor").finish()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -15,6 +15,7 @@ use crate::common;
 use crate::common::Config;
 use crate::dbg_ctrl::DebuggerTransportHandle;
 use crate::debugger::get_debugger_backend;
+use crate::notification::get_notif_mgr;
 use crate::plugin::get_framework_plugin;
 use crate::session::lifecycle::SessionTerminationReporter;
 #[cfg(not(feature = "lazy_source_map"))]
@@ -154,6 +155,7 @@ impl DbgSession {
 
     pub async fn sync_bkpts_state(&self) -> Result<()> {
         if let Some(group_id) = get_group_mgr().group_id_by_session(self.sid) {
+            let notifications = get_notif_mgr();
             for breakpoint in get_bkpt_mgr().group_breakpoints(group_id) {
                 let path = breakpoint.location().breakpoint_path();
                 let response = api::command(&format!("-break-insert {}", path))?
@@ -172,6 +174,7 @@ impl DbgSession {
                 );
                 publish_breakpoint_state_change(
                     breakpoints,
+                    notifications.as_ref(),
                     change,
                     "setting up group breakpoint for new session",
                 )
@@ -193,8 +196,10 @@ impl DbgSession {
         let group_id = groups.group_id_by_session(self.sid);
         let breakpoints = get_bkpt_mgr();
         let changes = breakpoints.clean_bkpts_for_terminated_session(self.sid, group_id);
+        let notifications = get_notif_mgr();
         publish_breakpoint_state_changes(
             breakpoints,
+            notifications.as_ref(),
             changes,
             "cleaning breakpoints for terminated session",
         )

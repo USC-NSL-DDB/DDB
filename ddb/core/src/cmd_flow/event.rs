@@ -6,6 +6,7 @@ use tracing::trace;
 
 use crate::{
     cmd_flow::breakpoint::publish_breakpoint_state_change,
+    notification::get_notif_mgr,
     session::lifecycle::SessionTerminationCause,
     state::{get_bkpt_mgr, get_group_mgr, ThreadStatus, STATES},
 };
@@ -280,8 +281,15 @@ pub(crate) async fn project_event(event: DebuggerEvent, sid: u64) -> Result<Even
             local_breakpoint_id,
         } => {
             let breakpoints = get_bkpt_mgr();
+            let notifications = get_notif_mgr();
             let change = breakpoints.record_local_bkpt_deletion(sid, local_breakpoint_id);
-            publish_breakpoint_state_change(breakpoints, change, "deleting local breakpoint").await;
+            publish_breakpoint_state_change(
+                breakpoints,
+                notifications.as_ref(),
+                change,
+                "deleting local breakpoint",
+            )
+            .await;
             Ok(EventProjection::default())
         }
         DebuggerEventKind::ThreadCreated {

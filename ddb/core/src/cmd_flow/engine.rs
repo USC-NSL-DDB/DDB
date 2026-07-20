@@ -5,6 +5,8 @@ use tokio::sync::Semaphore;
 use tracing::{debug, error};
 
 use super::{
+    api::CommandExecutor,
+    breakpoint::BreakpointService,
     framework_adapter::FrameworkCommandAdapter,
     handler::{
         BreakDeleteHandler, BreakInsertHandler, ContinueHandler, DefaultHandler,
@@ -16,7 +18,10 @@ use super::{
     router::{Router, Target},
     CommandOutcome,
 };
-use crate::state::get_state_mgr;
+use crate::{
+    notification::NotificationManager,
+    state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
+};
 
 const DETACHED_COMMAND_LIMIT: usize = 256;
 
@@ -56,11 +61,27 @@ pub struct CommandEngine {
 }
 
 impl CommandEngine {
-    pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>, router: Arc<Router>) -> Arc<Self> {
+    pub fn new(
+        adapter: Arc<dyn FrameworkCommandAdapter>,
+        router: Arc<Router>,
+        notifications: Arc<NotificationManager>,
+    ) -> Arc<Self> {
         let state = get_state_mgr();
+        let breakpoint_service = Arc::new(BreakpointService::new(
+            get_bkpt_mgr(),
+            get_group_mgr(),
+            notifications,
+            CommandExecutor::new(Arc::clone(&router)),
+        ));
         let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
-        handlers.insert("-break-insert".into(), Arc::new(BreakInsertHandler::new()));
-        handlers.insert("-break-delete".into(), Arc::new(BreakDeleteHandler::new()));
+        handlers.insert(
+            "-break-insert".into(),
+            Arc::new(BreakInsertHandler::new(Arc::clone(&breakpoint_service))),
+        );
+        handlers.insert(
+            "-break-delete".into(),
+            Arc::new(BreakDeleteHandler::new(breakpoint_service)),
+        );
         handlers.insert(
             "-thread-info".into(),
             Arc::new(ThreadInfoHandler::new(state)),

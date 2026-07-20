@@ -22,12 +22,17 @@ pub struct AppContext {
 impl AppContext {
     fn new(command_adapter: Arc<dyn FrameworkCommandAdapter>) -> Self {
         let command_router = Arc::new(Router::new());
-        let command_engine = CommandEngine::new(command_adapter, Arc::clone(&command_router));
+        let notification_manager = Arc::new(NotificationManager::new());
+        let command_engine = CommandEngine::new(
+            command_adapter,
+            Arc::clone(&command_router),
+            Arc::clone(&notification_manager),
+        );
 
         Self {
             command_engine,
             command_router,
-            notification_manager: Arc::new(NotificationManager::new()),
+            notification_manager,
             shutdown: ShutdownCtrl::new(),
             runtime_status: RuntimeStatus::new(),
             debugger_manager: OnceLock::new(),

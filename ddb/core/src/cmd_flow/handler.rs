@@ -1,37 +1,24 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     cmd_flow::transaction,
     common::Config,
-    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
     debugger::get_debugger_backend,
     feature::get_proclet_restore_mgr,
-    notification::{get_notif_mgr, BreakpointChangeEvent, Notification, NotificationPayload},
-    state::{
-        get_bkpt_mgr, get_group_mgr, get_state_mgr, BkptLoc, BreakpointStateChange, GroupSubBkpt,
-        LocalThreadId, SessionRef, SessionSubBkpt, SubBkptType, ThreadContext, ThreadStatus,
-        STATES,
-    },
+    state::{get_state_mgr, LocalThreadId, SessionRef, ThreadContext, ThreadStatus, STATES},
 };
 
 use super::{
-    api,
-    decoder::{BreakpointCreated, Payload},
-    framework_adapter::FrameworkCommandAdapter,
-    input::ParsedInputCmd,
-    query::QueryProjector,
-    router::Target,
-    CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse, Presentation,
+    api, breakpoint::BreakpointService, decoder::Payload,
+    framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, query::QueryProjector,
+    router::Target, CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse,
+    Presentation,
 };
 
 /// Command operation selected by the engine after parsing and target resolution.
@@ -72,80 +59,13 @@ impl Handler for DefaultHandler {
 }
 
 #[derive(Debug)]
-pub struct BreakInsertHandler;
-impl BreakInsertHandler {
-    pub fn new() -> Self {
-        BreakInsertHandler
-    }
+pub struct BreakInsertHandler {
+    service: Arc<BreakpointService>,
 }
 
 impl BreakInsertHandler {
-    fn parse_breakpoint_location(args: &str) -> Result<BkptLoc> {
-        let location = args
-            .trim()
-            .rsplit_once(char::is_whitespace)
-            .map(|(_, tail)| tail)
-            .unwrap_or(args)
-            .trim_matches(['"', '\'']);
-        let (src, line) = location.rsplit_once(':').ok_or_else(|| {
-            anyhow!(
-                "Unsupported breakpoint location '{}'. Expected <file>:<line>.",
-                location
-            )
-        })?;
-        if src.is_empty() {
-            bail!("Breakpoint source path cannot be empty");
-        }
-        let line = line
-            .parse::<u64>()
-            .map_err(|_| anyhow!("Invalid breakpoint line '{}'", line))?;
-        Ok(BkptLoc::new(src, line))
-    }
-
-    async fn insert_bkpts_for_group(major_bkpt_id: u64, cmd: &str, gid: u64) -> Result<()> {
-        let mut grp_bkpt = GroupSubBkpt::new(gid);
-
-        // Check if group exists and has active sessions
-        let grp = match get_group_mgr().group_by_id(gid) {
-            Some(g) => g,
-            None => {
-                warn!("Group {} does not exist", gid);
-                return Err(anyhow!("Group {} does not exist", gid));
-            }
-        };
-        let sids = grp.session_ids();
-
-        // Only send breakpoint command if group has active sessions
-        // If empty, the breakpoint will be applied later when sessions join via sync_bkpts_state()
-        if !sids.is_empty() {
-            let ret = api::command(cmd)?
-                .target(Target::Group(gid))
-                .execute()
-                .await?;
-            for resp in ret.get_responses() {
-                let breakpoint = BreakpointCreated::decode(resp)?;
-                // TODO: work out how to store `times` information.
-                let _times = breakpoint.times;
-                grp_bkpt.add_local_bkpt(resp.get_sid(), breakpoint.local_id);
-            }
-        }
-
-        let subbkpt = SubBkptType::Group(grp_bkpt);
-        get_bkpt_mgr().add_sub_breakpoint(major_bkpt_id, subbkpt);
-        Ok(())
-    }
-
-    async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) -> Result<()> {
-        let ret = api::command(cmd)?
-            .target(Target::Session(sid))
-            .execute()
-            .await?;
-        let breakpoint = BreakpointCreated::decode_first(&ret)?;
-        let _times = breakpoint.times;
-        // TODO: work out how to store `times` information.
-        let subbkpt = SubBkptType::Session(SessionSubBkpt::new(breakpoint.local_id, sid));
-        get_bkpt_mgr().add_sub_breakpoint(major_bkpt_id, subbkpt);
-        Ok(())
+    pub(crate) fn new(service: Arc<BreakpointService>) -> Self {
+        Self { service }
     }
 }
 
@@ -153,248 +73,18 @@ impl BreakInsertHandler {
 impl Handler for BreakInsertHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if !matches!(
-            cmd.target,
-            Target::Session(_) | Target::Group(_) | Target::Multiple(_)
-        ) {
-            bail!("break-insert requires a session, group, or multiple target");
-        }
-
-        let full_cmd = cmd.full_cmd();
-        let args = &cmd.args;
-        let bkpt_loc = Self::parse_breakpoint_location(args)?;
-        let bkpt_id = get_bkpt_mgr().add_breakpoint(bkpt_loc);
-
-        match cmd.target {
-            Target::Session(sid) => {
-                if let Err(e) = Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await {
-                    get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                    bail!(
-                        "Failed to insert breakpoint into session {}: {}",
-                        sid,
-                        e.to_string()
-                    );
-                }
-            }
-            Target::Group(gid) => {
-                if let Err(e) = Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await {
-                    get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                    bail!(
-                        "Failed to insert breakpoint into group {}: {}",
-                        gid,
-                        e.to_string()
-                    );
-                }
-            }
-            Target::Multiple(targets) => {
-                // dedup to ensure:
-                // 1. no deuplicate targets
-                // 2. if the session targets are already included in one of the group targets, skip them.
-                // 3. drop other targets, only support for session and group targets.
-                // result: deduped Vec<Target>
-                // let mut deduped_targets: Vec<Target> = Vec::new();
-                let groupped_sids = targets
-                    .iter()
-                    .filter_map(|ele| match ele {
-                        Target::Group(gid) => get_group_mgr()
-                            .group_by_id(*gid)
-                            .map(|grp| grp.session_ids().clone()),
-                        _ => None,
-                    })
-                    .flatten()
-                    .collect::<HashSet<u64>>();
-                let dedupped_targets = targets
-                    .iter()
-                    .filter(|target| match target {
-                        Target::Session(sid) => !groupped_sids.contains(sid),
-                        _ => true,
-                    })
-                    .collect::<Vec<&Target>>();
-                for t in dedupped_targets {
-                    match *t {
-                        Target::Session(sid) => {
-                            if let Err(e) =
-                                Self::insert_bkpts_for_session(bkpt_id, &full_cmd, sid).await
-                            {
-                                warn!(
-                                    "Failed to insert breakpoint into session {}: {}",
-                                    sid,
-                                    e.to_string()
-                                );
-                            }
-                        }
-                        Target::Group(gid) => {
-                            if let Err(e) =
-                                Self::insert_bkpts_for_group(bkpt_id, &full_cmd, gid).await
-                            {
-                                warn!(
-                                    "Failed to insert breakpoint into group {}: {}",
-                                    gid,
-                                    e.to_string()
-                                );
-                            }
-                        }
-                        _ => {
-                            // skip other target types
-                        }
-                    }
-                }
-            }
-            _ => {
-                get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                bail!("unsupported breakpoint target: {:?}", cmd.target);
-            }
-        }
-
-        if get_bkpt_mgr().breakpoint_is_empty(bkpt_id) == Some(true) {
-            get_bkpt_mgr().remove_breakpoint(bkpt_id);
-            bail!("Failed to insert breakpoint into any target.");
-        }
-
-        match get_bkpt_mgr().breakpoint(bkpt_id) {
-            Some(bkpt) => {
-                let payload = bkpt.clone().into();
-
-                get_notif_mgr()
-                    .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                        BreakpointChangeEvent::Added((&bkpt).into()),
-                    )))
-                    .await;
-                Ok(CommandOutcome::completed(
-                    cmd.external_token,
-                    0,
-                    "done",
-                    Some(payload),
-                    Presentation::Plain,
-                ))
-            }
-            None => bail!("Failed to find inserted breakpoint with id {}", bkpt_id),
-        }
+        self.service.insert(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct BreakDeleteHandler;
-impl BreakDeleteHandler {
-    pub fn new() -> Self {
-        BreakDeleteHandler
-    }
+pub struct BreakDeleteHandler {
+    service: Arc<BreakpointService>,
 }
 
 impl BreakDeleteHandler {
-    async fn delete_local_bkpt(sid: u64, local_bkpt_id: u64) -> Result<BreakpointStateChange> {
-        let ret = api::command(&format!("-break-delete {}", local_bkpt_id))
-            .unwrap()
-            .target(Target::Session(sid))
-            .execute()
-            .await?;
-        let response = ret.get_responses().first().unwrap();
-        if response.get_message() == "done" {
-            Ok(get_bkpt_mgr().record_local_bkpt_deletion(sid, local_bkpt_id))
-        } else {
-            warn!(
-                "Failed to delete local breakpoint {} from session {}: {:?}",
-                local_bkpt_id, sid, response
-            );
-            bail!(
-                "Failed to delete local breakpoint {} from session {}",
-                local_bkpt_id,
-                sid
-            );
-        }
-    }
-
-    fn merge_state_change(
-        current: BreakpointStateChange,
-        next: BreakpointStateChange,
-    ) -> BreakpointStateChange {
-        match (current, next) {
-            (BreakpointStateChange::Removed(bkpt_id), _)
-            | (_, BreakpointStateChange::Removed(bkpt_id)) => {
-                BreakpointStateChange::Removed(bkpt_id)
-            }
-            (BreakpointStateChange::TargetChanged(bkpt_id), _)
-            | (_, BreakpointStateChange::TargetChanged(bkpt_id)) => {
-                BreakpointStateChange::TargetChanged(bkpt_id)
-            }
-            _ => BreakpointStateChange::None,
-        }
-    }
-
-    fn finalize_explicit_subbkpt_delete(
-        bkpt_id: u64,
-        subbkpt_id: u64,
-    ) -> Result<BreakpointStateChange> {
-        get_bkpt_mgr().remove_sub_breakpoint(bkpt_id, subbkpt_id);
-        match get_bkpt_mgr().breakpoint_is_empty(bkpt_id) {
-            Some(true) => {
-                get_bkpt_mgr().remove_breakpoint(bkpt_id);
-                Ok(BreakpointStateChange::Removed(bkpt_id))
-            }
-            Some(false) => Ok(BreakpointStateChange::TargetChanged(bkpt_id)),
-            None => Ok(BreakpointStateChange::None),
-        }
-    }
-
-    async fn delete_sub_breakpoint(bkpt_id: u64, subbkpt_id: u64) -> Result<BreakpointStateChange> {
-        if let Some(subbkpt) = get_bkpt_mgr().sub_breakpoint(bkpt_id, subbkpt_id) {
-            match subbkpt.kind() {
-                SubBkptType::Session(sess_subbkpt) => {
-                    let sid = sess_subbkpt.target_session();
-                    let local_bkpt_id = sess_subbkpt.local_id();
-                    let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
-                    match ret {
-                        Ok(change) => return Ok(change),
-                        Err(e) => {
-                            bail!(
-                                "Failed to delete breakpoint {} from session {}. Error: {}",
-                                local_bkpt_id,
-                                sid,
-                                e
-                            );
-                        }
-                    }
-                }
-                SubBkptType::Group(group_subbkpt) => {
-                    let mut error = false;
-                    let local_ids = group_subbkpt.local_ids();
-                    if local_ids.is_empty() {
-                        return Self::finalize_explicit_subbkpt_delete(bkpt_id, subbkpt_id);
-                    }
-
-                    let mut change = BreakpointStateChange::None;
-                    for (sid, local_bkpt_id) in local_ids {
-                        let ret = Self::delete_local_bkpt(sid, local_bkpt_id).await;
-                        match ret {
-                            Ok(local_change) => {
-                                change = Self::merge_state_change(change, local_change);
-                            }
-                            Err(e) => {
-                                error = true;
-                                error!(
-                                    "Failed to delete breakpoint {} from session {}: {}",
-                                    local_bkpt_id, sid, e
-                                );
-                            }
-                        }
-                    }
-                    if error {
-                        bail!(
-                            "Failed to delete some breakpoints from group sub-breakpoint {}",
-                            subbkpt_id
-                        );
-                    } else {
-                        return Ok(change);
-                    }
-                }
-            }
-        } else {
-            bail!(
-                "No sub-breakpoint found for deletion with bkpt_id {} and subbkpt_id {}",
-                bkpt_id,
-                subbkpt_id
-            );
-        }
+    pub(crate) fn new(service: Arc<BreakpointService>) -> Self {
+        Self { service }
     }
 }
 
@@ -402,107 +92,7 @@ impl BreakDeleteHandler {
 impl Handler for BreakDeleteHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let args = cmd.args.trim();
-        if args.is_empty() {
-            bail!("No breakpoint id provided for deletion.");
-        }
-
-        let bkpt_id: u64;
-        if let Some((bkpt_id_str, subbkpt_id_str)) = args.split_once(char::is_whitespace) {
-            bkpt_id = bkpt_id_str
-                .parse::<u64>()
-                .with_context(|| format!("Invalid breakpoint id {}", bkpt_id_str))?;
-            let subbkpt_id = subbkpt_id_str
-                .parse::<u64>()
-                .with_context(|| format!("Invalid sub-breakpoint id {}", subbkpt_id_str))?;
-            match Self::delete_sub_breakpoint(bkpt_id, subbkpt_id).await? {
-                BreakpointStateChange::TargetChanged(bkpt_id) => {
-                    if let Some(bkpt) = get_bkpt_mgr().breakpoint(bkpt_id) {
-                        let record = MIFormatter::format(
-                            "=",
-                            "breakpoint-modified",
-                            Some(&bkpt.clone().into()),
-                            None,
-                        );
-
-                        get_notif_mgr()
-                            .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                                BreakpointChangeEvent::Updated((&bkpt).into()),
-                            )))
-                            .await;
-                        let mut outcome = CommandOutcome::completed(
-                            cmd.external_token,
-                            0,
-                            "done",
-                            None,
-                            Presentation::Plain,
-                        );
-                        outcome.push_record(record);
-                        return Ok(outcome);
-                    }
-                    bail!("Breakpoint {} disappeared after deletion", bkpt_id);
-                }
-                BreakpointStateChange::Removed(bkpt_id) => {
-                    let record = MIFormatter::format(
-                        "=",
-                        "breakpoint-deleted",
-                        Some(&bkpt_deleted_payload(bkpt_id)),
-                        None,
-                    );
-
-                    get_notif_mgr()
-                        .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                            BreakpointChangeEvent::Removed(bkpt_id),
-                        )))
-                        .await;
-                    let mut outcome = CommandOutcome::completed(
-                        cmd.external_token,
-                        0,
-                        "done",
-                        None,
-                        Presentation::Plain,
-                    );
-                    outcome.push_record(record);
-                    return Ok(outcome);
-                }
-                BreakpointStateChange::None => return Ok(CommandOutcome::empty()),
-            }
-        } else {
-            bkpt_id = args
-                .parse::<u64>()
-                .with_context(|| format!("Invalid breakpoint id {}", args))?;
-            for (sid, local_bkpt_id) in get_bkpt_mgr().local_breakpoint_ids(bkpt_id) {
-                match Self::delete_local_bkpt(sid, local_bkpt_id).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(
-                            "Failed to delete local breakpoint {} from session {}: {}",
-                            local_bkpt_id,
-                            sid,
-                            e.to_string()
-                        );
-                    }
-                }
-            }
-
-            get_bkpt_mgr().remove_breakpoint(bkpt_id);
-            let record = MIFormatter::format(
-                "=",
-                "breakpoint-deleted",
-                Some(&bkpt_deleted_payload(bkpt_id)),
-                None,
-            );
-
-            get_notif_mgr()
-                .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                    BreakpointChangeEvent::Removed(bkpt_id),
-                )))
-                .await;
-            let mut outcome =
-                CommandOutcome::completed(cmd.external_token, 0, "done", None, Presentation::Plain);
-            outcome.insert_record(0, record);
-            Ok(outcome)
-        }
+        self.service.delete(cmd).await
     }
 }
 
