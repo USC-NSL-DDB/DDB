@@ -83,6 +83,17 @@ impl<'a> Payload<'a> {
         }
     }
 
+    pub(crate) fn list(self, field: &'static str) -> Result<&'a [Value], DecodeError> {
+        match self.value(field)? {
+            Value::List(value) => Ok(value),
+            _ => Err(DecodeError::UnexpectedType {
+                sid: self.sid,
+                field,
+                expected: "a list",
+            }),
+        }
+    }
+
     pub(crate) fn optional_string(
         self,
         field: &'static str,

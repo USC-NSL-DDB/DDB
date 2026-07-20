@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use gdbmi::raw::{Dict, Value};
 use tracing::debug;
 
-use crate::{dbg_parser::gdb_parser::MIFormatter, state::STATES};
+use crate::dbg_parser::gdb_parser::MIFormatter;
 
 use super::FinishedCmd;
 
@@ -117,21 +117,17 @@ impl Formatter for ThreadInfoFormatter {
     #[inline]
     fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
         let mut all_thread_info = Vec::<Value>::new();
+        let mut current_thread_id = String::new();
 
         for resp in responses.get_responses() {
-            let sid = resp.get_sid();
             if let Some(payload) = resp.get_payload() {
-                if let Value::List(threads) = &payload["threads"] {
-                    for t in threads {
-                        let mut t = t.expect_dict_ref().unwrap().clone();
-                        let gtid = {
-                            let tid = t["id"].expect_string_ref().unwrap();
-                            let tid = tid.parse::<u64>().unwrap();
-                            STATES.global_thread_id(sid, tid).unwrap()
-                        };
-                        t.insert("id".into(), Value::String(gtid.to_string()));
-                        all_thread_info.push(t.into());
+                if current_thread_id.is_empty() {
+                    if let Some(Value::String(id)) = payload.get("current-thread-id") {
+                        current_thread_id = id.clone();
                     }
+                }
+                if let Some(Value::List(threads)) = payload.get("threads") {
+                    all_thread_info.extend(threads.iter().cloned());
                 }
             }
         }
@@ -140,14 +136,7 @@ impl Formatter for ThreadInfoFormatter {
             responses.get_external_token(),
             vec![
                 ("threads".to_string(), all_thread_info.into()),
-                (
-                    "current-thread-id".to_string(),
-                    STATES
-                        .current_thread_id()
-                        .map(|v| v.to_string())
-                        .unwrap_or("".to_string())
-                        .into(),
-                ),
+                ("current-thread-id".to_string(), current_thread_id.into()),
             ]
             .into(),
         )
@@ -170,19 +159,9 @@ impl Formatter for ProcessInfoFormatter {
         let mut all_process_info = Vec::<Value>::new();
 
         for resp in responses.get_responses() {
-            let sid = resp.get_sid();
             if let Some(payload) = resp.get_payload() {
-                if let Value::List(processes) = &payload["groups"] {
-                    for p in processes {
-                        let mut p = p.expect_dict_ref().unwrap().clone();
-                        let gtgid = {
-                            let tgid = p["id"].expect_string_ref().unwrap();
-                            let gtgid = STATES.global_thread_group_id(sid, tgid).unwrap();
-                            gtgid.to_string()
-                        };
-                        p.insert("id".into(), Value::String(gtgid));
-                        all_process_info.push(p.into());
-                    }
+                if let Some(Value::List(processes)) = payload.get("groups") {
+                    all_process_info.extend(processes.iter().cloned());
                 }
             }
         }
@@ -213,7 +192,7 @@ impl Formatter for ProcessReadableFormatter {
             .iter()
             .map(|p| {
                 let p = p.expect_dict_ref().unwrap();
-                let id = p["id"].expect_string_ref().unwrap()[1..].to_string();
+                let id = p["id"].expect_string_ref().unwrap().to_string();
                 let ptype = p["type"].expect_string_ref().unwrap();
                 let pid = p["pid"].expect_string_ref().unwrap();
                 let exec = p
@@ -322,4 +301,75 @@ pub fn emit_static<T: Formatter>(finished: FinishedCmd, formatter: T) {
 pub fn format_error(err_msg: &str, token: Option<u64>) -> String {
     let payload: Dict = HashMap::from([("msg".to_string(), err_msg.to_string().into())]).into();
     MIFormatter::format("^", "error", Some(&payload), token)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmd_flow::ParsedSessionResponse;
+
+    fn completion(sid: u64, payload: Dict) -> FinishedCmd {
+        FinishedCmd::new(
+            Some(11),
+            sid,
+            vec![ParsedSessionResponse::new(
+                sid,
+                "done".to_string(),
+                Some(payload),
+            )],
+        )
+    }
+
+    #[test]
+    fn thread_formatter_only_aggregates_preprojected_ids() {
+        let payload: Dict = vec![
+            (
+                "threads".to_string(),
+                Value::List(vec![Value::Dict(
+                    vec![("id".to_string(), Value::from("41"))].into(),
+                )]),
+            ),
+            ("current-thread-id".to_string(), Value::from("41")),
+        ]
+        .into();
+
+        let transformed = ThreadInfoFormatter.transform(completion(3, payload));
+
+        assert_eq!(
+            transformed.1["threads"].expect_list_ref().unwrap()[0]
+                .expect_dict_ref()
+                .unwrap()["id"]
+                .expect_string_ref()
+                .unwrap(),
+            "41"
+        );
+        assert_eq!(
+            transformed.1["current-thread-id"]
+                .expect_string_ref()
+                .unwrap(),
+            "41"
+        );
+    }
+
+    #[test]
+    fn readable_process_formatter_preserves_the_full_global_id() {
+        let payload: Dict = vec![(
+            "groups".to_string(),
+            Value::List(vec![Value::Dict(
+                vec![
+                    ("id".to_string(), Value::from("42")),
+                    ("type".to_string(), Value::from("process")),
+                    ("pid".to_string(), Value::from("9001")),
+                ]
+                .into(),
+            )]),
+        )]
+        .into();
+
+        let transformed = ProcessReadableFormatter.transform(completion(7, payload));
+        let process = transformed.1["groups"].expect_list_ref().unwrap()[0]
+            .expect_dict_ref()
+            .unwrap();
+        assert_eq!(process["id"].expect_string_ref().unwrap(), "42");
+        assert_eq!(process["desc"].expect_string_ref().unwrap(), "process 9001");
+    }
 }

@@ -29,6 +29,7 @@ use super::{
     decoder::{BreakpointCreated, Payload},
     framework_adapter::FrameworkCommandAdapter,
     input::ParsedInputCmd,
+    query::QueryProjector,
     router::Target,
     CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse, Presentation,
 };
@@ -506,11 +507,15 @@ impl Handler for BreakDeleteHandler {
 }
 
 #[derive(Debug)]
-pub struct ThreadInfoHandler;
+pub struct ThreadInfoHandler {
+    projector: QueryProjector<'static>,
+}
 
 impl ThreadInfoHandler {
-    pub fn new() -> Self {
-        ThreadInfoHandler
+    pub fn new(state: &'static crate::state::StateMgr) -> Self {
+        Self {
+            projector: QueryProjector::new(state),
+        }
     }
 }
 
@@ -520,10 +525,7 @@ impl Handler for ThreadInfoHandler {
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         match cmd.target {
             Target::Thread(tid) => {
-                let (_, local_tid) = STATES
-                    .local_thread_id(tid)
-                    .ok_or_else(|| anyhow!("Unknown global thread {}", tid))?
-                    .into();
+                let (_, local_tid) = self.projector.resolve_thread(tid)?;
                 let thrd_info_cmd = format!(
                     "{}-thread-info {}",
                     cmd.external_token
@@ -535,10 +537,12 @@ impl Handler for ThreadInfoHandler {
                     .target(Target::Thread(tid))
                     .execute()
                     .await?;
+                let response = self.projector.project_threads(response)?;
                 Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
             _ => {
                 let response = api::parsed(cmd)?.execute().await?;
+                let response = self.projector.project_threads(response)?;
                 Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
             }
         }
@@ -759,11 +763,15 @@ impl Handler for ThreadSelectHandler {
 }
 
 #[derive(Debug)]
-pub struct ListGroupsHandler;
+pub struct ListGroupsHandler {
+    projector: QueryProjector<'static>,
+}
 
 impl ListGroupsHandler {
-    pub fn new() -> Self {
-        ListGroupsHandler
+    pub fn new(state: &'static crate::state::StateMgr) -> Self {
+        Self {
+            projector: QueryProjector::new(state),
+        }
     }
 }
 
@@ -775,6 +783,7 @@ impl Handler for ListGroupsHandler {
             .target(Target::Broadcast)
             .execute()
             .await?;
+        let response = self.projector.project_processes(response)?;
         Ok(CommandOutcome::response(
             response,
             Presentation::ProcessReadable,

@@ -57,10 +57,14 @@ pub struct CommandEngine {
 
 impl CommandEngine {
     pub fn new(adapter: Arc<dyn FrameworkCommandAdapter>, router: Arc<Router>) -> Arc<Self> {
+        let state = get_state_mgr();
         let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
         handlers.insert("-break-insert".into(), Arc::new(BreakInsertHandler::new()));
         handlers.insert("-break-delete".into(), Arc::new(BreakDeleteHandler::new()));
-        handlers.insert("-thread-info".into(), Arc::new(ThreadInfoHandler::new()));
+        handlers.insert(
+            "-thread-info".into(),
+            Arc::new(ThreadInfoHandler::new(state)),
+        );
         handlers.insert("-exec-continue".into(), Arc::new(ContinueHandler::new()));
         handlers.insert(
             "-record-time-and-continue".into(),
@@ -78,7 +82,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-list-thread-groups".into(),
-            Arc::new(ListGroupsHandler::new()),
+            Arc::new(ListGroupsHandler::new(state)),
         );
         handlers.insert("-exec-next".into(), Arc::new(ExecNextHandler::new()));
         handlers.insert("-exec-step".into(), Arc::new(ExecStepHandler::new()));

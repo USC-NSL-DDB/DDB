@@ -15,6 +15,7 @@ pub mod handler;
 pub mod input;
 pub mod outcome;
 pub mod output;
+pub(crate) mod query;
 pub mod response;
 pub mod router;
 pub mod session_runtime;
