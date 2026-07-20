@@ -1,10 +1,14 @@
 //! Exclusive command sequences spanning one or more sessions.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::Arc,
+};
 
 use crate::{
-    cmd_flow::{get_router, session_runtime::SessionLease},
-    state::{get_state_mgr, SessionRef},
+    cmd_flow::{get_router, router::Router, session_runtime::SessionLease},
+    state::{get_state_mgr, SessionRef, StateMgr},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +46,46 @@ impl SessionTransaction {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct TransactionCoordinator {
+    state: &'static StateMgr,
+    router: Arc<Router>,
+}
+
+impl TransactionCoordinator {
+    pub(crate) fn new(state: &'static StateMgr, router: Arc<Router>) -> Self {
+        Self { state, router }
+    }
+
+    pub(crate) async fn begin(
+        &self,
+        session_id: u64,
+    ) -> Result<SessionTransaction, TransactionError> {
+        self.begin_with_related(session_id, std::iter::empty())
+            .await
+    }
+
+    pub(crate) async fn begin_with_related(
+        &self,
+        primary_session_id: u64,
+        related: impl IntoIterator<Item = u64>,
+    ) -> Result<SessionTransaction, TransactionError> {
+        acquire_transaction(
+            self.state,
+            self.router.as_ref(),
+            primary_session_id,
+            related,
+        )
+        .await
+    }
+}
+
+impl fmt::Debug for TransactionCoordinator {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("TransactionCoordinator").finish()
+    }
+}
+
 pub async fn begin(sid: u64) -> Result<SessionTransaction, TransactionError> {
     begin_with_related(sid, std::iter::empty()).await
 }
@@ -56,14 +100,23 @@ pub async fn begin_with_related(
     primary_sid: u64,
     related: impl IntoIterator<Item = u64>,
 ) -> Result<SessionTransaction, TransactionError> {
-    let session = get_state_mgr()
+    acquire_transaction(get_state_mgr(), get_router().as_ref(), primary_sid, related).await
+}
+
+async fn acquire_transaction(
+    state: &StateMgr,
+    router: &Router,
+    primary_sid: u64,
+    related: impl IntoIterator<Item = u64>,
+) -> Result<SessionTransaction, TransactionError> {
+    let session = state
         .session(primary_sid)
         .ok_or(TransactionError::SessionNotFound(primary_sid))?;
     let session_ids = ordered_session_ids(primary_sid, related);
 
     let mut handles = Vec::with_capacity(session_ids.len());
     for sid in session_ids {
-        let handle = get_router()
+        let handle = router
             .session_handle(sid)
             .map_err(|error| TransactionError::Acquire(sid, error.to_string()))?;
         handles.push((sid, handle));

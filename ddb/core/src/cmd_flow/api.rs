@@ -39,9 +39,50 @@ impl CommandExecutor {
     }
 
     pub(crate) async fn execute(&self, command_text: &str, target: Target) -> Result<FinishedCmd> {
-        let request = command(command_text)?.target(target);
+        self.execute_request(command(command_text)?.target(target))
+            .await
+    }
+
+    pub(crate) async fn execute_parsed(&self, command: ParsedInputCmd) -> Result<FinishedCmd> {
+        self.execute_request(ExecutionRequest::from_parsed(command)?)
+            .await
+    }
+
+    pub(crate) async fn execute_exclusive(
+        &self,
+        command_text: &str,
+        target: Target,
+        lease: &super::session_runtime::SessionLease,
+    ) -> Result<FinishedCmd> {
+        self.execute_request_exclusive(command(command_text)?.target(target), lease)
+            .await
+    }
+
+    pub(crate) async fn execute_parsed_exclusive(
+        &self,
+        command: ParsedInputCmd,
+        target: Target,
+        lease: &super::session_runtime::SessionLease,
+    ) -> Result<FinishedCmd> {
+        self.execute_request_exclusive(
+            ExecutionRequest::from_parsed(command)?.target(target),
+            lease,
+        )
+        .await
+    }
+
+    async fn execute_request(&self, request: ExecutionRequest) -> Result<FinishedCmd> {
         let (target, command) = request.into_parts();
         self.router.execute(target, command).await
+    }
+
+    async fn execute_request_exclusive(
+        &self,
+        request: ExecutionRequest,
+        lease: &super::session_runtime::SessionLease,
+    ) -> Result<FinishedCmd> {
+        let (target, command) = request.into_parts();
+        self.router.execute_exclusive(lease, target, command).await
     }
 }
 

@@ -7,6 +7,7 @@ use tracing::{debug, error};
 use super::{
     api::CommandExecutor,
     breakpoint::BreakpointService,
+    execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
     handler::{
         BreakDeleteHandler, BreakInsertHandler, ContinueHandler, DefaultHandler,
@@ -16,9 +17,11 @@ use super::{
     },
     input::ParsedInputCmd,
     router::{Router, Target},
+    transaction::TransactionCoordinator,
     CommandOutcome,
 };
 use crate::{
+    debugger::get_debugger_backend,
     notification::NotificationManager,
     state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
 };
@@ -67,11 +70,19 @@ impl CommandEngine {
         notifications: Arc<NotificationManager>,
     ) -> Arc<Self> {
         let state = get_state_mgr();
+        let executor = CommandExecutor::new(Arc::clone(&router));
+        let transactions = TransactionCoordinator::new(state, Arc::clone(&router));
         let breakpoint_service = Arc::new(BreakpointService::new(
             get_bkpt_mgr(),
             get_group_mgr(),
             notifications,
-            CommandExecutor::new(Arc::clone(&router)),
+            executor.clone(),
+        ));
+        let execution_service = Arc::new(ExecutionService::new(
+            state,
+            executor,
+            transactions,
+            Arc::clone(get_debugger_backend()),
         ));
         let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
         handlers.insert(
@@ -86,12 +97,18 @@ impl CommandEngine {
             "-thread-info".into(),
             Arc::new(ThreadInfoHandler::new(state)),
         );
-        handlers.insert("-exec-continue".into(), Arc::new(ContinueHandler::new()));
+        handlers.insert(
+            "-exec-continue".into(),
+            Arc::new(ContinueHandler::new(Arc::clone(&execution_service))),
+        );
         handlers.insert(
             "-record-time-and-continue".into(),
-            Arc::new(ContinueHandler::new()),
+            Arc::new(ContinueHandler::new(Arc::clone(&execution_service))),
         );
-        handlers.insert("-exec-interrupt".into(), Arc::new(InterruptHandler::new()));
+        handlers.insert(
+            "-exec-interrupt".into(),
+            Arc::new(InterruptHandler::new(Arc::clone(&execution_service))),
+        );
         handlers.insert("-file-list-lines".into(), Arc::new(ListHandler::new()));
         handlers.insert(
             "-thread-select".into(),
@@ -105,24 +122,42 @@ impl CommandEngine {
             "-list-thread-groups".into(),
             Arc::new(ListGroupsHandler::new(state)),
         );
-        handlers.insert("-exec-next".into(), Arc::new(ExecNextHandler::new()));
-        handlers.insert("-exec-step".into(), Arc::new(ExecStepHandler::new()));
-        handlers.insert("-exec-finish".into(), Arc::new(ExecFinishHandler::new()));
+        handlers.insert(
+            "-exec-next".into(),
+            Arc::new(ExecNextHandler::new(Arc::clone(&execution_service))),
+        );
+        handlers.insert(
+            "-exec-step".into(),
+            Arc::new(ExecStepHandler::new(Arc::clone(&execution_service))),
+        );
+        handlers.insert(
+            "-exec-finish".into(),
+            Arc::new(ExecFinishHandler::new(Arc::clone(&execution_service))),
+        );
         handlers.insert(
             "-record-time-and-next".into(),
-            Arc::new(ExecNextHandler::new()),
+            Arc::new(ExecNextHandler::new(Arc::clone(&execution_service))),
         );
         handlers.insert(
             "-record-time-and-step".into(),
-            Arc::new(ExecStepHandler::new()),
+            Arc::new(ExecStepHandler::new(Arc::clone(&execution_service))),
         );
         handlers.insert(
             "-record-time-and-finish".into(),
-            Arc::new(ExecFinishHandler::new()),
+            Arc::new(ExecFinishHandler::new(Arc::clone(&execution_service))),
         );
-        handlers.insert("-exec-jump".into(), Arc::new(ExecJumpHandler));
-        handlers.insert("-send-signal".into(), Arc::new(SendSignalHandler));
-        handlers.insert("-list-signals".into(), Arc::new(ListSignalsHandler));
+        handlers.insert(
+            "-exec-jump".into(),
+            Arc::new(ExecJumpHandler::new(Arc::clone(&execution_service))),
+        );
+        handlers.insert(
+            "-send-signal".into(),
+            Arc::new(SendSignalHandler::new(Arc::clone(&execution_service))),
+        );
+        handlers.insert(
+            "-list-signals".into(),
+            Arc::new(ListSignalsHandler::new(Arc::clone(&execution_service))),
+        );
 
         Arc::new(Self {
             handlers,

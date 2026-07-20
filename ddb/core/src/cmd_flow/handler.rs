@@ -3,22 +3,19 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use gdbmi::raw::{Dict, Value};
-use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
 use crate::{
     cmd_flow::transaction,
     common::Config,
-    debugger::get_debugger_backend,
     feature::get_proclet_restore_mgr,
-    state::{get_state_mgr, LocalThreadId, SessionRef, ThreadContext, ThreadStatus, STATES},
+    state::{get_state_mgr, LocalThreadId, SessionRef, ThreadContext, STATES},
 };
 
 use super::{
-    api, breakpoint::BreakpointService, decoder::Payload,
+    api, breakpoint::BreakpointService, execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, query::QueryProjector,
-    router::Target, CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse,
-    Presentation,
+    router::Target, CommandOutcome, DebuggerDataErr, FinishedCmd, Presentation,
 };
 
 /// Command operation selected by the engine after parsing and target resolution.
@@ -140,77 +137,13 @@ impl Handler for ThreadInfoHandler {
 }
 
 #[derive(Debug)]
-pub struct ContinueHandler;
-
-impl ContinueHandler {
-    pub fn new() -> Self {
-        ContinueHandler
-    }
+pub struct ContinueHandler {
+    service: Arc<ExecutionService>,
 }
 
 impl ContinueHandler {
-    #[cfg_attr(feature = "profile", tracing::instrument)]
-    async fn continue_session(
-        cont_cmd: ParsedInputCmd,
-        session: SessionRef,
-    ) -> Result<FinishedCmd> {
-        let sid = session.read_with(|meta| meta.sid()).await;
-        let tx = transaction::begin(sid)
-            .await
-            .map_err(|error| anyhow!(error.to_string()))?;
-        let (sid, in_custom_context, current_context) = tx
-            .session()
-            .read_with(|meta| {
-                (
-                    meta.sid(),
-                    meta.is_in_custom_context(),
-                    meta.current_context().cloned(),
-                )
-            })
-            .await;
-
-        if in_custom_context {
-            let Some(ctx) = current_context else {
-                bail!("Session {} has no context to restore", sid);
-            };
-            let restore = api::command(&format!(
-                "-switch-context-custom {}",
-                Self::prepare_ctx_switch_args(&ctx)
-            ))?
-            .target(Target::Thread(ctx.tid))
-            .execute_exclusive(tx.lease())
-            .await?;
-            let restored = restore.get_responses().len() == 1
-                && Payload::first(&restore)?.string("message")? == "success";
-
-            session
-                .write_with(|meta| meta.set_in_custom_context(!restored))
-                .await;
-
-            if !restored {
-                bail!("Failed to restore context for session {}", sid);
-            }
-        }
-
-        let response = api::parsed(cont_cmd)?
-            .target(Target::Session(sid))
-            .execute_exclusive(tx.lease())
-            .await?;
-        session
-            .write_with(|meta| meta.update_all_status(ThreadStatus::RUNNING))
-            .await;
-        Ok(response)
-    }
-
-    #[inline]
-    fn prepare_ctx_switch_args(regs: &ThreadContext) -> String {
-        regs.ctx
-            .iter()
-            .fold(format!(""), |acc, (reg, val)| {
-                format!("{} {}={}", acc, reg, val)
-            })
-            .trim()
-            .to_string()
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
     }
 }
 
@@ -218,52 +151,18 @@ impl ContinueHandler {
 impl Handler for ContinueHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if Config::global().conf.support_migration {
-            // reset all proclet cache and clean up restored proclet heap.
-            get_proclet_restore_mgr().reset().await;
-        }
-
-        let external_token = cmd.external_token;
-        let tasks: Vec<JoinHandle<Result<FinishedCmd>>> = match &cmd.target {
-            Target::Session(sid) => get_state_mgr()
-                .session(*sid)
-                .into_iter()
-                .map(|session| {
-                    let cmd = cmd.clone();
-                    tokio::spawn(async move { Self::continue_session(cmd, session).await })
-                })
-                .collect(),
-            _ => get_state_mgr()
-                .sessions()
-                .into_iter()
-                .map(|session| {
-                    let cmd = cmd.clone();
-                    tokio::spawn(async move { Self::continue_session(cmd, session).await })
-                })
-                .collect(),
-        };
-
-        let mut responses = Vec::<ParsedSessionResponse>::new();
-        for result in futures::future::join_all(tasks).await {
-            match result {
-                Err(e) => return Err(anyhow!("Continue task failed: {e}")),
-                Ok(Err(e)) => return Err(e.context("Failed to continue")),
-                Ok(Ok(response)) => responses.extend(response.get_responses().iter().cloned()),
-            }
-        }
-        Ok(CommandOutcome::response(
-            FinishedCmd::new(external_token, 0, responses),
-            Presentation::Unit,
-        ))
+        self.service.continue_command(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct InterruptHandler;
+pub struct InterruptHandler {
+    service: Arc<ExecutionService>,
+}
 
 impl InterruptHandler {
-    pub fn new() -> Self {
-        InterruptHandler
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
     }
 }
 
@@ -271,28 +170,7 @@ impl InterruptHandler {
 impl Handler for InterruptHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let cmd = cmd.with_prefix("-exec-interrupt-if-running");
-        match cmd.target {
-            Target::Session(sid) => {
-                let ss = STATES.session(sid);
-                if ss.is_some() {
-                    // Note: send interrupt to running process. Ignore thread granularity.
-                    // skips checking if the thread is running or not.
-                    let response = api::parsed(cmd)?.execute().await?;
-                    Ok(CommandOutcome::response(response, Presentation::Plain))
-                } else {
-                    Ok(CommandOutcome::empty())
-                }
-            }
-            _ => {
-                // broadcast to all sessions
-                let response = api::parsed(cmd)?
-                    .target(Target::Broadcast)
-                    .execute()
-                    .await?;
-                Ok(CommandOutcome::response(response, Presentation::Plain))
-            }
-        }
+        self.service.interrupt(cmd).await
     }
 }
 
@@ -861,11 +739,13 @@ impl Handler for DistributeBacktraceHandler {
 }
 
 #[derive(Debug)]
-pub struct ExecNextHandler;
+pub struct ExecNextHandler {
+    service: Arc<ExecutionService>,
+}
 
 impl ExecNextHandler {
-    pub fn new() -> Self {
-        Self
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
     }
 }
 
@@ -873,21 +753,18 @@ impl ExecNextHandler {
 impl Handler for ExecNextHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if let Target::Thread(_) = &cmd.target {
-            let response = api::parsed(cmd)?.execute().await?;
-            Ok(CommandOutcome::silent(response))
-        } else {
-            bail!("exec-next command should specify a thread id by --thread <gtid>")
-        }
+        self.service.next(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct ExecFinishHandler;
+pub struct ExecFinishHandler {
+    service: Arc<ExecutionService>,
+}
 
 impl ExecFinishHandler {
-    pub fn new() -> Self {
-        Self
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
     }
 }
 
@@ -895,12 +772,7 @@ impl ExecFinishHandler {
 impl Handler for ExecFinishHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if let Target::Thread(_) = &cmd.target {
-            let response = api::parsed(cmd)?.execute().await?;
-            Ok(CommandOutcome::silent(response))
-        } else {
-            bail!("exec-finish command should specify a thread id by --thread <gtid>")
-        }
+        self.service.finish(cmd).await
     }
 }
 
@@ -981,11 +853,13 @@ mod tests {
 }
 
 #[derive(Debug)]
-pub struct ExecStepHandler;
+pub struct ExecStepHandler {
+    service: Arc<ExecutionService>,
+}
 
 impl ExecStepHandler {
-    pub fn new() -> Self {
-        Self
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
     }
 }
 
@@ -993,104 +867,63 @@ impl ExecStepHandler {
 impl Handler for ExecStepHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if let Target::Thread(_) = &cmd.target {
-            let response = api::parsed(cmd)?.execute().await?;
-            Ok(CommandOutcome::silent(response))
-        } else {
-            bail!("exec-step command should specify a thread id by --thread <gtid>")
-        }
+        self.service.step(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct ExecJumpHandler;
+pub struct ExecJumpHandler {
+    service: Arc<ExecutionService>,
+}
+
+impl ExecJumpHandler {
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
+    }
+}
 
 #[async_trait]
 impl Handler for ExecJumpHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        // Note: `exec-jump` should only be used when session is specified at the moment.
-        // otherwise it will be ambiguous which process to jump to.
-        // let (target, cmd) = cmd.to_command(PlainFormatter);
-        match cmd.target {
-            Target::Session(_) => {
-                let response = api::parsed(cmd)?.execute().await?;
-                Ok(CommandOutcome::response(response, Presentation::Plain))
-            }
-            _ => bail!("exec-jump command should specify a session"),
-        }
+        self.service.jump(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct SendSignalHandler;
+pub struct SendSignalHandler {
+    service: Arc<ExecutionService>,
+}
+
+impl SendSignalHandler {
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
+    }
+}
 
 #[async_trait]
 impl Handler for SendSignalHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if cmd.args.trim().is_empty() {
-            bail!("-send-signal command requires a signal argument");
-        }
-
-        match cmd.target {
-            Target::Session(sid) => {
-                // TODO: use signal mgr to check if the signal is valid or not.
-
-                // Signal can only be delivered when the process is stopped in gdb.
-                // So first send an interrupt to stop the process.
-                let backend = get_debugger_backend();
-                api::command(&backend.interrupt_command())?
-                    .target(Target::Session(sid))
-                    .execute()
-                    .await?;
-
-                let signal_cmd =
-                    backend.console_exec_command(&format!("signal {}", cmd.args.trim()));
-                let mut response = api::command(&signal_cmd)?
-                    .target(Target::Session(sid))
-                    .execute()
-                    .await?;
-                if let Some(token) = cmd.external_token {
-                    response.set_external_token(token);
-                }
-                debug!("-send-signal command completed: {}", signal_cmd);
-                Ok(CommandOutcome::silent(response))
-            }
-            _ => bail!("-send-signal command should specify a session"),
-        }
+        self.service.send_signal(cmd).await
     }
 }
 
 #[derive(Debug)]
-pub struct ListSignalsHandler;
+pub struct ListSignalsHandler {
+    service: Arc<ExecutionService>,
+}
+
+impl ListSignalsHandler {
+    pub(crate) fn new(service: Arc<ExecutionService>) -> Self {
+        Self { service }
+    }
+}
 
 #[async_trait]
 impl Handler for ListSignalsHandler {
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     async fn process_cmd(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        if !cmd.args.trim().is_empty() {
-            bail!("-list-signals command needs no argument. raw: {}", cmd.args);
-        }
-
-        match cmd.target {
-            Target::Session(sid) => {
-                // TODO: use signal mgr to cache results?
-                // so that we can directly return if it is cached already.
-                let list_signal_cmd = format!(
-                    "{}-list-signals",
-                    cmd.external_token
-                        .map(|token| token.to_string())
-                        .unwrap_or("".to_string())
-                );
-                let response = api::command(&list_signal_cmd)?
-                    .target(Target::Session(sid))
-                    .execute()
-                    .await?;
-                debug!("-list-signals command completed: {}", list_signal_cmd);
-                Ok(CommandOutcome::response(response, Presentation::Plain))
-            }
-            _ => bail!("-list-signals command should specify a session"),
-        }
+        self.service.list_signals(cmd).await
     }
 }

@@ -11,6 +11,7 @@ pub(crate) mod decoder;
 pub mod engine;
 pub(crate) mod event;
 pub(crate) mod event_publisher;
+pub(crate) mod execution;
 pub mod framework_adapter;
 pub mod handler;
 pub mod input;
