@@ -2,6 +2,7 @@ pub mod broker;
 pub mod discovery_message_producer;
 pub mod k8s_producer;
 pub mod mqtt_producer;
+pub(crate) mod runtime;
 pub mod service_mgr;
 pub mod subscriber;
 pub use discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo};

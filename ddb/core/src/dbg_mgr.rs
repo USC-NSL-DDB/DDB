@@ -1,12 +1,14 @@
 use anyhow::{anyhow, bail, Result};
-use flume::Receiver;
 use russh::client::Config as RusshClientConfig;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
+use crate::discovery::{
+    broker::{EMQXBroker, MessageBroker, MosquittoBroker},
+    runtime::DiscoveryRuntime,
+};
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
@@ -20,94 +22,12 @@ use crate::{
 
 const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
 
-pub struct ServiceDiscover {
-    /// The service discovery producer that will send `ServiceInfo` events.
-    ///
-    /// Producer (and ServiceDiscover) lifecycle should be managed by the `DbgManager`.
-    pub producer: Box<dyn DiscoveryMessageProducer>,
-
-    /// The channel receiver for receiving `ServiceInfo` events.
-    pub rx: Receiver<crate::discovery::ServiceInfo>,
-
-    pub handle: Option<JoinHandle<()>>,
-
-    pub proxy_tunnel: Option<
-        Arc<russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>>,
-    >,
-}
-
-impl ServiceDiscover {
-    pub fn new(
-        producer: Box<dyn DiscoveryMessageProducer>,
-        rx: Receiver<crate::discovery::ServiceInfo>,
-        proxy_tunnel: Option<
-            Arc<
-                russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>,
-            >,
-        >,
-    ) -> Self {
-        ServiceDiscover {
-            producer,
-            rx,
-            handle: None,
-            proxy_tunnel,
-        }
-    }
-
-    // async fn notify_new_session()
-
-    /// Handles creation of a new debug session for a discovered service.
-    /// Called by the consumer loop that reads from a unified channel of `ServiceInfo<T>`.
-    async fn prepare_new_session(
-        manager: Arc<DbgManager>,
-        info: crate::discovery::ServiceInfo,
-        proxy_tunnel: Option<crate::dbg_ctrl::ProxyTunnel>,
-    ) {
-        let process = match manager.factory.create_discovered(info, proxy_tunnel) {
-            Ok(process) => process,
-            Err(error) => {
-                error!(?error, "failed to construct discovered session");
-                return;
-            }
-        };
-        if let Err(error) = manager.supervisor.admit(process).await {
-            error!(?error, "failed to admit discovered session");
-        }
-    }
-
-    pub fn start(&mut self, manager: std::sync::Weak<DbgManager>) {
-        let rx = self.rx.clone();
-        let proxy_tunnel = self.proxy_tunnel.clone();
-        let handle = tokio::spawn(async move {
-            while let Ok(info) = rx.recv_async().await {
-                let Some(manager) = manager.upgrade() else {
-                    break;
-                };
-                // For each discovered service, create a new debug session.
-                debug!("Received service info: {:?}", info);
-                Self::prepare_new_session(manager, info, proxy_tunnel.clone()).await;
-            }
-        });
-        self.handle = Some(handle);
-    }
-
-    pub async fn shutdown(&mut self) {
-        self.handle.take().map(|h| h.abort());
-        self.rx.drain();
-        self.producer.stop_producing().await.unwrap();
-    }
-}
-
 /// The manager that can handle multiple producers, each sending discovered services.
 pub struct DbgManager {
     supervisor: Arc<SessionSupervisor>,
     factory: SessionFactory<'static>,
 
-    /// We keep the producers in a vector (each implements `DiscoveryMessageProducer<T>`).
-    // producers: Mutex<Vec<Box<dyn crate::discovery::DiscoveryMessageProducer>>>,
-
-    // ServiceDiscover, which receives the discovered services information.
-    sd: Mutex<Option<ServiceDiscover>>,
+    discovery: Mutex<Option<DiscoveryRuntime>>,
 
     // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
     proclet_ctrl: Option<ProcletCtrlClient>,
@@ -118,7 +38,7 @@ pub struct DbgManager {
 }
 
 impl DbgManager {
-    async fn init_sd(&self) -> Result<()> {
+    async fn init_discovery(&self) -> Result<()> {
         let config = self.config;
         let plugin = get_framework_plugin();
         // Discovery is bursty, but session creation is comparatively expensive.
@@ -150,10 +70,12 @@ impl DbgManager {
                     // So that it can be cleaned up properly in case of failure (via `cleanup`).
                     let result = mqtt_producer.start_producing(producer_tx_clone).await;
 
-                    self.sd.lock().await.replace(ServiceDiscover::new(
+                    self.discovery.lock().await.replace(DiscoveryRuntime::new(
                         Box::new(mqtt_producer),
                         producer_rx,
                         None,
+                        self.factory,
+                        Arc::clone(&self.supervisor),
                     ));
 
                     match result {
@@ -228,10 +150,12 @@ impl DbgManager {
                     .await
                     .unwrap();
 
-                self.sd.lock().await.replace(ServiceDiscover::new(
+                self.discovery.lock().await.replace(DiscoveryRuntime::new(
                     Box::new(serviceweaver_producer),
                     producer_rx,
                     Some(jump_host_session),
+                    self.factory,
+                    Arc::clone(&self.supervisor),
                 ));
             }
             ServiceDiscoveryMode::None => {}
@@ -295,7 +219,7 @@ impl DbgManager {
         Arc::new(DbgManager {
             supervisor: SessionSupervisor::new(config),
             factory: SessionFactory::new(config),
-            sd: Mutex::new(None),
+            discovery: Mutex::new(None),
             proclet_ctrl,
             config,
             static_session_handles: Mutex::new(Vec::new()),
@@ -306,12 +230,12 @@ impl DbgManager {
         self.supervisor.start().await?;
         if self.config.service_discovery.is_some() {
             info!("[Service Discovery]: ENABLED. INIT service discovery...");
-            self.init_sd().await?;
+            self.init_discovery().await?;
         } else {
             info!("[Service Discovery]: DISABLED. SKIP service discovery initialization.");
         }
-        if let Some(sd) = &mut *self.sd.lock().await {
-            sd.start(Arc::downgrade(self));
+        if let Some(discovery) = &mut *self.discovery.lock().await {
+            discovery.start()?;
             debug!("DbgManager is now listening for discovered services.");
         }
         if !self.config.static_sessions.is_empty() {
@@ -332,9 +256,11 @@ impl DbgManager {
             }
         }
 
-        if let Some(sd) = &mut *self.sd.lock().await {
-            debug!("Shutting down ServiceDiscovery...");
-            sd.shutdown().await;
+        if let Some(discovery) = &mut *self.discovery.lock().await {
+            debug!("Shutting down service discovery...");
+            if let Err(error) = discovery.shutdown().await {
+                error!(?error, "service discovery shutdown failed");
+            }
         }
 
         self.supervisor.shutdown().await;
