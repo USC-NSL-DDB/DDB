@@ -7,7 +7,7 @@ use std::path::Path;
 use std::{fs, sync::OnceLock};
 use tracing::debug;
 
-use crate::dbg_cmd::{FrameFilterAddArgs, FrameFilterMatchType};
+use crate::debugger::gdb::command::{FrameFilterAddArgs, FrameFilterMatchType};
 
 // Global configuration instance
 static GLOBAL_CONFIG: OnceLock<Config> = OnceLock::new();

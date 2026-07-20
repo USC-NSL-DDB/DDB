@@ -1,8 +1,35 @@
 use crate::common::config::DebuggerCommand;
 
-use crate::dbg_cmd::DbgCmdGenerator;
 use serde::{Deserialize, Serialize};
 
+pub trait DbgCmdGenerator {
+    fn generate(&self) -> String;
+}
+
+pub struct DbgCmdListBuilder<T>
+where
+    T: DbgCmdGenerator,
+{
+    cmds: Vec<T>,
+}
+
+impl<T> DbgCmdListBuilder<T>
+where
+    T: DbgCmdGenerator,
+{
+    pub fn new() -> Self {
+        Self { cmds: Vec::new() }
+    }
+
+    pub fn add<U: Into<T>>(&mut self, cmd: U) -> &Self {
+        self.cmds.push(cmd.into());
+        self
+    }
+
+    pub fn build(self) -> Vec<String> {
+        self.cmds.iter().map(DbgCmdGenerator::generate).collect()
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FrameFilterMatchType {
@@ -210,7 +237,6 @@ impl DbgCmdGenerator for GdbOption {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dbg_cmd::DbgCmdListBuilder;
 
     #[test]
     fn test_gdb_cmd_generate() {

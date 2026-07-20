@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::dbg_parser::gdb_parser::MIFormatter;
+use crate::debugger::gdb::parser::MIFormatter;
 
 use super::event::ProjectedDebuggerOutput;
 

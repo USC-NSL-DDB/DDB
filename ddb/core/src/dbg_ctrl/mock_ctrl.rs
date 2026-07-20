@@ -19,7 +19,7 @@ use tokio::{
 use crate::{
     common::config::{MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig},
     connection::{RunningTransport, TransportEvent, TransportRequest},
-    dbg_parser::gdb_parser::MIFormatter,
+    debugger::gdb::parser::MIFormatter,
 };
 
 use super::DebuggerTransport;

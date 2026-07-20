@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use gdbmi::raw::{Dict, Value};
 use tracing::debug;
 
-use crate::dbg_parser::gdb_parser::MIFormatter;
+use crate::debugger::gdb::parser::MIFormatter;
 
 use super::FinishedCmd;
 

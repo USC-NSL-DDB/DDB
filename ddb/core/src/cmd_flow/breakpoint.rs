@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use tracing::{debug, error, warn};
 
 use crate::{
-    dbg_parser::gdb_parser::{bkpt_deleted_payload, MIFormatter},
+    debugger::gdb::parser::{bkpt_deleted_payload, MIFormatter},
     group_operation::GroupOperationCoordinator,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
     state::{

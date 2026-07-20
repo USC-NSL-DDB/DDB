@@ -18,7 +18,7 @@ use tracing::{debug, trace, warn};
 
 use crate::{
     connection::{RunningTransport, TransportEvent},
-    dbg_parser::gdb_parser::GdbParser,
+    debugger::gdb::parser::GdbParser,
     session::lifecycle::{SessionTerminationCause, SessionTerminationReporter},
 };
 
