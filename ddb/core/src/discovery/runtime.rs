@@ -17,7 +17,7 @@ pub(crate) struct DiscoveryRuntime {
     services: Receiver<ServiceInfo>,
     consumer_task: Option<JoinHandle<()>>,
     proxy_tunnel: Option<ProxyTunnel>,
-    factory: SessionFactory<'static>,
+    factory: SessionFactory,
     supervisor: Arc<SessionSupervisor>,
 }
 
@@ -26,7 +26,7 @@ impl DiscoveryRuntime {
         producer: Box<dyn DiscoveryMessageProducer>,
         services: Receiver<ServiceInfo>,
         proxy_tunnel: Option<ProxyTunnel>,
-        factory: SessionFactory<'static>,
+        factory: SessionFactory,
         supervisor: Arc<SessionSupervisor>,
     ) -> Self {
         Self {
@@ -46,7 +46,7 @@ impl DiscoveryRuntime {
 
         let services = self.services.clone();
         let proxy_tunnel = self.proxy_tunnel.clone();
-        let factory = self.factory;
+        let factory = self.factory.clone();
         let supervisor = Arc::downgrade(&self.supervisor);
         self.consumer_task = Some(tokio::spawn(async move {
             while let Ok(info) = services.recv_async().await {
@@ -93,14 +93,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        cmd_flow::{api::CommandExecutor, router::Router},
+        cmd_flow::{api::CommandExecutor, event::DebuggerEventReducer, router::Router},
         common::Config,
         group_operation::GroupOperationCoordinator,
+        notification::NotificationManager,
+        runtime_model::RuntimeModel,
         source::{
             catalog::SourceCatalog,
             resolver::{SourceResolutionPolicy, SourceResolver},
         },
-        state::GroupMgr,
     };
 
     struct TestProducer {
@@ -121,17 +122,27 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_starts_once_and_stops_its_producer() {
-        let config = Box::leak(Box::new(Config::default()));
-        let factory = SessionFactory::new(config);
-        let router = Arc::new(Router::new());
+        let config = Arc::new(Config::default());
+        let plugin = crate::plugin::resolve_framework_plugin(config.as_ref());
+        let backend = crate::debugger::resolve_debugger_backend(config.as_ref());
+        let model = RuntimeModel::new();
+        let notifications = Arc::new(NotificationManager::new());
+        let reducer = DebuggerEventReducer::new(Arc::clone(&model), Arc::clone(&notifications));
+        let factory =
+            SessionFactory::new(Arc::clone(&config), backend, Arc::clone(&plugin), reducer);
+        let router = Arc::new(Router::new(Arc::clone(&model)));
         let source_resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
-            Arc::new(GroupMgr::new()),
-            CommandExecutor::new(router),
+            Arc::clone(model.groups()),
+            CommandExecutor::new(Arc::clone(&router)),
             SourceResolutionPolicy::OnDemand,
         );
         let supervisor = SessionSupervisor::new(
             config,
+            plugin,
+            model,
+            router,
+            notifications,
             Arc::new(GroupOperationCoordinator::new()),
             source_resolver,
         );

@@ -16,7 +16,7 @@ use crate::{
         transaction::SessionTransaction,
     },
     get_dbg_mgr,
-    state::get_proclet_mgr,
+    state::ProcletMgr,
 };
 
 type ProcletId = u64;
@@ -65,6 +65,7 @@ impl From<ProcletHeapInfo> for ProcletHeapMeta {
 /// The goal here is to temporarily restore the proclet to original location.
 /// We should keep states regarding where is a session proclet is restored so that we can properly clean up later.
 pub struct ProcletRestorationMgr {
+    proclets: Arc<ProcletMgr>,
     // cache the result regarding whether the proclet is local to the session
     proclet_is_local_cache: DashMap<ProcletQueryTarget, Arc<tokio::sync::Mutex<bool>>>,
     // proclet_is_local_lock
@@ -78,8 +79,9 @@ pub struct ProcletRestorationMgr {
 }
 
 impl ProcletRestorationMgr {
-    pub fn new() -> Self {
+    pub fn new(proclets: Arc<ProcletMgr>) -> Self {
         Self {
+            proclets,
             proclet_is_local_cache: DashMap::new(),
             proclet_loc_cache: DashMap::new(),
             proclet_restored_heap_meta: DashMap::new(),
@@ -139,13 +141,14 @@ impl ProcletRestorationMgr {
             .with_context(|| format!("Failed to query proclet {} from ProcletMgr", proclet_id))?;
 
         let caladan_ip = resp.caladan_ip;
-        let owner_sid = get_proclet_mgr()
-            .session_id_for_caladan_ip(caladan_ip)
-            .ok_or(anyhow::anyhow!(
-                "Fail to find the owner session for proclet {}. caladan_ip: {}",
-                proclet_id,
-                caladan_ip
-            ))?;
+        let owner_sid =
+            self.proclets
+                .session_id_for_caladan_ip(caladan_ip)
+                .ok_or(anyhow::anyhow!(
+                    "Fail to find the owner session for proclet {}. caladan_ip: {}",
+                    proclet_id,
+                    caladan_ip
+                ))?;
         let proc_loc = ProcletLoc { sid: owner_sid };
         *loc_guard = Some(proc_loc.clone());
         Ok(proc_loc)

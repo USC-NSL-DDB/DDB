@@ -3,7 +3,7 @@ mod builtin;
 use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use anyhow::Result;
@@ -122,21 +122,6 @@ pub(crate) fn default_runtime_asset() -> BundledDebuggerAsset {
 
 pub(crate) fn proclet_runtime_asset() -> BundledDebuggerAsset {
     PROCLET_GDB_RUNTIME_ASSET
-}
-
-static ACTIVE_PLUGIN: OnceLock<Arc<dyn FrameworkPlugin>> = OnceLock::new();
-
-pub fn init_framework_plugin<F>(f: F)
-where
-    F: FnOnce() -> Arc<dyn FrameworkPlugin>,
-{
-    ACTIVE_PLUGIN.get_or_init(f);
-}
-
-pub fn get_framework_plugin() -> &'static Arc<dyn FrameworkPlugin> {
-    ACTIVE_PLUGIN
-        .get()
-        .expect("Framework plugin is not initialized.")
 }
 
 #[cfg(test)]

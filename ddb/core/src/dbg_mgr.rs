@@ -5,15 +5,14 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
+use crate::context::AppContext;
 use crate::discovery::{
     broker::{EMQXBroker, MessageBroker, MosquittoBroker},
     runtime::DiscoveryRuntime,
 };
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
-use crate::group_operation::GroupOperationCoordinator;
-use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
+use crate::plugin::{FrameworkPlugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
-use crate::source::resolver::SourceResolver;
 use crate::{
     common::{
         self,
@@ -27,22 +26,23 @@ const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
 /// The manager that can handle multiple producers, each sending discovered services.
 pub struct DbgManager {
     supervisor: Arc<SessionSupervisor>,
-    factory: SessionFactory<'static>,
+    factory: SessionFactory,
 
     discovery: Mutex<Option<DiscoveryRuntime>>,
 
     // This should be non-null if the framework is Nu/Quicksand and migration support is enabled.
     proclet_ctrl: Option<ProcletCtrlClient>,
 
-    config: &'static DDBConfig,
+    config: Arc<DDBConfig>,
+    plugin: Arc<dyn FrameworkPlugin>,
 
     static_session_handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl DbgManager {
     async fn init_discovery(&self) -> Result<()> {
-        let config = self.config;
-        let plugin = get_framework_plugin();
+        let config = self.config.as_ref();
+        let plugin = self.plugin.as_ref();
         let (producer_tx, producer_rx) =
             flume::bounded::<crate::discovery::ServiceInfo>(SERVICE_DISCOVERY_QUEUE_CAPACITY);
 
@@ -66,14 +66,16 @@ impl DbgManager {
                         None => None,
                     };
 
-                let mut producer =
-                    crate::discovery::mqtt_producer::MqttProducer::new(managed_broker, config);
+                let mut producer = crate::discovery::mqtt_producer::MqttProducer::new(
+                    managed_broker,
+                    Arc::clone(&self.config),
+                );
                 let start_result = producer.start_producing(producer_tx.clone()).await;
                 self.discovery.lock().await.replace(DiscoveryRuntime::new(
                     Box::new(producer),
                     producer_rx,
                     None,
-                    self.factory,
+                    self.factory.clone(),
                     Arc::clone(&self.supervisor),
                 ));
                 start_result.context("failed to start MQTT discovery producer")?;
@@ -147,7 +149,7 @@ impl DbgManager {
                     Box::new(producer),
                     producer_rx,
                     Some(jump_host),
-                    self.factory,
+                    self.factory.clone(),
                     Arc::clone(&self.supervisor),
                 ));
                 start_result.context("failed to start Kubernetes discovery producer")?;
@@ -191,21 +193,11 @@ impl DbgManager {
 }
 
 impl DbgManager {
-    pub(crate) async fn new(
-        group_operations: Arc<GroupOperationCoordinator>,
-        source_resolver: Arc<SourceResolver>,
-    ) -> Result<Arc<Self>> {
-        Self::new_with_config(DDBConfig::global(), group_operations, source_resolver).await
-    }
+    pub(crate) async fn new(services: &AppContext) -> Result<Arc<Self>> {
+        let config = Arc::clone(services.config());
+        let plugin = Arc::clone(services.plugin());
 
-    pub(crate) async fn new_with_config(
-        config: &'static DDBConfig,
-        group_operations: Arc<GroupOperationCoordinator>,
-        source_resolver: Arc<SourceResolver>,
-    ) -> Result<Arc<Self>> {
-        let plugin = get_framework_plugin();
-
-        let proclet_ctrl = if plugin.supports_migration(config) {
+        let proclet_ctrl = if plugin.supports_migration(config.as_ref()) {
             debug!("Migration support is ENABLED, initializing proxy proclet controller.");
             Some(
                 ProcletCtrlClient::try_connect_default()
@@ -217,12 +209,29 @@ impl DbgManager {
             None
         };
 
+        let supervisor = SessionSupervisor::new(
+            Arc::clone(&config),
+            Arc::clone(&plugin),
+            Arc::clone(services.runtime_model()),
+            Arc::clone(services.command_router()),
+            Arc::clone(services.notification_manager()),
+            Arc::clone(services.group_operations()),
+            Arc::clone(services.source_resolver()),
+        );
+        let factory = SessionFactory::new(
+            Arc::clone(&config),
+            Arc::clone(services.backend()),
+            Arc::clone(&plugin),
+            Arc::clone(services.event_reducer()),
+        );
+
         Ok(Arc::new(DbgManager {
-            supervisor: SessionSupervisor::new(config, group_operations, source_resolver),
-            factory: SessionFactory::new(config),
+            supervisor,
+            factory,
             discovery: Mutex::new(None),
             proclet_ctrl,
             config,
+            plugin,
             static_session_handles: Mutex::new(Vec::new()),
         }))
     }

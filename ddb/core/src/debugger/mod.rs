@@ -4,7 +4,7 @@ pub mod mock;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
@@ -68,21 +68,6 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<String>>;
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
-}
-
-static ACTIVE_BACKEND: OnceLock<Arc<dyn DebuggerBackend>> = OnceLock::new();
-
-pub fn init_debugger_backend<F>(f: F)
-where
-    F: FnOnce() -> Arc<dyn DebuggerBackend>,
-{
-    ACTIVE_BACKEND.get_or_init(f);
-}
-
-pub fn get_debugger_backend() -> &'static Arc<dyn DebuggerBackend> {
-    ACTIVE_BACKEND
-        .get()
-        .expect("Debugger backend is not initialized.")
 }
 
 pub fn resolve_debugger_backend(config: &Config) -> Arc<dyn DebuggerBackend> {

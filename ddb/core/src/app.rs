@@ -4,9 +4,8 @@ use tracing::{error, info};
 
 use crate::{
     api::server::ApiServer,
-    notification::NotificationManager,
+    context::AppContext,
     shutdown::{get_shutdown_ctrl, ShutdownCause},
-    source::resolver::SourceResolver,
 };
 
 pub struct App {
@@ -14,15 +13,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
-        port: u16,
-        notifications: Arc<NotificationManager>,
-        source_resolver: Arc<SourceResolver>,
-    ) -> Self {
+    pub fn new(port: u16, services: &AppContext) -> Self {
         let api_svr = Arc::new(ApiServer::new(
             format!("localhost:{port}"),
-            notifications,
-            source_resolver,
+            Arc::clone(services.notification_manager()),
+            Arc::clone(services.source_resolver()),
+            Arc::clone(services.command_engine()),
+            Arc::clone(services.command_router()),
+            Arc::clone(services.runtime_model()),
         ));
         App { api_svr }
     }

@@ -46,12 +46,12 @@ impl SessionTransaction {
 
 #[derive(Clone)]
 pub(crate) struct TransactionCoordinator {
-    state: &'static StateMgr,
+    state: Arc<StateMgr>,
     router: Arc<Router>,
 }
 
 impl TransactionCoordinator {
-    pub(crate) fn new(state: &'static StateMgr, router: Arc<Router>) -> Self {
+    pub(crate) fn new(state: Arc<StateMgr>, router: Arc<Router>) -> Self {
         Self { state, router }
     }
 
@@ -69,7 +69,7 @@ impl TransactionCoordinator {
         related: impl IntoIterator<Item = u64>,
     ) -> Result<SessionTransaction, TransactionError> {
         acquire_transaction(
-            self.state,
+            self.state.as_ref(),
             self.router.as_ref(),
             primary_session_id,
             related,

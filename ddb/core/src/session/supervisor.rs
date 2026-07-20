@@ -15,9 +15,12 @@ use super::{
     SessionProcess,
 };
 use crate::{
+    cmd_flow::router::Router,
     common::Config,
     group_operation::GroupOperationCoordinator,
-    notification::{get_notif_mgr, Notification, NotificationPayload},
+    notification::{Notification, NotificationManager, NotificationPayload},
+    plugin::FrameworkPlugin,
+    runtime_model::RuntimeModel,
     shutdown::{get_shutdown_ctrl, ShutdownCause},
     source::resolver::SourceResolver,
 };
@@ -45,12 +48,17 @@ pub(crate) struct SessionSupervisor {
     lifecycle_shutdown: Mutex<Option<oneshot::Sender<()>>>,
     lifecycle_task: Mutex<Option<JoinHandle<()>>>,
     transitions: Mutex<()>,
+    notifications: Arc<NotificationManager>,
     auto_shutdown: bool,
 }
 
 impl SessionSupervisor {
     pub(crate) fn new(
-        config: &'static Config,
+        config: Arc<Config>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        model: Arc<RuntimeModel>,
+        router: Arc<Router>,
+        notifications: Arc<NotificationManager>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Arc<Self> {
@@ -58,7 +66,11 @@ impl SessionSupervisor {
         Arc::new(Self {
             sessions: DashMap::new(),
             activation: SessionActivation::new(
-                config,
+                Arc::clone(&config),
+                plugin,
+                model,
+                router,
+                Arc::clone(&notifications),
                 group_operations,
                 Arc::clone(&source_resolver),
             ),
@@ -68,6 +80,7 @@ impl SessionSupervisor {
             lifecycle_shutdown: Mutex::new(None),
             lifecycle_task: Mutex::new(None),
             transitions: Mutex::new(()),
+            notifications,
             auto_shutdown: config.conf.auto_shutdown,
         })
     }
@@ -220,7 +233,7 @@ impl SessionSupervisor {
     }
 
     async fn notify_session_list_changed(&self) {
-        get_notif_mgr()
+        self.notifications
             .broadcast(Notification::new(NotificationPayload::SessionListChanged))
             .await;
     }

@@ -10,8 +10,3 @@ pub use manager::NotificationManager;
 pub use message::{
     BreakpointChangeEvent, CustomEvent, Notification, NotificationPayload, SessionStatusEvent,
 };
-
-/// Get the global notification manager
-pub fn get_notif_mgr() -> std::sync::Arc<NotificationManager> {
-    crate::context::app_context().notification_manager().clone()
-}

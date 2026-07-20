@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use crate::state::STATES;
+use crate::state::StateMgr;
 
 use super::{
     api, backtrace::DistributedBacktraceService, breakpoint::BreakpointService,
@@ -88,11 +88,11 @@ impl Handler for BreakDeleteHandler {
 
 #[derive(Debug)]
 pub struct ThreadInfoHandler {
-    projector: QueryProjector<'static>,
+    projector: QueryProjector,
 }
 
 impl ThreadInfoHandler {
-    pub fn new(state: &'static crate::state::StateMgr) -> Self {
+    pub fn new(state: Arc<StateMgr>) -> Self {
         Self {
             projector: QueryProjector::new(state),
         }
@@ -190,12 +190,19 @@ impl Handler for ListHandler {
     }
 }
 
-#[derive(Debug)]
-pub struct ThreadSelectHandler;
+pub struct ThreadSelectHandler {
+    state: Arc<StateMgr>,
+}
+
+impl std::fmt::Debug for ThreadSelectHandler {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("ThreadSelectHandler").finish()
+    }
+}
 
 impl ThreadSelectHandler {
-    pub fn new() -> Self {
-        ThreadSelectHandler
+    pub fn new(state: Arc<StateMgr>) -> Self {
+        Self { state }
     }
 }
 
@@ -206,7 +213,8 @@ impl Handler for ThreadSelectHandler {
         let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
         if !parts.is_empty() {
             let gtid = parts.last().unwrap().parse::<u64>()?;
-            let (sid, tid) = STATES
+            let (sid, tid) = self
+                .state
                 .local_thread_id(gtid)
                 .ok_or_else(|| anyhow!("Unknown global thread {}", gtid))?
                 .into();
@@ -225,11 +233,11 @@ impl Handler for ThreadSelectHandler {
 
 #[derive(Debug)]
 pub struct ListGroupsHandler {
-    projector: QueryProjector<'static>,
+    projector: QueryProjector,
 }
 
 impl ListGroupsHandler {
-    pub fn new(state: &'static crate::state::StateMgr) -> Self {
+    pub fn new(state: Arc<StateMgr>) -> Self {
         Self {
             projector: QueryProjector::new(state),
         }

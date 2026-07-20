@@ -76,8 +76,8 @@ pub(crate) async fn publish_breakpoint_state_changes(
 }
 
 pub(crate) struct BreakpointService {
-    breakpoints: &'static BreakpointMgr,
-    groups: &'static GroupMgr,
+    breakpoints: Arc<BreakpointMgr>,
+    groups: Arc<GroupMgr>,
     notifications: Arc<NotificationManager>,
     executor: CommandExecutor,
     group_operations: Arc<GroupOperationCoordinator>,
@@ -85,8 +85,8 @@ pub(crate) struct BreakpointService {
 
 impl BreakpointService {
     pub(crate) fn new(
-        breakpoints: &'static BreakpointMgr,
-        groups: &'static GroupMgr,
+        breakpoints: Arc<BreakpointMgr>,
+        groups: Arc<GroupMgr>,
         notifications: Arc<NotificationManager>,
         executor: CommandExecutor,
         group_operations: Arc<GroupOperationCoordinator>,
@@ -158,7 +158,7 @@ impl BreakpointService {
                 }
             }
             Target::Multiple(targets) => {
-                for target in deduplicate_insertion_targets(self.groups, targets) {
+                for target in deduplicate_insertion_targets(self.groups.as_ref(), targets) {
                     let result = match target {
                         Target::Session(session_id) => {
                             self.insert_for_session(breakpoint_id, &debugger_command, session_id)

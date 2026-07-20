@@ -14,10 +14,15 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
 use crate::{
-    cmd_flow::{get_command_engine, router::Target, FinishedCmd},
+    cmd_flow::{
+        engine::CommandEngine,
+        router::{Router as CommandRouter, Target},
+        FinishedCmd,
+    },
     notification::{self, NotificationManager},
+    runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
-    state::{get_bkpt_mgr, BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
+    state::{BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
     status::{get_rt_status, Component},
 };
 
@@ -144,11 +149,32 @@ impl From<&BkptMeta> for BkptJson {
 struct ApiState {
     notifications: Arc<NotificationManager>,
     source_resolver: Arc<SourceResolver>,
+    command_engine: Arc<CommandEngine>,
+    command_router: Arc<CommandRouter>,
+    model: Arc<RuntimeModel>,
 }
 
 impl FromRef<ApiState> for Arc<NotificationManager> {
     fn from_ref(state: &ApiState) -> Self {
         Arc::clone(&state.notifications)
+    }
+}
+
+impl FromRef<ApiState> for Arc<CommandEngine> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.command_engine)
+    }
+}
+
+impl FromRef<ApiState> for Arc<CommandRouter> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.command_router)
+    }
+}
+
+impl FromRef<ApiState> for Arc<RuntimeModel> {
+    fn from_ref(state: &ApiState) -> Self {
+        Arc::clone(&state.model)
     }
 }
 
@@ -168,12 +194,18 @@ impl ApiServer {
         addr: impl Into<String>,
         notifications: Arc<NotificationManager>,
         source_resolver: Arc<SourceResolver>,
+        command_engine: Arc<CommandEngine>,
+        command_router: Arc<CommandRouter>,
+        model: Arc<RuntimeModel>,
     ) -> Self {
         Self {
             addr: addr.into(),
             state: ApiState {
                 notifications,
                 source_resolver,
+                command_engine,
+                command_router,
+                model,
             },
         }
     }
@@ -268,19 +300,20 @@ async fn resolve_src_to_groups(
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn send_cmd(Json(send_cmd): Json<SendCommand>) -> impl IntoResponse {
+async fn send_cmd(
+    State(engine): State<Arc<CommandEngine>>,
+    Json(send_cmd): Json<SendCommand>,
+) -> impl IntoResponse {
     debug!("Received command: {:?}", send_cmd);
 
     let result: Result<Option<FinishedCmd>> = async {
         if send_cmd.wait {
-            Ok(get_command_engine()
+            Ok(engine
                 .execute_api(&send_cmd.cmd, send_cmd.target)
                 .await?
                 .into_response())
         } else {
-            get_command_engine()
-                .submit_api(&send_cmd.cmd, send_cmd.target)
-                .await?;
+            engine.submit_api(&send_cmd.cmd, send_cmd.target).await?;
             Ok(None)
         }
     }
@@ -328,12 +361,12 @@ async fn get_status() -> impl IntoResponse {
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_sessions() -> impl IntoResponse {
+async fn get_sessions(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
     // if it has performance issues, we can probably parallelize this
     // or maybe do it in parallel conditionally when the size
     // is above a certain threshold
     let mut results = vec![];
-    let ss = crate::state::STATES.sessions();
+    let ss = model.state().sessions();
     for s in ss {
         let (sid, tag, alias, status) = s
             .read_with(|s_meta| {
@@ -348,7 +381,7 @@ async fn get_sessions() -> impl IntoResponse {
                 )
             })
             .await;
-        let grp_info = crate::state::get_group_mgr().group_info_by_session(sid);
+        let grp_info = model.groups().group_info_by_session(sid);
         let session = json!({
             "sid": sid,
             "tag": tag,
@@ -367,21 +400,24 @@ async fn get_sessions() -> impl IntoResponse {
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_pending_commands() -> impl IntoResponse {
-    let statuses = crate::cmd_flow::get_router().runtime_statuses();
+async fn get_pending_commands(State(router): State<Arc<CommandRouter>>) -> impl IntoResponse {
+    let statuses = router.runtime_statuses();
     (StatusCode::OK, Json(json!(statuses)))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_groups() -> impl IntoResponse {
-    let group_mgr = crate::state::get_group_mgr();
+async fn get_groups(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
+    let group_mgr = model.groups();
     let result: Vec<GroupMeta> = group_mgr.groups();
     (StatusCode::OK, Json(result))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
-    let group_mgr = crate::state::get_group_mgr();
+async fn get_group(
+    State(model): State<Arc<RuntimeModel>>,
+    Query(query): Query<GetGroupQuery>,
+) -> impl IntoResponse {
+    let group_mgr = model.groups();
     if let Some(grp_id) = query.grp_id {
         if let Some(group_meta) = group_mgr.group_by_id(grp_id) {
             (StatusCode::OK, Json(json!(group_meta)))
@@ -409,8 +445,9 @@ async fn get_group(Query(query): Query<GetGroupQuery>) -> impl IntoResponse {
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_bkpts() -> impl IntoResponse {
-    let bkpts: Vec<BkptJson> = get_bkpt_mgr()
+async fn get_bkpts(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
+    let bkpts: Vec<BkptJson> = model
+        .breakpoints()
         .breakpoints()
         .iter()
         .map(|bkpt| bkpt.into())

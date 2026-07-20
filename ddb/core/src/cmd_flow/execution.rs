@@ -7,7 +7,7 @@ use tracing::debug;
 use crate::{
     common::Config,
     debugger::DebuggerBackend,
-    feature::get_proclet_restore_mgr,
+    feature::proclet_restore::ProcletRestorationMgr,
     state::{SessionRef, StateMgr, ThreadContext, ThreadStatus},
 };
 
@@ -18,7 +18,9 @@ use super::{
 };
 
 pub(crate) struct ExecutionService {
-    state: &'static StateMgr,
+    state: Arc<StateMgr>,
+    config: Arc<Config>,
+    proclet_restoration: Arc<ProcletRestorationMgr>,
     executor: CommandExecutor,
     transactions: TransactionCoordinator,
     backend: Arc<dyn DebuggerBackend>,
@@ -26,13 +28,17 @@ pub(crate) struct ExecutionService {
 
 impl ExecutionService {
     pub(crate) fn new(
-        state: &'static StateMgr,
+        state: Arc<StateMgr>,
+        config: Arc<Config>,
+        proclet_restoration: Arc<ProcletRestorationMgr>,
         executor: CommandExecutor,
         transactions: TransactionCoordinator,
         backend: Arc<dyn DebuggerBackend>,
     ) -> Self {
         Self {
             state,
+            config,
+            proclet_restoration,
             executor,
             transactions,
             backend,
@@ -40,8 +46,8 @@ impl ExecutionService {
     }
 
     pub(crate) async fn continue_command(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
-        if Config::global().conf.support_migration {
-            get_proclet_restore_mgr().reset().await;
+        if self.config.conf.support_migration {
+            self.proclet_restoration.reset().await;
         }
 
         let external_token = command.external_token;

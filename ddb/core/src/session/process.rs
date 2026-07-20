@@ -1,14 +1,15 @@
 use anyhow::Result;
 use bytes::Bytes;
+use std::sync::Arc;
 use tracing::debug;
 
 use super::{SessionMode, SessionRequest, SessionStart};
 use crate::{
-    cmd_flow::session_runtime::SessionHandle,
+    cmd_flow::{event::DebuggerEventReducer, session_runtime::SessionHandle},
     common::{self, Config},
     dbg_ctrl::DebuggerTransportHandle,
-    debugger::get_debugger_backend,
-    plugin::get_framework_plugin,
+    debugger::DebuggerBackend,
+    plugin::FrameworkPlugin,
     session::lifecycle::SessionTerminationReporter,
 };
 
@@ -21,10 +22,21 @@ pub struct SessionProcess {
     runtime: Option<SessionHandle>,
     runtime_task: Option<tokio::task::JoinHandle<()>>,
     shutdown_complete: bool,
+    config: Arc<Config>,
+    backend: Arc<dyn DebuggerBackend>,
+    plugin: Arc<dyn FrameworkPlugin>,
+    reducer: Arc<DebuggerEventReducer>,
 }
 
 impl SessionProcess {
-    pub fn new(request: SessionRequest, transport: DebuggerTransportHandle) -> Self {
+    pub fn new(
+        request: SessionRequest,
+        transport: DebuggerTransportHandle,
+        config: Arc<Config>,
+        backend: Arc<dyn DebuggerBackend>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        reducer: Arc<DebuggerEventReducer>,
+    ) -> Self {
         Self {
             sid: crate::common::counter::next_session_id(),
             request,
@@ -32,6 +44,10 @@ impl SessionProcess {
             runtime: None,
             runtime_task: None,
             shutdown_complete: false,
+            config,
+            backend,
+            plugin,
+            reducer,
         }
     }
 
@@ -47,14 +63,15 @@ impl SessionProcess {
         &mut self,
         termination: SessionTerminationReporter,
     ) -> Result<SessionHandle> {
-        let config = Config::global();
-        let backend = get_debugger_backend();
-        let plugin = get_framework_plugin();
+        let config = self.config.as_ref();
+        let backend = self.backend.as_ref();
+        let plugin = self.plugin.as_ref();
         let plugin_bootstrap = plugin.debugger_bootstrap(config);
         let launch_command = backend.build_start_command(self.request.sudo);
 
         let running = self.transport.launch(&launch_command).await?;
-        let (handle, task) = SessionHandle::spawn(self.sid, running, termination);
+        let (handle, task) =
+            SessionHandle::spawn(self.sid, running, termination, Arc::clone(&self.reducer));
         self.runtime = Some(handle.clone());
         self.runtime_task = Some(task);
 
@@ -63,16 +80,11 @@ impl SessionProcess {
             | SessionMode::Local(SessionStart::Attach(_)) => backend.build_remote_attach_commands(
                 config,
                 &self.request,
-                plugin.as_ref(),
+                plugin,
                 &plugin_bootstrap,
             )?,
             SessionMode::Local(SessionStart::Binary { .. }) => backend
-                .build_local_binary_commands(
-                    config,
-                    &self.request,
-                    plugin.as_ref(),
-                    &plugin_bootstrap,
-                )?,
+                .build_local_binary_commands(config, &self.request, plugin, &plugin_bootstrap)?,
             SessionMode::Remote(SessionStart::Binary { .. }) => {
                 anyhow::bail!("remote binary launch is not implemented")
             }
@@ -86,8 +98,9 @@ impl SessionProcess {
     }
 
     pub async fn finish_bootstrap(&self) -> Result<()> {
-        let commands = get_framework_plugin()
-            .debugger_bootstrap(Config::global())
+        let commands = self
+            .plugin
+            .debugger_bootstrap(self.config.as_ref())
             .post_start_commands
             .iter()
             .map(|command| command.render())

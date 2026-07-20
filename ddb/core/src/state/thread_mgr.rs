@@ -155,6 +155,7 @@ impl ThreadStateMgr {
             .copied()
     }
 
+    #[cfg(test)]
     pub fn local_thread_group_id(&self, gtgid: u64) -> Option<LocalThreadGroupId> {
         self.indexes
             .read()
@@ -162,26 +163,6 @@ impl ThreadStateMgr {
             .gtgid_to_ltgid
             .get(&gtgid)
             .cloned()
-    }
-
-    pub fn insert_thread(&self, local_tid: &LocalThreadId, gtid: u64) {
-        let mut indexes = self.indexes.write().unwrap();
-        if let Some(old_gtid) = indexes.ltid_to_gtid.insert(local_tid.clone(), gtid) {
-            indexes.gtid_to_ltid.remove(&old_gtid);
-        }
-        if let Some(old_local_tid) = indexes.gtid_to_ltid.insert(gtid, local_tid.clone()) {
-            indexes.ltid_to_gtid.remove(&old_local_tid);
-        }
-    }
-
-    pub fn insert_thread_group(&self, local_tgid: &LocalThreadGroupId, gtgid: u64) {
-        let mut indexes = self.indexes.write().unwrap();
-        if let Some(old_gtgid) = indexes.ltgid_to_gtgid.insert(local_tgid.clone(), gtgid) {
-            indexes.gtgid_to_ltgid.remove(&old_gtgid);
-        }
-        if let Some(old_local_tgid) = indexes.gtgid_to_ltgid.insert(gtgid, local_tgid.clone()) {
-            indexes.ltgid_to_gtgid.remove(&old_local_tgid);
-        }
     }
 
     pub fn get_or_insert_thread_with<F>(&self, local_tid: &LocalThreadId, create: F) -> u64
@@ -293,10 +274,10 @@ mod tests {
         let ltid_c = LocalThreadId::new(2, 20);
         let ltgid = LocalThreadGroupId::new(1, "i1");
 
-        mgr.insert_thread(&ltid_a, 100);
-        mgr.insert_thread(&ltid_b, 101);
-        mgr.insert_thread(&ltid_c, 200);
-        mgr.insert_thread_group(&ltgid, 300);
+        mgr.get_or_insert_thread_with(&ltid_a, || 100);
+        mgr.get_or_insert_thread_with(&ltid_b, || 101);
+        mgr.get_or_insert_thread_with(&ltid_c, || 200);
+        mgr.get_or_insert_thread_group_with(&ltgid, || 300);
 
         assert_eq!(mgr.global_thread_id(&ltid_a), Some(100));
         assert_eq!(mgr.local_thread_id(101), Some(ltid_b.clone()));
@@ -317,21 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn replacing_thread_mapping_preserves_the_bijection() {
-        let mgr = ThreadStateMgr::new();
-        let first = LocalThreadId::new(1, 10);
-        let second = LocalThreadId::new(1, 11);
-
-        mgr.insert_thread(&first, 100);
-        mgr.insert_thread(&first, 101);
-        assert_eq!(mgr.local_thread_id(100), None);
-
-        mgr.insert_thread(&second, 101);
-        assert_eq!(mgr.global_thread_id(&first), None);
-        assert_eq!(mgr.local_thread_id(101), Some(second));
-    }
-
-    #[test]
     fn removing_session_clears_all_thread_and_group_indexes_for_that_session() {
         let mgr = ThreadStateMgr::new();
         let ltid_a = LocalThreadId::new(1, 10);
@@ -340,11 +306,11 @@ mod tests {
         let ltgid_a = LocalThreadGroupId::new(1, "i1");
         let ltgid_b = LocalThreadGroupId::new(2, "i2");
 
-        mgr.insert_thread(&ltid_a, 100);
-        mgr.insert_thread(&ltid_b, 101);
-        mgr.insert_thread(&ltid_c, 200);
-        mgr.insert_thread_group(&ltgid_a, 300);
-        mgr.insert_thread_group(&ltgid_b, 400);
+        mgr.get_or_insert_thread_with(&ltid_a, || 100);
+        mgr.get_or_insert_thread_with(&ltid_b, || 101);
+        mgr.get_or_insert_thread_with(&ltid_c, || 200);
+        mgr.get_or_insert_thread_group_with(&ltgid_a, || 300);
+        mgr.get_or_insert_thread_group_with(&ltgid_b, || 400);
 
         mgr.remove_session(1);
 

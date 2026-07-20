@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Result};
 use dashmap::DashMap;
@@ -17,7 +17,8 @@ use super::{
 };
 use crate::{
     get_dbg_mgr,
-    state::{get_bkpt_mgr, get_group_mgr, get_proclet_mgr, GroupId, LocalThreadId, STATES},
+    runtime_model::RuntimeModel,
+    state::{GroupId, LocalThreadId},
 };
 
 const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -66,12 +67,14 @@ impl SessionRoute {
 }
 
 pub struct Router {
+    model: Arc<RuntimeModel>,
     sessions: DashMap<u64, SessionHandle>,
 }
 
 impl Router {
-    pub fn new() -> Self {
+    pub fn new(model: Arc<RuntimeModel>) -> Self {
         Self {
+            model,
             sessions: DashMap::new(),
         }
     }
@@ -118,13 +121,17 @@ impl Router {
             Target::Unspecified => bail!("command target was not resolved before routing"),
             Target::Session(sid) => Ok(vec![self.session_route(*sid, None)?]),
             Target::Thread(gtid) => {
-                let LocalThreadId(sid, thread_id) = STATES
+                let LocalThreadId(sid, thread_id) = self
+                    .model
+                    .state()
                     .local_thread_id(*gtid)
                     .ok_or_else(|| anyhow!("Thread {} is not in a session", gtid))?;
                 Ok(vec![self.session_route(sid, Some(thread_id))?])
             }
             Target::Group(gid) => {
-                let group = get_group_mgr()
+                let group = self
+                    .model
+                    .groups()
                     .group_by_id(*gid)
                     .ok_or_else(|| anyhow!("Group {} does not exist", gid))?;
                 let session_ids = group.session_ids().clone();
@@ -134,13 +141,15 @@ impl Router {
                 })
             }
             Target::CurrThread => {
-                let gtid = STATES.current_thread_id().ok_or_else(|| {
+                let gtid = self.model.state().current_thread_id().ok_or_else(|| {
                     anyhow!("use -thread-select #gtid to select the thread first")
                 })?;
                 self.resolve_target(&Target::Thread(gtid))
             }
             Target::CurrSession => {
-                let sid = STATES
+                let sid = self
+                    .model
+                    .state()
                     .current_session_id()
                     .ok_or_else(|| anyhow!("No current session selected"))?;
                 self.resolve_target(&Target::Session(sid))
@@ -274,12 +283,12 @@ impl Router {
         statuses
     }
 
-    pub fn handle_internal_cmd(&self, command: &str) {
+    pub fn handle_internal_cmd(self: &Arc<Self>, command: &str) {
         match command {
-            "p-session-meta" => info!("p-session-meta: {:?}", STATES.sessions()),
-            "p-group-mgr" => info!("p-group-mgr: {:#?}", get_group_mgr()),
-            "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", get_bkpt_mgr()),
-            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", get_proclet_mgr()),
+            "p-session-meta" => info!("p-session-meta: {:?}", self.model.state().sessions()),
+            "p-group-mgr" => info!("p-group-mgr: {:#?}", self.model.groups()),
+            "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", self.model.breakpoints()),
+            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", self.model.proclets()),
             _ if command.starts_with("s-cmd ") => {
                 let parts = command.split_whitespace().collect::<Vec<_>>();
                 if parts.len() < 3 {
@@ -291,15 +300,13 @@ impl Router {
                     return;
                 };
                 let raw = parts[2..].join(" ");
+                let router = Arc::clone(self);
                 tokio::spawn(async move {
                     let parsed: Result<ParsedInputCmd> = raw.try_into();
                     match parsed {
                         Ok(parsed) => {
                             let (_, command) = parsed.to_command();
-                            match crate::cmd_flow::get_router()
-                                .execute(Target::Session(sid), command)
-                                .await
-                            {
+                            match router.execute(Target::Session(sid), command).await {
                                 Ok(response) => emit_static(response, PlainFormatter),
                                 Err(error) => warn!(?error, "failed to send internal command"),
                             }

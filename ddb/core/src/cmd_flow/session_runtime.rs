@@ -23,7 +23,7 @@ use crate::{
 };
 
 use super::{
-    event::{decode_event, project_event, DebuggerEvent},
+    event::{decode_event, DebuggerEvent, DebuggerEventReducer},
     event_publisher::EventPublisher,
     response::{ParsedSessionResponse, SessionRuntimeStatus},
 };
@@ -198,18 +198,26 @@ impl std::fmt::Debug for SessionHandle {
 }
 
 impl SessionHandle {
-    pub fn spawn(
+    pub(crate) fn spawn(
         sid: u64,
         transport: RunningTransport,
         termination: SessionTerminationReporter,
+        reducer: Arc<DebuggerEventReducer>,
     ) -> (Self, tokio::task::JoinHandle<()>) {
-        Self::spawn_with_config(sid, transport, termination, RuntimeConfig::default())
+        Self::spawn_with_config(
+            sid,
+            transport,
+            termination,
+            reducer,
+            RuntimeConfig::default(),
+        )
     }
 
     fn spawn_with_config(
         sid: u64,
         transport: RunningTransport,
         termination: SessionTerminationReporter,
+        reducer: Arc<DebuggerEventReducer>,
         config: RuntimeConfig,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (requests, request_rx) = mpsc::channel(COMMAND_MAILBOX_CAPACITY);
@@ -234,6 +242,7 @@ impl SessionHandle {
                 closed,
                 termination,
             },
+            reducer,
             config,
         ));
         (handle, task)
@@ -354,6 +363,7 @@ impl SessionLease {
 async fn run_projector(
     sid: u64,
     mut events: mpsc::Receiver<ProjectedEvent>,
+    reducer: Arc<DebuggerEventReducer>,
     applied: watch::Sender<u64>,
     publisher: EventPublisher,
     termination: SessionTerminationReporter,
@@ -364,7 +374,7 @@ async fn run_projector(
         if !projection_delay.is_zero() {
             tokio::time::sleep(projection_delay).await;
         }
-        match project_event(event.event, sid).await {
+        match reducer.project(event.event, sid).await {
             Ok(projection) => {
                 if let Some(output) = projection.output {
                     if let Err(error) = publisher.publish(output).await {
@@ -500,6 +510,7 @@ async fn run_session(
     mut control: mpsc::UnboundedReceiver<ControlRequest>,
     transport: RunningTransport,
     shared: RuntimeShared,
+    reducer: Arc<DebuggerEventReducer>,
     config: RuntimeConfig,
 ) {
     let RuntimeShared {
@@ -517,6 +528,7 @@ async fn run_session(
     let projector = tokio::spawn(run_projector(
         sid,
         event_rx,
+        reducer,
         applied_tx,
         publisher,
         termination.clone(),
@@ -709,10 +721,18 @@ async fn run_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::{RunningTransport, TransportEvent, TransportRequest};
     use crate::session::lifecycle::{self, SessionTermination, SessionTerminationCause};
+    use crate::{
+        connection::{RunningTransport, TransportEvent, TransportRequest},
+        notification::NotificationManager,
+        runtime_model::RuntimeModel,
+    };
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn test_reducer() -> Arc<DebuggerEventReducer> {
+        DebuggerEventReducer::new(RuntimeModel::new(), Arc::new(NotificationManager::new()))
+    }
 
     fn test_transport(
         request_capacity: usize,
@@ -748,7 +768,8 @@ mod tests {
         mpsc::UnboundedReceiver<SessionTermination>,
     ) {
         let (lifecycle, terminations) = lifecycle::channel();
-        let (handle, task) = SessionHandle::spawn(sid, transport, lifecycle.bind(sid));
+        let (handle, task) =
+            SessionHandle::spawn(sid, transport, lifecycle.bind(sid), test_reducer());
         (handle, task, terminations)
     }
 
@@ -762,8 +783,13 @@ mod tests {
         mpsc::UnboundedReceiver<SessionTermination>,
     ) {
         let (lifecycle, terminations) = lifecycle::channel();
-        let (handle, task) =
-            SessionHandle::spawn_with_config(sid, transport, lifecycle.bind(sid), config);
+        let (handle, task) = SessionHandle::spawn_with_config(
+            sid,
+            transport,
+            lifecycle.bind(sid),
+            test_reducer(),
+            config,
+        );
         (handle, task, terminations)
     }
 

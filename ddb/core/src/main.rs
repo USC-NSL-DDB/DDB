@@ -15,6 +15,7 @@ mod group_operation;
 mod logging;
 mod notification;
 mod plugin;
+mod runtime_model;
 mod session;
 mod setup;
 mod shutdown;
@@ -29,13 +30,11 @@ use app::App;
 use cmd_flow::{format_error, get_command_engine};
 use common::config::Config;
 use dbg_mgr::DbgManager;
-use debugger::{init_debugger_backend, resolve_debugger_backend};
-use group_operation::GroupOperationCoordinator;
-use plugin::{get_framework_plugin, init_framework_plugin, resolve_framework_plugin};
+use debugger::resolve_debugger_backend;
+use plugin::resolve_framework_plugin;
 use setup::LoggingSettings;
 use setup::{AppDirConfig, SetupProcedure};
 use shutdown::{get_shutdown_ctrl, ShutdownCause, ShutdownCtrl};
-use source::resolver::SourceResolver;
 use status::*;
 
 use anyhow::Result;
@@ -165,11 +164,8 @@ async fn run_command_flow() -> Result<()> {
     Ok(())
 }
 
-async fn run_debugger_manager(
-    group_operations: Arc<GroupOperationCoordinator>,
-    source_resolver: Arc<SourceResolver>,
-) -> Result<()> {
-    let dbg_mgr = DbgManager::new(group_operations, source_resolver).await?;
+async fn run_debugger_manager() -> Result<()> {
+    let dbg_mgr = DbgManager::new(context::app_context()).await?;
     init_dbg_mgr(|| Arc::downgrade(&dbg_mgr));
 
     if let Err(error) = dbg_mgr.start().await {
@@ -191,7 +187,7 @@ async fn run_debugger_manager(
 }
 
 async fn run_notification_manager() -> Result<()> {
-    let manager = notification::get_notif_mgr();
+    let manager = Arc::clone(context::app_context().notification_manager());
     manager.start().await;
     get_rt_status().up(Component::Notification);
 
@@ -205,22 +201,11 @@ async fn run_notification_manager() -> Result<()> {
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
 async fn run_main(command_workers: usize) -> Result<()> {
     let services = context::app_context();
-    let group_operations = Arc::clone(services.group_operations());
-    let source_resolver = Arc::clone(services.source_resolver());
-    let app = App::new(
-        Config::global().conf.api_server_port,
-        Arc::clone(services.notification_manager()),
-        Arc::clone(&source_resolver),
-    );
+    let app = App::new(services.config().conf.api_server_port, services);
     let mut tasks = JoinSet::new();
 
     tasks.spawn(async { ("command-flow", run_command_flow().await) });
-    tasks.spawn(async move {
-        (
-            "debugger-manager",
-            run_debugger_manager(group_operations, source_resolver).await,
-        )
-    });
+    tasks.spawn(async move { ("debugger-manager", run_debugger_manager().await) });
     tasks.spawn(async { ("notification-manager", run_notification_manager().await) });
     tasks.spawn(async move { ("api-server", app.run(get_shutdown_ctrl().subscribe()).await) });
     tasks.spawn(async {
@@ -263,15 +248,19 @@ async fn main() -> Result<()> {
     let args = arg::Args::parse();
     let command_workers = args.command_workers;
     let logging_settings = LoggingSettings::from_args(&args);
-    Config::init_global(args.config)?;
-    init_debugger_backend(|| resolve_debugger_backend(Config::global()));
-    init_framework_plugin(|| resolve_framework_plugin(Config::global()));
-    context::init_app_context(get_framework_plugin().command_adapter());
-    let app_dir_conf = AppDirConfig::from_config(Config::global());
+    let config = Arc::new(Config::load(args.config)?);
+    let backend = resolve_debugger_backend(config.as_ref());
+    let plugin = resolve_framework_plugin(config.as_ref());
+    context::init_app_context(
+        Arc::clone(&config),
+        Arc::clone(&plugin),
+        Arc::clone(&backend),
+    );
+    let app_dir_conf = AppDirConfig::from_config(config.as_ref());
 
     // Keep the guards to ensure the async logger and OTEL tracer are running.
     // The guards will be used for graceful shutdown at the end.
-    let tracing_guards = SetupProcedure::new()
+    let tracing_guards = SetupProcedure::new(config, backend, plugin)
         .with_app_dir_config(app_dir_conf)
         .with_logging_settings(logging_settings)
         .run()?;

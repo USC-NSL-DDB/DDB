@@ -1,9 +1,10 @@
 use crate::{
-    common::{self, config::Config, default_vals},
-    debugger::{get_debugger_backend, install_bundled_assets},
+    common::{config::Config, default_vals},
+    debugger::{install_bundled_assets, DebuggerBackend},
     logging,
-    plugin::get_framework_plugin,
+    plugin::FrameworkPlugin,
 };
+use std::sync::Arc;
 
 use crate::logging::TracingGuards;
 use anyhow::{Context, Result};
@@ -176,13 +177,23 @@ impl LoggingSettings {
 }
 
 pub struct SetupProcedure {
+    config: Arc<Config>,
+    backend: Arc<dyn DebuggerBackend>,
+    plugin: Arc<dyn FrameworkPlugin>,
     app_dir_config: AppDirConfig,
     logging_settings: LoggingSettings,
 }
 
 impl SetupProcedure {
-    pub fn new() -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        backend: Arc<dyn DebuggerBackend>,
+        plugin: Arc<dyn FrameworkPlugin>,
+    ) -> Self {
         SetupProcedure {
+            config,
+            backend,
+            plugin,
             app_dir_config: AppDirConfig::default(),
             logging_settings: LoggingSettings::default(),
         }
@@ -210,10 +221,10 @@ impl SetupProcedure {
             &self.logging_settings,
         )?;
 
-        let config = common::Config::global();
-        let backend_assets = get_debugger_backend().bundled_assets(config);
+        let config = self.config.as_ref();
+        let backend_assets = self.backend.bundled_assets(config);
         install_bundled_assets(&backend_assets)?;
-        let plugin_assets = get_framework_plugin().bundled_assets(config);
+        let plugin_assets = self.plugin.bundled_assets(config);
         let installed_plugin_assets = install_bundled_assets(&plugin_assets)?;
 
         if config.conf.support_migration {
@@ -236,11 +247,5 @@ impl SetupProcedure {
         info!("[FEATURE]: (DISABLED) lazy source map");
 
         Ok(guards)
-    }
-}
-
-impl Default for SetupProcedure {
-    fn default() -> Self {
-        SetupProcedure::new()
     }
 }

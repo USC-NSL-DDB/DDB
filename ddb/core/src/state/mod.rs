@@ -2,47 +2,12 @@ pub mod bkpt_mgr;
 pub mod group_mgr;
 pub mod proclet_mgr;
 pub mod session_mgr;
-pub mod signal_mgr;
 pub mod state_mgr;
 pub mod thread_mgr;
-
-use std::sync::{Arc, OnceLock};
 
 pub use bkpt_mgr::*;
 pub use group_mgr::*;
 pub use proclet_mgr::*;
 pub use session_mgr::*;
-pub use signal_mgr::*;
 pub use state_mgr::*;
 pub use thread_mgr::*;
-
-use lazy_static::lazy_static;
-
-lazy_static! {
-    pub static ref STATES: StateMgr = StateMgr::new();
-}
-
-static GROUPS: OnceLock<Arc<GroupMgr>> = OnceLock::new();
-static BKPTS: OnceLock<BreakpointMgr> = OnceLock::new();
-static PROCLETS: OnceLock<ProcletMgr> = OnceLock::new();
-static SIGNALS: OnceLock<SignalMgr> = OnceLock::new();
-
-pub fn get_state_mgr() -> &'static StateMgr {
-    &STATES
-}
-
-pub fn get_group_mgr() -> &'static Arc<GroupMgr> {
-    GROUPS.get_or_init(|| Arc::new(GroupMgr::new()))
-}
-
-pub fn get_bkpt_mgr() -> &'static BreakpointMgr {
-    BKPTS.get_or_init(BreakpointMgr::new)
-}
-
-pub fn get_proclet_mgr() -> &'static ProcletMgr {
-    PROCLETS.get_or_init(ProcletMgr::new)
-}
-
-pub fn get_signal_mgr() -> &'static SignalMgr {
-    SIGNALS.get_or_init(SignalMgr::new)
-}

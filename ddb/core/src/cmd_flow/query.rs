@@ -4,7 +4,7 @@
 //! with DDB-global identifiers. Presenters can therefore remain pure and every
 //! ingress observes the same response semantics.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use gdbmi::raw::{Dict, Value};
 
@@ -29,19 +29,19 @@ pub(crate) enum QueryProjectionError {
     UnknownThreadGroup { sid: u64, local_id: String },
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct QueryProjector<'a> {
-    state: &'a StateMgr,
+#[derive(Clone)]
+pub(crate) struct QueryProjector {
+    state: Arc<StateMgr>,
 }
 
-impl fmt::Debug for QueryProjector<'_> {
+impl fmt::Debug for QueryProjector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("QueryProjector").finish()
     }
 }
 
-impl<'a> QueryProjector<'a> {
-    pub(crate) fn new(state: &'a StateMgr) -> Self {
+impl QueryProjector {
+    pub(crate) fn new(state: Arc<StateMgr>) -> Self {
         Self { state }
     }
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn thread_projection_replaces_local_and_current_ids() {
-        let state = StateMgr::new();
+        let state = Arc::new(StateMgr::new());
         state.register_session(3, "svc", None).await;
         state.register_thread_group(3, "i1").await.unwrap();
         let global_id = state.register_thread(3, 9, "i1").await.unwrap().thread_id;
@@ -212,7 +212,9 @@ mod tests {
             )])))],
         );
 
-        let projected = QueryProjector::new(&state).project_threads(input).unwrap();
+        let projected = QueryProjector::new(Arc::clone(&state))
+            .project_threads(input)
+            .unwrap();
         let payload = projected.get_responses()[0].get_payload().unwrap();
         let thread = payload["threads"].expect_list_ref().unwrap()[0]
             .expect_dict_ref()
@@ -229,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn thread_projection_reuses_the_owned_record_list() {
-        let state = StateMgr::new();
+        let state = Arc::new(StateMgr::new());
         state.register_session(3, "svc", None).await;
         state.register_thread_group(3, "i1").await.unwrap();
         state.register_thread(3, 9, "i1").await.unwrap();
@@ -253,7 +255,9 @@ mod tests {
             .unwrap()
             .as_ptr();
 
-        let projected = QueryProjector::new(&state).project_threads(input).unwrap();
+        let projected = QueryProjector::new(Arc::clone(&state))
+            .project_threads(input)
+            .unwrap();
         let records_after = projected.get_responses()[0].get_payload().unwrap()["threads"]
             .expect_list_ref()
             .unwrap()
@@ -264,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_projection_replaces_local_group_ids() {
-        let state = StateMgr::new();
+        let state = Arc::new(StateMgr::new());
         state.register_session(4, "svc", None).await;
         let global_id = state.register_thread_group(4, "i7").await.unwrap();
         let process = Value::Dict(Dict::from(HashMap::from([
@@ -273,7 +277,7 @@ mod tests {
             ("pid".to_string(), Value::from("42")),
         ])));
 
-        let projected = QueryProjector::new(&state)
+        let projected = QueryProjector::new(Arc::clone(&state))
             .project_processes(completion(4, "groups", vec![process]))
             .unwrap();
         let process = projected.get_responses()[0].get_payload().unwrap()["groups"]
@@ -289,7 +293,7 @@ mod tests {
 
     #[test]
     fn unknown_thread_mapping_is_reported_without_panicking() {
-        let state = StateMgr::new();
+        let state = Arc::new(StateMgr::new());
         let input = completion(
             8,
             "threads",
@@ -300,7 +304,7 @@ mod tests {
         );
 
         assert_eq!(
-            QueryProjector::new(&state)
+            QueryProjector::new(Arc::clone(&state))
                 .project_threads(input)
                 .unwrap_err(),
             QueryProjectionError::UnknownThread {

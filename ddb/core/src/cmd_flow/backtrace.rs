@@ -45,23 +45,26 @@ struct ParentMetadata {
 
 pub(crate) struct DistributedBacktraceService {
     adapter: Arc<dyn FrameworkCommandAdapter>,
-    state: &'static StateMgr,
+    state: Arc<StateMgr>,
+    config: Arc<Config>,
     executor: CommandExecutor,
     transactions: TransactionCoordinator,
-    proclet_restoration: &'static ProcletRestorationMgr,
+    proclet_restoration: Arc<ProcletRestorationMgr>,
 }
 
 impl DistributedBacktraceService {
     pub(crate) fn new(
         adapter: Arc<dyn FrameworkCommandAdapter>,
-        state: &'static StateMgr,
+        state: Arc<StateMgr>,
+        config: Arc<Config>,
         executor: CommandExecutor,
         transactions: TransactionCoordinator,
-        proclet_restoration: &'static ProcletRestorationMgr,
+        proclet_restoration: Arc<ProcletRestorationMgr>,
     ) -> Self {
         Self {
             adapter,
             state,
+            config,
             executor,
             transactions,
             proclet_restoration,
@@ -221,7 +224,7 @@ impl DistributedBacktraceService {
         parent: &ParentMetadata,
     ) -> Result<BacktraceData> {
         debug!(session_id, "switching to distributed parent context");
-        let related_session = if Config::global().handle_migration()
+        let related_session = if self.config.handle_migration()
             && !parent.proclet_id.is_empty()
             && parent.proclet_id != "0"
         {
@@ -286,7 +289,7 @@ impl DistributedBacktraceService {
         parent: &ParentMetadata,
         transaction: Option<&SessionTransaction>,
     ) {
-        if !Config::global().handle_migration() {
+        if !self.config.handle_migration() {
             return;
         }
         let Some(LocalThreadId(session_id, _)) = self.state.local_thread_id(global_thread_id)

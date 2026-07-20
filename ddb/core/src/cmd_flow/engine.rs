@@ -22,12 +22,9 @@ use super::{
     CommandOutcome,
 };
 use crate::{
-    debugger::get_debugger_backend,
-    feature::get_proclet_restore_mgr,
-    group_operation::GroupOperationCoordinator,
-    notification::NotificationManager,
-    source::resolver::SourceResolver,
-    state::{get_bkpt_mgr, get_group_mgr, get_state_mgr},
+    common::Config, debugger::DebuggerBackend, feature::proclet_restore::ProcletRestorationMgr,
+    group_operation::GroupOperationCoordinator, notification::NotificationManager,
+    runtime_model::RuntimeModel, source::resolver::SourceResolver, state::StateMgr,
 };
 
 const DETACHED_COMMAND_LIMIT: usize = 256;
@@ -64,40 +61,48 @@ pub struct CommandEngine {
     handlers: HashMap<String, Arc<dyn Handler>>,
     default_handler: Arc<dyn Handler>,
     router: Arc<Router>,
+    state: Arc<StateMgr>,
     source_resolver: Arc<SourceResolver>,
     detached_slots: Arc<Semaphore>,
 }
 
 impl CommandEngine {
-    pub fn new(
+    pub(crate) fn new(
         adapter: Arc<dyn FrameworkCommandAdapter>,
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
+        model: Arc<RuntimeModel>,
+        config: Arc<Config>,
+        backend: Arc<dyn DebuggerBackend>,
+        proclet_restoration: Arc<ProcletRestorationMgr>,
     ) -> Arc<Self> {
-        let state = get_state_mgr();
+        let state = Arc::clone(model.state());
         let executor = CommandExecutor::new(Arc::clone(&router));
-        let transactions = TransactionCoordinator::new(state, Arc::clone(&router));
+        let transactions = TransactionCoordinator::new(Arc::clone(&state), Arc::clone(&router));
         let breakpoint_service = Arc::new(BreakpointService::new(
-            get_bkpt_mgr(),
-            get_group_mgr(),
+            Arc::clone(model.breakpoints()),
+            Arc::clone(model.groups()),
             notifications,
             executor.clone(),
             group_operations,
         ));
         let execution_service = Arc::new(ExecutionService::new(
-            state,
+            Arc::clone(&state),
+            Arc::clone(&config),
+            Arc::clone(&proclet_restoration),
             executor.clone(),
             transactions.clone(),
-            Arc::clone(get_debugger_backend()),
+            backend,
         ));
         let backtrace_service = Arc::new(DistributedBacktraceService::new(
             adapter,
-            state,
+            Arc::clone(&state),
+            config,
             executor,
             transactions,
-            get_proclet_restore_mgr(),
+            proclet_restoration,
         ));
         let mut handlers: HashMap<String, Arc<dyn Handler>> = HashMap::new();
         handlers.insert(
@@ -110,7 +115,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-thread-info".into(),
-            Arc::new(ThreadInfoHandler::new(state)),
+            Arc::new(ThreadInfoHandler::new(Arc::clone(&state))),
         );
         handlers.insert(
             "-exec-continue".into(),
@@ -127,7 +132,7 @@ impl CommandEngine {
         handlers.insert("-file-list-lines".into(), Arc::new(ListHandler::new()));
         handlers.insert(
             "-thread-select".into(),
-            Arc::new(ThreadSelectHandler::new()),
+            Arc::new(ThreadSelectHandler::new(Arc::clone(&state))),
         );
         handlers.insert(
             "-bt-remote".into(),
@@ -135,7 +140,7 @@ impl CommandEngine {
         );
         handlers.insert(
             "-list-thread-groups".into(),
-            Arc::new(ListGroupsHandler::new(state)),
+            Arc::new(ListGroupsHandler::new(Arc::clone(&state))),
         );
         handlers.insert(
             "-exec-next".into(),
@@ -178,6 +183,7 @@ impl CommandEngine {
             handlers,
             default_handler: Arc::new(DefaultHandler::new()),
             router,
+            state,
             source_resolver,
             detached_slots: Arc::new(Semaphore::new(DETACHED_COMMAND_LIMIT)),
         })
@@ -200,7 +206,8 @@ impl CommandEngine {
             return Ok(CommandOutcome::empty());
         }
 
-        let default_target = get_state_mgr()
+        let default_target = self
+            .state
             .current_thread_id()
             .map(Target::Thread)
             .unwrap_or(Target::Broadcast);

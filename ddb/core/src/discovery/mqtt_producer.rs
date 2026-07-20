@@ -4,6 +4,7 @@ use std::{
     io::Write,
     net::Ipv4Addr,
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
@@ -47,7 +48,7 @@ fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
 
 /// A Producer that uses MQTT (via `AsyncDiscoverClient`) to receive
 /// `ServiceInfo` events and send them through a channel.
-pub struct MqttProducer<'a> {
+pub struct MqttProducer {
     /// If you want this producer to also own and manage the broker lifecycle,
     /// store it here. If `None`, we assume the broker is managed externally.
     managed_broker: Option<Box<dyn MessageBroker>>,
@@ -55,14 +56,14 @@ pub struct MqttProducer<'a> {
     /// Keep track of spawned tasks for `start_producing`. We’ll abort them in `stop_producing`.
     handles: Vec<JoinHandle<()>>,
 
-    config: &'a crate::common::config::Config,
+    config: Arc<crate::common::config::Config>,
 }
 
-impl<'a> MqttProducer<'a> {
+impl MqttProducer {
     /// Create a new MqttProducer, optionally with an owned broker.
     pub fn new(
         managed_broker: Option<Box<dyn MessageBroker>>,
-        config: &'a crate::common::config::Config,
+        config: Arc<crate::common::config::Config>,
     ) -> Self {
         Self {
             managed_broker,
@@ -158,7 +159,7 @@ impl TryFrom<&str> for MqttPayload {
 }
 
 #[axum::async_trait]
-impl<'a> DiscoveryMessageProducer for MqttProducer<'a> {
+impl DiscoveryMessageProducer for MqttProducer {
     /// Start “producing” by:
     /// 1. Optionally starting our broker,
     /// 2. Creating an AsyncDiscoverClient,

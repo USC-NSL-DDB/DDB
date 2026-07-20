@@ -1,16 +1,12 @@
 use super::default_vals;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
 use std::net::Ipv4Addr;
 use std::path::Path;
-use std::{fs, sync::OnceLock};
-use tracing::debug;
 
 use crate::debugger::gdb::command::{FrameFilterAddArgs, FrameFilterMatchType};
-
-// Global configuration instance
-static GLOBAL_CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -605,44 +601,12 @@ impl Config {
         Ok(())
     }
 
-    /// Initialize the global configuration with a file path
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - An optional file path from which to load the configuration.
-    ///           If `None`, the default configuration is used.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the configuration file cannot be read or parsed.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// Config::init_global(Some("/path/to/config.yaml")).expect("Failed to initialize global config");
-    /// ```
-    pub fn init_global<P: AsRef<Path>>(path: Option<P>) -> Result<Config> {
-        let config = match path {
-            Some(p) => Self::from_file(p)?,
-            None => Self::default(),
-        };
-        debug!("Initializing global config: {:?}", config);
-        match GLOBAL_CONFIG.set(config.clone()) {
-            Ok(_) => (),
-            Err(_) => {
-                bail!("Global config has already been initialized.");
-            }
+    /// Load configuration from a path, or use defaults when no path is supplied.
+    pub fn load<P: AsRef<Path>>(path: Option<P>) -> Result<Self> {
+        match path {
+            Some(path) => Self::from_file(path),
+            None => Ok(Self::default()),
         }
-        Ok(config)
-    }
-
-    /// Get a reference to the global configuration
-    /// SAFETY: This is safe to call only after init_global has been called
-    #[allow(static_mut_refs)]
-    pub fn global() -> &'static Config {
-        GLOBAL_CONFIG
-            .get()
-            .expect("Global config is not properly initialized.")
     }
 }
 

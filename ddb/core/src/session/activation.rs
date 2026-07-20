@@ -7,32 +7,44 @@ use crate::{
     cmd_flow::{
         breakpoint::{publish_breakpoint_state_change, publish_breakpoint_state_changes},
         decoder::BreakpointCreated,
-        get_router,
+        router::Router,
         session_runtime::{CompletionConsistency, SessionCommand, SessionHandle},
     },
     common::Config,
     group_operation::GroupOperationCoordinator,
-    notification::get_notif_mgr,
-    plugin::get_framework_plugin,
+    notification::NotificationManager,
+    plugin::FrameworkPlugin,
+    runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
-    state::{get_bkpt_mgr, get_group_mgr, get_proclet_mgr, get_state_mgr, STATES},
 };
 
 /// Applies and removes every application projection associated with a process.
 pub(crate) struct SessionActivation {
-    config: &'static Config,
+    config: Arc<Config>,
+    plugin: Arc<dyn FrameworkPlugin>,
+    model: Arc<RuntimeModel>,
+    router: Arc<Router>,
+    notifications: Arc<NotificationManager>,
     group_operations: Arc<GroupOperationCoordinator>,
     source_resolver: Arc<SourceResolver>,
 }
 
 impl SessionActivation {
     pub(crate) fn new(
-        config: &'static Config,
+        config: Arc<Config>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        model: Arc<RuntimeModel>,
+        router: Arc<Router>,
+        notifications: Arc<NotificationManager>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Self {
         Self {
             config,
+            plugin,
+            model,
+            router,
+            notifications,
             group_operations,
             source_resolver,
         }
@@ -52,14 +64,15 @@ impl SessionActivation {
         let service_meta = request.service_meta.clone();
         let caladan_ip = request.caladan_ip;
 
-        STATES
+        self.model
+            .state()
             .register_session(sid, &tag, service_meta.clone())
             .await;
 
         let handle = process.launch(termination.clone()).await?;
 
         let group_id = service_meta.as_ref().map(|meta| {
-            let groups = get_group_mgr();
+            let groups = self.model.groups();
             groups.register_session(&meta.hash, meta.alias.clone(), sid);
             groups
                 .group_id_by_session(sid)
@@ -77,27 +90,29 @@ impl SessionActivation {
             bail!("session {} terminated before activation completed", sid);
         }
 
-        get_router().add_session(handle);
+        self.router.add_session(handle);
         drop(group_operation);
         self.source_resolver.session_activated(sid);
 
-        if get_framework_plugin().should_register_caladan_ip(self.config) {
+        if self.plugin.should_register_caladan_ip(self.config.as_ref()) {
             if let Some(caladan_ip) = caladan_ip {
-                get_proclet_mgr().register_owner_session(caladan_ip, sid);
+                self.model
+                    .proclets()
+                    .register_owner_session(caladan_ip, sid);
             }
         }
 
-        STATES.update_session_status_on(sid).await;
+        self.model.state().update_session_status_on(sid).await;
         Ok(())
     }
 
     async fn sync_group_breakpoints(&self, sid: u64, handle: &SessionHandle) -> Result<()> {
-        let Some(group_id) = get_group_mgr().group_id_by_session(sid) else {
+        let Some(group_id) = self.model.groups().group_id_by_session(sid) else {
             return Ok(());
         };
 
-        let notifications = get_notif_mgr();
-        for breakpoint in get_bkpt_mgr().group_breakpoints(group_id) {
+        let notifications = self.notifications.as_ref();
+        for breakpoint in self.model.breakpoints().group_breakpoints(group_id) {
             let path = breakpoint.location().breakpoint_path();
             let response = handle
                 .execute(SessionCommand {
@@ -109,7 +124,7 @@ impl SessionActivation {
                 .await
                 .with_context(|| format!("Failed to insert existing breakpoint at {}", path))?;
             let local_id = BreakpointCreated::decode(&response)?.local_id;
-            let breakpoints = get_bkpt_mgr();
+            let breakpoints = self.model.breakpoints();
             let change = breakpoints.attach_group_breakpoint_session_target(
                 breakpoint.id(),
                 group_id,
@@ -118,7 +133,7 @@ impl SessionActivation {
             );
             publish_breakpoint_state_change(
                 breakpoints,
-                notifications.as_ref(),
+                notifications,
                 change,
                 "setting up group breakpoint for new session",
             )
@@ -131,22 +146,22 @@ impl SessionActivation {
         let sid = process.sid();
 
         self.source_resolver.cancel_session(sid).await;
-        let groups = get_group_mgr();
+        let groups = self.model.groups();
         let group_id = groups.group_id_by_session(sid);
         let group_operation = match group_id {
             Some(group_id) => Some(self.group_operations.lock(group_id).await),
             None => None,
         };
 
-        get_router().remove_session(sid);
-        get_state_mgr().update_session_status_off(sid).await;
+        self.router.remove_session(sid);
+        self.model.state().update_session_status_off(sid).await;
 
-        let breakpoints = get_bkpt_mgr();
+        let breakpoints = self.model.breakpoints();
         let changes = breakpoints.clean_bkpts_for_terminated_session(sid, group_id);
-        let notifications = get_notif_mgr();
+        let notifications = self.notifications.as_ref();
         publish_breakpoint_state_changes(
             breakpoints,
-            notifications.as_ref(),
+            notifications,
             changes,
             "cleaning breakpoints for terminated session",
         )
@@ -162,8 +177,8 @@ impl SessionActivation {
             self.group_operations.remove_group(group_id);
         }
 
-        get_proclet_mgr().remove_owner_session(sid);
-        get_state_mgr().remove_session(sid).await;
+        self.model.proclets().remove_owner_session(sid);
+        self.model.state().remove_session(sid).await;
         process.shutdown().await
     }
 }

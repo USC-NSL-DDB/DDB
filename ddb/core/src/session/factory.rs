@@ -1,22 +1,39 @@
 use anyhow::{bail, Result};
+use std::sync::Arc;
 
 use super::{SessionMode, SessionProcess, SessionRequest, SessionRequestBuilder, SessionStart};
 use crate::{
+    cmd_flow::event::DebuggerEventReducer,
     common::config::{Config, DebuggerBackendKind, StaticSessionConfig, StaticSessionStartMode},
     dbg_ctrl::{build_transport, ProxyTunnel, TransportSpec},
+    debugger::DebuggerBackend,
     discovery::{discovery_message_producer::ServiceMeta, ServiceInfo},
+    plugin::FrameworkPlugin,
     state::get_caladan_ip_from_user_data,
 };
 
 /// Normalizes every session source into one validated process construction path.
-#[derive(Clone, Copy)]
-pub(crate) struct SessionFactory<'config> {
-    config: &'config Config,
+#[derive(Clone)]
+pub(crate) struct SessionFactory {
+    config: Arc<Config>,
+    backend: Arc<dyn DebuggerBackend>,
+    plugin: Arc<dyn FrameworkPlugin>,
+    reducer: Arc<DebuggerEventReducer>,
 }
 
-impl<'config> SessionFactory<'config> {
-    pub(crate) fn new(config: &'config Config) -> Self {
-        Self { config }
+impl SessionFactory {
+    pub(crate) fn new(
+        config: Arc<Config>,
+        backend: Arc<dyn DebuggerBackend>,
+        plugin: Arc<dyn FrameworkPlugin>,
+        reducer: Arc<DebuggerEventReducer>,
+    ) -> Self {
+        Self {
+            config,
+            backend,
+            plugin,
+            reducer,
+        }
     }
     pub(crate) fn create_discovered(
         &self,
@@ -38,14 +55,21 @@ impl<'config> SessionFactory<'config> {
         proxy_tunnel: Option<ProxyTunnel>,
     ) -> Result<SessionProcess> {
         let transport = build_transport(&request.transport, proxy_tunnel)?;
-        Ok(SessionProcess::new(request, transport))
+        Ok(SessionProcess::new(
+            request,
+            transport,
+            Arc::clone(&self.config),
+            Arc::clone(&self.backend),
+            Arc::clone(&self.plugin),
+            Arc::clone(&self.reducer),
+        ))
     }
 
     fn build_discovery_request(&self, info: ServiceInfo) -> Result<SessionRequest> {
         let service_meta = ServiceMeta::from(&info);
         let caladan_ip = get_caladan_ip_from_user_data(&service_meta.user_data);
 
-        SessionRequestBuilder::from_config(self.config)
+        SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(info.tag)
             .mode(SessionMode::Remote(SessionStart::Attach(info.pid)))
             .transport(info.transport)
@@ -64,7 +88,7 @@ impl<'config> SessionFactory<'config> {
             None,
         );
 
-        let mut builder = SessionRequestBuilder::from_config(self.config)
+        let mut builder = SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(session.tag)
             .stop_at_entry(session.stop_at_entry)
             .service_meta(service_meta);
@@ -108,11 +132,24 @@ mod tests {
     use std::{collections::HashMap, net::Ipv4Addr};
 
     use super::*;
+    use crate::{notification::NotificationManager, runtime_model::RuntimeModel};
+
+    fn test_factory(config: Config) -> SessionFactory {
+        let config = Arc::new(config);
+        let reducer =
+            DebuggerEventReducer::new(RuntimeModel::new(), Arc::new(NotificationManager::new()));
+        SessionFactory::new(
+            Arc::clone(&config),
+            crate::debugger::resolve_debugger_backend(config.as_ref()),
+            crate::plugin::resolve_framework_plugin(config.as_ref()),
+            reducer,
+        )
+    }
 
     #[test]
     fn static_attach_requires_a_pid() {
         let config = Config::default();
-        let factory = SessionFactory::new(&config);
+        let factory = test_factory(config);
 
         let error = factory
             .build_static_request(StaticSessionConfig::default())
@@ -127,7 +164,7 @@ mod tests {
     #[test]
     fn static_binary_requires_a_path() {
         let config = Config::default();
-        let factory = SessionFactory::new(&config);
+        let factory = test_factory(config);
         let session = StaticSessionConfig {
             start_mode: StaticSessionStartMode::Binary,
             ..StaticSessionConfig::default()
@@ -146,7 +183,7 @@ mod tests {
     #[test]
     fn discovery_metadata_carries_proclet_owner() {
         let config = Config::default();
-        let factory = SessionFactory::new(&config);
+        let factory = test_factory(config);
         let info = ServiceInfo::new(
             Ipv4Addr::LOCALHOST,
             "api".to_string(),
