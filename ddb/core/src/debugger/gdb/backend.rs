@@ -12,7 +12,7 @@ use crate::{
     dbg_cmd::{DbgCmdGenerator, DbgCmdListBuilder},
     debugger::{BundledDebuggerAsset, DebuggerBackend},
     plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
-    session::{DbgMode, DbgSessionConfig, DbgStartMode},
+    session::{SessionMode, SessionRequest, SessionStart},
 };
 
 use super::{
@@ -27,13 +27,13 @@ impl GdbBackend {
     fn apply_common_setup(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
         builder: &mut DbgCmdListBuilder<GdbCmd>,
     ) -> Result<()> {
         if config.conf.gdb.logging {
             match &session.mode {
-                DbgMode::REMOTE(DbgStartMode::ATTACH(_)) => {
+                SessionMode::Remote(SessionStart::Attach(_)) => {
                     self.setup_logging_commands(session, builder)?;
                 }
                 _ => {
@@ -91,13 +91,13 @@ impl GdbBackend {
 
     fn setup_logging_commands(
         &self,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         builder: &mut DbgCmdListBuilder<GdbCmd>,
     ) -> Result<()> {
         use std::fs;
 
         let pid = match &session.mode {
-            DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => *pid,
+            SessionMode::Remote(SessionStart::Attach(pid)) => *pid,
             _ => return Err(anyhow!("Cannot setup logging for non-attach mode")),
         };
 
@@ -131,7 +131,7 @@ impl DebuggerBackend for GdbBackend {
     fn build_remote_attach_commands(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>> {
@@ -139,10 +139,10 @@ impl DebuggerBackend for GdbBackend {
         self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
 
         match &session.mode {
-            DbgMode::REMOTE(DbgStartMode::ATTACH(pid)) => {
+            SessionMode::Remote(SessionStart::Attach(pid)) => {
                 builder.add(GdbCmd::TargetAttach(*pid));
             }
-            DbgMode::LOCAL(DbgStartMode::ATTACH(pid)) => {
+            SessionMode::Local(SessionStart::Attach(pid)) => {
                 builder.add(GdbCmd::TargetAttach(*pid));
             }
             _ => return Err(anyhow!("Invalid mode for remote attach")),
@@ -158,7 +158,7 @@ impl DebuggerBackend for GdbBackend {
     fn build_local_binary_commands(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>> {
@@ -166,7 +166,7 @@ impl DebuggerBackend for GdbBackend {
         self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
 
         match &session.mode {
-            DbgMode::LOCAL(DbgStartMode::BINARY { path, args }) => {
+            SessionMode::Local(SessionStart::Binary { path, args }) => {
                 builder.add(GdbCmd::FileExecAndSym(path.clone()));
                 if !args.is_empty() {
                     builder.add(GdbCmd::ExeArgs(args.join(" ")));

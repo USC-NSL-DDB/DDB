@@ -3,142 +3,70 @@ pub(crate) mod lifecycle;
 
 pub use dbg_session::*;
 
+use anyhow::{anyhow, Result};
+
 use crate::{
-    common::config::{DebuggerCommand, GdbCommand, OnExit},
+    common::config::{Config, DebuggerCommand, OnExit},
     dbg_ctrl::TransportSpec,
     discovery::discovery_message_producer::ServiceMeta,
 };
 
+/// Validated, source-independent description of a debugger session to admit.
 #[derive(Debug)]
-#[allow(unused)]
-pub struct DbgSessionConfig {
-    // TODO: considering move this to the global config
-    // as it can also be shared manually in the config
-    pub mode: DbgMode,
+pub struct SessionRequest {
+    pub mode: SessionMode,
     pub sudo: bool,
     pub on_exit: OnExit,
     pub tag: Option<String>,
-
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
     pub postrun_debugger_cmds: Vec<DebuggerCommand>,
     pub stop_at_entry: bool,
-
-    // This should be present if the service discovery is enabled.
-    // pub service_info: Option<ServiceInfo>,
     pub service_meta: Option<ServiceMeta>,
-
     pub transport: TransportSpec,
+    pub caladan_ip: Option<u32>,
 }
 
+/// Builds a request from explicit application configuration.
+///
+/// This keeps admission deterministic and testable: constructing a request no
+/// longer reaches through the global configuration singleton.
 #[derive(Debug)]
-pub struct DbgSessionCfgBuilder {
-    pub mode: Option<DbgMode>,
-    pub sudo: bool,
-    pub on_exit: OnExit,
-    pub tag: Option<String>,
-
-    pub prerun_debugger_cmds: Vec<DebuggerCommand>,
-    pub postrun_debugger_cmds: Vec<DebuggerCommand>,
-    pub stop_at_entry: bool,
-
-    pub service_meta: Option<ServiceMeta>,
-    pub transport: Option<TransportSpec>,
+pub struct SessionRequestBuilder {
+    mode: Option<SessionMode>,
+    sudo: bool,
+    on_exit: OnExit,
+    tag: Option<String>,
+    prerun_debugger_cmds: Vec<DebuggerCommand>,
+    postrun_debugger_cmds: Vec<DebuggerCommand>,
+    stop_at_entry: bool,
+    service_meta: Option<ServiceMeta>,
+    transport: Option<TransportSpec>,
+    caladan_ip: Option<u32>,
 }
 
-/// Creates a new `DbgSessionCfgBuilder` initialized with values from the global configuration.
-///
-/// This constructor initializes a new builder with the following fields inherited from global config:
-/// - `sudo`: Whether to run with sudo privileges
-/// - `on_exit`: Behavior specification for program exit
-/// - `prerun_debugger_cmds`: debugger commands to run before debugging session
-/// - `postrun_debugger_cmds`: debugger commands to run after debugging session
-///
-/// All other fields are initialized to `None`.
-///
-/// # Returns
-///
-/// Returns a new instance of `DbgSessionCfgBuilder` with default values from global configuration.
-#[allow(unused)]
-impl DbgSessionCfgBuilder {
-    pub fn new() -> Self {
-        // fill in fields that inherit from global config
-        let gconf = crate::common::config::Config::global();
-        let sudo = gconf.conf.sudo;
-        let on_exit = gconf.conf.on_exit.clone();
-        let prerun_debugger_cmds = gconf.prerun_gdb_cmds.clone();
-        let postrun_debugger_cmds = gconf.postrun_gdb_cmds.clone();
-
+impl SessionRequestBuilder {
+    pub fn from_config(config: &Config) -> Self {
         Self {
             mode: None,
-            sudo,
-            on_exit,
+            sudo: config.conf.sudo,
+            on_exit: config.conf.on_exit.clone(),
             tag: None,
-            prerun_debugger_cmds,
-            postrun_debugger_cmds,
+            prerun_debugger_cmds: config.prerun_gdb_cmds.clone(),
+            postrun_debugger_cmds: config.postrun_gdb_cmds.clone(),
             stop_at_entry: false,
             service_meta: None,
             transport: None,
+            caladan_ip: None,
         }
     }
 
-    pub fn mode(mut self, mode: DbgMode) -> Self {
+    pub fn mode(mut self, mode: SessionMode) -> Self {
         self.mode = Some(mode);
         self
     }
 
-    pub fn sudo(mut self, sudo: bool) -> Self {
-        self.sudo = sudo;
-        self
-    }
-
-    pub fn on_exit(mut self, on_exit: OnExit) -> Self {
-        self.on_exit = on_exit;
-        self
-    }
-
-    pub fn tag(mut self, tag: String) -> Self {
-        self.tag = Some(tag);
-        self
-    }
-
-    pub fn add_prerun_debugger_cmds(mut self, cmds: Vec<DebuggerCommand>) -> Self {
-        self.prerun_debugger_cmds.extend(cmds);
-        self
-    }
-
-    pub fn add_prerun_debugger_cmd(mut self, cmd: DebuggerCommand) -> Self {
-        self.prerun_debugger_cmds.push(cmd);
-        self
-    }
-
-    pub fn add_prerun_gdb_cmds(self, cmds: Vec<GdbCommand>) -> Self {
-        self.add_prerun_debugger_cmds(cmds)
-    }
-
-    pub fn add_prerun_gdb_cmd(self, cmd: GdbCommand) -> Self {
-        self.add_prerun_debugger_cmd(cmd)
-    }
-
-    pub fn add_postrun_debugger_cmds(mut self, cmds: Vec<DebuggerCommand>) -> Self {
-        self.postrun_debugger_cmds.extend(cmds);
-        self
-    }
-
-    pub fn add_postrun_debugger_cmd(mut self, cmd: DebuggerCommand) -> Self {
-        self.postrun_debugger_cmds.push(cmd);
-        self
-    }
-
-    pub fn add_postrun_gdb_cmds(self, cmds: Vec<GdbCommand>) -> Self {
-        self.add_postrun_debugger_cmds(cmds)
-    }
-
-    pub fn add_postrun_gdb_cmd(self, cmd: GdbCommand) -> Self {
-        self.add_postrun_debugger_cmd(cmd)
-    }
-
-    pub fn with_service_meta(mut self, meta: ServiceMeta) -> Self {
-        self.service_meta = Some(meta);
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
         self
     }
 
@@ -152,16 +80,21 @@ impl DbgSessionCfgBuilder {
         self
     }
 
-    pub fn build(self) -> DbgSessionConfig {
-        let mode = {
-            if self.mode.is_none() {
-                panic!("DbgSessionConfig DbgMode is required");
-            }
-            self.mode.as_ref().unwrap()
-        };
+    pub fn service_meta(mut self, meta: ServiceMeta) -> Self {
+        self.service_meta = Some(meta);
+        self
+    }
 
-        DbgSessionConfig {
-            mode: mode.clone(),
+    pub fn caladan_ip(mut self, caladan_ip: Option<u32>) -> Self {
+        self.caladan_ip = caladan_ip;
+        self
+    }
+
+    pub fn build(self) -> Result<SessionRequest> {
+        Ok(SessionRequest {
+            mode: self
+                .mode
+                .ok_or_else(|| anyhow!("session start mode is required"))?,
             sudo: self.sudo,
             on_exit: self.on_exit,
             tag: self.tag,
@@ -171,29 +104,66 @@ impl DbgSessionCfgBuilder {
             service_meta: self.service_meta,
             transport: self
                 .transport
-                .expect("DbgSessionConfig transport is required"),
-        }
+                .ok_or_else(|| anyhow!("session transport is required"))?,
+            caladan_ip: self.caladan_ip,
+        })
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum DbgStartMode {
-    ATTACH(u64), // pid
-    BINARY { path: String, args: Vec<String> },
+pub enum SessionStart {
+    Attach(u64),
+    Binary { path: String, args: Vec<String> },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub enum DbgMode {
-    LOCAL(DbgStartMode),
-    REMOTE(DbgStartMode),
+pub enum SessionMode {
+    Local(SessionStart),
+    Remote(SessionStart),
 }
 
-// impl Default for DbgMode {
-//     fn default() -> Self {
-//         // Set attach pid mode as default for now
-//         // as we dropped other supported modes
-//         DbgMode::REMOTE(DbgStartMode::ATTACH)
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_requires_mode() {
+        let error = SessionRequestBuilder::from_config(&Config::default())
+            .transport(TransportSpec::Local)
+            .build()
+            .expect_err("mode should be required");
+
+        assert_eq!(error.to_string(), "session start mode is required");
+    }
+
+    #[test]
+    fn request_requires_transport() {
+        let error = SessionRequestBuilder::from_config(&Config::default())
+            .mode(SessionMode::Local(SessionStart::Attach(42)))
+            .build()
+            .expect_err("transport should be required");
+
+        assert_eq!(error.to_string(), "session transport is required");
+    }
+
+    #[test]
+    fn request_inherits_explicit_config_defaults() {
+        let mut config = Config::default();
+        config.conf.sudo = true;
+        config.conf.on_exit = OnExit::KILL;
+        config.prerun_gdb_cmds.push(DebuggerCommand {
+            name: "setup".to_string(),
+            command: "set pagination off".to_string(),
+        });
+
+        let request = SessionRequestBuilder::from_config(&config)
+            .mode(SessionMode::Local(SessionStart::Attach(42)))
+            .transport(TransportSpec::Local)
+            .build()
+            .expect("request should be valid");
+
+        assert!(request.sudo);
+        assert_eq!(request.on_exit, OnExit::KILL);
+        assert_eq!(request.prerun_debugger_cmds.len(), 1);
+    }
+}

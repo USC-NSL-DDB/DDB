@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use crate::{
     common::config::{Config, DebuggerBackendKind},
     plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
-    session::DbgSessionConfig,
+    session::SessionRequest,
     Asset,
 };
 
@@ -55,14 +55,14 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     fn build_remote_attach_commands(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>>;
     fn build_local_binary_commands(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>>;

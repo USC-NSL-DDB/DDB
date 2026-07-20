@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use tracing::debug;
 
-use super::{DbgMode, DbgSessionConfig, DbgStartMode};
+use super::{SessionMode, SessionRequest, SessionStart};
 use crate::cmd_flow::{
     api,
     breakpoint::{publish_breakpoint_state_change, publish_breakpoint_state_changes},
@@ -25,7 +25,7 @@ use crate::state::{get_bkpt_mgr, get_group_mgr, get_state_mgr, STATES};
 #[derive(Debug)]
 pub struct DbgSession {
     pub sid: u64,
-    pub config: DbgSessionConfig,
+    pub request: SessionRequest,
     transport: DebuggerTransportHandle,
     runtime: Option<SessionHandle>,
     runtime_task: Option<tokio::task::JoinHandle<()>>,
@@ -33,11 +33,11 @@ pub struct DbgSession {
 }
 
 impl DbgSession {
-    pub fn new(config: DbgSessionConfig, transport: DebuggerTransportHandle) -> Self {
+    pub fn new(request: SessionRequest, transport: DebuggerTransportHandle) -> Self {
         let sid = crate::common::counter::next_session_id();
         Self {
             sid,
-            config,
+            request,
             transport,
             runtime: None,
             runtime_task: None,
@@ -52,12 +52,12 @@ impl DbgSession {
         STATES
             .register_session(
                 self.sid,
-                self.config
+                self.request
                     .tag
                     .clone()
                     .unwrap_or_else(|| format!("session-{}", self.sid))
                     .as_str(),
-                self.config.service_meta.clone(),
+                self.request.service_meta.clone(),
             )
             .await;
 
@@ -75,7 +75,7 @@ impl DbgSession {
             }
         };
 
-        if let Some(meta) = &self.config.service_meta {
+        if let Some(meta) = &self.request.service_meta {
             get_group_mgr().register_session(&meta.hash, meta.alias.clone(), self.sid);
         }
         get_router().add_session(handle.clone());
@@ -102,29 +102,29 @@ impl DbgSession {
         let backend = get_debugger_backend();
         let plugin = get_framework_plugin();
         let plugin_bootstrap = plugin.debugger_bootstrap(config);
-        let launch_command = backend.build_start_command(config.conf.sudo);
+        let launch_command = backend.build_start_command(self.request.sudo);
 
         let running = self.transport.launch(&launch_command).await?;
         let (handle, task) = SessionHandle::spawn(self.sid, running, termination);
         self.runtime = Some(handle.clone());
         self.runtime_task = Some(task);
 
-        let bootstrap = match &self.config.mode {
-            DbgMode::REMOTE(DbgStartMode::ATTACH(_)) | DbgMode::LOCAL(DbgStartMode::ATTACH(_)) => {
-                backend.build_remote_attach_commands(
-                    config,
-                    &self.config,
-                    plugin.as_ref(),
-                    &plugin_bootstrap,
-                )?
-            }
-            DbgMode::LOCAL(DbgStartMode::BINARY { .. }) => backend.build_local_binary_commands(
+        let bootstrap = match &self.request.mode {
+            SessionMode::Remote(SessionStart::Attach(_))
+            | SessionMode::Local(SessionStart::Attach(_)) => backend.build_remote_attach_commands(
                 config,
-                &self.config,
+                &self.request,
                 plugin.as_ref(),
                 &plugin_bootstrap,
             )?,
-            DbgMode::REMOTE(DbgStartMode::BINARY { .. }) => {
+            SessionMode::Local(SessionStart::Binary { .. }) => backend
+                .build_local_binary_commands(
+                    config,
+                    &self.request,
+                    plugin.as_ref(),
+                    &plugin_bootstrap,
+                )?,
+            SessionMode::Remote(SessionStart::Binary { .. }) => {
                 anyhow::bail!("remote binary launch is not implemented")
             }
         }
@@ -189,7 +189,7 @@ impl DbgSession {
             return Ok(());
         }
 
-        debug!("Cleaning up session with config: {:?}", self.config);
+        debug!("Cleaning up session with config: {:?}", self.request);
         get_state_mgr().update_session_status_off(self.sid).await;
         get_router().remove_session(self.sid);
         let groups = get_group_mgr();
@@ -209,7 +209,7 @@ impl DbgSession {
 
         let mut first_error = None;
         if self.transport.is_open() && self.runtime.is_some() {
-            let exit_policy = match &self.config.on_exit {
+            let exit_policy = match &self.request.on_exit {
                 common::config::OnExit::DETACH => "detach\n",
                 common::config::OnExit::KILL => "kill\n",
             };

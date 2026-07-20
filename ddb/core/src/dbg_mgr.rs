@@ -83,34 +83,35 @@ impl ServiceDiscover {
     ) {
         let service_meta = ServiceMeta::from(&info);
         let pid = info.pid;
-        let tag_str = info.tag;
-        // if no such field is provided, it will be None.
-        // so it is ok to leave it here.
         let caladan_ip = get_caladan_ip_from_user_data(&service_meta.user_data);
-
-        let s_cfg = crate::session::DbgSessionCfgBuilder::new()
-            .tag(tag_str)
-            // Possibly do something more direct with the `info.controller`
-            // if your code needs to embed or pass it in.
-            .mode(crate::session::DbgMode::REMOTE(
-                crate::session::DbgStartMode::ATTACH(pid),
+        let request = match crate::session::SessionRequestBuilder::from_config(manager.config)
+            .tag(info.tag)
+            .mode(crate::session::SessionMode::Remote(
+                crate::session::SessionStart::Attach(pid),
             ))
-            .add_prerun_debugger_cmd(
-                crate::dbg_cmd::GdbCmd::SetOption(crate::dbg_cmd::GdbOption::MiAsync(true)).into(),
-            )
             .transport(info.transport)
-            .with_service_meta(service_meta)
-            .build();
-
-        let transport = match build_transport(&s_cfg.transport, proxy_tunnel) {
-            Ok(transport) => transport,
+            .service_meta(service_meta)
+            .caladan_ip(caladan_ip)
+            .build()
+        {
+            Ok(request) => request,
             Err(error) => {
-                error!("Failed to construct debugger transport: {:?}", error);
+                error!(?error, "failed to validate discovered session request");
                 return;
             }
         };
-        let dbg_session = crate::session::DbgSession::new(s_cfg, transport);
-        manager.start_session(dbg_session, caladan_ip).await;
+
+        let transport = match build_transport(&request.transport, proxy_tunnel) {
+            Ok(transport) => transport,
+            Err(error) => {
+                error!(?error, "failed to construct debugger transport");
+                return;
+            }
+        };
+        let dbg_session = crate::session::DbgSession::new(request, transport);
+        if let Err(error) = manager.start_session(dbg_session).await {
+            error!(?error, "failed to admit discovered session");
+        }
     }
 
     pub fn start(&mut self, manager: std::sync::Weak<DbgManager>) {
@@ -202,12 +203,9 @@ impl DbgManager {
         Ok(())
     }
 
-    async fn start_session(
-        &self,
-        dbg_session: crate::session::DbgSession,
-        caladan_ip: Option<u32>,
-    ) {
+    async fn start_session(&self, dbg_session: crate::session::DbgSession) -> Result<u64> {
         let sid = dbg_session.sid;
+        let caladan_ip = dbg_session.request.caladan_ip;
         let termination = self.lifecycle.bind(sid);
         let session = Arc::new(Mutex::new(dbg_session));
         self.sessions.insert(sid, Arc::clone(&session));
@@ -231,14 +229,18 @@ impl DbgManager {
                 debug!(sid, "session started successfully");
                 let notification = Notification::new(NotificationPayload::SessionListChanged);
                 get_notif_mgr().broadcast(notification).await;
+                Ok(sid)
             }
-            Ok(_) => {
-                debug!(sid, "session terminated before startup completed");
-            }
+            Ok(_) => Err(anyhow!(
+                "session {} terminated before startup completed",
+                sid
+            )),
             Err(error) => {
-                error!(sid, ?error, "failed to start session");
                 self.sessions.remove(&sid);
-                let _ = session.lock().await.cleanup().await;
+                if let Err(cleanup_error) = session.lock().await.cleanup().await {
+                    error!(sid, ?cleanup_error, "failed to roll back session startup");
+                }
+                Err(error)
             }
         }
     }
@@ -408,15 +410,15 @@ impl DbgManager {
             None,
         );
 
-        let mut builder = crate::session::DbgSessionCfgBuilder::new()
+        let mut builder = crate::session::SessionRequestBuilder::from_config(self.config)
             .tag(session.tag.clone())
             .stop_at_entry(session.stop_at_entry)
-            .with_service_meta(service_meta);
+            .service_meta(service_meta);
 
         builder = match self.config.conf.debugger.backend {
             DebuggerBackendKind::Mock => builder
-                .mode(crate::session::DbgMode::REMOTE(
-                    crate::session::DbgStartMode::ATTACH(session.pid),
+                .mode(crate::session::SessionMode::Remote(
+                    crate::session::SessionStart::Attach(session.pid),
                 ))
                 .transport(TransportSpec::Mock {
                     config: session.mock.clone(),
@@ -428,7 +430,7 @@ impl DbgManager {
                         if session.pid == 0 {
                             bail!("static attach sessions require a non-zero pid");
                         }
-                        crate::session::DbgMode::LOCAL(crate::session::DbgStartMode::ATTACH(
+                        crate::session::SessionMode::Local(crate::session::SessionStart::Attach(
                             session.pid,
                         ))
                     }
@@ -436,22 +438,21 @@ impl DbgManager {
                         if session.binary_path.trim().is_empty() {
                             bail!("static binary sessions require binary_path to be set");
                         }
-                        crate::session::DbgMode::LOCAL(crate::session::DbgStartMode::BINARY {
+                        crate::session::SessionMode::Local(crate::session::SessionStart::Binary {
                             path: session.binary_path.clone(),
                             args: session.binary_args.clone(),
                         })
                     }
                 };
-
                 builder.mode(mode).transport(TransportSpec::Local)
             }
             DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
         };
 
-        let session_config = builder.build();
-        let transport = build_transport(&session_config.transport, None)?;
-        let dbg_session = crate::session::DbgSession::new(session_config, transport);
-        self.start_session(dbg_session, None).await;
+        let request = builder.build()?;
+        let transport = build_transport(&request.transport, None)?;
+        let dbg_session = crate::session::DbgSession::new(request, transport);
+        self.start_session(dbg_session).await?;
         Ok(())
     }
 

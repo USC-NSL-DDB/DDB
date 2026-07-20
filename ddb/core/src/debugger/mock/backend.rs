@@ -4,7 +4,7 @@ use crate::{
     common::config::Config,
     debugger::{BundledDebuggerAsset, DebuggerBackend},
     plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
-    session::DbgSessionConfig,
+    session::SessionRequest,
 };
 
 #[derive(Debug, Default)]
@@ -26,7 +26,7 @@ impl DebuggerBackend for MockBackend {
     fn build_remote_attach_commands(
         &self,
         _config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>> {
@@ -59,7 +59,7 @@ impl DebuggerBackend for MockBackend {
     fn build_local_binary_commands(
         &self,
         config: &Config,
-        session: &DbgSessionConfig,
+        session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
     ) -> Result<Vec<String>> {
