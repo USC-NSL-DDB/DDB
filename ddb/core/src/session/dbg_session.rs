@@ -3,7 +3,9 @@ use bytes::Bytes;
 use tracing::debug;
 
 use super::{DbgMode, DbgSessionConfig, DbgStartMode};
-use crate::cmd_flow::{api, get_router, session_runtime::SessionHandle, Target};
+use crate::cmd_flow::{
+    api, decoder::BreakpointCreated, get_router, session_runtime::SessionHandle, Target,
+};
 use crate::common;
 use crate::common::Config;
 use crate::dbg_ctrl::DebuggerTransportHandle;
@@ -155,16 +157,7 @@ impl DbgSession {
                     .execute()
                     .await
                     .with_context(|| format!("Failed to insert existing breakpoint at {}", path))?;
-                let local_id = response
-                    .get_responses()
-                    .first()
-                    .and_then(|response| response.get_payload())
-                    .and_then(|payload| payload.get("bkpt"))
-                    .and_then(|breakpoint| breakpoint.expect_dict_ref().ok())
-                    .and_then(|breakpoint| breakpoint.get("number"))
-                    .and_then(|number| number.expect_string_ref().ok())
-                    .ok_or_else(|| anyhow::anyhow!("breakpoint response is missing number"))?
-                    .parse::<u64>()?;
+                let local_id = BreakpointCreated::decode_first(&response)?.local_id;
                 get_bkpt_mgr()
                     .attach_group_breakpoint_session_target(
                         breakpoint.id(),

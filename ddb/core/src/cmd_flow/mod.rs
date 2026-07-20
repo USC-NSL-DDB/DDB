@@ -6,6 +6,7 @@
 //! projection. No transport channels cross component boundaries.
 
 pub mod api;
+pub(crate) mod decoder;
 pub mod engine;
 pub(crate) mod event;
 pub(crate) mod event_publisher;

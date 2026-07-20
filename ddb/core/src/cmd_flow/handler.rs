@@ -25,7 +25,11 @@ use crate::{
 };
 
 use super::{
-    api, framework_adapter::FrameworkCommandAdapter, input::ParsedInputCmd, router::Target,
+    api,
+    decoder::{BreakpointCreated, Payload},
+    framework_adapter::FrameworkCommandAdapter,
+    input::ParsedInputCmd,
+    router::Target,
     CommandOutcome, DebuggerDataErr, FinishedCmd, ParsedSessionResponse, Presentation,
 };
 
@@ -113,35 +117,15 @@ impl BreakInsertHandler {
         // Only send breakpoint command if group has active sessions
         // If empty, the breakpoint will be applied later when sessions join via sync_bkpts_state()
         if !sids.is_empty() {
-            let ret = api::command(cmd)
-                .unwrap()
+            let ret = api::command(cmd)?
                 .target(Target::Group(gid))
                 .execute()
                 .await?;
             for resp in ret.get_responses() {
-                let bkpt_info = resp
-                    .get_payload()
-                    .unwrap()
-                    .get("bkpt")
-                    .unwrap()
-                    .expect_dict_ref()
-                    .unwrap();
-                let local_bkpt_id = bkpt_info
-                    .get("number")
-                    .unwrap()
-                    .expect_string_ref()
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap();
-                let _times = bkpt_info
-                    .get("times")
-                    .unwrap()
-                    .expect_string_ref()
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap();
+                let breakpoint = BreakpointCreated::decode(resp)?;
                 // TODO: work out how to store `times` information.
-                grp_bkpt.add_local_bkpt(resp.get_sid(), local_bkpt_id);
+                let _times = breakpoint.times;
+                grp_bkpt.add_local_bkpt(resp.get_sid(), breakpoint.local_id);
             }
         }
 
@@ -151,37 +135,14 @@ impl BreakInsertHandler {
     }
 
     async fn insert_bkpts_for_session(major_bkpt_id: u64, cmd: &str, sid: u64) -> Result<()> {
-        let ret = api::command(cmd)
-            .unwrap()
+        let ret = api::command(cmd)?
             .target(Target::Session(sid))
             .execute()
             .await?;
-        let bkpt_info = ret
-            .get_responses()
-            .first()
-            .unwrap()
-            .get_payload()
-            .unwrap()
-            .get("bkpt")
-            .unwrap()
-            .expect_dict_ref()
-            .unwrap();
-        let local_bkpt_id = bkpt_info
-            .get("number")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
-        let _times = bkpt_info
-            .get("times")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
+        let breakpoint = BreakpointCreated::decode_first(&ret)?;
+        let _times = breakpoint.times;
         // TODO: work out how to store `times` information.
-        let subbkpt = SubBkptType::Session(SessionSubBkpt::new(local_bkpt_id, sid));
+        let subbkpt = SubBkptType::Session(SessionSubBkpt::new(breakpoint.local_id, sid));
         get_bkpt_mgr().add_sub_breakpoint(major_bkpt_id, subbkpt);
         Ok(())
     }
@@ -621,17 +582,12 @@ impl ContinueHandler {
             let restore = api::command(&format!(
                 "-switch-context-custom {}",
                 Self::prepare_ctx_switch_args(&ctx)
-            ))
-            .unwrap()
+            ))?
             .target(Target::Thread(ctx.tid))
             .execute_exclusive(tx.lease())
             .await?;
-            let responses = restore.get_responses();
-            let restored = responses.len() == 1
-                && responses[0].get_payload().unwrap()["message"]
-                    .expect_string_ref()
-                    .unwrap()
-                    == "success";
+            let restored = restore.get_responses().len() == 1
+                && Payload::first(&restore)?.string("message")? == "success";
 
             session
                 .write_with(|meta| meta.set_in_custom_context(!restored))

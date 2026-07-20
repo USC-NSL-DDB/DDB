@@ -9,8 +9,12 @@ use dashmap::DashMap;
 use tracing::{debug, trace};
 
 use crate::{
-    cmd_flow::api,
-    cmd_flow::{session_runtime::SessionLease, transaction::SessionTransaction},
+    cmd_flow::{
+        api,
+        decoder::{OperationStatus, ProcletHeap, ProcletLocality},
+        session_runtime::SessionLease,
+        transaction::SessionTransaction,
+    },
     get_dbg_mgr,
     state::get_proclet_mgr,
 };
@@ -106,62 +110,19 @@ impl ProcletRestorationMgr {
         proclet_id: &str,
         transaction: Option<&SessionTransaction>,
     ) -> Result<bool> {
-        let resp = api::command(&format!("-check-proclet {}", proclet_id))
-            .unwrap()
+        let resp = api::command(&format!("-check-proclet {}", proclet_id))?
             .target(api::Target::Session(sid))
             .protocol_complete()
             .execute_with_optional_lease(Self::transaction_lease(transaction, sid)?)
             .await
             .with_context(|| format!("Failed to send -check-proclet command to session {}", sid))?;
-        let payload = resp
-            .get_responses()
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No response from check-proclet command. sid={}", sid))?
-            .get_payload()
-            .unwrap();
-        let succcess = payload
-            .get("success")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
-
-        let msg = payload
-            .get("message")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .to_string();
-
-        if !succcess {
-            bail!(
-                "Fail to check proclet ({}) on session {}. Err: {}",
-                proclet_id,
-                sid,
-                msg
-            );
-        }
-
-        let is_local = payload
-            .get("is_local")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
-
-        // let status = payload
-        //     .get("status")
-        //     .unwrap()
-        //     .expect_string_repr::<u32>()
-        //     .unwrap();
-
-        Ok(is_local)
+        Ok(ProcletLocality::decode(&resp)?.is_local)
     }
 
     async fn query_proclet_location(&self, proclet_id: &str) -> Result<ProcletLoc> {
-        let proclet_id = proclet_id.parse::<u64>().unwrap();
+        let proclet_id = proclet_id
+            .parse::<u64>()
+            .with_context(|| format!("Invalid proclet id: {}", proclet_id))?;
         let loc_ref = self
             .proclet_loc_cache
             .entry(proclet_id)
@@ -196,8 +157,7 @@ impl ProcletRestorationMgr {
         proclet_id: &str,
         transaction: Option<&SessionTransaction>,
     ) -> Result<ProcletHeapInfo> {
-        let resp = api::command(&format!("-get-proclet-heap {}", proclet_id))
-            .unwrap()
+        let resp = api::command(&format!("-get-proclet-heap {}", proclet_id))?
             .target(api::Target::Session(target_sid))
             .protocol_complete()
             .execute_with_optional_lease(Self::transaction_lease(transaction, target_sid)?)
@@ -208,88 +168,12 @@ impl ProcletRestorationMgr {
                     target_sid
                 )
             })?;
-        let payload = resp
-            .get_responses()
-            .first()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No response from -get-proclet-heap command. sid={}",
-                    target_sid
-                )
-            })?
-            .get_payload()
-            .unwrap();
-
-        let success = payload
-            .get("success")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
-        let msg = payload
-            .get("message")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap_or_default()
-            .to_string();
-
-        if !success {
-            bail!(
-                "Fail to get proclet heap (proclet_id = {}) on session {}. Err: {}",
-                proclet_id,
-                target_sid,
-                msg
-            );
-        }
-
-        let start_addr = payload
-            .get("start")
-            .unwrap()
-            .expect_string_repr::<u64>()
-            .unwrap();
-
-        let end_addr = payload
-            .get("end")
-            .unwrap()
-            .expect_string_repr::<u64>()
-            .unwrap();
-
-        let data_len = payload
-            .get("len")
-            .unwrap()
-            .expect_string_repr::<u64>()
-            .unwrap();
-
-        let full_heap_size = payload
-            .get("full_heap_size")
-            .unwrap()
-            .expect_string_repr::<u64>()
-            .unwrap();
-
-        if start_addr == 0 || end_addr == 0 && data_len == 0 || full_heap_size == 0 {
-            bail!(
-                "Fail to get proclet heap (proclet_id = {}) on session {}. Err: {}",
-                proclet_id,
-                target_sid,
-                msg
-            );
-        }
-
-        let data = payload
-            .get("heap_content")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .to_string();
-        // .as_bytes();
-        // let data = Bytes::copy_from_slice(data);
-
+        let heap = ProcletHeap::decode(&resp)?.validate()?;
         Ok(ProcletHeapInfo {
-            start_addr,
-            data_len,
-            data,
-            full_heap_size,
+            start_addr: heap.start_addr,
+            data_len: heap.data_len,
+            data: heap.data,
+            full_heap_size: heap.full_heap_size,
             proclet_id: proclet_id.to_string(),
         })
     }
@@ -303,8 +187,7 @@ impl ProcletRestorationMgr {
         let resp = api::command(&format!(
             "-restore-proclet-heap {} {} {}",
             heap_info.start_addr, heap_info.data_len, heap_info.data
-        ))
-        .unwrap()
+        ))?
         .target(api::Target::Session(sid))
         .execute_with_optional_lease(Self::transaction_lease(transaction, sid)?)
         .await
@@ -314,36 +197,7 @@ impl ProcletRestorationMgr {
                 sid
             )
         })?;
-        let payload = resp
-            .get_responses()
-            .first()
-            .ok_or_else(|| {
-                anyhow::anyhow!("No response from -get-proclet-heap command. sid={}", sid)
-            })?
-            .get_payload()
-            .unwrap();
-
-        let success = payload
-            .get("success")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
-        let msg = payload
-            .get("message")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap_or_default()
-            .to_string();
-
-        if !success {
-            bail!(
-                "Fail to restore proclet heap on session {}. Err: {}",
-                sid,
-                msg
-            );
-        }
+        OperationStatus::decode(&resp)?.require_success("restore-proclet-heap")?;
         Ok(())
     }
 
@@ -377,7 +231,9 @@ impl ProcletRestorationMgr {
         // if not local, we hold the mutex and restore the proclet heap.
         // here, intentionally hold the mutex so that the repeated request can be throttled automatically.
         // the major goal is to avoid excessive network calls to the proclet manager.
-        let proclet_id_u64 = proclet_id.parse::<u64>().unwrap();
+        let proclet_id_u64 = proclet_id
+            .parse::<u64>()
+            .with_context(|| format!("Invalid proclet id: {}", proclet_id))?;
         let is_local_ref = self
             .proclet_is_local_cache
             .entry(ProcletQueryTarget {
@@ -455,8 +311,7 @@ impl ProcletRestorationMgr {
         let resp = api::command(&format!(
             "-clean-proclet-heap {} {}",
             h.proclet_id, h.full_heap_size
-        ))
-        .unwrap()
+        ))?
         .target(api::Target::Session(sid))
         .execute()
         .await
@@ -466,39 +321,7 @@ impl ProcletRestorationMgr {
                 sid
             )
         })?;
-        let payload = resp
-            .get_responses()
-            .first()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No response from -cleanup-proclet-heap command. sid={}",
-                    sid
-                )
-            })?
-            .get_payload()
-            .unwrap();
-        let success = payload
-            .get("success")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
-
-        let msg = payload
-            .get("message")
-            .unwrap()
-            .expect_string_ref()
-            .unwrap_or_default()
-            .to_string();
-
-        if !success {
-            bail!(
-                "Fail to cleanup proclet heap on session {}. Err: {}",
-                sid,
-                msg,
-            );
-        }
+        OperationStatus::decode(&resp)?.require_success("clean-proclet-heap")?;
         Ok(())
     }
 
