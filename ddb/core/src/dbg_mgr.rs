@@ -14,9 +14,12 @@ use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::notification::{get_notif_mgr, Notification, NotificationPayload};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
-use crate::session::lifecycle::{self, SessionLifecycleHandle, SessionTermination};
+use crate::session::{
+    activation::SessionActivation,
+    lifecycle::{self, SessionLifecycleHandle, SessionTermination},
+};
 use crate::shutdown::get_shutdown_ctrl;
-use crate::state::{get_caladan_ip_from_user_data, get_proclet_mgr};
+use crate::state::get_caladan_ip_from_user_data;
 use crate::{
     common::{
         self,
@@ -29,10 +32,10 @@ use crate::{
 
 const SERVICE_DISCOVERY_QUEUE_CAPACITY: usize = 256;
 
-type DebuggerSessionRef = Arc<Mutex<crate::session::DbgSession>>;
+type SessionProcessRef = Arc<Mutex<crate::session::SessionProcess>>;
 
 /// For convenience, a type alias to store sessions in a DashMap (sid -> session).
-type SessionsRef = Arc<DashMap<u64, DebuggerSessionRef>>;
+type SessionsRef = Arc<DashMap<u64, SessionProcessRef>>;
 
 pub struct ServiceDiscover {
     /// The service discovery producer that will send `ServiceInfo` events.
@@ -108,8 +111,8 @@ impl ServiceDiscover {
                 return;
             }
         };
-        let dbg_session = crate::session::DbgSession::new(request, transport);
-        if let Err(error) = manager.start_session(dbg_session).await {
+        let process = crate::session::SessionProcess::new(request, transport);
+        if let Err(error) = manager.start_session(process).await {
             error!(?error, "failed to admit discovered session");
         }
     }
@@ -141,6 +144,7 @@ impl ServiceDiscover {
 pub struct DbgManager {
     /// All active GDB sessions (keyed by session id).
     sessions: SessionsRef,
+    activation: SessionActivation,
 
     /// We keep the producers in a vector (each implements `DiscoveryMessageProducer<T>`).
     // producers: Mutex<Vec<Box<dyn crate::discovery::DiscoveryMessageProducer>>>,
@@ -203,42 +207,43 @@ impl DbgManager {
         Ok(())
     }
 
-    async fn start_session(&self, dbg_session: crate::session::DbgSession) -> Result<u64> {
-        let sid = dbg_session.sid;
-        let caladan_ip = dbg_session.request.caladan_ip;
+    async fn start_session(&self, process: crate::session::SessionProcess) -> Result<u64> {
+        let sid = process.sid();
         let termination = self.lifecycle.bind(sid);
-        let session = Arc::new(Mutex::new(dbg_session));
+        let session = Arc::new(Mutex::new(process));
         self.sessions.insert(sid, Arc::clone(&session));
 
-        let start_result = {
-            let mut session = session.lock().await;
-            match session.start(termination.clone()).await {
-                Ok(_) => session.post_start().await,
-                Err(error) => Err(error),
-            }
-        };
+        let start_result = self
+            .activation
+            .activate(&mut *session.lock().await, termination.clone())
+            .await;
 
         match start_result {
-            Ok(_) if !termination.termination_requested() && self.sessions.contains_key(&sid) => {
-                if get_framework_plugin().should_register_caladan_ip(self.config) {
-                    if let Some(caladan_ip) = caladan_ip {
-                        get_proclet_mgr().register_owner_session(caladan_ip, sid);
-                    }
-                }
-
+            Ok(()) if !termination.termination_requested() && self.sessions.contains_key(&sid) => {
                 debug!(sid, "session started successfully");
                 let notification = Notification::new(NotificationPayload::SessionListChanged);
                 get_notif_mgr().broadcast(notification).await;
                 Ok(sid)
             }
-            Ok(_) => Err(anyhow!(
-                "session {} terminated before startup completed",
-                sid
-            )),
+            Ok(()) => {
+                if let Some((_, process)) = self.sessions.remove(&sid) {
+                    if let Err(error) = self.activation.deactivate(&mut *process.lock().await).await
+                    {
+                        error!(sid, ?error, "failed to roll back terminated session");
+                    }
+                }
+                Err(anyhow!(
+                    "session {} terminated before activation completed",
+                    sid
+                ))
+            }
             Err(error) => {
-                self.sessions.remove(&sid);
-                if let Err(cleanup_error) = session.lock().await.cleanup().await {
-                    error!(sid, ?cleanup_error, "failed to roll back session startup");
+                if let Some((_, process)) = self.sessions.remove(&sid) {
+                    if let Err(cleanup_error) =
+                        self.activation.deactivate(&mut *process.lock().await).await
+                    {
+                        error!(sid, ?cleanup_error, "failed to roll back session startup");
+                    }
                 }
                 Err(error)
             }
@@ -260,7 +265,7 @@ impl DbgManager {
             return;
         };
 
-        if let Err(error) = session.lock().await.cleanup().await {
+        if let Err(error) = self.activation.deactivate(&mut *session.lock().await).await {
             error!(sid, ?error, "session cleanup failed");
         }
 
@@ -451,8 +456,8 @@ impl DbgManager {
 
         let request = builder.build()?;
         let transport = build_transport(&request.transport, None)?;
-        let dbg_session = crate::session::DbgSession::new(request, transport);
-        self.start_session(dbg_session).await?;
+        let process = crate::session::SessionProcess::new(request, transport);
+        self.start_session(process).await?;
         Ok(())
     }
 
@@ -503,6 +508,7 @@ impl DbgManager {
 
         Arc::new(DbgManager {
             sessions,
+            activation: SessionActivation::new(config),
             sd: Mutex::new(None),
             proclet_ctrl,
             config,
@@ -565,7 +571,7 @@ impl DbgManager {
         }
 
         join_all(sessions.into_iter().map(|(sid, session)| async move {
-            if let Err(error) = session.lock().await.cleanup().await {
+            if let Err(error) = self.activation.deactivate(&mut *session.lock().await).await {
                 error!(
                     sid,
                     ?error,

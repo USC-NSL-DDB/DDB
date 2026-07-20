@@ -250,6 +250,10 @@ impl SessionHandle {
         self.submit_with_permit(command, permit).await
     }
 
+    pub(crate) async fn execute(&self, command: SessionCommand) -> Result<ParsedSessionResponse> {
+        self.submit(command).await?.complete().await
+    }
+
     async fn submit_with_permit(
         &self,
         command: SessionCommand,

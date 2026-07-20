@@ -1,7 +1,8 @@
-pub mod dbg_session;
+pub(crate) mod activation;
 pub(crate) mod lifecycle;
+pub mod process;
 
-pub use dbg_session::*;
+pub use process::*;
 
 use anyhow::{anyhow, Result};
 

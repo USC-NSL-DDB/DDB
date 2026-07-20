@@ -32,6 +32,11 @@ impl ProcletMgr {
         debug!("Registered caladan_ip: {} with sid: {}", caladan_ip, sid);
     }
 
+    pub fn remove_owner_session(&self, sid: u64) {
+        self.caladan_ip_to_sid
+            .retain(|_, owner_sid| *owner_sid != sid);
+    }
+
     pub fn session_id_for_caladan_ip(&self, caladan_ip: u32) -> Option<u64> {
         self.caladan_ip_to_sid
             .get(&caladan_ip)
@@ -60,6 +65,9 @@ mod tests {
 
         assert_eq!(mgr.session_id_for_caladan_ip(7), Some(99));
         assert_eq!(mgr.session_id_for_caladan_ip(8), None);
+
+        mgr.remove_owner_session(99);
+        assert_eq!(mgr.session_id_for_caladan_ip(7), None);
     }
 
     #[test]
