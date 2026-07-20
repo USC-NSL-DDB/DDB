@@ -62,4 +62,5 @@ fn transport_exit_during_bootstrap_never_activates_a_stale_session() {
         .as_array()
         .expect("groups should be an array")
         .is_empty());
+    assert_eq!(ddb.api_get("/status")["status"], "up");
 }

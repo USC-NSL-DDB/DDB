@@ -164,8 +164,11 @@ impl DbgManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(session.start_delay_ms)).await;
         }
 
+        let tag = session.tag.clone();
         let process = self.factory.create_static(session)?;
-        self.supervisor.admit(process).await?;
+        if let Err(error) = self.supervisor.admit(process).await {
+            error!(tag, ?error, "failed to admit static session");
+        }
         Ok(())
     }
 
