@@ -18,6 +18,9 @@ use crate::{
     },
 };
 
+/// Shared authenticated tunnel used by proxy SSH transports.
+pub type ProxyTunnel = Arc<Handle<SSHProxyClientHandler>>;
+
 /// Pure description of how a debugger session should be transported.
 #[derive(Debug, Clone)]
 pub enum TransportSpec {
@@ -29,7 +32,7 @@ pub enum TransportSpec {
 
 pub fn build_transport(
     spec: &TransportSpec,
-    proxy_tunnel: Option<Arc<Handle<SSHProxyClientHandler>>>,
+    proxy_tunnel: Option<ProxyTunnel>,
 ) -> Result<DebuggerTransportHandle> {
     match spec {
         TransportSpec::DirectSsh(credentials) => Ok(Box::new(RemoteTransport::new(

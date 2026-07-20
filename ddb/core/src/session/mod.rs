@@ -1,4 +1,5 @@
 pub(crate) mod activation;
+pub(crate) mod factory;
 pub(crate) mod lifecycle;
 pub mod process;
 pub(crate) mod supervisor;

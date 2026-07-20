@@ -6,19 +6,14 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-use crate::dbg_ctrl::{build_transport, TransportSpec};
 use crate::discovery::broker::{EMQXBroker, MessageBroker, MosquittoBroker};
-use crate::discovery::discovery_message_producer::ServiceMeta;
 use crate::feature::proclet_ctrl::{ProcletCtrlClient, QueryProcletResp};
 use crate::plugin::{get_framework_plugin, ServiceDiscoveryMode};
-use crate::session::supervisor::SessionSupervisor;
-use crate::state::get_caladan_ip_from_user_data;
+use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
 use crate::{
     common::{
         self,
-        config::{
-            Config as DDBConfig, DebuggerBackendKind, StaticSessionConfig, StaticSessionStartMode,
-        },
+        config::{Config as DDBConfig, StaticSessionConfig},
     },
     discovery::DiscoveryMessageProducer,
 };
@@ -66,40 +61,15 @@ impl ServiceDiscover {
     async fn prepare_new_session(
         manager: Arc<DbgManager>,
         info: crate::discovery::ServiceInfo,
-        proxy_tunnel: Option<
-            Arc<
-                russh::client::Handle<crate::connection::ssh_client_channel::SSHProxyClientHandler>,
-            >,
-        >,
+        proxy_tunnel: Option<crate::dbg_ctrl::ProxyTunnel>,
     ) {
-        let service_meta = ServiceMeta::from(&info);
-        let pid = info.pid;
-        let caladan_ip = get_caladan_ip_from_user_data(&service_meta.user_data);
-        let request = match crate::session::SessionRequestBuilder::from_config(manager.config)
-            .tag(info.tag)
-            .mode(crate::session::SessionMode::Remote(
-                crate::session::SessionStart::Attach(pid),
-            ))
-            .transport(info.transport)
-            .service_meta(service_meta)
-            .caladan_ip(caladan_ip)
-            .build()
-        {
-            Ok(request) => request,
+        let process = match manager.factory.create_discovered(info, proxy_tunnel) {
+            Ok(process) => process,
             Err(error) => {
-                error!(?error, "failed to validate discovered session request");
+                error!(?error, "failed to construct discovered session");
                 return;
             }
         };
-
-        let transport = match build_transport(&request.transport, proxy_tunnel) {
-            Ok(transport) => transport,
-            Err(error) => {
-                error!(?error, "failed to construct debugger transport");
-                return;
-            }
-        };
-        let process = crate::session::SessionProcess::new(request, transport);
         if let Err(error) = manager.supervisor.admit(process).await {
             error!(?error, "failed to admit discovered session");
         }
@@ -131,6 +101,7 @@ impl ServiceDiscover {
 /// The manager that can handle multiple producers, each sending discovered services.
 pub struct DbgManager {
     supervisor: Arc<SessionSupervisor>,
+    factory: SessionFactory<'static>,
 
     /// We keep the producers in a vector (each implements `DiscoveryMessageProducer<T>`).
     // producers: Mutex<Vec<Box<dyn crate::discovery::DiscoveryMessageProducer>>>,
@@ -273,57 +244,7 @@ impl DbgManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(session.start_delay_ms)).await;
         }
 
-        let service_meta = ServiceMeta::new(
-            session.ip,
-            session.tag.clone(),
-            session.pid,
-            session.hash.clone(),
-            session.alias.clone(),
-            None,
-        );
-
-        let mut builder = crate::session::SessionRequestBuilder::from_config(self.config)
-            .tag(session.tag.clone())
-            .stop_at_entry(session.stop_at_entry)
-            .service_meta(service_meta);
-
-        builder = match self.config.conf.debugger.backend {
-            DebuggerBackendKind::Mock => builder
-                .mode(crate::session::SessionMode::Remote(
-                    crate::session::SessionStart::Attach(session.pid),
-                ))
-                .transport(TransportSpec::Mock {
-                    config: session.mock.clone(),
-                    pid: session.pid,
-                }),
-            DebuggerBackendKind::Gdb => {
-                let mode = match session.start_mode {
-                    StaticSessionStartMode::Attach => {
-                        if session.pid == 0 {
-                            bail!("static attach sessions require a non-zero pid");
-                        }
-                        crate::session::SessionMode::Local(crate::session::SessionStart::Attach(
-                            session.pid,
-                        ))
-                    }
-                    StaticSessionStartMode::Binary => {
-                        if session.binary_path.trim().is_empty() {
-                            bail!("static binary sessions require binary_path to be set");
-                        }
-                        crate::session::SessionMode::Local(crate::session::SessionStart::Binary {
-                            path: session.binary_path.clone(),
-                            args: session.binary_args.clone(),
-                        })
-                    }
-                };
-                builder.mode(mode).transport(TransportSpec::Local)
-            }
-            DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
-        };
-
-        let request = builder.build()?;
-        let transport = build_transport(&request.transport, None)?;
-        let process = crate::session::SessionProcess::new(request, transport);
+        let process = self.factory.create_static(session)?;
         self.supervisor.admit(process).await?;
         Ok(())
     }
@@ -373,6 +294,7 @@ impl DbgManager {
 
         Arc::new(DbgManager {
             supervisor: SessionSupervisor::new(config),
+            factory: SessionFactory::new(config),
             sd: Mutex::new(None),
             proclet_ctrl,
             config,
