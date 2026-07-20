@@ -66,12 +66,8 @@ async fn get_pod_pid(pods: &Api<Pod>, pod_name: &str, service_name: &str) -> Res
 }
 #[axum::async_trait]
 impl DiscoveryMessageProducer for K8sProducer {
-    /// Start "producing" by:
-    /// 1. Optionally starting our broker,
-    /// 2. Creating an AsyncDiscoverClient,
-    /// 3. Subscribing to the desired topic,
-    /// 4. Spawning a monitor task that feeds an internal channel with MQTT events,
-    /// 5. Spawning consumer tasks that parse events and send `ServiceInfo` into `tx`.
+    /// Connect to Kubernetes, watch matching pod additions, and emit each valid pod
+    /// as a `ServiceInfo`. The owned watch task is cancelled by `stop_producing`.
     async fn start_producing(&mut self, tx: Sender<ServiceInfo>) -> Result<()> {
         let kubeconfig_path = Path::new(
             self.config
