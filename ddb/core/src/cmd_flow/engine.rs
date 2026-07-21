@@ -12,6 +12,7 @@ use super::{
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
     input::ParsedInputCmd,
+    query::{QueryProjector, QueryService},
     router::{Router, Target},
     transaction::TransactionCoordinator,
     CommandOutcome, Presentation,
@@ -105,11 +106,15 @@ impl CommandEngine {
             transactions,
             proclet_restoration,
         ));
+        let query_service = Arc::new(QueryService::new(
+            executor.clone(),
+            QueryProjector::new(Arc::clone(&state)),
+        ));
         let dispatcher = CommandDispatcher::new(
             breakpoint_service,
             execution_service,
             backtrace_service,
-            Arc::clone(&state),
+            query_service,
             executor,
         );
 

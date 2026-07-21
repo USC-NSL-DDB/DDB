@@ -505,6 +505,12 @@ impl SessionStateMgr {
     }
 
     #[inline]
+    pub fn session_ids(&self) -> Vec<u64> {
+        let sessions = self.sessions.pin();
+        sessions.keys().copied().collect()
+    }
+
+    #[inline]
     pub fn session_by_tag(&self, tag: &str) -> Option<SessionRef> {
         self.tag_index
             .get(tag)

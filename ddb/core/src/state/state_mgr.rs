@@ -502,6 +502,11 @@ impl StateMgr {
     }
 
     #[inline]
+    pub fn session_ids(&self) -> Vec<u64> {
+        self.session_states.session_ids()
+    }
+
+    #[inline]
     #[cfg_attr(feature = "profile", tracing::instrument(skip(self)))]
     pub fn session(&self, sid: u64) -> Option<SessionRef> {
         self.session_states.session(sid)

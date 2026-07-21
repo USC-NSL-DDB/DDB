@@ -1,8 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use anyhow::{anyhow, Result};
-
-use crate::state::StateMgr;
+use anyhow::Result;
 
 use super::{
     api::{self, CommandExecutor},
@@ -10,8 +8,7 @@ use super::{
     breakpoint::BreakpointService,
     execution::ExecutionService,
     input::ParsedInputCmd,
-    query::QueryProjector,
-    router::Target,
+    query::QueryService,
     CommandOutcome, Presentation,
 };
 
@@ -79,8 +76,7 @@ pub(crate) struct CommandDispatcher {
     breakpoints: Arc<BreakpointService>,
     execution: Arc<ExecutionService>,
     backtrace: Arc<DistributedBacktraceService>,
-    queries: QueryProjector,
-    state: Arc<StateMgr>,
+    queries: Arc<QueryService>,
     executor: CommandExecutor,
 }
 
@@ -89,15 +85,14 @@ impl CommandDispatcher {
         breakpoints: Arc<BreakpointService>,
         execution: Arc<ExecutionService>,
         backtrace: Arc<DistributedBacktraceService>,
-        state: Arc<StateMgr>,
+        queries: Arc<QueryService>,
         executor: CommandExecutor,
     ) -> Self {
         Self {
             breakpoints,
             execution,
             backtrace,
-            queries: QueryProjector::new(Arc::clone(&state)),
-            state,
+            queries,
             executor,
         }
     }
@@ -133,69 +128,11 @@ impl CommandDispatcher {
 
     async fn query(&self, action: QueryAction, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         match action {
-            QueryAction::ThreadInfo => self.thread_info(cmd).await,
-            QueryAction::ThreadSelect => self.thread_select(cmd).await,
-            QueryAction::ListThreadGroups => self.list_thread_groups(cmd).await,
-            QueryAction::FileListLines => self.file_list_lines(cmd).await,
+            QueryAction::ThreadInfo => self.queries.thread_info(cmd).await,
+            QueryAction::ThreadSelect => self.queries.thread_select(cmd).await,
+            QueryAction::ListThreadGroups => self.queries.list_thread_groups(cmd).await,
+            QueryAction::FileListLines => self.queries.file_list_lines(cmd).await,
         }
-    }
-
-    async fn thread_info(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let response = match cmd.target {
-            Target::Thread(global_tid) => {
-                let (_, local_tid) = self.queries.resolve_thread(global_tid)?;
-                let token = cmd
-                    .external_token
-                    .map(|token| token.to_string())
-                    .unwrap_or_default();
-                let command = format!("{token}-thread-info {local_tid}");
-                self.executor
-                    .execute_plan(api::command(&command)?.target(Target::Thread(global_tid)))
-                    .await?
-            }
-            _ => self.executor.execute_plan(api::parsed(cmd)?).await?,
-        };
-        let response = self.queries.project_threads(response)?;
-        Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
-    }
-
-    async fn thread_select(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
-        let response = if let Some(global_tid) = parts.last() {
-            let global_tid = global_tid.parse::<crate::state::GlobalThreadId>()?;
-            let (session_id, local_tid) = self
-                .state
-                .local_thread_id(global_tid)
-                .ok_or_else(|| anyhow!("Unknown global thread {}", global_tid))?
-                .into();
-            let command = format!("-thread-select {local_tid}");
-            self.executor
-                .execute_plan(api::command(&command)?.target(Target::Session(session_id)))
-                .await?
-        } else {
-            self.executor.execute_plan(api::parsed(cmd)?).await?
-        };
-        Ok(CommandOutcome::response(response, Presentation::Plain))
-    }
-
-    async fn list_thread_groups(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let response = self
-            .executor
-            .execute_plan(api::parsed(cmd)?.target(Target::Broadcast))
-            .await?;
-        let response = self.queries.project_processes(response)?;
-        Ok(CommandOutcome::response(
-            response,
-            Presentation::ProcessReadable,
-        ))
-    }
-
-    async fn file_list_lines(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
-        let response = self
-            .executor
-            .execute_plan(api::parsed(cmd)?.target(Target::Session(1)))
-            .await?;
-        Ok(CommandOutcome::response(response, Presentation::Plain))
     }
 
     async fn pass_through(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {

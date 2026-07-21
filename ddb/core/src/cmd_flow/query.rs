@@ -1,4 +1,4 @@
-//! Semantic projection for read-only debugger queries.
+//! Read-only debugger queries: dispatch and semantic projection.
 //!
 //! Query responses enter this module with debugger-local identifiers and leave
 //! with DDB-global identifiers. Presenters can therefore remain pure and every
@@ -6,10 +6,98 @@
 
 use std::{fmt, sync::Arc};
 
+use anyhow::{anyhow, Result};
 use gdbmi::raw::{Dict, Value};
 
-use super::{decoder::DecodeError, schema, FinishedCmd};
+use super::{
+    api::{self, CommandExecutor},
+    decoder::DecodeError,
+    input::ParsedInputCmd,
+    router::Target,
+    schema, CommandOutcome, FinishedCmd, Presentation,
+};
 use crate::state::{GlobalThreadId, StateMgr};
+
+/// Owns the read-only query operations, symmetric to the other domain
+/// services: the dispatcher classifies and delegates, this service resolves
+/// targets, executes, and projects.
+pub(crate) struct QueryService {
+    executor: CommandExecutor,
+    projector: QueryProjector,
+}
+
+impl QueryService {
+    pub(crate) fn new(executor: CommandExecutor, projector: QueryProjector) -> Self {
+        Self {
+            executor,
+            projector,
+        }
+    }
+
+    pub(crate) async fn thread_info(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let response = match cmd.target {
+            Target::Thread(global_tid) => {
+                let (_, local_tid) = self.projector.resolve_thread(global_tid)?;
+                let token = cmd
+                    .external_token
+                    .map(|token| token.to_string())
+                    .unwrap_or_default();
+                let command = format!("{token}-thread-info {local_tid}");
+                self.executor
+                    .execute_plan(api::command(&command)?.target(Target::Thread(global_tid)))
+                    .await?
+            }
+            _ => self.executor.execute_plan(api::parsed(cmd)?).await?,
+        };
+        let response = self.projector.project_threads(response)?;
+        Ok(CommandOutcome::response(response, Presentation::ThreadInfo))
+    }
+
+    pub(crate) async fn thread_select(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
+        let response = if let Some(global_tid) = parts.last() {
+            let global_tid = global_tid.parse::<GlobalThreadId>()?;
+            let (session_id, local_tid) = self.projector.resolve_thread(global_tid)?;
+            let command = format!("-thread-select {local_tid}");
+            self.executor
+                .execute_plan(api::command(&command)?.target(Target::Session(session_id)))
+                .await?
+        } else {
+            self.executor.execute_plan(api::parsed(cmd)?).await?
+        };
+        Ok(CommandOutcome::response(response, Presentation::Plain))
+    }
+
+    pub(crate) async fn list_thread_groups(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let response = self
+            .executor
+            .execute_plan(api::parsed(cmd)?.target(Target::Broadcast))
+            .await?;
+        let response = self.projector.project_processes(response)?;
+        Ok(CommandOutcome::response(
+            response,
+            Presentation::ProcessReadable,
+        ))
+    }
+
+    pub(crate) async fn file_list_lines(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
+        let session_id = self
+            .projector
+            .default_query_session()
+            .ok_or_else(|| anyhow!("no debugger session is available to list source lines"))?;
+        let response = self
+            .executor
+            .execute_plan(api::parsed(cmd)?.target(Target::Session(session_id)))
+            .await?;
+        Ok(CommandOutcome::response(response, Presentation::Plain))
+    }
+}
+
+impl fmt::Debug for QueryService {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("QueryService").finish()
+    }
+}
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub(crate) enum QueryProjectionError {
@@ -53,6 +141,14 @@ impl QueryProjector {
             .local_thread_id(global_id)
             .map(|local| local.into_parts())
             .ok_or(QueryProjectionError::UnknownGlobalThread { global_id })
+    }
+
+    /// The session queries fall back to when a command has no usable target:
+    /// the selected session, else the lowest live session id.
+    pub(crate) fn default_query_session(&self) -> Option<u64> {
+        self.state
+            .current_session_id()
+            .or_else(|| self.state.session_ids().into_iter().min())
     }
 
     pub(crate) fn project_threads(
