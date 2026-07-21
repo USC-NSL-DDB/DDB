@@ -305,7 +305,23 @@ fn rewrite_thread_argument(command: &str, local_thread_id: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite_thread_argument;
+    use super::{rewrite_thread_argument, Command, Router, Target};
+    use crate::state::RuntimeModel;
+
+    #[tokio::test]
+    async fn unresolved_targets_are_rejected_at_the_routing_boundary() {
+        let router = Router::new(RuntimeModel::new());
+        let command = Command::new(None, 1, "-thread-info".to_string());
+
+        let error = router
+            .execute(Target::Unspecified, command)
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("command target was not resolved before routing"));
+    }
 
     #[test]
     fn thread_argument_is_localized_at_the_route_boundary() {

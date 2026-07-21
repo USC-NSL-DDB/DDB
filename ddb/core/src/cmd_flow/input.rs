@@ -45,15 +45,6 @@ impl ParsedInputCmd {
     }
 
     #[inline]
-    pub fn with_default_target(self, target: Target) -> Self {
-        if matches!(self.target, Target::Unspecified) {
-            self.with_target(target)
-        } else {
-            self
-        }
-    }
-
-    #[inline]
     pub fn with_prefix(self, prefix: &str) -> Self {
         ParsedInputCmd {
             prefix: prefix.to_string(),

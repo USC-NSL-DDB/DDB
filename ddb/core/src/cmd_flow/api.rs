@@ -105,12 +105,16 @@ pub struct CommandPlan {
 }
 
 impl CommandPlan {
+    /// Wraps a parsed command without resolving its target. Target defaults are
+    /// an ingress policy: callers either rely on the target embedded in the
+    /// command text or set one explicitly with [`CommandPlan::target`]. The
+    /// router rejects unresolved targets.
     pub fn from_parsed(parsed: ParsedInputCmd) -> Result<Self> {
         if parsed.prefix.is_empty() {
             return Err(Error::InvalidPrefix("prefix cannot be empty".to_string()).into());
         }
         Ok(Self {
-            parsed: parsed.with_default_target(Target::Broadcast),
+            parsed,
             consistency: super::session_runtime::CompletionConsistency::StateConsistent,
         })
     }
@@ -151,6 +155,12 @@ mod tests {
         let request = command("42-thread-info --all").unwrap();
         assert_eq!(request.parsed.external_token, Some(42));
         assert_eq!(request.parsed.target, Target::Broadcast);
+    }
+
+    #[test]
+    fn target_less_commands_stay_unresolved_until_ingress_decides() {
+        let request = command("-thread-info").unwrap();
+        assert_eq!(request.parsed.target, Target::Unspecified);
     }
 
     #[test]
