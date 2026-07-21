@@ -6,8 +6,7 @@ use serde::Serialize;
 use crate::{
     cmd_flow::router::Router,
     source::resolver::SourceResolver,
-    state::RuntimeModel,
-    state::{BkptLoc, BkptMeta, GroupMeta, SubBkptMeta, SubBkptType},
+    state::{BreakpointSnapshot, GroupMeta, RuntimeModel},
 };
 
 #[derive(Clone)]
@@ -139,15 +138,15 @@ impl ApiQueries {
         Ok(groups)
     }
 
-    pub(crate) fn breakpoints(&self) -> Vec<BreakpointView> {
+    pub(crate) fn breakpoints(&self) -> Vec<BreakpointSnapshot> {
         let mut breakpoints = self
             .model
             .breakpoints()
             .breakpoints()
             .iter()
-            .map(BreakpointView::from)
+            .map(BreakpointSnapshot::from)
             .collect::<Vec<_>>();
-        breakpoints.sort_unstable_by_key(|breakpoint| breakpoint.id);
+        breakpoints.sort_unstable_by_key(|breakpoint| breakpoint.id());
         breakpoints
     }
 }
@@ -193,80 +192,6 @@ impl From<&GroupMeta> for GroupView {
             hash: group.hash().to_string(),
             alias: group.alias().to_string(),
             sids,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct BreakpointLocationView {
-    src: String,
-    line: u64,
-}
-
-impl From<&BkptLoc> for BreakpointLocationView {
-    fn from(location: &BkptLoc) -> Self {
-        Self {
-            src: location.path().to_string(),
-            line: location.line(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "type")]
-pub(crate) enum SubBreakpointView {
-    #[serde(rename = "session")]
-    Session {
-        id: u64,
-        target_session: u64,
-        local_breakpoint_id: u64,
-    },
-    #[serde(rename = "group")]
-    Group {
-        id: u64,
-        target_group: u64,
-        active_sessions: usize,
-    },
-}
-
-impl From<&SubBkptMeta> for SubBreakpointView {
-    fn from(sub_breakpoint: &SubBkptMeta) -> Self {
-        match sub_breakpoint.kind() {
-            SubBkptType::Session(session) => Self::Session {
-                id: sub_breakpoint.id(),
-                target_session: session.target_session(),
-                local_breakpoint_id: session.local_id(),
-            },
-            SubBkptType::Group(group) => Self::Group {
-                id: sub_breakpoint.id(),
-                target_group: group.target_group().value(),
-                active_sessions: group.local_ids().len(),
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct BreakpointView {
-    id: u64,
-    location: BreakpointLocationView,
-    enabled: bool,
-    times: u64,
-    subbkpts: Vec<SubBreakpointView>,
-}
-
-impl From<&BkptMeta> for BreakpointView {
-    fn from(breakpoint: &BkptMeta) -> Self {
-        Self {
-            id: breakpoint.id(),
-            location: breakpoint.location().into(),
-            enabled: breakpoint.is_enabled(),
-            times: breakpoint.times(),
-            subbkpts: breakpoint
-                .sub_breakpoints()
-                .iter()
-                .map(SubBreakpointView::from)
-                .collect(),
         }
     }
 }

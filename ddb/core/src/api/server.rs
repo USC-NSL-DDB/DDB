@@ -13,7 +13,8 @@ use serde_json::json;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
-use super::read_model::{ApiQueries, BreakpointView, GroupView};
+use super::read_model::{ApiQueries, GroupView};
+use crate::state::BreakpointSnapshot;
 
 use crate::{
     cmd_flow::{engine::CommandEngine, router::Target, FinishedCmd},
@@ -60,7 +61,7 @@ struct GroupsResponse {
 
 #[derive(Serialize)]
 struct BkptsResponse {
-    bkpts: Vec<BreakpointView>,
+    bkpts: Vec<BreakpointSnapshot>,
 }
 
 // Struct for JSON output

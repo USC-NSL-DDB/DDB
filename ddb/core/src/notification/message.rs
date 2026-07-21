@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::read_model::BreakpointView;
+use crate::state::BreakpointSnapshot;
 
 /// Notification envelope - versioned for extensibility
 #[derive(Serialize, Clone, Debug)]
@@ -50,13 +50,13 @@ pub enum BreakpointChangeEvent {
     // Consumer may need to remove the breakpoint from its list.
     Removed(u64),
     // Breakpoint added.
-    Added(BreakpointView),
+    Added(BreakpointSnapshot),
     // Breakpoint updated.
     // Possible cases:
     // - condition changed
     // - hit count changed
     // - subbkpt changed (added/removed/updated)
-    Updated(BreakpointView),
+    Updated(BreakpointSnapshot),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
