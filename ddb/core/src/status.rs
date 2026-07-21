@@ -9,6 +9,18 @@ pub enum Component {
     Notification,
 }
 
+impl Component {
+    /// Every component the runtime must see report up before it is considered
+    /// running. Extend this array when adding a component so the readiness
+    /// gate stays in sync with the enum.
+    pub const ALL: [Component; 4] = [
+        Component::CmdFlow,
+        Component::DbgMgr,
+        Component::Api,
+        Component::Notification,
+    ];
+}
+
 pub struct RuntimeStatus {
     running: tokio::sync::watch::Receiver<bool>,
     trigger: tokio::sync::watch::Sender<bool>,
@@ -21,13 +33,8 @@ impl RuntimeStatus {
         let (tx, rx) = tokio::sync::watch::channel(false);
 
         let mut monitor = HashMap::new();
-        for component in &[
-            Component::CmdFlow,
-            Component::DbgMgr,
-            Component::Api,
-            Component::Notification,
-        ] {
-            monitor.insert(*component, false);
+        for component in Component::ALL {
+            monitor.insert(component, false);
         }
 
         RuntimeStatus {
