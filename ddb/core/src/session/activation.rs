@@ -138,32 +138,24 @@ impl SessionActivation {
         let sid = process.sid();
 
         self.source_resolver.cancel_session(sid).await;
-        let groups = self.model.groups();
-        let group_id = groups.group_id_by_session(sid);
-        let group_operation = match group_id {
+        let group_operation = match self.model.groups().group_id_by_session(sid) {
             Some(group_id) => Some(self.group_operations.lock(group_id).await),
             None => None,
         };
 
         self.router.remove_session(sid);
-        self.model.state().update_session_status_off(sid).await;
+        let retirement = self.model.retire_session(sid).await;
+        self.breakpoint_events
+            .publish_state_changes(retirement.breakpoint_changes)
+            .await;
 
-        let breakpoints = self.model.breakpoints();
-        let changes = breakpoints.clean_bkpts_for_terminated_session(sid, group_id);
-        self.breakpoint_events.publish_state_changes(changes).await;
-
-        groups.remove_session(sid);
-        let removed_group = group_id.filter(|group_id| groups.group_by_id(*group_id).is_none());
-        if let Some(group_id) = removed_group {
+        if let Some(group_id) = retirement.emptied_group {
             self.source_resolver.remove_group(group_id).await;
         }
         drop(group_operation);
-        if let Some(group_id) = removed_group {
+        if let Some(group_id) = retirement.emptied_group {
             self.group_operations.remove_group(group_id);
         }
-
-        self.model.proclets().remove_owner_session(sid);
-        self.model.state().remove_session(sid).await;
         process.shutdown().await
     }
 }
