@@ -97,12 +97,6 @@ pub mod mqtt {
     }
 }
 
-#[allow(dead_code)]
-pub mod gdb {
-    #[allow(unused_imports)]
-    pub use crate::debugger::gdb::runtime::*;
-}
-
 pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
     cmd: &str,
     args: &[&str],
