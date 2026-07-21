@@ -1,11 +1,11 @@
 use std::sync::Mutex;
 
-use crate::{common::counter::SimpleCounter, discovery::discovery_message_producer::ServiceMeta};
+use crate::common::counter::SimpleCounter;
 
 use super::{
     session_mgr,
     thread_mgr::{self, LocalThreadGroupId, LocalThreadId},
-    GlobalThreadGroupId, GlobalThreadId, SessionRef,
+    GlobalThreadGroupId, GlobalThreadId, ServiceIdentity, SessionRef,
 };
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -154,9 +154,14 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn register_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
+    pub async fn register_session(
+        &self,
+        sid: u64,
+        tag: &str,
+        service_identity: Option<ServiceIdentity>,
+    ) {
         self.session_states
-            .add_session(sid, tag, service_meta)
+            .add_session(sid, tag, service_identity)
             .await;
     }
 
@@ -503,9 +508,9 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn session_service_meta(&self, sid: u64) -> Option<ServiceMeta> {
+    pub async fn session_service_identity(&self, sid: u64) -> Option<ServiceIdentity> {
         self.session_states
-            .with_session(sid, |session| session.cloned_service_meta())
+            .with_session(sid, |session| session.cloned_service_identity())
             .await
             .flatten()
     }

@@ -8,9 +8,9 @@ use crate::{
     common::counter::SimpleCounter,
     dbg_ctrl::{build_transport, ProxyTunnel, TransportSpec},
     debugger::DebuggerBackend,
-    discovery::{discovery_message_producer::ServiceMeta, ServiceInfo},
+    discovery::ServiceInfo,
     plugin::FrameworkPlugin,
-    state::get_caladan_ip_from_user_data,
+    state::ServiceIdentity,
 };
 
 /// Normalizes every session source into one validated process construction path.
@@ -70,32 +70,25 @@ impl SessionFactory {
     }
 
     fn build_discovery_request(&self, info: ServiceInfo) -> Result<SessionRequest> {
-        let service_meta = ServiceMeta::from(&info);
-        let caladan_ip = get_caladan_ip_from_user_data(&service_meta.user_data);
+        let caladan_ip = info.caladan_ip();
+        let service_identity = ServiceIdentity::new(info.hash, info.alias);
 
         SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(info.tag)
             .mode(SessionMode::Remote(SessionStart::Attach(info.pid)))
             .transport(info.transport)
-            .service_meta(service_meta)
+            .service_identity(service_identity)
             .caladan_ip(caladan_ip)
             .build()
     }
 
     fn build_static_request(&self, session: StaticSessionConfig) -> Result<SessionRequest> {
-        let service_meta = ServiceMeta::new(
-            session.ip,
-            session.tag.clone(),
-            session.pid,
-            session.hash.clone(),
-            session.alias.clone(),
-            None,
-        );
+        let service_identity = ServiceIdentity::new(session.hash.clone(), session.alias.clone());
 
         let mut builder = SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(session.tag)
             .stop_at_entry(session.stop_at_entry)
-            .service_meta(service_meta);
+            .service_identity(service_identity);
 
         builder = match self.config.conf.debugger.backend {
             DebuggerBackendKind::Mock => builder
@@ -212,6 +205,9 @@ mod tests {
 
         assert_eq!(request.caladan_ip, Some(17));
         assert_eq!(request.tag.as_deref(), Some("api"));
-        assert_eq!(request.service_meta.as_ref().map(|meta| meta.pid), Some(42));
+        assert_eq!(
+            request.service_identity,
+            Some(ServiceIdentity::new("group", "api"))
+        );
     }
 }

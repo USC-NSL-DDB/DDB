@@ -3,8 +3,6 @@ use std::fmt::{Debug, Display};
 use dashmap::DashMap;
 use tracing::debug;
 
-use crate::discovery::discovery_message_producer::UserDataMap;
-
 #[derive(Debug)]
 pub struct ProcletMgr {
     caladan_ip_to_sid: DashMap<u32, u64>,
@@ -44,17 +42,8 @@ impl ProcletMgr {
     }
 }
 
-pub fn get_caladan_ip_from_user_data(user_data: &UserDataMap) -> Option<u32> {
-    user_data.as_ref().and_then(|data| {
-        data.get("caladan_ip")
-            .and_then(|ip_str| ip_str.parse::<u32>().ok())
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     #[test]
@@ -68,21 +57,5 @@ mod tests {
 
         mgr.remove_owner_session(99);
         assert_eq!(mgr.session_id_for_caladan_ip(7), None);
-    }
-
-    #[test]
-    fn caladan_ip_is_extracted_only_from_valid_user_data() {
-        let valid = Some(HashMap::from([(
-            "caladan_ip".to_string(),
-            "42".to_string(),
-        )]));
-        let invalid = Some(HashMap::from([(
-            "caladan_ip".to_string(),
-            "not-a-number".to_string(),
-        )]));
-
-        assert_eq!(get_caladan_ip_from_user_data(&valid), Some(42));
-        assert_eq!(get_caladan_ip_from_user_data(&invalid), None);
-        assert_eq!(get_caladan_ip_from_user_data(&None), None);
     }
 }

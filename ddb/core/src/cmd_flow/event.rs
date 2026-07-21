@@ -320,9 +320,9 @@ impl DebuggerEventReducer {
                 let identity = state
                     .register_thread(sid, local_thread_id, &local_group_id)
                     .await?;
-                let service_meta = state.session_service_meta(sid).await;
-                let alias = service_meta
-                    .map(|meta| meta.alias)
+                let service_identity = state.session_service_identity(sid).await;
+                let alias = service_identity
+                    .map(|identity| identity.alias)
                     .unwrap_or_else(|| "UNKNOWN".to_string());
                 let group_hash = groups
                     .group_hash_by_session(sid)

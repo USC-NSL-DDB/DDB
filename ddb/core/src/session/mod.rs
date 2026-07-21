@@ -11,7 +11,7 @@ use anyhow::{anyhow, Result};
 use crate::{
     common::config::{Config, DebuggerCommand, OnExit},
     dbg_ctrl::TransportSpec,
-    discovery::discovery_message_producer::ServiceMeta,
+    state::ServiceIdentity,
 };
 
 /// Validated, source-independent description of a debugger session to admit.
@@ -24,7 +24,7 @@ pub struct SessionRequest {
     pub prerun_debugger_cmds: Vec<DebuggerCommand>,
     pub postrun_debugger_cmds: Vec<DebuggerCommand>,
     pub stop_at_entry: bool,
-    pub service_meta: Option<ServiceMeta>,
+    pub service_identity: Option<ServiceIdentity>,
     pub transport: TransportSpec,
     pub caladan_ip: Option<u32>,
 }
@@ -42,7 +42,7 @@ pub struct SessionRequestBuilder {
     prerun_debugger_cmds: Vec<DebuggerCommand>,
     postrun_debugger_cmds: Vec<DebuggerCommand>,
     stop_at_entry: bool,
-    service_meta: Option<ServiceMeta>,
+    service_identity: Option<ServiceIdentity>,
     transport: Option<TransportSpec>,
     caladan_ip: Option<u32>,
 }
@@ -57,7 +57,7 @@ impl SessionRequestBuilder {
             prerun_debugger_cmds: config.prerun_gdb_cmds.clone(),
             postrun_debugger_cmds: config.postrun_gdb_cmds.clone(),
             stop_at_entry: false,
-            service_meta: None,
+            service_identity: None,
             transport: None,
             caladan_ip: None,
         }
@@ -83,8 +83,8 @@ impl SessionRequestBuilder {
         self
     }
 
-    pub fn service_meta(mut self, meta: ServiceMeta) -> Self {
-        self.service_meta = Some(meta);
+    pub fn service_identity(mut self, identity: ServiceIdentity) -> Self {
+        self.service_identity = Some(identity);
         self
     }
 
@@ -104,7 +104,7 @@ impl SessionRequestBuilder {
             prerun_debugger_cmds: self.prerun_debugger_cmds,
             postrun_debugger_cmds: self.postrun_debugger_cmds,
             stop_at_entry: self.stop_at_entry,
-            service_meta: self.service_meta,
+            service_identity: self.service_identity,
             transport: self
                 .transport
                 .ok_or_else(|| anyhow!("session transport is required"))?,

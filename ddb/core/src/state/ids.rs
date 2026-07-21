@@ -57,6 +57,26 @@ domain_id!(GroupId);
 domain_id!(GlobalThreadId);
 domain_id!(GlobalThreadGroupId);
 
+/// Identity of the discovered service a session belongs to.
+///
+/// This is the domain's own record of service membership; boundary layers
+/// (discovery, static configuration) construct it when admitting a session so
+/// the state model never depends on transport message shapes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceIdentity {
+    pub hash: String,
+    pub alias: String,
+}
+
+impl ServiceIdentity {
+    pub fn new(hash: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self {
+            hash: hash.into(),
+            alias: alias.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

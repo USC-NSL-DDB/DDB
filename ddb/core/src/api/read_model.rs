@@ -42,7 +42,7 @@ impl ApiQueries {
                     (
                         meta.sid(),
                         meta.tag().to_string(),
-                        meta.service_meta()
+                        meta.service_identity()
                             .map(|service| service.alias.clone())
                             .unwrap_or_else(|| "UNKNOWN".to_string()),
                         meta.status().to_string(),

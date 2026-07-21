@@ -60,19 +60,19 @@ impl SessionActivation {
             .tag
             .clone()
             .unwrap_or_else(|| format!("session-{}", sid));
-        let service_meta = request.service_meta.clone();
+        let service_identity = request.service_identity.clone();
         let caladan_ip = request.caladan_ip;
 
         self.model
             .state()
-            .register_session(sid, &tag, service_meta.clone())
+            .register_session(sid, &tag, service_identity.clone())
             .await;
 
         let handle = process.launch(termination.clone()).await?;
 
-        let group_id = service_meta.as_ref().map(|meta| {
+        let group_id = service_identity.as_ref().map(|identity| {
             let groups = self.model.groups();
-            groups.register_session(&meta.hash, meta.alias.clone(), sid);
+            groups.register_session(&identity.hash, identity.alias.clone(), sid);
             groups
                 .group_id_by_session(sid)
                 .expect("registered session must have a group")

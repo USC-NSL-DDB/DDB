@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{discovery::discovery_message_producer::ServiceMeta, state::GlobalThreadId};
+use crate::state::{GlobalThreadId, ServiceIdentity};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum ThreadStatus {
@@ -223,7 +223,7 @@ pub struct SessionMeta {
     curr_ctx: Option<ThreadContext>,
     in_custom_ctx: bool,
 
-    service_meta: Option<ServiceMeta>,
+    service_identity: Option<ServiceIdentity>,
 
     // indicate of the session is connected or not
     status: SessionStatus,
@@ -236,7 +236,7 @@ pub struct SessionMeta {
 
 impl SessionMeta {
     #[inline]
-    pub fn new(sid: u64, tag: String, service_meta: Option<ServiceMeta>) -> Self {
+    pub fn new(sid: u64, tag: String, service_identity: Option<ServiceIdentity>) -> Self {
         Self {
             tag,
             sid,
@@ -244,7 +244,7 @@ impl SessionMeta {
             t_status: HashMap::new(),
             curr_ctx: None,
             in_custom_ctx: false,
-            service_meta,
+            service_identity,
             status: SessionStatus::OFF,
             threads: SessionThreadRegistry::default(),
         }
@@ -313,13 +313,13 @@ impl SessionMeta {
     }
 
     #[inline]
-    pub fn service_meta(&self) -> Option<&ServiceMeta> {
-        self.service_meta.as_ref()
+    pub fn service_identity(&self) -> Option<&ServiceIdentity> {
+        self.service_identity.as_ref()
     }
 
     #[inline]
-    pub fn cloned_service_meta(&self) -> Option<ServiceMeta> {
-        self.service_meta.clone()
+    pub fn cloned_service_identity(&self) -> Option<ServiceIdentity> {
+        self.service_identity.clone()
     }
 
     #[inline]
@@ -460,12 +460,17 @@ impl SessionStateMgr {
     }
 
     #[inline]
-    pub async fn add_session(&self, sid: u64, tag: &str, service_meta: Option<ServiceMeta>) {
+    pub async fn add_session(
+        &self,
+        sid: u64,
+        tag: &str,
+        service_identity: Option<ServiceIdentity>,
+    ) {
         let sessions = self.sessions.pin();
         sessions.insert(
             sid,
             Arc::new(SessionWrapper {
-                meta: RwLock::new(SessionMeta::new(sid, tag.to_string(), service_meta)),
+                meta: RwLock::new(SessionMeta::new(sid, tag.to_string(), service_identity)),
             }),
         );
         self.tag_index.insert(tag.to_string(), sid);
