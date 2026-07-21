@@ -10,6 +10,7 @@ pub(crate) mod backtrace;
 pub(crate) mod breakpoint;
 pub(crate) mod breakpoint_mi;
 pub(crate) mod decoder;
+pub(crate) mod diagnostics;
 pub(crate) mod dispatcher;
 pub mod engine;
 pub(crate) mod event;
