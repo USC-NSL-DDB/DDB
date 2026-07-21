@@ -1,9 +1,12 @@
-pub mod dbg_ctrl;
-pub mod local_ctrl;
-pub mod mock_ctrl;
-pub use dbg_ctrl::*;
-pub use local_ctrl::*;
-pub use mock_ctrl::*;
+mod dbg_ctrl;
+mod local_ctrl;
+mod mock_ctrl;
+
+pub use dbg_ctrl::{DebuggerTransport, DebuggerTransportHandle};
+
+use dbg_ctrl::RemoteTransport;
+use local_ctrl::LocalProcessController;
+use mock_ctrl::MockAttachController;
 
 use std::sync::Arc;
 
@@ -11,7 +14,7 @@ use anyhow::{anyhow, Result};
 use russh::client::Handle;
 
 use crate::{
-    common::config::MockSessionConfig,
+    common::mock_fixture::MockSessionConfig,
     connection::{
         ssh_client::{SSHConnection, SSHCred},
         ssh_client_channel::{SSHProxyClientHandler, SSHProxyConnection, SSHProxyCred},

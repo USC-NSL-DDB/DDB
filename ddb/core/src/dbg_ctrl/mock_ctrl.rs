@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    common::config::{MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig},
+    common::mock_fixture::{MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig},
     connection::{RunningTransport, TransportEvent, TransportRequest},
     debugger::gdb::parser::MIFormatter,
 };
@@ -731,7 +731,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        common::config::{MockDbtParentConfig, MockStackFrameConfig},
+        common::mock_fixture::{MockDbtParentConfig, MockStackFrameConfig},
         debugger::gdb::parser::GdbParser,
     };
 
