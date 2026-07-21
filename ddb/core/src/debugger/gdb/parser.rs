@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use gdbmi::{
@@ -8,8 +7,6 @@ use gdbmi::{
 use tracing::error;
 
 use gdbmi::parser::Message;
-
-use crate::state::BkptMeta;
 
 pub struct GdbParser;
 
@@ -107,62 +104,6 @@ impl MIFormatter {
 
         format!("{}{}{}{}", token, task_sym, msg, payload)
     }
-}
-
-impl From<BkptMeta> for Dict {
-    fn from(bkpt: BkptMeta) -> Self {
-        let bkpt_loc = bkpt.location();
-        let subbkpts: Vec<gdbmi::raw::Value> = bkpt
-            .sub_breakpoints()
-            .iter()
-            .map(|subbkpt| {
-                let (bkpt_type, target_id) = match subbkpt.kind() {
-                    crate::state::SubBkptType::Group(grp_bkpt) => {
-                        ("group".to_string(), grp_bkpt.target_group().value())
-                    }
-                    crate::state::SubBkptType::Session(s_bkpt) => {
-                        ("session".to_string(), s_bkpt.target_session())
-                    }
-                };
-                HashMap::from([
-                    ("id", subbkpt.id().to_string().into()),
-                    ("type", bkpt_type.into()),
-                    ("target_id", target_id.to_string().into()),
-                ])
-                .into()
-            })
-            .collect();
-
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            "bkpt",
-            HashMap::from([
-                ("id", bkpt.id().to_string().into()),
-                (
-                    "enabled",
-                    if bkpt.is_enabled() {
-                        "y".to_string()
-                    } else {
-                        "n".to_string()
-                    }
-                    .into(),
-                ),
-                ("fullname", bkpt_loc.path().into()),
-                ("line", bkpt_loc.line().to_string().into()),
-            ])
-            .into(),
-        );
-        map.insert("subbkpt", subbkpts.into());
-        Dict::from(map)
-    }
-}
-
-pub fn bkpt_deleted_payload(bkpt_id: u64) -> Dict {
-    HashMap::from([(
-        "bkpt",
-        HashMap::from([("id", bkpt_id.to_string().into())]).into(),
-    )])
-    .into()
 }
 
 #[cfg(test)]

@@ -8,17 +8,17 @@ use crate::state::{BkptLoc, BkptMeta, SubBkptMeta, SubBkptType};
 /// layers serialize it as-is instead of reaching into aggregate internals.
 #[derive(Clone, Debug, Serialize)]
 pub struct BreakpointSnapshot {
-    id: u64,
-    location: BreakpointLocationSnapshot,
-    enabled: bool,
-    times: u64,
-    subbkpts: Vec<SubBreakpointSnapshot>,
+    pub id: u64,
+    pub location: BreakpointLocationSnapshot,
+    pub enabled: bool,
+    pub times: u64,
+    pub subbkpts: Vec<SubBreakpointSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BreakpointLocationSnapshot {
-    src: String,
-    line: u64,
+    pub src: String,
+    pub line: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,12 +36,6 @@ pub enum SubBreakpointSnapshot {
         target_group: u64,
         active_sessions: usize,
     },
-}
-
-impl BreakpointSnapshot {
-    pub fn id(&self) -> u64 {
-        self.id
-    }
 }
 
 impl From<&BkptMeta> for BreakpointSnapshot {

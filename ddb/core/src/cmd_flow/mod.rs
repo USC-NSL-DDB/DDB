@@ -8,6 +8,7 @@
 pub mod api;
 pub(crate) mod backtrace;
 pub(crate) mod breakpoint;
+pub(crate) mod breakpoint_mi;
 pub(crate) mod decoder;
 pub(crate) mod dispatcher;
 pub mod engine;

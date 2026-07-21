@@ -146,7 +146,7 @@ impl ApiQueries {
             .iter()
             .map(BreakpointSnapshot::from)
             .collect::<Vec<_>>();
-        breakpoints.sort_unstable_by_key(|breakpoint| breakpoint.id());
+        breakpoints.sort_unstable_by_key(|breakpoint| breakpoint.id);
         breakpoints
     }
 }

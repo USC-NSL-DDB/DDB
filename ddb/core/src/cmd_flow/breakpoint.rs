@@ -4,17 +4,21 @@ use anyhow::{anyhow, bail, Context, Result};
 use tracing::{debug, error, warn};
 
 use crate::{
-    debugger::gdb::parser::{bkpt_deleted_payload, MIFormatter},
+    debugger::gdb::parser::MIFormatter,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
     state::GroupOperationCoordinator,
     state::{
-        BkptLoc, BreakpointMgr, BreakpointStateChange, GroupId, GroupMgr, GroupSubBkpt,
-        SessionSubBkpt, SubBkptType,
+        BkptLoc, BreakpointMgr, BreakpointSnapshot, BreakpointStateChange, GroupId, GroupMgr,
+        GroupSubBkpt, SessionSubBkpt, SubBkptType,
     },
 };
 
 use super::{
-    api::CommandExecutor, decoder::BreakpointCreated, input::ParsedInputCmd, router::Target,
+    api::CommandExecutor,
+    breakpoint_mi::{bkpt_deleted_payload, bkpt_payload},
+    decoder::BreakpointCreated,
+    input::ParsedInputCmd,
+    router::Target,
     CommandOutcome, Presentation,
 };
 
@@ -32,12 +36,16 @@ impl BreakpointEventPublisher {
         let event = match change {
             BreakpointStateChange::None => return,
             BreakpointStateChange::TargetChanged(breakpoint) => {
-                let breakpoint_id = breakpoint.id();
-                let output =
-                    MIFormatter::format("=", "breakpoint-modified", Some(&breakpoint.into()), None);
+                let snapshot = BreakpointSnapshot::from(&breakpoint);
+                let output = MIFormatter::format(
+                    "=",
+                    "breakpoint-modified",
+                    Some(&bkpt_payload(&snapshot)),
+                    None,
+                );
                 println!("{}", output);
                 debug!("output: {}", output);
-                BreakpointChangeEvent::TargetChanged(breakpoint_id)
+                BreakpointChangeEvent::TargetChanged(snapshot.id)
             }
             BreakpointStateChange::Removed(breakpoint_id) => {
                 let output = MIFormatter::format(
@@ -190,9 +198,10 @@ impl BreakpointService {
                 breakpoint_id
             )
         })?;
-        let payload = breakpoint.clone().into();
+        let snapshot = BreakpointSnapshot::from(&breakpoint);
+        let payload = bkpt_payload(&snapshot);
         self.events
-            .broadcast(BreakpointChangeEvent::Added((&breakpoint).into()))
+            .broadcast(BreakpointChangeEvent::Added(snapshot))
             .await;
 
         Ok(CommandOutcome::completed(
@@ -453,14 +462,15 @@ impl BreakpointService {
     ) -> Result<CommandOutcome> {
         match change {
             BreakpointStateChange::TargetChanged(breakpoint) => {
+                let snapshot = BreakpointSnapshot::from(&breakpoint);
                 let record = MIFormatter::format(
                     "=",
                     "breakpoint-modified",
-                    Some(&breakpoint.clone().into()),
+                    Some(&bkpt_payload(&snapshot)),
                     None,
                 );
                 self.events
-                    .broadcast(BreakpointChangeEvent::Updated((&breakpoint).into()))
+                    .broadcast(BreakpointChangeEvent::Updated(snapshot))
                     .await;
 
                 let mut outcome =
