@@ -6,7 +6,7 @@ use crate::{
     api::read_model::ApiQueries,
     cmd_flow::{
         api::CommandExecutor, breakpoint::BreakpointEventPublisher, engine::CommandEngine,
-        event::DebuggerEventReducer, router::Router,
+        event::DebuggerEventReducer, event_publisher::EventPublisher, router::Router,
     },
     common::Config,
     dbg_mgr::DbgManager,
@@ -42,7 +42,9 @@ impl ApplicationServices {
     ) -> Result<Arc<Self>> {
         let runtime_model = RuntimeModel::new();
         let notification_manager = Arc::new(NotificationManager::new());
-        let breakpoint_events = BreakpointEventPublisher::new(Arc::clone(&notification_manager));
+        let (breakpoint_records, _breakpoint_record_sink) = EventPublisher::spawn();
+        let breakpoint_events =
+            BreakpointEventPublisher::new(Arc::clone(&notification_manager), breakpoint_records);
         let event_reducer =
             DebuggerEventReducer::new(Arc::clone(&runtime_model), Arc::clone(&breakpoint_events));
         let command_router = Arc::new(Router::new(Arc::clone(&runtime_model)));

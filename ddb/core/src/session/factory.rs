@@ -188,7 +188,10 @@ mod tests {
         let config = Arc::new(config);
         let reducer = DebuggerEventReducer::new(
             RuntimeModel::new(),
-            BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+            BreakpointEventPublisher::new(
+                Arc::new(NotificationManager::new()),
+                crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+            ),
         );
         SessionFactory::new(
             Arc::clone(&config),
@@ -198,8 +201,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn static_attach_requires_a_pid() {
+    #[tokio::test]
+    async fn static_attach_requires_a_pid() {
         let config = Config::default();
         let factory = test_factory(config);
 
@@ -213,8 +216,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn static_binary_requires_a_path() {
+    #[tokio::test]
+    async fn static_binary_requires_a_path() {
         let config = Config::default();
         let factory = test_factory(config);
         let session = StaticSessionConfig {
@@ -232,8 +235,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn discovery_metadata_carries_proclet_owner() {
+    #[tokio::test]
+    async fn discovery_metadata_carries_proclet_owner() {
         let config = Config::default();
         let factory = test_factory(config);
         let info = ServiceInfo::new(

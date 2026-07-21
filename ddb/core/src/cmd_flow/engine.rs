@@ -12,10 +12,9 @@ use super::{
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
     input::ParsedInputCmd,
-    output::{emit_static, PlainFormatter},
     router::{Router, Target},
     transaction::TransactionCoordinator,
-    CommandOutcome,
+    CommandOutcome, Presentation,
 };
 use crate::{
     common::Config,
@@ -137,7 +136,7 @@ impl CommandEngine {
                     .await
                     .map_err(|source| CommandError::new(None, source))?;
             } else {
-                self.execute_internal(internal).await;
+                return Ok(self.execute_internal(internal).await);
             }
             return Ok(CommandOutcome::empty());
         }
@@ -152,7 +151,7 @@ impl CommandEngine {
         self.dispatch(parsed).await
     }
 
-    async fn execute_internal(&self, command: &str) {
+    async fn execute_internal(&self, command: &str) -> CommandOutcome {
         match command {
             "p-session-meta" => info!("p-session-meta: {:?}", self.model.state().sessions()),
             "p-group-mgr" => info!("p-group-mgr: {:#?}", self.model.groups()),
@@ -162,11 +161,11 @@ impl CommandEngine {
                 let parts = command.split_whitespace().collect::<Vec<_>>();
                 if parts.len() < 3 {
                     info!("Usage: s-cmd <session_id> <cmd>");
-                    return;
+                    return CommandOutcome::empty();
                 }
                 let Ok(sid) = parts[1].parse::<u64>() else {
                     warn!("Invalid session id: {}", parts[1]);
-                    return;
+                    return CommandOutcome::empty();
                 };
                 let raw = parts[2..].join(" ");
                 match raw.try_into() {
@@ -174,7 +173,9 @@ impl CommandEngine {
                         let parsed: ParsedInputCmd = parsed;
                         let (_, command) = parsed.to_command(self.router.next_internal_token());
                         match self.router.execute(Target::Session(sid), command).await {
-                            Ok(response) => emit_static(response, PlainFormatter),
+                            Ok(response) => {
+                                return CommandOutcome::response(response, Presentation::Plain);
+                            }
                             Err(error) => warn!(?error, "failed to send internal command"),
                         }
                     }
@@ -192,6 +193,7 @@ impl CommandEngine {
             }
             _ => {}
         }
+        CommandOutcome::empty()
     }
 
     /// Execute one API command to semantic completion. API commands without an

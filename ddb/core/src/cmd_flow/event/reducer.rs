@@ -253,7 +253,10 @@ mod tests {
     fn test_reducer(model: Arc<RuntimeModel>) -> Arc<DebuggerEventReducer> {
         DebuggerEventReducer::new(
             model,
-            BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+            BreakpointEventPublisher::new(
+                Arc::new(NotificationManager::new()),
+                crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+            ),
         )
     }
 

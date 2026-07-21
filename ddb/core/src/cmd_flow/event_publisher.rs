@@ -14,7 +14,6 @@ pub(crate) struct EventPublisher {
 }
 
 impl EventPublisher {
-    #[cfg(not(test))]
     pub(crate) fn spawn() -> (Self, tokio::task::JoinHandle<()>) {
         let (output, receiver) = mpsc::channel(EVENT_OUTPUT_CAPACITY);
         let task = tokio::spawn(run_publisher(

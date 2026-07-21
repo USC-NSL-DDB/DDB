@@ -22,6 +22,7 @@ pub mod output;
 pub(crate) mod query;
 pub mod response;
 pub mod router;
+pub(crate) mod schema;
 pub mod session_runtime;
 pub(crate) mod transaction;
 

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use gdbmi::raw::{Dict, Value};
-use tracing::debug;
 
 use crate::debugger::gdb::parser::MIFormatter;
 
-use super::FinishedCmd;
+use super::{schema, FinishedCmd};
 
 /// Formatter trait for transforming and formatting GDB responses
 ///
@@ -122,11 +121,11 @@ impl Formatter for ThreadInfoFormatter {
         for resp in responses.get_responses() {
             if let Some(payload) = resp.get_payload() {
                 if current_thread_id.is_empty() {
-                    if let Some(Value::String(id)) = payload.get("current-thread-id") {
+                    if let Some(Value::String(id)) = payload.get(schema::CURRENT_THREAD_ID) {
                         current_thread_id = id.clone();
                     }
                 }
-                if let Some(Value::List(threads)) = payload.get("threads") {
+                if let Some(Value::List(threads)) = payload.get(schema::THREADS) {
                     all_thread_info.extend(threads.iter().cloned());
                 }
             }
@@ -135,8 +134,11 @@ impl Formatter for ThreadInfoFormatter {
         (
             responses.get_external_token(),
             vec![
-                ("threads".to_string(), all_thread_info.into()),
-                ("current-thread-id".to_string(), current_thread_id.into()),
+                (schema::THREADS.to_string(), all_thread_info.into()),
+                (
+                    schema::CURRENT_THREAD_ID.to_string(),
+                    current_thread_id.into(),
+                ),
             ]
             .into(),
         )
@@ -144,38 +146,21 @@ impl Formatter for ThreadInfoFormatter {
 
     #[inline]
     fn format(&self, input: &Self::Transformed) -> String {
-        MIFormatter::format("^", "done", Some(&input.1), input.0)
+        format_done(input.0, &input.1)
     }
 }
 
-/// handle `-list-thread-groups` command response
-#[derive(Clone)]
-pub struct ProcessInfoFormatter;
-impl Formatter for ProcessInfoFormatter {
-    type Transformed = (Option<u64>, Dict);
-
-    #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
-        let mut all_process_info = Vec::<Value>::new();
-
-        for resp in responses.get_responses() {
-            if let Some(payload) = resp.get_payload() {
-                if let Some(Value::List(processes)) = payload.get("groups") {
-                    all_process_info.extend(processes.iter().cloned());
-                }
+/// Aggregates per-session `-list-thread-groups` payloads into one record list.
+fn aggregate_process_groups(responses: &FinishedCmd) -> Vec<Value> {
+    let mut all_process_info = Vec::<Value>::new();
+    for resp in responses.get_responses() {
+        if let Some(payload) = resp.get_payload() {
+            if let Some(Value::List(processes)) = payload.get(schema::GROUPS) {
+                all_process_info.extend(processes.iter().cloned());
             }
         }
-
-        (
-            responses.get_external_token(),
-            vec![("groups".to_string(), all_process_info.into())].into(),
-        )
     }
-
-    #[inline]
-    fn format(&self, input: &Self::Transformed) -> String {
-        MIFormatter::format("^", "done", Some(&input.1), input.0)
-    }
+    all_process_info
 }
 
 /// handle `info inferiors` command response
@@ -186,25 +171,30 @@ impl Formatter for ProcessReadableFormatter {
 
     #[inline]
     fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
-        let (token, pinfo) = ProcessInfoFormatter.transform(responses);
-        let grps = pinfo["groups"].expect_list_ref().unwrap();
-        let readable_pinfo: Vec<Value> = grps
+        let processes = aggregate_process_groups(&responses);
+        let readable_pinfo: Vec<Value> = processes
             .iter()
             .map(|p| {
                 let p = p.expect_dict_ref().unwrap();
-                let id = p["id"].expect_string_ref().unwrap().to_string();
-                let ptype = p["type"].expect_string_ref().unwrap();
-                let pid = p["pid"].expect_string_ref().unwrap();
+                let id = p[schema::RECORD_ID]
+                    .expect_string_ref()
+                    .unwrap()
+                    .to_string();
+                let ptype = p[schema::PROCESS_TYPE].expect_string_ref().unwrap();
+                let pid = p[schema::PROCESS_PID].expect_string_ref().unwrap();
                 let exec = p
-                    .get("executable")
+                    .get(schema::PROCESS_EXECUTABLE)
                     .unwrap_or(&Value::String("".to_string()))
                     .clone();
 
                 Value::Dict(
                     vec![
-                        ("id".to_string(), id.into()),
-                        ("desc".to_string(), format!("{} {}", ptype, pid).into()),
-                        ("executable".to_string(), exec),
+                        (schema::RECORD_ID.to_string(), id.into()),
+                        (
+                            schema::PROCESS_DESC.to_string(),
+                            format!("{} {}", ptype, pid).into(),
+                        ),
+                        (schema::PROCESS_EXECUTABLE.to_string(), exec),
                     ]
                     .into(),
                 )
@@ -212,25 +202,21 @@ impl Formatter for ProcessReadableFormatter {
             .collect();
 
         (
-            token,
-            vec![("groups".to_string(), readable_pinfo.into())].into(),
+            responses.get_external_token(),
+            vec![(schema::GROUPS.to_string(), readable_pinfo.into())].into(),
         )
     }
 
     #[inline]
     fn format(&self, input: &Self::Transformed) -> String {
-        MIFormatter::format("^", "done", Some(&input.1), input.0)
+        format_done(input.0, &input.1)
     }
 }
 
-/// Static dispatched version of the emit based on the formatter.
-/// this is useful when the formatter is known at compile time.
+/// The one `^done` completion record shape shared by aggregate presenters.
 #[inline]
-pub fn emit_static<T: Formatter>(finished: FinishedCmd, formatter: T) {
-    let transformed = formatter.transform(finished);
-    let formatted = formatter.format(&transformed);
-    println!("{}", formatted);
-    debug!("output: {}", formatted);
+fn format_done(token: Option<u64>, payload: &Dict) -> String {
+    MIFormatter::format("^", "done", Some(payload), token)
 }
 
 #[inline]

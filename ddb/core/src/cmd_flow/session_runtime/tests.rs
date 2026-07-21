@@ -22,7 +22,10 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 fn test_reducer() -> Arc<DebuggerEventReducer> {
     DebuggerEventReducer::new(
         RuntimeModel::new(),
-        BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+        BreakpointEventPublisher::new(
+            Arc::new(NotificationManager::new()),
+            crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+        ),
     )
 }
 

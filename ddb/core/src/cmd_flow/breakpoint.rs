@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 use crate::{
     debugger::gdb::parser::MIFormatter,
@@ -17,19 +17,31 @@ use super::{
     api::CommandExecutor,
     breakpoint_mi::{bkpt_deleted_payload, bkpt_payload},
     decoder::BreakpointCreated,
+    event::{ProjectedDebuggerOutput, ProjectedDebuggerRecord},
+    event_publisher::EventPublisher,
     input::ParsedInputCmd,
     router::Target,
     CommandOutcome, Presentation,
 };
 
 /// Sole boundary for breakpoint notifications and automatic MI records.
+///
+/// Records flow through the shared asynchronous record sink; nothing here
+/// writes to stdout directly.
 pub(crate) struct BreakpointEventPublisher {
     notifications: Arc<NotificationManager>,
+    records: EventPublisher,
 }
 
 impl BreakpointEventPublisher {
-    pub(crate) fn new(notifications: Arc<NotificationManager>) -> Arc<Self> {
-        Arc::new(Self { notifications })
+    pub(crate) fn new(
+        notifications: Arc<NotificationManager>,
+        records: EventPublisher,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            notifications,
+            records,
+        })
     }
 
     pub(crate) async fn publish_state_change(&self, change: BreakpointStateChange) {
@@ -37,29 +49,31 @@ impl BreakpointEventPublisher {
             BreakpointStateChange::None => return,
             BreakpointStateChange::TargetChanged(breakpoint) => {
                 let snapshot = BreakpointSnapshot::from(&breakpoint);
-                let output = MIFormatter::format(
-                    "=",
-                    "breakpoint-modified",
-                    Some(&bkpt_payload(&snapshot)),
-                    None,
-                );
-                println!("{}", output);
-                debug!("output: {}", output);
+                self.publish_record("breakpoint-modified", bkpt_payload(&snapshot))
+                    .await;
                 BreakpointChangeEvent::TargetChanged(snapshot.id)
             }
             BreakpointStateChange::Removed(breakpoint_id) => {
-                let output = MIFormatter::format(
-                    "=",
-                    "breakpoint-deleted",
-                    Some(&bkpt_deleted_payload(breakpoint_id)),
-                    None,
-                );
-                println!("{}", output);
-                debug!("output: {}", output);
+                self.publish_record("breakpoint-deleted", bkpt_deleted_payload(breakpoint_id))
+                    .await;
                 BreakpointChangeEvent::Removed(breakpoint_id)
             }
         };
         self.broadcast(event).await;
+    }
+
+    async fn publish_record(&self, message: &str, payload: gdbmi::raw::Dict) {
+        let output = ProjectedDebuggerOutput {
+            records: vec![ProjectedDebuggerRecord {
+                prefix: "=",
+                message: message.to_string(),
+                payload: Some(payload),
+                token: None,
+            }],
+        };
+        if let Err(error) = self.records.publish(output).await {
+            warn!(%message, ?error, "failed to publish breakpoint record");
+        }
     }
 
     pub(crate) async fn publish_state_changes(

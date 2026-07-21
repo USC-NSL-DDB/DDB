@@ -8,7 +8,7 @@ use std::{fmt, sync::Arc};
 
 use gdbmi::raw::{Dict, Value};
 
-use super::{decoder::DecodeError, FinishedCmd};
+use super::{decoder::DecodeError, schema, FinishedCmd};
 use crate::state::{GlobalThreadId, StateMgr};
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -71,9 +71,9 @@ impl QueryProjector {
             let payload = response
                 .get_payload_mut()
                 .ok_or(DecodeError::MissingPayload { sid })?;
-            for value in list_mut(payload, sid, "threads")? {
+            for value in list_mut(payload, sid, schema::THREADS)? {
                 let thread = record_mut(value, sid, "thread")?;
-                let local_id = required_string(thread, sid, "thread", "id")?
+                let local_id = required_string(thread, sid, "thread", schema::RECORD_ID)?
                     .parse::<u64>()
                     .map_err(|error| QueryProjectionError::MalformedRecord {
                         sid,
@@ -83,10 +83,10 @@ impl QueryProjector {
                 let global_id = thread_ids
                     .global_thread_id(sid, local_id)
                     .ok_or(QueryProjectionError::UnknownThread { sid, local_id })?;
-                thread.insert("id".to_string(), global_id.to_string().into());
+                thread.insert(schema::RECORD_ID.to_string(), global_id.to_string().into());
             }
             payload.insert(
-                "current-thread-id".to_string(),
+                schema::CURRENT_THREAD_ID.to_string(),
                 current_thread_id.clone().into(),
             );
         }
@@ -103,18 +103,18 @@ impl QueryProjector {
             let payload = response
                 .get_payload_mut()
                 .ok_or(DecodeError::MissingPayload { sid })?;
-            for value in list_mut(payload, sid, "groups")? {
+            for value in list_mut(payload, sid, schema::GROUPS)? {
                 let process = record_mut(value, sid, "process")?;
-                let local_id = required_string(process, sid, "process", "id")?;
-                required_string(process, sid, "process", "type")?;
-                required_string(process, sid, "process", "pid")?;
+                let local_id = required_string(process, sid, "process", schema::RECORD_ID)?;
+                required_string(process, sid, "process", schema::PROCESS_TYPE)?;
+                required_string(process, sid, "process", schema::PROCESS_PID)?;
                 let global_id = thread_ids
                     .global_thread_group_id(sid, local_id)
                     .ok_or_else(|| QueryProjectionError::UnknownThreadGroup {
                         sid,
                         local_id: local_id.to_string(),
                     })?;
-                process.insert("id".to_string(), global_id.to_string().into());
+                process.insert(schema::RECORD_ID.to_string(), global_id.to_string().into());
             }
         }
         Ok(completion)
