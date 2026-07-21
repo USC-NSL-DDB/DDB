@@ -45,6 +45,11 @@ impl GroupMeta {
     }
 
     #[inline]
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+
+    #[inline]
     pub fn session_ids(&self) -> &HashSet<SessionId> {
         &self.sids
     }

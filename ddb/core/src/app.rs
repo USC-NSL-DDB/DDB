@@ -24,10 +24,8 @@ impl App {
         let api_svr = Arc::new(ApiServer::new(
             format!("localhost:{port}"),
             Arc::clone(services.notification_manager()),
-            Arc::clone(services.source_resolver()),
             Arc::clone(services.command_engine()),
-            Arc::clone(services.command_router()),
-            Arc::clone(services.runtime_model()),
+            Arc::clone(services.api_queries()),
             status,
         ));
         App { api_svr, shutdown }

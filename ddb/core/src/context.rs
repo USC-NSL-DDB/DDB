@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::{
+    api::read_model::ApiQueries,
     cmd_flow::{
         api::CommandExecutor, breakpoint::BreakpointEventPublisher, engine::CommandEngine,
         event::DebuggerEventReducer, router::Router,
@@ -26,11 +27,9 @@ use crate::{
 /// Immutable service graph owned by one application runtime.
 pub(crate) struct ApplicationServices {
     config: Arc<Config>,
-    runtime_model: Arc<RuntimeModel>,
     command_engine: Arc<CommandEngine>,
-    command_router: Arc<Router>,
     notification_manager: Arc<NotificationManager>,
-    source_resolver: Arc<SourceResolver>,
+    api_queries: Arc<ApiQueries>,
     debugger_manager: Arc<DbgManager>,
 }
 
@@ -62,6 +61,11 @@ impl ApplicationServices {
             command_executor,
             SourceResolutionPolicy::configured(),
         );
+        let api_queries = ApiQueries::new(
+            Arc::clone(&runtime_model),
+            Arc::clone(&command_router),
+            Arc::clone(&source_resolver),
+        );
         let command_engine = CommandEngine::new(
             plugin.command_adapter(),
             Arc::clone(&command_router),
@@ -90,11 +94,9 @@ impl ApplicationServices {
 
         Ok(Arc::new(Self {
             config,
-            runtime_model,
             command_engine,
-            command_router,
             notification_manager,
-            source_resolver,
+            api_queries,
             debugger_manager,
         }))
     }
@@ -103,24 +105,16 @@ impl ApplicationServices {
         &self.config
     }
 
-    pub(crate) fn runtime_model(&self) -> &Arc<RuntimeModel> {
-        &self.runtime_model
-    }
-
     pub(crate) fn command_engine(&self) -> &Arc<CommandEngine> {
         &self.command_engine
-    }
-
-    pub(crate) fn command_router(&self) -> &Arc<Router> {
-        &self.command_router
     }
 
     pub(crate) fn notification_manager(&self) -> &Arc<NotificationManager> {
         &self.notification_manager
     }
 
-    pub(crate) fn source_resolver(&self) -> &Arc<SourceResolver> {
-        &self.source_resolver
+    pub(crate) fn api_queries(&self) -> &Arc<ApiQueries> {
+        &self.api_queries
     }
 
     pub(crate) fn debugger_manager(&self) -> &Arc<DbgManager> {
@@ -198,8 +192,8 @@ mod tests {
             .unwrap();
 
         assert!(!Arc::ptr_eq(
-            first.services().runtime_model(),
-            second.services().runtime_model(),
+            first.services().api_queries().model(),
+            second.services().api_queries().model(),
         ));
 
         first

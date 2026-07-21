@@ -13,16 +13,11 @@ use serde_json::json;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
 
+use super::read_model::{ApiQueries, BreakpointView, GroupView};
+
 use crate::{
-    cmd_flow::{
-        engine::CommandEngine,
-        router::{Router as CommandRouter, Target},
-        FinishedCmd,
-    },
+    cmd_flow::{engine::CommandEngine, router::Target, FinishedCmd},
     notification::{self, NotificationManager},
-    runtime_model::RuntimeModel,
-    source::resolver::SourceResolver,
-    state::{BkptLoc, BkptMeta, GroupId, GroupMeta, SubBkptMeta, SubBkptType},
     status::{Component, RuntimeStatus},
 };
 
@@ -55,12 +50,17 @@ struct SourceQuery {
 
 #[derive(Serialize)]
 struct GroupIdsResponse {
-    grp_ids: Vec<GroupId>,
+    grp_ids: Vec<u64>,
 }
 
 #[derive(Serialize)]
 struct GroupsResponse {
-    grps: Vec<GroupMeta>,
+    grps: Vec<GroupView>,
+}
+
+#[derive(Serialize)]
+struct BkptsResponse {
+    bkpts: Vec<BreakpointView>,
 }
 
 // Struct for JSON output
@@ -69,89 +69,11 @@ struct ApiResponse {
     message: String,
 }
 
-// Breakpoint API response types
-#[derive(Serialize, Debug, Clone)]
-pub struct BkptLocJson {
-    src: String,
-    line: u64,
-}
-
-#[derive(Serialize, Debug, Clone)]
-#[serde(tag = "type")]
-pub enum SubBkptJson {
-    #[serde(rename = "session")]
-    Session {
-        id: u64,
-        target_session: u64,
-        local_breakpoint_id: u64,
-    },
-    #[serde(rename = "group")]
-    Group {
-        id: u64,
-        target_group: u64,
-        active_sessions: usize,
-    },
-}
-
-#[derive(Serialize, Debug, Clone)]
-pub struct BkptJson {
-    id: u64,
-    location: BkptLocJson,
-    enabled: bool,
-    times: u64,
-    subbkpts: Vec<SubBkptJson>,
-}
-
-#[derive(Serialize, Debug)]
-struct BkptsResponse {
-    bkpts: Vec<BkptJson>,
-}
-
-impl From<&BkptLoc> for BkptLocJson {
-    fn from(loc: &BkptLoc) -> Self {
-        BkptLocJson {
-            src: loc.path().to_string(),
-            line: loc.line(),
-        }
-    }
-}
-
-impl From<&SubBkptMeta> for SubBkptJson {
-    fn from(subbkpt: &SubBkptMeta) -> Self {
-        match subbkpt.kind() {
-            SubBkptType::Session(s) => SubBkptJson::Session {
-                id: subbkpt.id(),
-                target_session: s.target_session(),
-                local_breakpoint_id: s.local_id(),
-            },
-            SubBkptType::Group(g) => SubBkptJson::Group {
-                id: subbkpt.id(),
-                target_group: g.target_group().value(),
-                active_sessions: g.local_ids().len(),
-            },
-        }
-    }
-}
-
-impl From<&BkptMeta> for BkptJson {
-    fn from(bkpt: &BkptMeta) -> Self {
-        BkptJson {
-            id: bkpt.id(),
-            location: bkpt.location().into(),
-            enabled: bkpt.is_enabled(),
-            times: bkpt.times(),
-            subbkpts: bkpt.sub_breakpoints().iter().map(|s| s.into()).collect(),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct ApiState {
     notifications: Arc<NotificationManager>,
-    source_resolver: Arc<SourceResolver>,
     command_engine: Arc<CommandEngine>,
-    command_router: Arc<CommandRouter>,
-    model: Arc<RuntimeModel>,
+    queries: Arc<ApiQueries>,
     status: Arc<RuntimeStatus>,
 }
 
@@ -167,27 +89,15 @@ impl FromRef<ApiState> for Arc<CommandEngine> {
     }
 }
 
-impl FromRef<ApiState> for Arc<CommandRouter> {
+impl FromRef<ApiState> for Arc<ApiQueries> {
     fn from_ref(state: &ApiState) -> Self {
-        Arc::clone(&state.command_router)
-    }
-}
-
-impl FromRef<ApiState> for Arc<RuntimeModel> {
-    fn from_ref(state: &ApiState) -> Self {
-        Arc::clone(&state.model)
+        Arc::clone(&state.queries)
     }
 }
 
 impl FromRef<ApiState> for Arc<RuntimeStatus> {
     fn from_ref(state: &ApiState) -> Self {
         Arc::clone(&state.status)
-    }
-}
-
-impl FromRef<ApiState> for Arc<SourceResolver> {
-    fn from_ref(state: &ApiState) -> Self {
-        Arc::clone(&state.source_resolver)
     }
 }
 
@@ -200,20 +110,16 @@ impl ApiServer {
     pub fn new(
         addr: impl Into<String>,
         notifications: Arc<NotificationManager>,
-        source_resolver: Arc<SourceResolver>,
         command_engine: Arc<CommandEngine>,
-        command_router: Arc<CommandRouter>,
-        model: Arc<RuntimeModel>,
+        queries: Arc<ApiQueries>,
         status: Arc<RuntimeStatus>,
     ) -> Self {
         Self {
             addr: addr.into(),
             state: ApiState {
                 notifications,
-                source_resolver,
                 command_engine,
-                command_router,
-                model,
+                queries,
                 status,
             },
         }
@@ -283,26 +189,23 @@ fn source_resolution_error(error: anyhow::Error) -> (StatusCode, Json<ApiRespons
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn resolve_src_to_group_ids(
-    State(resolver): State<Arc<SourceResolver>>,
+    State(queries): State<Arc<ApiQueries>>,
     Query(src): Query<SourceQuery>,
 ) -> std::result::Result<Json<GroupIdsResponse>, (StatusCode, Json<ApiResponse>)> {
-    let mut grp_ids = resolver
-        .group_ids_for(&src.src)
+    let grp_ids = queries
+        .group_ids_for_source(&src.src)
         .await
-        .map_err(source_resolution_error)?
-        .into_iter()
-        .collect::<Vec<_>>();
-    grp_ids.sort_unstable();
+        .map_err(source_resolution_error)?;
     Ok(Json(GroupIdsResponse { grp_ids }))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn resolve_src_to_groups(
-    State(resolver): State<Arc<SourceResolver>>,
+    State(queries): State<Arc<ApiQueries>>,
     Query(src): Query<SourceQuery>,
 ) -> std::result::Result<Json<GroupsResponse>, (StatusCode, Json<ApiResponse>)> {
-    let grps = resolver
-        .groups_for(&src.src)
+    let grps = queries
+        .groups_for_source(&src.src)
         .await
         .map_err(source_resolution_error)?;
     Ok(Json(GroupsResponse { grps }))
@@ -370,65 +273,27 @@ async fn get_status(State(status): State<Arc<RuntimeStatus>>) -> impl IntoRespon
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_sessions(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
-    // if it has performance issues, we can probably parallelize this
-    // or maybe do it in parallel conditionally when the size
-    // is above a certain threshold
-    let mut results = vec![];
-    let ss = model.state().sessions();
-    for s in ss {
-        let (sid, tag, alias, status) = s
-            .read_with(|s_meta| {
-                (
-                    s_meta.sid(),
-                    s_meta.tag().to_string(),
-                    s_meta
-                        .service_meta()
-                        .map(|x| x.alias.clone())
-                        .unwrap_or("UNKNOWN".to_string()),
-                    s_meta.status().to_string(),
-                )
-            })
-            .await;
-        let grp_info = model.groups().group_info_by_session(sid);
-        let session = json!({
-            "sid": sid,
-            "tag": tag,
-            "alias": alias,
-            "status": status,
-            "group": {
-                "valid": grp_info.is_some(),
-                "id": grp_info.as_ref().map(|(id, _)| *id).map(crate::state::GroupId::value).unwrap_or(0),
-                "hash": grp_info.as_ref().map(|(_, hash)| hash).unwrap_or(&"UNKNOWN".to_string()),
-            }
-        });
-        results.push(session);
-    }
-
-    (StatusCode::OK, Json(json!(results)))
+async fn get_sessions(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
+    (StatusCode::OK, Json(queries.sessions().await))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_pending_commands(State(router): State<Arc<CommandRouter>>) -> impl IntoResponse {
-    let statuses = router.runtime_statuses();
-    (StatusCode::OK, Json(json!(statuses)))
+async fn get_pending_commands(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
+    (StatusCode::OK, Json(queries.pending_commands()))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_groups(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
-    let group_mgr = model.groups();
-    let result: Vec<GroupMeta> = group_mgr.groups();
-    (StatusCode::OK, Json(result))
+async fn get_groups(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
+    (StatusCode::OK, Json(queries.groups()))
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
 async fn get_group(
-    State(model): State<Arc<RuntimeModel>>,
+    State(queries): State<Arc<ApiQueries>>,
     Query(query): Query<GetGroupQuery>,
 ) -> impl IntoResponse {
-    let group_mgr = model.groups();
     if let Some(grp_id) = query.grp_id {
-        if let Some(group_meta) = group_mgr.group_by_id(GroupId::new(grp_id)) {
+        if let Some(group_meta) = queries.group_by_id(grp_id) {
             (StatusCode::OK, Json(json!(group_meta)))
         } else {
             (
@@ -437,7 +302,7 @@ async fn get_group(
             )
         }
     } else if let Some(grp_hash) = query.grp_hash {
-        if let Some(group_meta) = group_mgr.group_by_hash(&grp_hash) {
+        if let Some(group_meta) = queries.group_by_hash(&grp_hash) {
             (StatusCode::OK, Json(json!(group_meta)))
         } else {
             (
@@ -454,12 +319,11 @@ async fn get_group(
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument)]
-async fn get_bkpts(State(model): State<Arc<RuntimeModel>>) -> impl IntoResponse {
-    let bkpts: Vec<BkptJson> = model
-        .breakpoints()
-        .breakpoints()
-        .iter()
-        .map(|bkpt| bkpt.into())
-        .collect();
-    (StatusCode::OK, Json(BkptsResponse { bkpts }))
+async fn get_bkpts(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(BkptsResponse {
+            bkpts: queries.breakpoints(),
+        }),
+    )
 }

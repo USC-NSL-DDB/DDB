@@ -478,20 +478,6 @@ impl BreakpointMgr {
             .unwrap_or_default()
     }
 
-    pub fn group_breakpoint_locations(&self, grp_id: GroupId) -> Vec<BkptLoc> {
-        let state = self.state.read().unwrap();
-        state
-            .group_bkpts
-            .get(&grp_id)
-            .map(|bkpt_ids| {
-                bkpt_ids
-                    .iter()
-                    .filter_map(|bkpt_id| state.bkpts.get(bkpt_id).map(|bkpt| bkpt.loc.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     pub fn breakpoint(&self, bkpt_id: u64) -> Option<BkptMeta> {
         self.state.read().unwrap().bkpts.get(&bkpt_id).cloned()
     }
