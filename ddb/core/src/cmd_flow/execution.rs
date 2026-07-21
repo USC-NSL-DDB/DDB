@@ -208,7 +208,7 @@ impl ExecutionService {
             let restored = restore.get_responses().len() == 1
                 && Payload::first(&restore)?.string("message")? == "success";
             session
-                .write_with(|meta| meta.set_in_custom_context(!restored))
+                .write_with(|meta| meta.exit_custom_context(restored))
                 .await;
             if !restored {
                 bail!("Failed to restore context for session {}", session_id);

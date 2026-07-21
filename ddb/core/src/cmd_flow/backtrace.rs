@@ -271,10 +271,7 @@ impl DistributedBacktraceService {
         let context = extract_context(switch_payload, global_thread_id)?;
         transaction
             .session()
-            .write_with(|session| {
-                session.set_current_context(Some(context));
-                session.set_in_custom_context(true);
-            })
+            .write_with(|session| session.enter_custom_context(context))
             .await;
 
         self.handle_migration(global_thread_id, parent, Some(&transaction))

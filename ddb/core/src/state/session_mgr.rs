@@ -333,18 +333,23 @@ impl SessionMeta {
     }
 
     #[inline]
-    pub fn set_current_context(&mut self, ctx: Option<ThreadContext>) {
-        self.curr_ctx = ctx;
-    }
-
-    #[inline]
     pub fn is_in_custom_context(&self) -> bool {
         self.in_custom_ctx
     }
 
+    /// Enters a custom thread context: the stored context and the flag change
+    /// as one operation, so no caller can flip the flag without a context.
     #[inline]
-    pub fn set_in_custom_context(&mut self, in_custom_ctx: bool) {
-        self.in_custom_ctx = in_custom_ctx;
+    pub fn enter_custom_context(&mut self, ctx: ThreadContext) {
+        self.curr_ctx = Some(ctx);
+        self.in_custom_ctx = true;
+    }
+
+    /// Records the outcome of a context-restore attempt: the session leaves
+    /// the custom context exactly when the restore succeeded.
+    #[inline]
+    pub fn exit_custom_context(&mut self, restored: bool) {
+        self.in_custom_ctx = !restored;
     }
 
     #[inline]
