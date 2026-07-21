@@ -136,12 +136,17 @@ mod tests {
     use std::{collections::HashMap, net::Ipv4Addr};
 
     use super::*;
-    use crate::{notification::NotificationManager, runtime_model::RuntimeModel};
+    use crate::{
+        cmd_flow::breakpoint::BreakpointEventPublisher, notification::NotificationManager,
+        runtime_model::RuntimeModel,
+    };
 
     fn test_factory(config: Config) -> SessionFactory {
         let config = Arc::new(config);
-        let reducer =
-            DebuggerEventReducer::new(RuntimeModel::new(), Arc::new(NotificationManager::new()));
+        let reducer = DebuggerEventReducer::new(
+            RuntimeModel::new(),
+            BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+        );
         SessionFactory::new(
             Arc::clone(&config),
             crate::debugger::resolve_debugger_backend(config.as_ref()),

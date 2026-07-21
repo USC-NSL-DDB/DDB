@@ -10,16 +10,6 @@ use super::GroupId;
 use crate::{common::counter::SimpleCounter, state::SessionId};
 
 #[derive(Debug, Clone)]
-pub struct GroupBkptTarget {
-    group_id: GroupId,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionBkptTarget {
-    session_id: u64,
-}
-
-#[derive(Debug, Clone)]
 pub struct BkptLoc {
     src: String,
     line: u64,
@@ -320,10 +310,10 @@ impl BkptMeta {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum BreakpointStateChange {
     None,
-    TargetChanged(u64),
+    TargetChanged(BkptMeta),
     Removed(u64),
 }
 
@@ -406,14 +396,32 @@ impl BreakpointMgr {
             .cloned()
     }
 
-    pub fn remove_sub_breakpoint(&self, bkpt_id: u64, subbkpt_id: u64) {
+    pub fn remove_sub_breakpoint(&self, bkpt_id: u64, subbkpt_id: u64) -> BreakpointStateChange {
         let mut state = self.state.write().unwrap();
-        if let Some(subbkpt) = state
+        let Some(subbkpt) = state
             .bkpts
             .get_mut(&bkpt_id)
             .and_then(|bkpt| bkpt.delete_subbkpt(subbkpt_id))
-        {
-            Self::unregister_subbkpt(&mut state, &subbkpt);
+        else {
+            return BreakpointStateChange::None;
+        };
+        Self::unregister_subbkpt(&mut state, &subbkpt);
+
+        let is_empty = state
+            .bkpts
+            .get(&bkpt_id)
+            .map(BkptMeta::is_empty)
+            .unwrap_or(false);
+        if is_empty {
+            state.bkpts.remove(&bkpt_id);
+            BreakpointStateChange::Removed(bkpt_id)
+        } else {
+            state
+                .bkpts
+                .get(&bkpt_id)
+                .cloned()
+                .map(BreakpointStateChange::TargetChanged)
+                .unwrap_or(BreakpointStateChange::None)
         }
     }
 
@@ -511,38 +519,34 @@ impl BreakpointMgr {
         sid: SessionId,
         local_bkpt_id: u64,
     ) -> BreakpointStateChange {
-        let updated = {
-            let mut state = self.state.write().unwrap();
-            let subbkpt_ids = if let Some(bkpt) = state.bkpts.get_mut(&bkpt_id) {
-                let mut subbkpt_ids = Vec::new();
-                for subbkpt in bkpt.subbkpts.iter_mut() {
-                    if let SubBkptType::Group(group_subbkpt) = &mut subbkpt.subbkpt_type {
-                        if group_subbkpt.target_group == grp_id {
-                            group_subbkpt.add_local_bkpt(sid, local_bkpt_id);
-                            subbkpt_ids.push(subbkpt.id);
-                        }
+        let mut state = self.state.write().unwrap();
+        let subbkpt_ids = if let Some(bkpt) = state.bkpts.get_mut(&bkpt_id) {
+            let mut subbkpt_ids = Vec::new();
+            for subbkpt in bkpt.subbkpts.iter_mut() {
+                if let SubBkptType::Group(group_subbkpt) = &mut subbkpt.subbkpt_type {
+                    if group_subbkpt.target_group == grp_id {
+                        group_subbkpt.add_local_bkpt(sid, local_bkpt_id);
+                        subbkpt_ids.push(subbkpt.id);
                     }
                 }
-                subbkpt_ids
-            } else {
-                Vec::new()
-            };
-            for subbkpt_id in &subbkpt_ids {
-                Self::insert_local_bkpt_id_index(
-                    &mut state,
-                    sid,
-                    local_bkpt_id,
-                    bkpt_id,
-                    *subbkpt_id,
-                );
             }
-            !subbkpt_ids.is_empty()
-        };
-
-        if updated {
-            BreakpointStateChange::TargetChanged(bkpt_id)
+            subbkpt_ids
         } else {
+            Vec::new()
+        };
+        for subbkpt_id in &subbkpt_ids {
+            Self::insert_local_bkpt_id_index(&mut state, sid, local_bkpt_id, bkpt_id, *subbkpt_id);
+        }
+
+        if subbkpt_ids.is_empty() {
             BreakpointStateChange::None
+        } else {
+            state
+                .bkpts
+                .get(&bkpt_id)
+                .cloned()
+                .map(BreakpointStateChange::TargetChanged)
+                .unwrap_or(BreakpointStateChange::None)
         }
     }
 
@@ -570,7 +574,9 @@ impl BreakpointMgr {
                     state.bkpts.remove(&bkpt_id);
                     changes.push(BreakpointStateChange::Removed(bkpt_id));
                 } else if updated {
-                    changes.push(BreakpointStateChange::TargetChanged(bkpt_id));
+                    if let Some(snapshot) = state.bkpts.get(&bkpt_id).cloned() {
+                        changes.push(BreakpointStateChange::TargetChanged(snapshot));
+                    }
                 }
             }
             state
@@ -619,7 +625,12 @@ impl BreakpointMgr {
             state.bkpts.remove(&bkpt_id);
             BreakpointStateChange::Removed(bkpt_id)
         } else {
-            BreakpointStateChange::TargetChanged(bkpt_id)
+            state
+                .bkpts
+                .get(&bkpt_id)
+                .cloned()
+                .map(BreakpointStateChange::TargetChanged)
+                .unwrap_or(BreakpointStateChange::None)
         }
     }
 
@@ -707,10 +718,14 @@ mod tests {
             Some((bkpt_id, subbkpt_id))
         );
 
-        mgr.remove_sub_breakpoint(bkpt_id, subbkpt_id);
+        let change = mgr.remove_sub_breakpoint(bkpt_id, subbkpt_id);
 
+        assert!(matches!(
+            change,
+            BreakpointStateChange::Removed(id) if id == bkpt_id
+        ));
         assert_eq!(mgr.breakpoint_ids_by_local_id(3, 55), None);
-        assert_eq!(mgr.breakpoint_is_empty(bkpt_id), Some(true));
+        assert!(mgr.breakpoint(bkpt_id).is_none());
     }
 
     #[test]
@@ -723,10 +738,11 @@ mod tests {
         group_subbkpt.add_local_bkpt(12, 202);
         mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
-        assert_eq!(
-            mgr.record_local_bkpt_deletion(11, 101),
-            BreakpointStateChange::TargetChanged(bkpt_id)
-        );
+        let change = mgr.record_local_bkpt_deletion(11, 101);
+        assert!(matches!(
+            change,
+            BreakpointStateChange::TargetChanged(snapshot) if snapshot.id() == bkpt_id
+        ));
         assert!(mgr.breakpoint(bkpt_id).is_some());
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
         assert_eq!(
@@ -744,10 +760,10 @@ mod tests {
         group_subbkpt.add_local_bkpt(11, 101);
         mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
-        assert_eq!(
+        assert!(matches!(
             mgr.record_local_bkpt_deletion(11, 101),
-            BreakpointStateChange::Removed(bkpt_id)
-        );
+            BreakpointStateChange::Removed(id) if id == bkpt_id
+        ));
         assert!(mgr.breakpoint(bkpt_id).is_none());
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
         assert!(mgr.group_breakpoints(GroupId::new(7)).is_empty());
@@ -768,18 +784,19 @@ mod tests {
             SubBkptType::Group(GroupSubBkpt::new(GroupId::new(7))),
         );
 
-        assert_eq!(
-            mgr.attach_group_breakpoint_session_target(bkpt_id, GroupId::new(7), 11, 101),
-            BreakpointStateChange::TargetChanged(bkpt_id)
-        );
+        let change = mgr.attach_group_breakpoint_session_target(bkpt_id, GroupId::new(7), 11, 101);
+        assert!(matches!(
+            change,
+            BreakpointStateChange::TargetChanged(snapshot) if snapshot.id() == bkpt_id
+        ));
         assert_eq!(
             mgr.breakpoint_ids_by_local_id(11, 101).map(|ids| ids.0),
             Some(bkpt_id)
         );
-        assert_eq!(
+        assert!(matches!(
             mgr.attach_group_breakpoint_session_target(bkpt_id, GroupId::new(8), 12, 202),
             BreakpointStateChange::None
-        );
+        ));
     }
 
     #[test]
@@ -801,8 +818,14 @@ mod tests {
         let changes = mgr.clean_bkpts_for_terminated_session(11, Some(GroupId::new(7)));
 
         assert_eq!(changes.len(), 2);
-        assert!(changes.contains(&BreakpointStateChange::TargetChanged(retained_bkpt_id)));
-        assert!(changes.contains(&BreakpointStateChange::Removed(removed_bkpt_id)));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            BreakpointStateChange::TargetChanged(snapshot) if snapshot.id() == retained_bkpt_id
+        )));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            BreakpointStateChange::Removed(id) if *id == removed_bkpt_id
+        )));
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 303), None);
         assert_eq!(

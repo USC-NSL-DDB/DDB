@@ -93,7 +93,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        cmd_flow::{api::CommandExecutor, event::DebuggerEventReducer, router::Router},
+        cmd_flow::{
+            api::CommandExecutor, breakpoint::BreakpointEventPublisher,
+            event::DebuggerEventReducer, router::Router,
+        },
         common::Config,
         group_operation::GroupOperationCoordinator,
         notification::NotificationManager,
@@ -128,7 +131,8 @@ mod tests {
         let backend = crate::debugger::resolve_debugger_backend(config.as_ref());
         let model = RuntimeModel::new();
         let notifications = Arc::new(NotificationManager::new());
-        let reducer = DebuggerEventReducer::new(Arc::clone(&model), Arc::clone(&notifications));
+        let breakpoint_events = BreakpointEventPublisher::new(Arc::clone(&notifications));
+        let reducer = DebuggerEventReducer::new(Arc::clone(&model), Arc::clone(&breakpoint_events));
         let factory =
             SessionFactory::new(Arc::clone(&config), backend, Arc::clone(&plugin), reducer);
         let router = Arc::new(Router::new(Arc::clone(&model)));
@@ -144,6 +148,7 @@ mod tests {
             model,
             router,
             notifications,
+            breakpoint_events,
             Arc::new(GroupOperationCoordinator::new()),
             source_resolver,
             Arc::new(ShutdownCtrl::new()),

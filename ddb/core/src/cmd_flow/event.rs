@@ -5,8 +5,8 @@ use gdbmi::{raw::Dict, Token};
 use tracing::trace;
 
 use crate::{
-    cmd_flow::breakpoint::publish_breakpoint_state_change, notification::NotificationManager,
-    runtime_model::RuntimeModel, session::lifecycle::SessionTerminationCause, state::ThreadStatus,
+    cmd_flow::breakpoint::BreakpointEventPublisher, runtime_model::RuntimeModel,
+    session::lifecycle::SessionTerminationCause, state::ThreadStatus,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -238,7 +238,7 @@ pub(crate) fn decode_event(
 
 pub(crate) struct DebuggerEventReducer {
     model: Arc<RuntimeModel>,
-    notifications: Arc<NotificationManager>,
+    breakpoint_events: Arc<BreakpointEventPublisher>,
 }
 
 impl std::fmt::Debug for DebuggerEventReducer {
@@ -250,11 +250,11 @@ impl std::fmt::Debug for DebuggerEventReducer {
 impl DebuggerEventReducer {
     pub(crate) fn new(
         model: Arc<RuntimeModel>,
-        notifications: Arc<NotificationManager>,
+        breakpoint_events: Arc<BreakpointEventPublisher>,
     ) -> Arc<Self> {
         Arc::new(Self {
             model,
-            notifications,
+            breakpoint_events,
         })
     }
 
@@ -309,15 +309,8 @@ impl DebuggerEventReducer {
             DebuggerEventKind::BreakpointDeleted {
                 local_breakpoint_id,
             } => {
-                let notifications = self.notifications.as_ref();
                 let change = breakpoints.record_local_bkpt_deletion(sid, local_breakpoint_id);
-                publish_breakpoint_state_change(
-                    breakpoints,
-                    notifications,
-                    change,
-                    "deleting local breakpoint",
-                )
-                .await;
+                self.breakpoint_events.publish_state_change(change).await;
                 Ok(EventProjection::default())
             }
             DebuggerEventKind::ThreadCreated {
@@ -578,6 +571,7 @@ mod tests {
     use gdbmi::raw::Value;
 
     use super::*;
+    use crate::notification::NotificationManager;
 
     fn payload(entries: &[(&str, Value)]) -> Dict {
         entries
@@ -709,7 +703,10 @@ mod tests {
     }
 
     fn test_reducer(model: Arc<RuntimeModel>) -> Arc<DebuggerEventReducer> {
-        DebuggerEventReducer::new(model, Arc::new(NotificationManager::new()))
+        DebuggerEventReducer::new(
+            model,
+            BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+        )
     }
 
     #[tokio::test]

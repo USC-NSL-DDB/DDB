@@ -18,67 +18,64 @@ use super::{
     CommandOutcome, Presentation,
 };
 
-/// Publishes the user-visible consequences of an automatic breakpoint state change.
-///
-/// The state manager deliberately has no output or notification dependencies. Lifecycle
-/// and debugger-event callers invoke this publisher after releasing the repository lock.
-pub(crate) async fn publish_breakpoint_state_change(
-    breakpoints: &BreakpointMgr,
-    notifications: &NotificationManager,
-    change: BreakpointStateChange,
-    context: &str,
-) {
-    let notification = match change {
-        BreakpointStateChange::None => return,
-        BreakpointStateChange::TargetChanged(breakpoint_id) => {
-            let Some(breakpoint) = breakpoints.breakpoint(breakpoint_id) else {
-                warn!(
-                    breakpoint_id,
-                    context, "breakpoint disappeared before its state change was published"
-                );
-                return;
-            };
-            let output =
-                MIFormatter::format("=", "breakpoint-modified", Some(&breakpoint.into()), None);
-            println!("{}", output);
-            debug!("output: {}", output);
-            BreakpointChangeEvent::TargetChanged(breakpoint_id)
-        }
-        BreakpointStateChange::Removed(breakpoint_id) => {
-            let output = MIFormatter::format(
-                "=",
-                "breakpoint-deleted",
-                Some(&bkpt_deleted_payload(breakpoint_id)),
-                None,
-            );
-            println!("{}", output);
-            debug!("output: {}", output);
-            BreakpointChangeEvent::Removed(breakpoint_id)
-        }
-    };
-
-    notifications
-        .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-            notification,
-        )))
-        .await;
+/// Sole boundary for breakpoint notifications and automatic MI records.
+pub(crate) struct BreakpointEventPublisher {
+    notifications: Arc<NotificationManager>,
 }
 
-pub(crate) async fn publish_breakpoint_state_changes(
-    breakpoints: &BreakpointMgr,
-    notifications: &NotificationManager,
-    changes: impl IntoIterator<Item = BreakpointStateChange>,
-    context: &str,
-) {
-    for change in changes {
-        publish_breakpoint_state_change(breakpoints, notifications, change, context).await;
+impl BreakpointEventPublisher {
+    pub(crate) fn new(notifications: Arc<NotificationManager>) -> Arc<Self> {
+        Arc::new(Self { notifications })
+    }
+
+    pub(crate) async fn publish_state_change(&self, change: BreakpointStateChange) {
+        let event = match change {
+            BreakpointStateChange::None => return,
+            BreakpointStateChange::TargetChanged(breakpoint) => {
+                let breakpoint_id = breakpoint.id();
+                let output =
+                    MIFormatter::format("=", "breakpoint-modified", Some(&breakpoint.into()), None);
+                println!("{}", output);
+                debug!("output: {}", output);
+                BreakpointChangeEvent::TargetChanged(breakpoint_id)
+            }
+            BreakpointStateChange::Removed(breakpoint_id) => {
+                let output = MIFormatter::format(
+                    "=",
+                    "breakpoint-deleted",
+                    Some(&bkpt_deleted_payload(breakpoint_id)),
+                    None,
+                );
+                println!("{}", output);
+                debug!("output: {}", output);
+                BreakpointChangeEvent::Removed(breakpoint_id)
+            }
+        };
+        self.broadcast(event).await;
+    }
+
+    pub(crate) async fn publish_state_changes(
+        &self,
+        changes: impl IntoIterator<Item = BreakpointStateChange>,
+    ) {
+        for change in changes {
+            self.publish_state_change(change).await;
+        }
+    }
+
+    pub(crate) async fn broadcast(&self, event: BreakpointChangeEvent) {
+        self.notifications
+            .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
+                event,
+            )))
+            .await;
     }
 }
 
 pub(crate) struct BreakpointService {
     breakpoints: Arc<BreakpointMgr>,
     groups: Arc<GroupMgr>,
-    notifications: Arc<NotificationManager>,
+    events: Arc<BreakpointEventPublisher>,
     executor: CommandExecutor,
     group_operations: Arc<GroupOperationCoordinator>,
 }
@@ -87,14 +84,14 @@ impl BreakpointService {
     pub(crate) fn new(
         breakpoints: Arc<BreakpointMgr>,
         groups: Arc<GroupMgr>,
-        notifications: Arc<NotificationManager>,
+        events: Arc<BreakpointEventPublisher>,
         executor: CommandExecutor,
         group_operations: Arc<GroupOperationCoordinator>,
     ) -> Self {
         Self {
             breakpoints,
             groups,
-            notifications,
+            events,
             executor,
             group_operations,
         }
@@ -194,7 +191,8 @@ impl BreakpointService {
             )
         })?;
         let payload = breakpoint.clone().into();
-        self.broadcast(BreakpointChangeEvent::Added((&breakpoint).into()))
+        self.events
+            .broadcast(BreakpointChangeEvent::Added((&breakpoint).into()))
             .await;
 
         Ok(CommandOutcome::completed(
@@ -258,7 +256,8 @@ impl BreakpointService {
             Some(&bkpt_deleted_payload(breakpoint_id)),
             None,
         );
-        self.broadcast(BreakpointChangeEvent::Removed(breakpoint_id))
+        self.events
+            .broadcast(BreakpointChangeEvent::Removed(breakpoint_id))
             .await;
 
         let mut outcome =
@@ -444,15 +443,7 @@ impl BreakpointService {
         sub_breakpoint_id: u64,
     ) -> BreakpointStateChange {
         self.breakpoints
-            .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id);
-        match self.breakpoints.breakpoint_is_empty(breakpoint_id) {
-            Some(true) => {
-                self.breakpoints.remove_breakpoint(breakpoint_id);
-                BreakpointStateChange::Removed(breakpoint_id)
-            }
-            Some(false) => BreakpointStateChange::TargetChanged(breakpoint_id),
-            None => BreakpointStateChange::None,
-        }
+            .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id)
     }
 
     async fn explicit_delete_outcome(
@@ -461,17 +452,15 @@ impl BreakpointService {
         change: BreakpointStateChange,
     ) -> Result<CommandOutcome> {
         match change {
-            BreakpointStateChange::TargetChanged(breakpoint_id) => {
-                let breakpoint = self.breakpoints.breakpoint(breakpoint_id).ok_or_else(|| {
-                    anyhow!("Breakpoint {} disappeared after deletion", breakpoint_id)
-                })?;
+            BreakpointStateChange::TargetChanged(breakpoint) => {
                 let record = MIFormatter::format(
                     "=",
                     "breakpoint-modified",
                     Some(&breakpoint.clone().into()),
                     None,
                 );
-                self.broadcast(BreakpointChangeEvent::Updated((&breakpoint).into()))
+                self.events
+                    .broadcast(BreakpointChangeEvent::Updated((&breakpoint).into()))
                     .await;
 
                 let mut outcome =
@@ -486,7 +475,8 @@ impl BreakpointService {
                     Some(&bkpt_deleted_payload(breakpoint_id)),
                     None,
                 );
-                self.broadcast(BreakpointChangeEvent::Removed(breakpoint_id))
+                self.events
+                    .broadcast(BreakpointChangeEvent::Removed(breakpoint_id))
                     .await;
 
                 let mut outcome =
@@ -496,14 +486,6 @@ impl BreakpointService {
             }
             BreakpointStateChange::None => Ok(CommandOutcome::empty()),
         }
-    }
-
-    async fn broadcast(&self, event: BreakpointChangeEvent) {
-        self.notifications
-            .broadcast(Notification::new(NotificationPayload::BreakpointChanged(
-                event,
-            )))
-            .await;
     }
 }
 
@@ -574,9 +556,9 @@ fn merge_state_changes(
         | (_, BreakpointStateChange::Removed(breakpoint_id)) => {
             BreakpointStateChange::Removed(breakpoint_id)
         }
-        (BreakpointStateChange::TargetChanged(breakpoint_id), _)
-        | (_, BreakpointStateChange::TargetChanged(breakpoint_id)) => {
-            BreakpointStateChange::TargetChanged(breakpoint_id)
+        (BreakpointStateChange::TargetChanged(snapshot), _)
+        | (_, BreakpointStateChange::TargetChanged(snapshot)) => {
+            BreakpointStateChange::TargetChanged(snapshot)
         }
         _ => BreakpointStateChange::None,
     }
@@ -626,12 +608,17 @@ mod tests {
 
     #[test]
     fn removed_state_change_dominates_target_updates() {
-        assert_eq!(
-            merge_state_changes(
-                BreakpointStateChange::TargetChanged(7),
-                BreakpointStateChange::Removed(7),
-            ),
-            BreakpointStateChange::Removed(7)
+        let manager = BreakpointMgr::new();
+        let breakpoint_id = manager.add_breakpoint(BkptLoc::new("main.rs", 10));
+        let snapshot = manager.breakpoint(breakpoint_id).unwrap();
+        let merged = merge_state_changes(
+            BreakpointStateChange::TargetChanged(snapshot),
+            BreakpointStateChange::Removed(breakpoint_id),
         );
+
+        assert!(matches!(
+            merged,
+            BreakpointStateChange::Removed(id) if id == breakpoint_id
+        ));
     }
 }

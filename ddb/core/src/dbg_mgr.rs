@@ -12,7 +12,7 @@ use crate::discovery::{
 use crate::plugin::{FrameworkPlugin, ServiceDiscoveryMode};
 use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
 use crate::{
-    cmd_flow::{event::DebuggerEventReducer, router::Router},
+    cmd_flow::{breakpoint::BreakpointEventPublisher, event::DebuggerEventReducer, router::Router},
     debugger::DebuggerBackend,
     group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
@@ -209,6 +209,7 @@ impl DbgManager {
         model: Arc<RuntimeModel>,
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
+        breakpoint_events: Arc<BreakpointEventPublisher>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
         event_reducer: Arc<DebuggerEventReducer>,
@@ -220,6 +221,7 @@ impl DbgManager {
             model,
             router,
             notifications,
+            breakpoint_events,
             group_operations,
             source_resolver,
             Arc::clone(&shutdown),

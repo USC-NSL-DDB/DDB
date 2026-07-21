@@ -15,7 +15,7 @@ use super::{
     SessionProcess,
 };
 use crate::{
-    cmd_flow::router::Router,
+    cmd_flow::{breakpoint::BreakpointEventPublisher, router::Router},
     common::Config,
     group_operation::GroupOperationCoordinator,
     notification::{Notification, NotificationManager, NotificationPayload},
@@ -60,6 +60,7 @@ impl SessionSupervisor {
         model: Arc<RuntimeModel>,
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
+        breakpoint_events: Arc<BreakpointEventPublisher>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
         shutdown: Arc<ShutdownCtrl>,
@@ -72,7 +73,7 @@ impl SessionSupervisor {
                 plugin,
                 model,
                 router,
-                Arc::clone(&notifications),
+                breakpoint_events,
                 group_operations,
                 Arc::clone(&source_resolver),
             ),

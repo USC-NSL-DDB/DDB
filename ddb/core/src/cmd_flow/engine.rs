@@ -7,7 +7,7 @@ use tracing::{debug, error, info, warn};
 use super::{
     api::CommandExecutor,
     backtrace::DistributedBacktraceService,
-    breakpoint::BreakpointService,
+    breakpoint::{BreakpointEventPublisher, BreakpointService},
     dispatcher::CommandDispatcher,
     execution::ExecutionService,
     framework_adapter::FrameworkCommandAdapter,
@@ -22,7 +22,6 @@ use crate::{
     debugger::DebuggerBackend,
     feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
     group_operation::GroupOperationCoordinator,
-    notification::NotificationManager,
     runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
     state::StateMgr,
@@ -72,7 +71,7 @@ impl CommandEngine {
     pub(crate) fn new(
         adapter: Arc<dyn FrameworkCommandAdapter>,
         router: Arc<Router>,
-        notifications: Arc<NotificationManager>,
+        breakpoint_events: Arc<BreakpointEventPublisher>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
         model: Arc<RuntimeModel>,
@@ -87,7 +86,7 @@ impl CommandEngine {
         let breakpoint_service = Arc::new(BreakpointService::new(
             Arc::clone(model.breakpoints()),
             Arc::clone(model.groups()),
-            notifications,
+            breakpoint_events,
             executor.clone(),
             group_operations,
         ));

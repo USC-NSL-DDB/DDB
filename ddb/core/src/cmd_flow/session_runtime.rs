@@ -723,6 +723,7 @@ mod tests {
     use super::*;
     use crate::session::lifecycle::{self, SessionTermination, SessionTerminationCause};
     use crate::{
+        cmd_flow::breakpoint::BreakpointEventPublisher,
         connection::{RunningTransport, TransportEvent, TransportRequest},
         notification::NotificationManager,
         runtime_model::RuntimeModel,
@@ -731,7 +732,10 @@ mod tests {
     const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
     fn test_reducer() -> Arc<DebuggerEventReducer> {
-        DebuggerEventReducer::new(RuntimeModel::new(), Arc::new(NotificationManager::new()))
+        DebuggerEventReducer::new(
+            RuntimeModel::new(),
+            BreakpointEventPublisher::new(Arc::new(NotificationManager::new())),
+        )
     }
 
     fn test_transport(

@@ -5,14 +5,13 @@ use anyhow::{bail, Context, Result};
 use super::{lifecycle::SessionTerminationReporter, SessionProcess};
 use crate::{
     cmd_flow::{
-        breakpoint::{publish_breakpoint_state_change, publish_breakpoint_state_changes},
+        breakpoint::BreakpointEventPublisher,
         decoder::BreakpointCreated,
         router::Router,
         session_runtime::{CompletionConsistency, SessionCommand, SessionHandle},
     },
     common::Config,
     group_operation::GroupOperationCoordinator,
-    notification::NotificationManager,
     plugin::FrameworkPlugin,
     runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
@@ -24,7 +23,7 @@ pub(crate) struct SessionActivation {
     plugin: Arc<dyn FrameworkPlugin>,
     model: Arc<RuntimeModel>,
     router: Arc<Router>,
-    notifications: Arc<NotificationManager>,
+    breakpoint_events: Arc<BreakpointEventPublisher>,
     group_operations: Arc<GroupOperationCoordinator>,
     source_resolver: Arc<SourceResolver>,
 }
@@ -35,7 +34,7 @@ impl SessionActivation {
         plugin: Arc<dyn FrameworkPlugin>,
         model: Arc<RuntimeModel>,
         router: Arc<Router>,
-        notifications: Arc<NotificationManager>,
+        breakpoint_events: Arc<BreakpointEventPublisher>,
         group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Self {
@@ -44,7 +43,7 @@ impl SessionActivation {
             plugin,
             model,
             router,
-            notifications,
+            breakpoint_events,
             group_operations,
             source_resolver,
         }
@@ -111,7 +110,6 @@ impl SessionActivation {
             return Ok(());
         };
 
-        let notifications = self.notifications.as_ref();
         for breakpoint in self.model.breakpoints().group_breakpoints(group_id) {
             let path = breakpoint.location().breakpoint_path();
             let response = handle
@@ -131,13 +129,7 @@ impl SessionActivation {
                 sid,
                 local_id,
             );
-            publish_breakpoint_state_change(
-                breakpoints,
-                notifications,
-                change,
-                "setting up group breakpoint for new session",
-            )
-            .await;
+            self.breakpoint_events.publish_state_change(change).await;
         }
         Ok(())
     }
@@ -158,14 +150,7 @@ impl SessionActivation {
 
         let breakpoints = self.model.breakpoints();
         let changes = breakpoints.clean_bkpts_for_terminated_session(sid, group_id);
-        let notifications = self.notifications.as_ref();
-        publish_breakpoint_state_changes(
-            breakpoints,
-            notifications,
-            changes,
-            "cleaning breakpoints for terminated session",
-        )
-        .await;
+        self.breakpoint_events.publish_state_changes(changes).await;
 
         groups.remove_session(sid);
         let removed_group = group_id.filter(|group_id| groups.group_by_id(*group_id).is_none());

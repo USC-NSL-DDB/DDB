@@ -56,8 +56,6 @@ macro_rules! domain_id {
 domain_id!(GroupId);
 domain_id!(GlobalThreadId);
 domain_id!(GlobalThreadGroupId);
-domain_id!(BreakpointId);
-domain_id!(SubBreakpointId);
 
 #[cfg(test)]
 mod tests {

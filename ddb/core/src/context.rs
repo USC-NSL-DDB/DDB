@@ -4,7 +4,8 @@ use anyhow::Result;
 
 use crate::{
     cmd_flow::{
-        api::CommandExecutor, engine::CommandEngine, event::DebuggerEventReducer, router::Router,
+        api::CommandExecutor, breakpoint::BreakpointEventPublisher, engine::CommandEngine,
+        event::DebuggerEventReducer, router::Router,
     },
     common::Config,
     dbg_mgr::DbgManager,
@@ -42,10 +43,9 @@ impl ApplicationServices {
     ) -> Result<Arc<Self>> {
         let runtime_model = RuntimeModel::new();
         let notification_manager = Arc::new(NotificationManager::new());
-        let event_reducer = DebuggerEventReducer::new(
-            Arc::clone(&runtime_model),
-            Arc::clone(&notification_manager),
-        );
+        let breakpoint_events = BreakpointEventPublisher::new(Arc::clone(&notification_manager));
+        let event_reducer =
+            DebuggerEventReducer::new(Arc::clone(&runtime_model), Arc::clone(&breakpoint_events));
         let command_router = Arc::new(Router::new(Arc::clone(&runtime_model)));
         let command_executor = CommandExecutor::new(Arc::clone(&command_router));
         let proclet_queries =
@@ -65,7 +65,7 @@ impl ApplicationServices {
         let command_engine = CommandEngine::new(
             plugin.command_adapter(),
             Arc::clone(&command_router),
-            Arc::clone(&notification_manager),
+            Arc::clone(&breakpoint_events),
             Arc::clone(&group_operations),
             Arc::clone(&source_resolver),
             Arc::clone(&runtime_model),
@@ -81,6 +81,7 @@ impl ApplicationServices {
             Arc::clone(&runtime_model),
             Arc::clone(&command_router),
             Arc::clone(&notification_manager),
+            breakpoint_events,
             Arc::clone(&group_operations),
             Arc::clone(&source_resolver),
             Arc::clone(&event_reducer),
