@@ -9,7 +9,7 @@ use crate::{
     state::GroupOperationCoordinator,
     state::{
         BkptLoc, BreakpointMgr, BreakpointSnapshot, BreakpointStateChange, GroupId, GroupMgr,
-        GroupSubBkpt, SessionSubBkpt, SubBkptType,
+        SubBkptSpec, SubBkptType,
     },
 };
 
@@ -147,71 +147,60 @@ impl BreakpointService {
 
         let debugger_command = command.full_cmd();
         let location = parse_breakpoint_location(&command.args)?;
-        let breakpoint_id = self.breakpoints.add_breakpoint(location);
-
-        match &command.target {
-            Target::Session(session_id) => {
-                if let Err(error) = self
-                    .insert_for_session(breakpoint_id, &debugger_command, *session_id)
-                    .await
-                {
-                    self.breakpoints.remove_breakpoint(breakpoint_id);
-                    bail!(
-                        "Failed to insert breakpoint into session {}: {}",
-                        session_id,
-                        error
-                    );
-                }
-            }
-            Target::Group(group_id) => {
-                if let Err(error) = self
-                    .insert_for_group(breakpoint_id, &debugger_command, *group_id)
-                    .await
-                {
-                    self.breakpoints.remove_breakpoint(breakpoint_id);
-                    bail!(
-                        "Failed to insert breakpoint into group {}: {}",
-                        group_id,
-                        error
-                    );
-                }
-            }
+        let planned_targets = match &command.target {
             Target::Multiple(targets) => {
-                for target in deduplicate_insertion_targets(self.groups.as_ref(), targets) {
-                    let result = match target {
-                        Target::Session(session_id) => {
-                            self.insert_for_session(breakpoint_id, &debugger_command, session_id)
-                                .await
-                        }
-                        Target::Group(group_id) => {
-                            self.insert_for_group(breakpoint_id, &debugger_command, group_id)
-                                .await
-                        }
-                        _ => unreachable!("target planning only returns session and group targets"),
-                    };
-                    if let Err(error) = result {
-                        warn!(
-                            ?target,
-                            %error,
-                            "failed to insert breakpoint into one target"
-                        );
-                    }
-                }
+                deduplicate_insertion_targets(self.groups.as_ref(), targets)
             }
-            _ => unreachable!("target was validated before creating breakpoint state"),
+            single => vec![single.clone()],
+        };
+        let lenient = matches!(&command.target, Target::Multiple(_));
+        let group_gates = self
+            .group_operations
+            .lock_many(planned_targets.iter().filter_map(|target| match target {
+                Target::Group(group_id) => Some(*group_id),
+                _ => None,
+            }))
+            .await;
+
+        let mut specs = Vec::new();
+        for target in planned_targets {
+            let spec = match target {
+                Target::Session(session_id) => self
+                    .session_spec(&debugger_command, session_id)
+                    .await
+                    .map_err(|error| {
+                        anyhow!(
+                            "Failed to insert breakpoint into session {}: {}",
+                            session_id,
+                            error
+                        )
+                    }),
+                Target::Group(group_id) => self
+                    .group_spec(&debugger_command, group_id)
+                    .await
+                    .map_err(|error| {
+                        anyhow!(
+                            "Failed to insert breakpoint into group {}: {}",
+                            group_id,
+                            error
+                        )
+                    }),
+                _ => unreachable!("target planning only returns session and group targets"),
+            };
+            match spec {
+                Ok(spec) => specs.push(spec),
+                Err(error) if lenient => {
+                    warn!(%error, "failed to insert breakpoint into one target");
+                }
+                Err(error) => return Err(error),
+            }
         }
 
-        if self.breakpoints.breakpoint_is_empty(breakpoint_id) == Some(true) {
-            self.breakpoints.remove_breakpoint(breakpoint_id);
+        let Some(breakpoint) = self.breakpoints.insert_breakpoint(location, specs) else {
             bail!("Failed to insert breakpoint into any target.");
-        }
+        };
+        drop(group_gates);
 
-        let breakpoint = self.breakpoints.breakpoint(breakpoint_id).ok_or_else(|| {
-            anyhow!(
-                "Failed to find inserted breakpoint with id {}",
-                breakpoint_id
-            )
-        })?;
         let snapshot = BreakpointSnapshot::from(&breakpoint);
         let payload = bkpt_payload(&snapshot);
         self.events
@@ -225,6 +214,43 @@ impl BreakpointService {
             Some(payload),
             Presentation::Plain,
         ))
+    }
+
+    /// Runs the insertion on one session and reports what it contributed.
+    async fn session_spec(&self, debugger_command: &str, session_id: u64) -> Result<SubBkptSpec> {
+        let completion = self
+            .executor
+            .execute(debugger_command, Target::Session(session_id))
+            .await?;
+        let breakpoint = BreakpointCreated::decode_first(&completion)?;
+        let _ = breakpoint.times;
+        Ok(SubBkptSpec::Session {
+            sid: session_id,
+            local_id: breakpoint.local_id,
+        })
+    }
+
+    /// Runs the insertion on every active session of a group. A group without
+    /// active sessions yields a spec with no locals so late joiners can still
+    /// be attached. The caller holds the group's operation gate.
+    async fn group_spec(&self, debugger_command: &str, group_id: GroupId) -> Result<SubBkptSpec> {
+        let group = self
+            .groups
+            .group_by_id(group_id)
+            .ok_or_else(|| anyhow!("Group {} does not exist", group_id))?;
+        let mut locals = Vec::new();
+        if !group.session_ids().is_empty() {
+            let completion = self
+                .executor
+                .execute(debugger_command, Target::Group(group_id))
+                .await?;
+            for response in completion.get_responses() {
+                let breakpoint = BreakpointCreated::decode(response)?;
+                let _ = breakpoint.times;
+                locals.push((response.get_sid(), breakpoint.local_id));
+            }
+        }
+        Ok(SubBkptSpec::Group { group_id, locals })
     }
 
     pub(crate) async fn delete(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
@@ -287,56 +313,6 @@ impl BreakpointService {
             CommandOutcome::completed(command.external_token, 0, "done", None, Presentation::Plain);
         outcome.insert_record(0, record);
         Ok(outcome)
-    }
-
-    async fn insert_for_group(
-        &self,
-        breakpoint_id: u64,
-        debugger_command: &str,
-        group_id: GroupId,
-    ) -> Result<()> {
-        let _group_operation = self.group_operations.lock(group_id).await;
-        let group = self
-            .groups
-            .group_by_id(group_id)
-            .ok_or_else(|| anyhow!("Group {} does not exist", group_id))?;
-        let has_active_sessions = !group.session_ids().is_empty();
-        let mut group_breakpoint = GroupSubBkpt::new(group_id);
-
-        if has_active_sessions {
-            let completion = self
-                .executor
-                .execute(debugger_command, Target::Group(group_id))
-                .await?;
-            for response in completion.get_responses() {
-                let breakpoint = BreakpointCreated::decode(response)?;
-                let _ = breakpoint.times;
-                group_breakpoint.add_local_bkpt(response.get_sid(), breakpoint.local_id);
-            }
-        }
-
-        self.breakpoints
-            .add_sub_breakpoint(breakpoint_id, SubBkptType::Group(group_breakpoint));
-        Ok(())
-    }
-
-    async fn insert_for_session(
-        &self,
-        breakpoint_id: u64,
-        debugger_command: &str,
-        session_id: u64,
-    ) -> Result<()> {
-        let completion = self
-            .executor
-            .execute(debugger_command, Target::Session(session_id))
-            .await?;
-        let breakpoint = BreakpointCreated::decode_first(&completion)?;
-        let _ = breakpoint.times;
-        self.breakpoints.add_sub_breakpoint(
-            breakpoint_id,
-            SubBkptType::Session(SessionSubBkpt::new(breakpoint.local_id, session_id)),
-        );
-        Ok(())
     }
 
     async fn delete_local_breakpoint(

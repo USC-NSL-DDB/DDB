@@ -317,6 +317,20 @@ pub enum BreakpointStateChange {
     Removed(u64),
 }
 
+/// Everything one insertion target contributed to a new breakpoint, gathered
+/// from debugger I/O before any breakpoint state is written.
+#[derive(Debug)]
+pub enum SubBkptSpec {
+    Session {
+        sid: SessionId,
+        local_id: u64,
+    },
+    Group {
+        group_id: GroupId,
+        locals: Vec<(SessionId, u64)>,
+    },
+}
+
 #[derive(Debug)]
 struct BreakpointState {
     bkpts: HashMap<u64, BkptMeta>,
@@ -343,16 +357,45 @@ impl BreakpointMgr {
         }
     }
 
-    pub fn breakpoint_is_empty(&self, bkpt_id: u64) -> Option<bool> {
-        // Return None when there is no bkpt
-        // Return Some(true) when the bkpt has no subbkpts
-        // Return Some(false) when the bkpt has subbkpts
-        self.state
-            .read()
-            .unwrap()
-            .bkpts
-            .get(&bkpt_id)
-            .map(BkptMeta::is_empty)
+    /// Inserts a breakpoint with its sub-breakpoints and both reverse indexes
+    /// as one unit under a single write lock.
+    ///
+    /// Emptiness is decided before the first write: an empty `specs` returns
+    /// `None` without touching any state, so no partially inserted breakpoint
+    /// is ever observable and no rollback path exists. A group spec with no
+    /// locals is a valid target — the empty group sub-breakpoint is retained
+    /// so later-joining sessions can be attached.
+    pub fn insert_breakpoint(&self, loc: BkptLoc, specs: Vec<SubBkptSpec>) -> Option<BkptMeta> {
+        if specs.is_empty() {
+            return None;
+        }
+        let mut state = self.state.write().unwrap();
+        let mut bkpt = BkptMeta::new(self.ids.next(), loc);
+        let bkpt_id = bkpt.id;
+        let subbkpts = specs
+            .into_iter()
+            .map(|spec| {
+                let subbkpt_type = match spec {
+                    SubBkptSpec::Session { sid, local_id } => {
+                        SubBkptType::Session(SessionSubBkpt::new(local_id, sid))
+                    }
+                    SubBkptSpec::Group { group_id, locals } => {
+                        let mut group_breakpoint = GroupSubBkpt::new(group_id);
+                        for (sid, local_id) in locals {
+                            group_breakpoint.add_local_bkpt(sid, local_id);
+                        }
+                        SubBkptType::Group(group_breakpoint)
+                    }
+                };
+                bkpt.add_subbkpt(subbkpt_type)
+            })
+            .collect::<Vec<_>>();
+        for subbkpt in &subbkpts {
+            Self::register_subbkpt(&mut state, subbkpt);
+        }
+        let snapshot = bkpt.clone();
+        state.bkpts.insert(bkpt_id, bkpt);
+        Some(snapshot)
     }
 
     pub fn add_breakpoint(&self, loc: BkptLoc) -> u64 {
@@ -657,6 +700,73 @@ impl BreakpointMgr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_transaction_writes_store_and_both_indexes_as_one_unit() {
+        let mgr = BreakpointMgr::new();
+
+        let breakpoint = mgr
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                vec![
+                    SubBkptSpec::Session {
+                        sid: 4,
+                        local_id: 41,
+                    },
+                    SubBkptSpec::Group {
+                        group_id: GroupId::new(7),
+                        locals: vec![(5, 51)],
+                    },
+                ],
+            )
+            .expect("non-empty specs must insert");
+
+        assert_eq!(breakpoint.sub_breakpoints().len(), 2);
+        assert_eq!(
+            mgr.breakpoint_ids_by_local_id(4, 41),
+            Some((breakpoint.id(), breakpoint.sub_breakpoints()[0].id()))
+        );
+        assert_eq!(
+            mgr.breakpoint_ids_by_local_id(5, 51),
+            Some((breakpoint.id(), breakpoint.sub_breakpoints()[1].id()))
+        );
+        assert_eq!(mgr.group_breakpoints(GroupId::new(7)).len(), 1);
+    }
+
+    #[test]
+    fn insert_transaction_rejects_empty_specs_without_writing() {
+        let mgr = BreakpointMgr::new();
+
+        assert!(mgr
+            .insert_breakpoint(BkptLoc::new("main.rs", 10), Vec::new())
+            .is_none());
+        assert!(mgr.breakpoints().is_empty());
+    }
+
+    #[test]
+    fn insert_transaction_retains_an_empty_group_target_for_late_joiners() {
+        let mgr = BreakpointMgr::new();
+
+        let breakpoint = mgr
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                vec![SubBkptSpec::Group {
+                    group_id: GroupId::new(7),
+                    locals: Vec::new(),
+                }],
+            )
+            .expect("an idle group is a valid target");
+
+        assert!(!breakpoint.is_empty());
+        assert_eq!(mgr.group_breakpoints(GroupId::new(7)).len(), 1);
+        let change =
+            mgr.attach_group_breakpoint_session_target(breakpoint.id(), GroupId::new(7), 9, 91);
+        assert!(matches!(change, BreakpointStateChange::TargetChanged(_)));
+        assert_eq!(
+            mgr.breakpoint_ids_by_local_id(9, 91),
+            Some((breakpoint.id(), breakpoint.sub_breakpoints()[0].id()))
+        );
+    }
 
     #[test]
     fn adding_and_deleting_group_subbreakpoints_keeps_indexes_consistent() {
