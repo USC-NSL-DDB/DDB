@@ -173,7 +173,7 @@ impl CommandEngine {
                 match raw.try_into() {
                     Ok(parsed) => {
                         let parsed: ParsedInputCmd = parsed;
-                        let (_, command) = parsed.to_command();
+                        let (_, command) = parsed.to_command(self.router.next_internal_token());
                         match self.router.execute(Target::Session(sid), command).await {
                             Ok(response) => emit_static(response, PlainFormatter),
                             Err(error) => warn!(?error, "failed to send internal command"),

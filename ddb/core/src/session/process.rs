@@ -30,6 +30,7 @@ pub struct SessionProcess {
 
 impl SessionProcess {
     pub fn new(
+        sid: u64,
         request: SessionRequest,
         transport: DebuggerTransportHandle,
         config: Arc<Config>,
@@ -38,7 +39,7 @@ impl SessionProcess {
         reducer: Arc<DebuggerEventReducer>,
     ) -> Self {
         Self {
-            sid: crate::common::counter::next_session_id(),
+            sid,
             request,
             transport,
             runtime: None,

@@ -190,8 +190,8 @@ pub struct BkptMeta {
 }
 
 impl BkptMeta {
-    fn new(loc: BkptLoc) -> Self {
-        let bkpt_id = crate::common::counter::next_bkpt_id();
+    fn new(id: u64, loc: BkptLoc) -> Self {
+        let bkpt_id = id;
         BkptMeta {
             id: bkpt_id,
             subbkpts: Vec::new(),
@@ -338,6 +338,7 @@ struct BreakpointState {
 pub struct BreakpointMgr {
     // The primary store and both reverse indexes are one consistency unit.
     state: RwLock<BreakpointState>,
+    ids: SimpleCounter,
 }
 
 impl BreakpointMgr {
@@ -348,6 +349,7 @@ impl BreakpointMgr {
                 local_bkpt_to_global: HashMap::new(),
                 group_bkpts: HashMap::new(),
             }),
+            ids: SimpleCounter::new(),
         }
     }
 
@@ -364,7 +366,7 @@ impl BreakpointMgr {
     }
 
     pub fn add_breakpoint(&self, loc: BkptLoc) -> u64 {
-        let bkpt = BkptMeta::new(loc);
+        let bkpt = BkptMeta::new(self.ids.next(), loc);
         let bkpt_id = bkpt.id;
         match self.state.write().unwrap().bkpts.insert(bkpt_id, bkpt) {
             Some(_) => panic!("Breakpoint ID collision on {}!", bkpt_id),

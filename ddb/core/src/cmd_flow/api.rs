@@ -67,7 +67,7 @@ impl CommandExecutor {
     }
 
     pub(crate) async fn execute_plan(&self, plan: CommandPlan) -> Result<FinishedCmd> {
-        let (target, command) = plan.into_parts();
+        let (target, command) = plan.into_parts(self.router.next_internal_token());
         self.router.execute(target, command).await
     }
 
@@ -76,7 +76,7 @@ impl CommandExecutor {
         plan: CommandPlan,
         lease: &super::session_runtime::SessionLease,
     ) -> Result<FinishedCmd> {
-        let (target, command) = plan.into_parts();
+        let (target, command) = plan.into_parts(self.router.next_internal_token());
         self.router.execute_exclusive(lease, target, command).await
     }
 
@@ -125,8 +125,8 @@ impl CommandPlan {
         self
     }
 
-    fn into_parts(self) -> (Target, Command) {
-        let (target, command) = self.parsed.to_command();
+    fn into_parts(self, internal_token: u64) -> (Target, Command) {
+        let (target, command) = self.parsed.to_command(internal_token);
         (target, command.with_consistency(self.consistency))
     }
 }
@@ -165,7 +165,6 @@ mod tests {
     fn empty_prefix_is_rejected() {
         let parsed = ParsedInputCmd {
             external_token: None,
-            internal_token: 1,
             prefix: String::new(),
             args: String::new(),
             target: Target::Broadcast,

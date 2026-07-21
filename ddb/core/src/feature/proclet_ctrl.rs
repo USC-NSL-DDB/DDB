@@ -9,7 +9,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use super::next_rpc_req_id;
+use crate::common::counter::SimpleCounter;
 
 type RPCToken = u64;
 
@@ -77,9 +77,7 @@ const HDR_SIZE: usize =
     std::mem::size_of::<u32>() + std::mem::size_of::<u32>() + std::mem::size_of::<u64>();
 
 impl ProcletCtrlCmd {
-    fn to_hdr(&self) -> (RPCToken, ProcletCtrlHdr) {
-        let token = next_rpc_req_id();
-
+    fn to_hdr(&self, token: RPCToken) -> (RPCToken, ProcletCtrlHdr) {
         let hdr = match self {
             ProcletCtrlCmd::Query(proclet_id) => ProcletCtrlHdr {
                 cmd: 0x01,
@@ -90,11 +88,11 @@ impl ProcletCtrlCmd {
         (token, hdr)
     }
 
-    fn to_bytes(&self) -> (RPCToken, Bytes) {
+    fn to_bytes(&self, token: RPCToken) -> (RPCToken, Bytes) {
         // Ensure the header size is correct, in the case of Rust API changes.
         // idk, but Rust ABI is rather unstable...
         // assert_eq!(std::mem::size_of::<ProcletCtrlHdr>(), HDR_SIZE);
-        let (token, hdr) = self.to_hdr();
+        let (token, hdr) = self.to_hdr(token);
 
         let mut bytes = BytesMut::with_capacity(HDR_SIZE + hdr.len as usize);
 
@@ -123,6 +121,7 @@ pub struct ProcletCtrlClient {
     sender_handle: tokio::task::JoinHandle<()>,
     receiver_handle: tokio::task::JoinHandle<()>,
     inflights: Arc<DashMap<RPCToken, oneshot::Sender<ProcletCtrlCmdResp>>>,
+    rpc_tokens: SimpleCounter,
 }
 
 const OUTGOING_QUEUE_CAPACITY: usize = 256;
@@ -147,6 +146,7 @@ impl ProcletCtrlClient {
             sender_handle,
             receiver_handle,
             inflights,
+            rpc_tokens: SimpleCounter::new(),
         })
     }
 
@@ -246,7 +246,7 @@ impl ProcletCtrlClient {
     }
 
     pub async fn send_command(&self, cmd: ProcletCtrlCmd) -> Result<ProcletCtrlCmdResp> {
-        let (token, data) = cmd.to_bytes();
+        let (token, data) = cmd.to_bytes(self.rpc_tokens.next());
         let (sender, receiver) = oneshot::channel();
         self.inflights.insert(token, sender);
         self.to_send.send_async(data).await?;

@@ -1,56 +1,24 @@
-use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Monotonic identifier source owned by the component that owns the IDs.
 #[derive(Debug)]
 pub struct SimpleCounter(AtomicU64);
 
 impl SimpleCounter {
-    pub fn new() -> Self {
-        SimpleCounter(AtomicU64::new(1))
+    pub const fn new() -> Self {
+        Self(AtomicU64::new(1))
     }
 
+    #[inline]
     pub fn next(&self) -> u64 {
-        // Fetch and add 1, returning the previous value
-        self.0.fetch_add(1, Ordering::SeqCst)
+        self.0.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-lazy_static! {
-    static ref SESSION_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref G_INFERIOR_ID_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref G_THREAD_ID_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref TOKEN_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref GROUP_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref RPC_REQ_COUNTER: SimpleCounter = SimpleCounter::new();
-    static ref BKPT_COUNTER: SimpleCounter = SimpleCounter::new();
-}
-
-pub fn next_session_id() -> u64 {
-    SESSION_COUNTER.next()
-}
-
-pub fn next_g_inferior_id() -> u64 {
-    G_INFERIOR_ID_COUNTER.next()
-}
-
-pub fn next_g_thread_id() -> u64 {
-    G_THREAD_ID_COUNTER.next()
-}
-
-pub fn next_token() -> u64 {
-    TOKEN_COUNTER.next()
-}
-
-pub fn next_group_id() -> u64 {
-    GROUP_COUNTER.next()
-}
-
-pub fn next_rpc_req_id() -> u64 {
-    RPC_REQ_COUNTER.next()
-}
-
-pub fn next_bkpt_id() -> u64 {
-    BKPT_COUNTER.next()
+impl Default for SimpleCounter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -64,5 +32,15 @@ mod tests {
         assert_eq!(counter.next(), 1);
         assert_eq!(counter.next(), 2);
         assert_eq!(counter.next(), 3);
+    }
+
+    #[test]
+    fn independent_counters_do_not_share_sequences() {
+        let first = SimpleCounter::new();
+        let second = SimpleCounter::new();
+
+        assert_eq!(first.next(), 1);
+        assert_eq!(first.next(), 2);
+        assert_eq!(second.next(), 1);
     }
 }

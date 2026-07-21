@@ -14,6 +14,7 @@ use super::{
     },
 };
 use crate::{
+    common::counter::SimpleCounter,
     runtime_model::RuntimeModel,
     state::{GroupId, LocalThreadId},
 };
@@ -66,6 +67,7 @@ impl SessionRoute {
 pub struct Router {
     model: Arc<RuntimeModel>,
     sessions: DashMap<u64, SessionHandle>,
+    tokens: SimpleCounter,
 }
 
 impl Router {
@@ -73,7 +75,13 @@ impl Router {
         Self {
             model,
             sessions: DashMap::new(),
+            tokens: SimpleCounter::new(),
         }
+    }
+
+    #[inline]
+    pub(crate) fn next_internal_token(&self) -> u64 {
+        self.tokens.next()
     }
 
     pub fn add_session(&self, handle: SessionHandle) {
@@ -202,7 +210,7 @@ impl Router {
             let token = if index == 0 {
                 command.internal_token
             } else {
-                crate::common::counter::next_token()
+                self.next_internal_token()
             };
             let session_command = route.command(command, token);
             async move {

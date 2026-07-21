@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::{common::counter, discovery::discovery_message_producer::ServiceMeta};
+use crate::{common::counter::SimpleCounter, discovery::discovery_message_producer::ServiceMeta};
 
 use super::{
     session_mgr,
@@ -100,6 +100,8 @@ pub struct StateMgr {
     session_states: session_mgr::SessionStateMgr,
     thread_states: thread_mgr::ThreadStateMgr,
     selection: SelectionState,
+    global_thread_ids: SimpleCounter,
+    global_thread_group_ids: SimpleCounter,
 }
 
 #[allow(unused)]
@@ -109,6 +111,8 @@ impl StateMgr {
             session_states: session_mgr::SessionStateMgr::new(),
             thread_states: thread_mgr::ThreadStateMgr::new(),
             selection: SelectionState::default(),
+            global_thread_ids: SimpleCounter::new(),
+            global_thread_group_ids: SimpleCounter::new(),
         }
     }
 
@@ -124,16 +128,18 @@ impl StateMgr {
 
     #[inline]
     fn register_thread_group_index(&self, sid: u64, tgid: &str) -> u64 {
-        self.thread_states.get_or_insert_thread_group_with(
-            &Self::thread_group_key(sid, tgid),
-            counter::next_g_inferior_id,
-        )
+        self.thread_states
+            .get_or_insert_thread_group_with(&Self::thread_group_key(sid, tgid), || {
+                self.global_thread_group_ids.next()
+            })
     }
 
     #[inline]
     fn register_thread_index(&self, sid: u64, tid: u64) -> u64 {
         self.thread_states
-            .get_or_insert_thread_with(&Self::thread_key(sid, tid), counter::next_g_thread_id)
+            .get_or_insert_thread_with(&Self::thread_key(sid, tid), || {
+                self.global_thread_ids.next()
+            })
     }
 
     #[inline]

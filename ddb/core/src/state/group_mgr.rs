@@ -5,7 +5,7 @@ use std::{
     sync::RwLock,
 };
 
-use crate::common::counter::next_group_id;
+use crate::common::counter::SimpleCounter;
 
 pub type GroupId = u64;
 pub type GroupHash = String;
@@ -66,6 +66,7 @@ struct GroupIndexes {
 pub struct GroupMgr {
     // These maps describe one relation and must never be observed half-updated.
     indexes: RwLock<GroupIndexes>,
+    ids: SimpleCounter,
 }
 
 impl Debug for GroupMgr {
@@ -83,6 +84,7 @@ impl GroupMgr {
     pub fn new() -> Self {
         Self {
             indexes: RwLock::new(GroupIndexes::default()),
+            ids: SimpleCounter::new(),
         }
     }
 
@@ -116,7 +118,7 @@ impl GroupMgr {
 
         let group_hash = group_hash.to_string();
         if !indexes.hash_to_group.contains_key(&group_hash) {
-            let group_id = next_group_id();
+            let group_id = self.ids.next();
             indexes.id_to_hash.insert(group_id, group_hash.clone());
             indexes.hash_to_group.insert(
                 group_hash.clone(),

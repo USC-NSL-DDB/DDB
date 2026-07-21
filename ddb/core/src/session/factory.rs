@@ -5,6 +5,7 @@ use super::{SessionMode, SessionProcess, SessionRequest, SessionRequestBuilder, 
 use crate::{
     cmd_flow::event::DebuggerEventReducer,
     common::config::{Config, DebuggerBackendKind, StaticSessionConfig, StaticSessionStartMode},
+    common::counter::SimpleCounter,
     dbg_ctrl::{build_transport, ProxyTunnel, TransportSpec},
     debugger::DebuggerBackend,
     discovery::{discovery_message_producer::ServiceMeta, ServiceInfo},
@@ -19,6 +20,7 @@ pub(crate) struct SessionFactory {
     backend: Arc<dyn DebuggerBackend>,
     plugin: Arc<dyn FrameworkPlugin>,
     reducer: Arc<DebuggerEventReducer>,
+    session_ids: Arc<SimpleCounter>,
 }
 
 impl SessionFactory {
@@ -33,6 +35,7 @@ impl SessionFactory {
             backend,
             plugin,
             reducer,
+            session_ids: Arc::new(SimpleCounter::new()),
         }
     }
     pub(crate) fn create_discovered(
@@ -56,6 +59,7 @@ impl SessionFactory {
     ) -> Result<SessionProcess> {
         let transport = build_transport(&request.transport, proxy_tunnel)?;
         Ok(SessionProcess::new(
+            self.session_ids.next(),
             request,
             transport,
             Arc::clone(&self.config),
