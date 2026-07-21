@@ -98,14 +98,14 @@ mod tests {
             event::DebuggerEventReducer, router::Router,
         },
         common::Config,
-        group_operation::GroupOperationCoordinator,
         notification::NotificationManager,
-        runtime_model::RuntimeModel,
         shutdown::ShutdownCtrl,
         source::{
             catalog::SourceCatalog,
             resolver::{SourceResolutionPolicy, SourceResolver},
         },
+        state::GroupOperationCoordinator,
+        state::RuntimeModel,
     };
 
     struct TestProducer {

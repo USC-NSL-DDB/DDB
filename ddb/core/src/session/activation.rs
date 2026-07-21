@@ -11,10 +11,10 @@ use crate::{
         session_runtime::{CompletionConsistency, SessionCommand, SessionHandle},
     },
     common::Config,
-    group_operation::GroupOperationCoordinator,
     plugin::FrameworkPlugin,
-    runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
+    state::GroupOperationCoordinator,
+    state::RuntimeModel,
 };
 
 /// Applies and removes every application projection associated with a process.

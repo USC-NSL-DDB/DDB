@@ -5,8 +5,8 @@ use gdbmi::{raw::Dict, Token};
 use tracing::trace;
 
 use crate::{
-    cmd_flow::breakpoint::BreakpointEventPublisher, runtime_model::RuntimeModel,
-    session::lifecycle::SessionTerminationCause, state::ThreadStatus,
+    cmd_flow::breakpoint::BreakpointEventPublisher, session::lifecycle::SessionTerminationCause,
+    state::RuntimeModel, state::ThreadStatus,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]

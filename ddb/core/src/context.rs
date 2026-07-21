@@ -12,15 +12,15 @@ use crate::{
     dbg_mgr::DbgManager,
     debugger::DebuggerBackend,
     feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
-    group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
     plugin::FrameworkPlugin,
-    runtime_model::RuntimeModel,
     shutdown::ShutdownCtrl,
     source::{
         catalog::SourceCatalog,
         resolver::{SourceResolutionPolicy, SourceResolver},
     },
+    state::GroupOperationCoordinator,
+    state::RuntimeModel,
     status::RuntimeStatus,
 };
 

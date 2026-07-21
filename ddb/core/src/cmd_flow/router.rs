@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     common::counter::SimpleCounter,
-    runtime_model::RuntimeModel,
+    state::RuntimeModel,
     state::{GlobalThreadId, GroupId, LocalThreadId},
 };
 

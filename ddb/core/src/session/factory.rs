@@ -138,7 +138,7 @@ mod tests {
     use super::*;
     use crate::{
         cmd_flow::breakpoint::BreakpointEventPublisher, notification::NotificationManager,
-        runtime_model::RuntimeModel,
+        state::RuntimeModel,
     };
 
     fn test_factory(config: Config) -> SessionFactory {

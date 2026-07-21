@@ -14,11 +14,11 @@ use crate::session::{factory::SessionFactory, supervisor::SessionSupervisor};
 use crate::{
     cmd_flow::{breakpoint::BreakpointEventPublisher, event::DebuggerEventReducer, router::Router},
     debugger::DebuggerBackend,
-    group_operation::GroupOperationCoordinator,
     notification::NotificationManager,
-    runtime_model::RuntimeModel,
     shutdown::ShutdownCtrl,
     source::resolver::SourceResolver,
+    state::GroupOperationCoordinator,
+    state::RuntimeModel,
 };
 use crate::{
     common::{

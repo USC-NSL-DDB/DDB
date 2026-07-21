@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use crate::{
     cmd_flow::router::Router,
-    runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
+    state::RuntimeModel,
     state::{BkptLoc, BkptMeta, GroupMeta, SubBkptMeta, SubBkptType},
 };
 

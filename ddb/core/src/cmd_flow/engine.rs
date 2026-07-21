@@ -21,9 +21,9 @@ use crate::{
     common::Config,
     debugger::DebuggerBackend,
     feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
-    group_operation::GroupOperationCoordinator,
-    runtime_model::RuntimeModel,
     source::resolver::SourceResolver,
+    state::GroupOperationCoordinator,
+    state::RuntimeModel,
     state::StateMgr,
 };
 

@@ -726,7 +726,7 @@ mod tests {
         cmd_flow::breakpoint::BreakpointEventPublisher,
         connection::{RunningTransport, TransportEvent, TransportRequest},
         notification::NotificationManager,
-        runtime_model::RuntimeModel,
+        state::RuntimeModel,
     };
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(1);

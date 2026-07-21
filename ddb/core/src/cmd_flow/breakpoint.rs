@@ -5,8 +5,8 @@ use tracing::{debug, error, warn};
 
 use crate::{
     debugger::gdb::parser::{bkpt_deleted_payload, MIFormatter},
-    group_operation::GroupOperationCoordinator,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
+    state::GroupOperationCoordinator,
     state::{
         BkptLoc, BreakpointMgr, BreakpointStateChange, GroupId, GroupMgr, GroupSubBkpt,
         SessionSubBkpt, SubBkptType,

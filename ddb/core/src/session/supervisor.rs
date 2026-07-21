@@ -17,12 +17,12 @@ use super::{
 use crate::{
     cmd_flow::{breakpoint::BreakpointEventPublisher, router::Router},
     common::Config,
-    group_operation::GroupOperationCoordinator,
     notification::{Notification, NotificationManager, NotificationPayload},
     plugin::FrameworkPlugin,
-    runtime_model::RuntimeModel,
     shutdown::{ShutdownCause, ShutdownCtrl},
     source::resolver::SourceResolver,
+    state::GroupOperationCoordinator,
+    state::RuntimeModel,
 };
 
 type ManagedSessionRef = Arc<Mutex<ManagedSession>>;
