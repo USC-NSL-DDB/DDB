@@ -67,7 +67,7 @@ impl CommandExecutor {
     }
 
     pub(crate) async fn execute_plan(&self, plan: CommandPlan) -> Result<FinishedCmd> {
-        let (target, command) = plan.into_parts(self.router.next_internal_token());
+        let (target, command) = plan.into_parts();
         self.router.execute(target, command).await
     }
 
@@ -76,7 +76,7 @@ impl CommandExecutor {
         plan: CommandPlan,
         lease: &super::session_runtime::SessionLease,
     ) -> Result<FinishedCmd> {
-        let (target, command) = plan.into_parts(self.router.next_internal_token());
+        let (target, command) = plan.into_parts();
         self.router.execute_exclusive(lease, target, command).await
     }
 
@@ -129,9 +129,12 @@ impl CommandPlan {
         self
     }
 
-    fn into_parts(self, internal_token: u64) -> (Target, Command) {
-        let (target, command) = self.parsed.to_command(internal_token);
-        (target, command.with_consistency(self.consistency))
+    fn into_parts(self) -> (Target, Command) {
+        let raw_cmd = self.parsed.full_cmd();
+        (
+            self.parsed.target,
+            Command::new(self.parsed.external_token, raw_cmd, self.consistency),
+        )
     }
 }
 
@@ -169,6 +172,22 @@ mod tests {
             .unwrap()
             .target(Target::Session(7));
         assert_eq!(request.parsed.target, Target::Session(7));
+    }
+
+    #[test]
+    fn plans_resolve_to_a_single_routing_envelope() {
+        let (target, command) = command("42-break-insert main.rs:5 --session 3")
+            .unwrap()
+            .protocol_complete()
+            .into_parts();
+
+        assert_eq!(target, Target::Session(3));
+        assert_eq!(command.external_token, Some(42));
+        assert_eq!(command.raw_cmd, "-break-insert main.rs:5");
+        assert_eq!(
+            command.consistency,
+            crate::cmd_flow::session_runtime::CompletionConsistency::ProtocolComplete
+        );
     }
 
     #[test]

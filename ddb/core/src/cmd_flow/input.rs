@@ -1,27 +1,27 @@
 use super::{router::Target, session_runtime::CompletionConsistency};
 use anyhow::{anyhow, bail, Context, Result};
 
+/// Routing-layer envelope: what to run and how completion is judged. Wire
+/// correlation tokens are not part of the envelope — each session runtime
+/// mints its own when the command becomes wire traffic.
 #[derive(Debug, Clone)]
 pub struct Command {
     pub external_token: Option<u64>,
-    pub internal_token: u64,
     pub raw_cmd: String,
     pub consistency: CompletionConsistency,
 }
 
 impl Command {
-    pub fn new(external_token: Option<u64>, internal_token: u64, raw_cmd: String) -> Self {
+    pub fn new(
+        external_token: Option<u64>,
+        raw_cmd: String,
+        consistency: CompletionConsistency,
+    ) -> Self {
         Self {
             external_token,
-            internal_token,
             raw_cmd,
-            consistency: CompletionConsistency::StateConsistent,
+            consistency,
         }
-    }
-
-    pub fn with_consistency(mut self, consistency: CompletionConsistency) -> Self {
-        self.consistency = consistency;
-        self
     }
 }
 
@@ -50,15 +50,6 @@ impl ParsedInputCmd {
             prefix: prefix.to_string(),
             ..self
         }
-    }
-
-    #[inline]
-    pub fn to_command(self, internal_token: u64) -> (Target, Command) {
-        let target = self.target.clone();
-        (
-            target,
-            Command::new(self.external_token, internal_token, self.full_cmd()),
-        )
     }
 }
 
@@ -252,7 +243,7 @@ impl TryInto<ParsedInputCmd> for InputCmdParser {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, ParsedInputCmd};
+    use super::ParsedInputCmd;
 
     #[test]
     fn parses_target_prefix_and_external_token_without_execution_state() {
@@ -293,21 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn command_conversion_accepts_the_boundary_allocated_token() {
-        let parsed: ParsedInputCmd = "777-exec-continue".try_into().unwrap();
-        let (target, command) = parsed.to_command(200);
-
-        assert_eq!(command.external_token, Some(777));
-        assert_eq!(command.internal_token, 200);
-        assert_eq!(command.raw_cmd, "-exec-continue");
-        assert_eq!(
-            command.consistency,
-            crate::cmd_flow::session_runtime::CompletionConsistency::StateConsistent
-        );
-        assert!(matches!(target, super::Target::Unspecified));
-    }
-
-    #[test]
     fn thread_target_parsing_does_not_require_live_state() {
         let parsed: ParsedInputCmd = "-stack-list-frames --thread 9001".try_into().unwrap();
         assert_eq!(
@@ -315,17 +291,5 @@ mod tests {
             super::Target::Thread(crate::state::GlobalThreadId::new(9001))
         );
         assert_eq!(parsed.args, "--thread 9001");
-    }
-
-    #[test]
-    fn command_completion_consistency_is_explicit() {
-        let command = Command::new(None, 200, "-thread-info".to_string()).with_consistency(
-            crate::cmd_flow::session_runtime::CompletionConsistency::ProtocolComplete,
-        );
-
-        assert_eq!(
-            command.consistency,
-            crate::cmd_flow::session_runtime::CompletionConsistency::ProtocolComplete
-        );
     }
 }

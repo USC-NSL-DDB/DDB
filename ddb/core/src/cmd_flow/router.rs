@@ -14,7 +14,6 @@ use super::{
     },
 };
 use crate::{
-    common::counter::SimpleCounter,
     state::RuntimeModel,
     state::{GlobalThreadId, GroupId, LocalThreadId},
 };
@@ -50,13 +49,12 @@ struct SessionRoute {
 }
 
 impl SessionRoute {
-    fn command(&self, command: &Command, token: u64) -> SessionCommand {
+    fn command(&self, command: &Command) -> SessionCommand {
         let wire_command = match self.thread_id {
             Some(thread_id) => rewrite_thread_argument(&command.raw_cmd, thread_id),
             None => command.raw_cmd.clone(),
         };
         SessionCommand {
-            token,
             command: wire_command,
             thread_id: self.thread_id,
             consistency: command.consistency,
@@ -67,7 +65,6 @@ impl SessionRoute {
 pub struct Router {
     model: Arc<RuntimeModel>,
     sessions: DashMap<u64, SessionHandle>,
-    tokens: SimpleCounter,
 }
 
 impl Router {
@@ -75,13 +72,7 @@ impl Router {
         Self {
             model,
             sessions: DashMap::new(),
-            tokens: SimpleCounter::new(),
         }
-    }
-
-    #[inline]
-    pub(crate) fn next_internal_token(&self) -> u64 {
-        self.tokens.next()
     }
 
     pub fn add_session(&self, handle: SessionHandle) {
@@ -206,13 +197,8 @@ impl Router {
         routes: Vec<SessionRoute>,
         command: &Command,
     ) -> Result<Vec<SessionTicket>> {
-        let submissions = routes.into_iter().enumerate().map(|(index, route)| {
-            let token = if index == 0 {
-                command.internal_token
-            } else {
-                self.next_internal_token()
-            };
-            let session_command = route.command(command, token);
+        let submissions = routes.into_iter().map(|route| {
+            let session_command = route.command(command);
             async move {
                 let sid = route.handle.sid();
                 timeout(COMMAND_SEND_TIMEOUT, route.handle.submit(session_command))
@@ -267,7 +253,7 @@ impl Router {
         let route = routes
             .pop()
             .expect("exclusive target has exactly one route");
-        let session_command = route.command(&command, command.internal_token);
+        let session_command = route.command(&command);
         let response = timeout(COMMAND_TIMEOUT, lease.execute(session_command))
             .await
             .map_err(|_| anyhow!("Timed out waiting for exclusive command"))??;
@@ -306,12 +292,16 @@ fn rewrite_thread_argument(command: &str, local_thread_id: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{rewrite_thread_argument, Command, Router, Target};
-    use crate::state::RuntimeModel;
+    use crate::{cmd_flow::session_runtime::CompletionConsistency, state::RuntimeModel};
 
     #[tokio::test]
     async fn unresolved_targets_are_rejected_at_the_routing_boundary() {
         let router = Router::new(RuntimeModel::new());
-        let command = Command::new(None, 1, "-thread-info".to_string());
+        let command = Command::new(
+            None,
+            "-thread-info".to_string(),
+            CompletionConsistency::StateConsistent,
+        );
 
         let error = router
             .execute(Target::Unspecified, command)

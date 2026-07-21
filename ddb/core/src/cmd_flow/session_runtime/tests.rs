@@ -45,9 +45,8 @@ fn test_transport(
     )
 }
 
-fn command(token: u64) -> SessionCommand {
+fn command() -> SessionCommand {
     SessionCommand {
-        token,
         command: "-thread-info".to_string(),
         thread_id: None,
         consistency: CompletionConsistency::ProtocolComplete,
@@ -127,8 +126,8 @@ async fn pipelines_and_correlates_out_of_order_coalesced_results() {
     let (transport, requests, events) = test_transport(8);
     let (handle, task, _terminations) = spawn_runtime(41, transport);
 
-    let first = handle.submit(command(1)).await.unwrap();
-    let second = handle.submit(command(2)).await.unwrap();
+    let first = handle.submit(command()).await.unwrap();
+    let second = handle.submit(command()).await.unwrap();
     assert_eq!((first.sid(), first.token()), (41, 1));
     assert_eq!((second.sid(), second.token()), (41, 2));
 
@@ -168,14 +167,14 @@ async fn pipelines_and_correlates_out_of_order_coalesced_results() {
 async fn buffers_fragmented_protocol_records() {
     let (transport, requests, events) = test_transport(4);
     let (handle, task, _terminations) = spawn_runtime(42, transport);
-    let ticket = handle.submit(command(7)).await.unwrap();
+    let ticket = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
 
     let completion = tokio::spawn(async move { ticket.complete().await });
     events
         .send_async(TransportEvent::Stdout(Bytes::from_static(
-            b"7^done,value=\"frag",
+            b"1^done,value=\"frag",
         )))
         .await
         .unwrap();
@@ -207,16 +206,16 @@ async fn exclusive_lease_blocks_normal_commands_until_released() {
     let lease = handle.exclusive().await.unwrap();
 
     let normal_handle = handle.clone();
-    let normal_submit = tokio::spawn(async move { normal_handle.submit(command(12)).await });
+    let normal_submit = tokio::spawn(async move { normal_handle.submit(command()).await });
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(requests.is_empty());
 
-    let exclusive = lease.submit(command(11)).await.unwrap();
+    let exclusive = lease.submit(command()).await.unwrap();
     let (wire, acknowledgement) = receive_write(&requests).await;
-    assert_eq!(wire, "11-thread-info\n");
+    assert_eq!(wire, "1-thread-info\n");
     acknowledgement.send(Ok(())).unwrap();
     events
-        .send_async(TransportEvent::Stdout(Bytes::from_static(b"11^done\n")))
+        .send_async(TransportEvent::Stdout(Bytes::from_static(b"1^done\n")))
         .await
         .unwrap();
     exclusive.complete().await.unwrap();
@@ -228,10 +227,10 @@ async fn exclusive_lease_blocks_normal_commands_until_released() {
         .unwrap()
         .unwrap();
     let (wire, acknowledgement) = receive_write(&requests).await;
-    assert_eq!(wire, "12-thread-info\n");
+    assert_eq!(wire, "2-thread-info\n");
     acknowledgement.send(Ok(())).unwrap();
     events
-        .send_async(TransportEvent::Stdout(Bytes::from_static(b"12^done\n")))
+        .send_async(TransportEvent::Stdout(Bytes::from_static(b"2^done\n")))
         .await
         .unwrap();
     normal.complete().await.unwrap();
@@ -242,7 +241,7 @@ async fn exclusive_lease_blocks_normal_commands_until_released() {
 async fn transport_fault_fails_pending_and_closes_runtime() {
     let (transport, requests, events) = test_transport(4);
     let (handle, task, mut terminations) = spawn_runtime(44, transport);
-    let ticket = handle.submit(command(21)).await.unwrap();
+    let ticket = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
 
@@ -310,7 +309,7 @@ async fn timeout_and_cancelled_receiver_release_transaction_permits() {
     };
     let (handle, task, _terminations) = spawn_runtime_with_config(45, transport, config);
 
-    let timed_out = handle.submit(command(31)).await.unwrap();
+    let timed_out = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
     let error = tokio::time::timeout(TEST_TIMEOUT, timed_out.complete())
@@ -321,12 +320,12 @@ async fn timeout_and_cancelled_receiver_release_transaction_permits() {
     assert!(error.contains("timed out"));
     wait_for_no_in_flight(&handle).await;
 
-    let cancelled = handle.submit(command(32)).await.unwrap();
+    let cancelled = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
     drop(cancelled);
     events
-        .send_async(TransportEvent::Stdout(Bytes::from_static(b"32^done\n")))
+        .send_async(TransportEvent::Stdout(Bytes::from_static(b"2^done\n")))
         .await
         .unwrap();
     wait_for_no_in_flight(&handle).await;
@@ -344,8 +343,8 @@ async fn shutdown_interrupts_transport_backpressure() {
     let (transport, _requests, _events) = test_transport(1);
     let (handle, task, _terminations) = spawn_runtime(46, transport);
 
-    let first = handle.submit(command(41)).await.unwrap();
-    let second = handle.submit(command(42)).await.unwrap();
+    let first = handle.submit(command()).await.unwrap();
+    let second = handle.submit(command()).await.unwrap();
     tokio::time::timeout(TEST_TIMEOUT, handle.shutdown())
         .await
         .expect("control lane should bypass a blocked transport write");
@@ -396,7 +395,7 @@ async fn completion_mode_controls_state_projection_watermark() {
     };
     let (handle, task, _terminations) = spawn_runtime_with_config(47, transport, config);
 
-    let mut state_consistent = command(51);
+    let mut state_consistent = command();
     state_consistent.consistency = CompletionConsistency::StateConsistent;
     let ticket = handle.submit(state_consistent).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
@@ -404,7 +403,7 @@ async fn completion_mode_controls_state_projection_watermark() {
     let completion = tokio::spawn(async move { ticket.complete().await });
     events
         .send_async(TransportEvent::Stdout(Bytes::from_static(
-            b"=breakpoint-modified,id=\"1\"\n51^done\n",
+            b"=breakpoint-modified,id=\"1\"\n1^done\n",
         )))
         .await
         .unwrap();
@@ -415,12 +414,12 @@ async fn completion_mode_controls_state_projection_watermark() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let protocol_complete = handle.submit(command(52)).await.unwrap();
+    let protocol_complete = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
     events
         .send_async(TransportEvent::Stdout(Bytes::from_static(
-            b"=breakpoint-modified,id=\"2\"\n52^done\n",
+            b"=breakpoint-modified,id=\"2\"\n2^done\n",
         )))
         .await
         .unwrap();
@@ -443,12 +442,12 @@ async fn presentation_io_is_not_part_of_state_consistency() {
     };
     let (handle, task, _terminations) = spawn_runtime_with_config(49, transport, config);
 
-    let ticket = handle.submit(command(61)).await.unwrap();
+    let ticket = handle.submit(command()).await.unwrap();
     let (_, acknowledgement) = receive_write(&requests).await;
     acknowledgement.send(Ok(())).unwrap();
     events
         .send_async(TransportEvent::Stdout(Bytes::from_static(
-            b"*stopped,reason=\"end-stepping-range\"\n61^done\n",
+            b"*stopped,reason=\"end-stepping-range\"\n1^done\n",
         )))
         .await
         .unwrap();

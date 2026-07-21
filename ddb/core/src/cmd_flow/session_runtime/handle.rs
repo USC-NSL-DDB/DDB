@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, Rw
 use crate::{
     cmd_flow::event::DebuggerEventReducer,
     cmd_flow::response::{ParsedSessionResponse, SessionRuntimeStatus},
+    common::counter::SimpleCounter,
     connection::RunningTransport,
     session::lifecycle::SessionTerminationReporter,
 };
@@ -32,6 +33,7 @@ pub(super) enum CommandPermit {
 
 pub(super) enum RuntimeRequest {
     Execute {
+        token: u64,
         command: SessionCommand,
         permit: CommandPermit,
         completion: oneshot::Sender<Result<ParsedSessionResponse>>,
@@ -76,6 +78,8 @@ pub struct SessionHandle {
     requests: mpsc::Sender<RuntimeRequest>,
     control: mpsc::UnboundedSender<ControlRequest>,
     gate: Arc<RwLock<()>>,
+    /// Wire correlation tokens for this session, minted once per submission.
+    tokens: Arc<SimpleCounter>,
     in_flight: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
 }
@@ -122,6 +126,7 @@ impl SessionHandle {
             requests,
             control,
             gate: Arc::new(RwLock::new(())),
+            tokens: Arc::new(SimpleCounter::new()),
             in_flight: Arc::clone(&in_flight),
             closed: Arc::clone(&closed),
         };
@@ -164,10 +169,11 @@ impl SessionHandle {
         if self.closed.load(Ordering::Acquire) {
             return Err(anyhow!("session {} is closed", self.sid));
         }
-        let token = command.token;
+        let token = self.tokens.next();
         let (completion, result) = oneshot::channel();
         self.requests
             .send(RuntimeRequest::Execute {
+                token,
                 command,
                 permit,
                 completion,

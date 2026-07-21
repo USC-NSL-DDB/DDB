@@ -142,8 +142,7 @@ pub(super) async fn run_session(
             }
             request = requests.recv() => {
                 match request {
-                    Some(RuntimeRequest::Execute { command, permit, completion }) => {
-                        let token = command.token;
+                    Some(RuntimeRequest::Execute { token, command, permit, completion }) => {
                         if pending.contains(token) {
                             let _ = completion.send(Err(anyhow!(
                                 "session {} already has command token {} in flight",
@@ -160,7 +159,7 @@ pub(super) async fn run_session(
                         });
                         let acknowledgement = guarded!(
                             &mut control,
-                            writer.start_write(Bytes::from(command.wire_command())),
+                            writer.start_write(Bytes::from(command.wire_command(token))),
                             shutdown_ack,
                             'runtime
                         );

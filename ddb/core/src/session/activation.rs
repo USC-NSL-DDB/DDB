@@ -114,7 +114,6 @@ impl SessionActivation {
             let path = breakpoint.location().breakpoint_path();
             let response = handle
                 .execute(SessionCommand {
-                    token: self.router.next_internal_token(),
                     command: format!("-break-insert {}", path),
                     thread_id: None,
                     consistency: CompletionConsistency::StateConsistent,
