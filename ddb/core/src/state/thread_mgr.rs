@@ -1,3 +1,5 @@
+use crate::state::ids::{GlobalThreadGroupId, GlobalThreadId};
+
 use std::{
     collections::HashMap,
     sync::{RwLock, RwLockReadGuard},
@@ -79,10 +81,10 @@ impl From<&LocalThreadGroupId> for (u64, String) {
 
 #[derive(Default)]
 struct ThreadIndexes {
-    ltid_to_gtid: HashMap<LocalThreadId, u64>,
-    gtid_to_ltid: HashMap<u64, LocalThreadId>,
-    ltgid_to_gtgid: HashMap<LocalThreadGroupId, u64>,
-    gtgid_to_ltgid: HashMap<u64, LocalThreadGroupId>,
+    ltid_to_gtid: HashMap<LocalThreadId, GlobalThreadId>,
+    gtid_to_ltid: HashMap<GlobalThreadId, LocalThreadId>,
+    ltgid_to_gtgid: HashMap<LocalThreadGroupId, GlobalThreadGroupId>,
+    gtgid_to_ltgid: HashMap<GlobalThreadGroupId, LocalThreadGroupId>,
 }
 
 /// Consistent read view over thread and thread-group identifiers.
@@ -94,14 +96,18 @@ pub(crate) struct ThreadIdView<'a> {
 }
 
 impl ThreadIdView<'_> {
-    pub(crate) fn global_thread_id(&self, sid: u64, tid: u64) -> Option<u64> {
+    pub(crate) fn global_thread_id(&self, sid: u64, tid: u64) -> Option<GlobalThreadId> {
         self.indexes
             .ltid_to_gtid
             .get(&LocalThreadId::new(sid, tid))
             .copied()
     }
 
-    pub(crate) fn global_thread_group_id(&self, sid: u64, tgid: &str) -> Option<u64> {
+    pub(crate) fn global_thread_group_id(
+        &self,
+        sid: u64,
+        tgid: &str,
+    ) -> Option<GlobalThreadGroupId> {
         self.indexes
             .ltgid_to_gtgid
             .get(&LocalThreadGroupId::new(sid, tgid))
@@ -128,7 +134,7 @@ impl ThreadStateMgr {
         }
     }
 
-    pub fn global_thread_id(&self, local_tid: &LocalThreadId) -> Option<u64> {
+    pub fn global_thread_id(&self, local_tid: &LocalThreadId) -> Option<GlobalThreadId> {
         self.indexes
             .read()
             .unwrap()
@@ -137,7 +143,7 @@ impl ThreadStateMgr {
             .copied()
     }
 
-    pub fn local_thread_id(&self, gtid: u64) -> Option<LocalThreadId> {
+    pub fn local_thread_id(&self, gtid: GlobalThreadId) -> Option<LocalThreadId> {
         self.indexes
             .read()
             .unwrap()
@@ -146,7 +152,10 @@ impl ThreadStateMgr {
             .cloned()
     }
 
-    pub fn global_thread_group_id(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
+    pub fn global_thread_group_id(
+        &self,
+        local_tgid: &LocalThreadGroupId,
+    ) -> Option<GlobalThreadGroupId> {
         self.indexes
             .read()
             .unwrap()
@@ -156,7 +165,7 @@ impl ThreadStateMgr {
     }
 
     #[cfg(test)]
-    pub fn local_thread_group_id(&self, gtgid: u64) -> Option<LocalThreadGroupId> {
+    pub fn local_thread_group_id(&self, gtgid: GlobalThreadGroupId) -> Option<LocalThreadGroupId> {
         self.indexes
             .read()
             .unwrap()
@@ -165,9 +174,13 @@ impl ThreadStateMgr {
             .cloned()
     }
 
-    pub fn get_or_insert_thread_with<F>(&self, local_tid: &LocalThreadId, create: F) -> u64
+    pub fn get_or_insert_thread_with<F>(
+        &self,
+        local_tid: &LocalThreadId,
+        create: F,
+    ) -> GlobalThreadId
     where
-        F: FnOnce() -> u64,
+        F: FnOnce() -> GlobalThreadId,
     {
         let mut indexes = self.indexes.write().unwrap();
         if let Some(gtid) = indexes.ltid_to_gtid.get(local_tid) {
@@ -183,9 +196,9 @@ impl ThreadStateMgr {
         &self,
         local_tgid: &LocalThreadGroupId,
         create: F,
-    ) -> u64
+    ) -> GlobalThreadGroupId
     where
-        F: FnOnce() -> u64,
+        F: FnOnce() -> GlobalThreadGroupId,
     {
         let mut indexes = self.indexes.write().unwrap();
         if let Some(gtgid) = indexes.ltgid_to_gtgid.get(local_tgid) {
@@ -197,7 +210,7 @@ impl ThreadStateMgr {
         gtgid
     }
 
-    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
+    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<GlobalThreadId> {
         self.indexes
             .read()
             .unwrap()
@@ -223,14 +236,17 @@ impl ThreadStateMgr {
             .retain(|_, local_tgid| local_tgid.session_id() != sid);
     }
 
-    pub fn remove_thread(&self, local_tid: &LocalThreadId) -> Option<u64> {
+    pub fn remove_thread(&self, local_tid: &LocalThreadId) -> Option<GlobalThreadId> {
         let mut indexes = self.indexes.write().unwrap();
         let gtid = indexes.ltid_to_gtid.remove(local_tid)?;
         indexes.gtid_to_ltid.remove(&gtid);
         Some(gtid)
     }
 
-    pub fn remove_thread_group(&self, local_tgid: &LocalThreadGroupId) -> Option<u64> {
+    pub fn remove_thread_group(
+        &self,
+        local_tgid: &LocalThreadGroupId,
+    ) -> Option<GlobalThreadGroupId> {
         let mut indexes = self.indexes.write().unwrap();
         let gtgid = indexes.ltgid_to_gtgid.remove(local_tgid)?;
         indexes.gtgid_to_ltgid.remove(&gtgid);
@@ -274,27 +290,47 @@ mod tests {
         let ltid_c = LocalThreadId::new(2, 20);
         let ltgid = LocalThreadGroupId::new(1, "i1");
 
-        mgr.get_or_insert_thread_with(&ltid_a, || 100);
-        mgr.get_or_insert_thread_with(&ltid_b, || 101);
-        mgr.get_or_insert_thread_with(&ltid_c, || 200);
-        mgr.get_or_insert_thread_group_with(&ltgid, || 300);
+        mgr.get_or_insert_thread_with(&ltid_a, || GlobalThreadId::new(100));
+        mgr.get_or_insert_thread_with(&ltid_b, || GlobalThreadId::new(101));
+        mgr.get_or_insert_thread_with(&ltid_c, || GlobalThreadId::new(200));
+        mgr.get_or_insert_thread_group_with(&ltgid, || GlobalThreadGroupId::new(300));
 
-        assert_eq!(mgr.global_thread_id(&ltid_a), Some(100));
-        assert_eq!(mgr.local_thread_id(101), Some(ltid_b.clone()));
-        assert_eq!(mgr.global_thread_group_id(&ltgid), Some(300));
-        assert_eq!(mgr.local_thread_group_id(300), Some(ltgid.clone()));
+        assert_eq!(
+            mgr.global_thread_id(&ltid_a),
+            Some(GlobalThreadId::new(100))
+        );
+        assert_eq!(
+            mgr.local_thread_id(GlobalThreadId::new(101)),
+            Some(ltid_b.clone())
+        );
+        assert_eq!(
+            mgr.global_thread_group_id(&ltgid),
+            Some(GlobalThreadGroupId::new(300))
+        );
+        assert_eq!(
+            mgr.local_thread_group_id(GlobalThreadGroupId::new(300)),
+            Some(ltgid.clone())
+        );
 
         let mut gtids = mgr.global_thread_ids_for_session(1);
         gtids.sort_unstable();
-        assert_eq!(gtids, vec![100, 101]);
+        assert_eq!(
+            gtids,
+            vec![GlobalThreadId::new(100), GlobalThreadId::new(101)]
+        );
 
-        assert_eq!(mgr.remove_thread(&ltid_a), Some(100));
+        assert_eq!(mgr.remove_thread(&ltid_a), Some(GlobalThreadId::new(100)));
         assert!(mgr.global_thread_id(&ltid_a).is_none());
-        assert!(mgr.local_thread_id(100).is_none());
+        assert!(mgr.local_thread_id(GlobalThreadId::new(100)).is_none());
 
-        assert_eq!(mgr.remove_thread_group(&ltgid), Some(300));
+        assert_eq!(
+            mgr.remove_thread_group(&ltgid),
+            Some(GlobalThreadGroupId::new(300))
+        );
         assert!(mgr.global_thread_group_id(&ltgid).is_none());
-        assert!(mgr.local_thread_group_id(300).is_none());
+        assert!(mgr
+            .local_thread_group_id(GlobalThreadGroupId::new(300))
+            .is_none());
     }
 
     #[test]
@@ -306,22 +342,30 @@ mod tests {
         let ltgid_a = LocalThreadGroupId::new(1, "i1");
         let ltgid_b = LocalThreadGroupId::new(2, "i2");
 
-        mgr.get_or_insert_thread_with(&ltid_a, || 100);
-        mgr.get_or_insert_thread_with(&ltid_b, || 101);
-        mgr.get_or_insert_thread_with(&ltid_c, || 200);
-        mgr.get_or_insert_thread_group_with(&ltgid_a, || 300);
-        mgr.get_or_insert_thread_group_with(&ltgid_b, || 400);
+        mgr.get_or_insert_thread_with(&ltid_a, || GlobalThreadId::new(100));
+        mgr.get_or_insert_thread_with(&ltid_b, || GlobalThreadId::new(101));
+        mgr.get_or_insert_thread_with(&ltid_c, || GlobalThreadId::new(200));
+        mgr.get_or_insert_thread_group_with(&ltgid_a, || GlobalThreadGroupId::new(300));
+        mgr.get_or_insert_thread_group_with(&ltgid_b, || GlobalThreadGroupId::new(400));
 
         mgr.remove_session(1);
 
         assert!(mgr.global_thread_id(&ltid_a).is_none());
         assert!(mgr.global_thread_id(&ltid_b).is_none());
-        assert!(mgr.local_thread_id(100).is_none());
-        assert!(mgr.local_thread_id(101).is_none());
+        assert!(mgr.local_thread_id(GlobalThreadId::new(100)).is_none());
+        assert!(mgr.local_thread_id(GlobalThreadId::new(101)).is_none());
         assert!(mgr.global_thread_group_id(&ltgid_a).is_none());
-        assert!(mgr.local_thread_group_id(300).is_none());
+        assert!(mgr
+            .local_thread_group_id(GlobalThreadGroupId::new(300))
+            .is_none());
 
-        assert_eq!(mgr.global_thread_id(&ltid_c), Some(200));
-        assert_eq!(mgr.global_thread_group_id(&ltgid_b), Some(400));
+        assert_eq!(
+            mgr.global_thread_id(&ltid_c),
+            Some(GlobalThreadId::new(200))
+        );
+        assert_eq!(
+            mgr.global_thread_group_id(&ltgid_b),
+            Some(GlobalThreadGroupId::new(400))
+        );
     }
 }

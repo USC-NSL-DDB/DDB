@@ -114,12 +114,16 @@ mod tests {
     fn full_listing_is_applied_once() {
         let catalog = SourceCatalog::new();
 
-        assert!(
-            catalog.record_full_listing(7, ["/src/main.rs".to_owned(), "/src/lib.rs".to_owned()])
-        );
-        assert!(!catalog.record_full_listing(7, ["/src/ignored.rs".to_owned()]));
+        assert!(catalog.record_full_listing(
+            GroupId::new(7),
+            ["/src/main.rs".to_owned(), "/src/lib.rs".to_owned()]
+        ));
+        assert!(!catalog.record_full_listing(GroupId::new(7), ["/src/ignored.rs".to_owned()]));
 
-        assert_eq!(catalog.group_ids("/src/main.rs"), HashSet::from([7]));
+        assert_eq!(
+            catalog.group_ids("/src/main.rs"),
+            HashSet::from([GroupId::new(7)])
+        );
         assert!(catalog.group_ids("/src/ignored.rs").is_empty());
     }
 
@@ -127,24 +131,27 @@ mod tests {
     fn empty_path_listing_is_remembered() {
         let catalog = SourceCatalog::new();
 
-        catalog.record_path_listing("/src/missing.rs", 3, []);
+        catalog.record_path_listing("/src/missing.rs", GroupId::new(3), []);
 
-        assert!(catalog.is_checked("/src/missing.rs", 3));
+        assert!(catalog.is_checked("/src/missing.rs", GroupId::new(3)));
         assert!(catalog.group_ids("/src/missing.rs").is_empty());
     }
 
     #[test]
     fn removing_group_cleans_every_reverse_index() {
         let catalog = SourceCatalog::new();
-        catalog.record_full_listing(3, ["/src/main.rs".to_owned()]);
-        catalog.record_full_listing(4, ["/src/main.rs".to_owned()]);
-        catalog.record_path_listing("/src/missing.rs", 3, []);
+        catalog.record_full_listing(GroupId::new(3), ["/src/main.rs".to_owned()]);
+        catalog.record_full_listing(GroupId::new(4), ["/src/main.rs".to_owned()]);
+        catalog.record_path_listing("/src/missing.rs", GroupId::new(3), []);
 
-        catalog.remove_group(3);
+        catalog.remove_group(GroupId::new(3));
 
-        assert!(!catalog.has_full_listing(3));
-        assert!(!catalog.is_checked("/src/main.rs", 3));
-        assert!(!catalog.is_checked("/src/missing.rs", 3));
-        assert_eq!(catalog.group_ids("/src/main.rs"), HashSet::from([4]));
+        assert!(!catalog.has_full_listing(GroupId::new(3)));
+        assert!(!catalog.is_checked("/src/main.rs", GroupId::new(3)));
+        assert!(!catalog.is_checked("/src/missing.rs", GroupId::new(3)));
+        assert_eq!(
+            catalog.group_ids("/src/main.rs"),
+            HashSet::from([GroupId::new(4)])
+        );
     }
 }

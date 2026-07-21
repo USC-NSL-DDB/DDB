@@ -12,7 +12,7 @@ use tracing::{debug, error};
 use crate::{
     common::Config,
     feature::proclet_restore::ProcletRestorationMgr,
-    state::{LocalThreadId, SessionRef, StateMgr, ThreadContext},
+    state::{GlobalThreadId, LocalThreadId, SessionRef, StateMgr, ThreadContext},
 };
 
 use super::{
@@ -31,7 +31,7 @@ struct BacktraceData {
 
 struct ParentCapture {
     session_id: u64,
-    thread_id: u64,
+    thread_id: GlobalThreadId,
     data: BacktraceData,
 }
 
@@ -122,7 +122,7 @@ impl DistributedBacktraceService {
         Ok(CommandOutcome::response(completion, Presentation::Plain))
     }
 
-    async fn capture_thread(&self, global_thread_id: u64) -> Result<BacktraceData> {
+    async fn capture_thread(&self, global_thread_id: GlobalThreadId) -> Result<BacktraceData> {
         let LocalThreadId(session_id, _) = self
             .state
             .local_thread_id(global_thread_id)
@@ -140,7 +140,7 @@ impl DistributedBacktraceService {
         &self,
         transaction: &SessionTransaction,
         session_id: u64,
-        global_thread_id: u64,
+        global_thread_id: GlobalThreadId,
     ) -> Result<BacktraceData> {
         let mut completion = self
             .executor
@@ -220,7 +220,7 @@ impl DistributedBacktraceService {
         &self,
         session: &SessionRef,
         session_id: u64,
-        global_thread_id: u64,
+        global_thread_id: GlobalThreadId,
         parent: &ParentMetadata,
     ) -> Result<BacktraceData> {
         debug!(session_id, "switching to distributed parent context");
@@ -285,7 +285,7 @@ impl DistributedBacktraceService {
 
     async fn handle_migration(
         &self,
-        global_thread_id: u64,
+        global_thread_id: GlobalThreadId,
         parent: &ParentMetadata,
         transaction: Option<&SessionTransaction>,
     ) {
@@ -295,7 +295,7 @@ impl DistributedBacktraceService {
         let Some(LocalThreadId(session_id, _)) = self.state.local_thread_id(global_thread_id)
         else {
             error!(
-                global_thread_id,
+                global_thread_id = %global_thread_id,
                 "unable to resolve session for proclet restoration"
             );
             return;
@@ -363,7 +363,7 @@ fn extract_remote_metadata(
     })
 }
 
-fn extract_context(payload: &Dict, global_thread_id: u64) -> Result<ThreadContext> {
+fn extract_context(payload: &Dict, global_thread_id: GlobalThreadId) -> Result<ThreadContext> {
     let context = required_dict(payload, "old_ctx")?
         .as_map()
         .iter()
@@ -397,7 +397,7 @@ fn prepare_context_switch_args(registers: &Dict) -> String {
 fn append_parent_frames(
     completion: &mut FinishedCmd,
     session_id: u64,
-    global_thread_id: u64,
+    global_thread_id: GlobalThreadId,
     parent_completion: FinishedCmd,
 ) -> Result<()> {
     let frames = take_stack(parent_completion)?;
@@ -541,7 +541,7 @@ mod tests {
         )])
         .into();
 
-        assert!(extract_context(&payload, 7).is_err());
+        assert!(extract_context(&payload, GlobalThreadId::new(7)).is_err());
     }
 
     #[test]

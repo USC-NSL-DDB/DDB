@@ -9,7 +9,7 @@ use std::{fmt, sync::Arc};
 use gdbmi::raw::{Dict, Value};
 
 use super::{decoder::DecodeError, FinishedCmd};
-use crate::state::StateMgr;
+use crate::state::{GlobalThreadId, StateMgr};
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub(crate) enum QueryProjectionError {
@@ -24,7 +24,7 @@ pub(crate) enum QueryProjectionError {
     #[error("session {sid} thread {local_id} has no global thread mapping")]
     UnknownThread { sid: u64, local_id: u64 },
     #[error("global thread {global_id} is unknown")]
-    UnknownGlobalThread { global_id: u64 },
+    UnknownGlobalThread { global_id: GlobalThreadId },
     #[error("session {sid} thread group '{local_id}' has no global group mapping")]
     UnknownThreadGroup { sid: u64, local_id: String },
 }
@@ -47,7 +47,7 @@ impl QueryProjector {
 
     pub(crate) fn resolve_thread(
         &self,
-        global_id: u64,
+        global_id: GlobalThreadId,
     ) -> Result<(u64, u64), QueryProjectionError> {
         self.state
             .local_thread_id(global_id)

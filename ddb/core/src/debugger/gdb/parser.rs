@@ -118,7 +118,7 @@ impl From<BkptMeta> for Dict {
             .map(|subbkpt| {
                 let (bkpt_type, target_id) = match subbkpt.kind() {
                     crate::state::SubBkptType::Group(grp_bkpt) => {
-                        ("group".to_string(), grp_bkpt.target_group())
+                        ("group".to_string(), grp_bkpt.target_group().value())
                     }
                     crate::state::SubBkptType::Session(s_bkpt) => {
                         ("session".to_string(), s_bkpt.target_session())

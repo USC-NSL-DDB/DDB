@@ -666,7 +666,7 @@ mod tests {
         let mgr = BreakpointMgr::new();
         let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
-        let mut group_subbkpt = GroupSubBkpt::new(7);
+        let mut group_subbkpt = GroupSubBkpt::new(GroupId::new(7));
         group_subbkpt.add_local_bkpt(11, 101);
         group_subbkpt.add_local_bkpt(12, 202);
 
@@ -675,13 +675,18 @@ mod tests {
         let mut local_ids = mgr.local_breakpoint_ids(bkpt_id);
         local_ids.sort_unstable();
         assert_eq!(local_ids, vec![(11, 101), (12, 202)]);
-        assert_eq!(mgr.group_breakpoints(7).len(), 1);
+        assert_eq!(mgr.group_breakpoints(GroupId::new(7)).len(), 1);
 
         mgr.remove_breakpoint(bkpt_id);
 
         assert!(mgr.local_breakpoint_ids(bkpt_id).is_empty());
-        assert!(mgr.group_breakpoints(7).is_empty());
-        assert!(!mgr.state.read().unwrap().group_bkpts.contains_key(&7));
+        assert!(mgr.group_breakpoints(GroupId::new(7)).is_empty());
+        assert!(!mgr
+            .state
+            .read()
+            .unwrap()
+            .group_bkpts
+            .contains_key(&GroupId::new(7)));
         assert!(mgr.breakpoint(bkpt_id).is_none());
     }
 
@@ -713,7 +718,7 @@ mod tests {
         let mgr = BreakpointMgr::new();
         let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
-        let mut group_subbkpt = GroupSubBkpt::new(7);
+        let mut group_subbkpt = GroupSubBkpt::new(GroupId::new(7));
         group_subbkpt.add_local_bkpt(11, 101);
         group_subbkpt.add_local_bkpt(12, 202);
         mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
@@ -735,7 +740,7 @@ mod tests {
         let mgr = BreakpointMgr::new();
         let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
 
-        let mut group_subbkpt = GroupSubBkpt::new(7);
+        let mut group_subbkpt = GroupSubBkpt::new(GroupId::new(7));
         group_subbkpt.add_local_bkpt(11, 101);
         mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(group_subbkpt));
 
@@ -745,18 +750,26 @@ mod tests {
         );
         assert!(mgr.breakpoint(bkpt_id).is_none());
         assert_eq!(mgr.breakpoint_ids_by_local_id(11, 101), None);
-        assert!(mgr.group_breakpoints(7).is_empty());
-        assert!(!mgr.state.read().unwrap().group_bkpts.contains_key(&7));
+        assert!(mgr.group_breakpoints(GroupId::new(7)).is_empty());
+        assert!(!mgr
+            .state
+            .read()
+            .unwrap()
+            .group_bkpts
+            .contains_key(&GroupId::new(7)));
     }
 
     #[test]
     fn attaching_group_target_returns_change_without_publishing() {
         let mgr = BreakpointMgr::new();
         let bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
-        mgr.add_sub_breakpoint(bkpt_id, SubBkptType::Group(GroupSubBkpt::new(7)));
+        mgr.add_sub_breakpoint(
+            bkpt_id,
+            SubBkptType::Group(GroupSubBkpt::new(GroupId::new(7))),
+        );
 
         assert_eq!(
-            mgr.attach_group_breakpoint_session_target(bkpt_id, 7, 11, 101),
+            mgr.attach_group_breakpoint_session_target(bkpt_id, GroupId::new(7), 11, 101),
             BreakpointStateChange::TargetChanged(bkpt_id)
         );
         assert_eq!(
@@ -764,7 +777,7 @@ mod tests {
             Some(bkpt_id)
         );
         assert_eq!(
-            mgr.attach_group_breakpoint_session_target(bkpt_id, 8, 12, 202),
+            mgr.attach_group_breakpoint_session_target(bkpt_id, GroupId::new(8), 12, 202),
             BreakpointStateChange::None
         );
     }
@@ -774,7 +787,7 @@ mod tests {
         let mgr = BreakpointMgr::new();
 
         let retained_bkpt_id = mgr.add_breakpoint(BkptLoc::from(["main.rs", "10"]));
-        let mut group_subbkpt = GroupSubBkpt::new(7);
+        let mut group_subbkpt = GroupSubBkpt::new(GroupId::new(7));
         group_subbkpt.add_local_bkpt(11, 101);
         group_subbkpt.add_local_bkpt(12, 202);
         mgr.add_sub_breakpoint(retained_bkpt_id, SubBkptType::Group(group_subbkpt));
@@ -785,7 +798,7 @@ mod tests {
             SubBkptType::Session(SessionSubBkpt::new(303, 11)),
         );
 
-        let changes = mgr.clean_bkpts_for_terminated_session(11, Some(7));
+        let changes = mgr.clean_bkpts_for_terminated_session(11, Some(GroupId::new(7)));
 
         assert_eq!(changes.len(), 2);
         assert!(changes.contains(&BreakpointStateChange::TargetChanged(retained_bkpt_id)));

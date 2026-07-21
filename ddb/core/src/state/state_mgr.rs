@@ -5,7 +5,7 @@ use crate::{common::counter::SimpleCounter, discovery::discovery_message_produce
 use super::{
     session_mgr,
     thread_mgr::{self, LocalThreadGroupId, LocalThreadId},
-    SessionRef,
+    GlobalThreadGroupId, GlobalThreadId, SessionRef,
 };
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -20,7 +20,7 @@ pub enum StateTransitionError {
     #[error("unknown thread {thread_id} in session {session_id}")]
     ThreadNotFound { session_id: u64, thread_id: u64 },
     #[error("unknown global thread {0}")]
-    GlobalThreadNotFound(u64),
+    GlobalThreadNotFound(GlobalThreadId),
     #[error(
         "thread {thread_id} in session {session_id} belongs to group {actual_group_id}, not {expected_group_id}"
     )]
@@ -36,14 +36,14 @@ pub type StateTransitionResult<T> = Result<T, StateTransitionError>;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct GlobalThreadIdentity {
-    pub thread_id: u64,
-    pub thread_group_id: u64,
+    pub thread_id: GlobalThreadId,
+    pub thread_group_id: GlobalThreadGroupId,
 }
 
 #[derive(Default)]
 struct Selection {
     curr_session: Option<u64>,
-    selected_gthread: Option<u64>,
+    selected_gthread: Option<GlobalThreadId>,
 }
 
 #[derive(Default)]
@@ -67,14 +67,14 @@ impl SelectionState {
     }
 
     #[inline]
-    fn select_thread(&self, sid: u64, gtid: u64) {
+    fn select_thread(&self, sid: u64, gtid: GlobalThreadId) {
         let mut current = self.current.lock().unwrap();
         current.curr_session = Some(sid);
         current.selected_gthread = Some(gtid);
     }
 
     #[inline]
-    fn current_thread_id(&self) -> Option<u64> {
+    fn current_thread_id(&self) -> Option<GlobalThreadId> {
         self.current.lock().unwrap().selected_gthread
     }
 
@@ -88,7 +88,7 @@ impl SelectionState {
     }
 
     #[inline]
-    fn clear_thread(&self, gtid: u64) {
+    fn clear_thread(&self, gtid: GlobalThreadId) {
         let mut current = self.current.lock().unwrap();
         if current.selected_gthread == Some(gtid) {
             current.selected_gthread = None;
@@ -127,18 +127,18 @@ impl StateMgr {
     }
 
     #[inline]
-    fn register_thread_group_index(&self, sid: u64, tgid: &str) -> u64 {
+    fn register_thread_group_index(&self, sid: u64, tgid: &str) -> GlobalThreadGroupId {
         self.thread_states
             .get_or_insert_thread_group_with(&Self::thread_group_key(sid, tgid), || {
-                self.global_thread_group_ids.next()
+                GlobalThreadGroupId::new(self.global_thread_group_ids.next())
             })
     }
 
     #[inline]
-    fn register_thread_index(&self, sid: u64, tid: u64) -> u64 {
+    fn register_thread_index(&self, sid: u64, tid: u64) -> GlobalThreadId {
         self.thread_states
             .get_or_insert_thread_with(&Self::thread_key(sid, tid), || {
-                self.global_thread_ids.next()
+                GlobalThreadId::new(self.global_thread_ids.next())
             })
     }
 
@@ -178,12 +178,16 @@ impl StateMgr {
     }
 
     #[inline]
-    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<u64> {
+    pub fn global_thread_ids_for_session(&self, sid: u64) -> Vec<GlobalThreadId> {
         self.thread_states.global_thread_ids_for_session(sid)
     }
 
     #[inline]
-    pub async fn register_thread_group(&self, sid: u64, tgid: &str) -> StateTransitionResult<u64> {
+    pub async fn register_thread_group(
+        &self,
+        sid: u64,
+        tgid: &str,
+    ) -> StateTransitionResult<GlobalThreadGroupId> {
         let session = self
             .session_states
             .session(sid)
@@ -194,7 +198,11 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn remove_thread_group(&self, sid: u64, tgid: &str) -> StateTransitionResult<u64> {
+    pub async fn remove_thread_group(
+        &self,
+        sid: u64,
+        tgid: &str,
+    ) -> StateTransitionResult<GlobalThreadGroupId> {
         let local_group_id = Self::thread_group_key(sid, tgid);
         let gtgid = self
             .thread_states
@@ -226,7 +234,7 @@ impl StateMgr {
         sid: u64,
         tgid: &str,
         pid: u64,
-    ) -> StateTransitionResult<u64> {
+    ) -> StateTransitionResult<GlobalThreadGroupId> {
         let gtgid = self.global_thread_group_id(sid, tgid).ok_or_else(|| {
             StateTransitionError::ThreadGroupNotFound {
                 session_id: sid,
@@ -249,7 +257,11 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn exit_thread_group(&self, sid: u64, tgid: &str) -> StateTransitionResult<u64> {
+    pub async fn exit_thread_group(
+        &self,
+        sid: u64,
+        tgid: &str,
+    ) -> StateTransitionResult<GlobalThreadGroupId> {
         let gtgid = self.global_thread_group_id(sid, tgid).ok_or_else(|| {
             StateTransitionError::ThreadGroupNotFound {
                 session_id: sid,
@@ -404,7 +416,7 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn select_thread(&self, gtid: u64) -> StateTransitionResult<()> {
+    pub async fn select_thread(&self, gtid: GlobalThreadId) -> StateTransitionResult<()> {
         let local_tid = self
             .local_thread_id(gtid)
             .ok_or(StateTransitionError::GlobalThreadNotFound(gtid))?;
@@ -437,12 +449,12 @@ impl StateMgr {
     }
 
     #[inline]
-    pub fn select_thread_context(&self, sid: u64, gtid: u64) {
+    pub fn select_thread_context(&self, sid: u64, gtid: GlobalThreadId) {
         self.selection.select_thread(sid, gtid);
     }
 
     #[inline]
-    pub fn current_thread_id(&self) -> Option<u64> {
+    pub fn current_thread_id(&self) -> Option<GlobalThreadId> {
         self.selection.current_thread_id()
     }
 
@@ -462,19 +474,19 @@ impl StateMgr {
     }
 
     #[inline]
-    pub fn global_thread_id(&self, sid: u64, tid: u64) -> Option<u64> {
+    pub fn global_thread_id(&self, sid: u64, tid: u64) -> Option<GlobalThreadId> {
         self.thread_states
             .global_thread_id(&Self::thread_key(sid, tid))
     }
 
     #[inline]
-    pub fn global_thread_group_id(&self, sid: u64, tgid: &str) -> Option<u64> {
+    pub fn global_thread_group_id(&self, sid: u64, tgid: &str) -> Option<GlobalThreadGroupId> {
         self.thread_states
             .global_thread_group_id(&Self::thread_group_key(sid, tgid))
     }
 
     #[inline]
-    pub fn local_thread_id(&self, gtid: u64) -> Option<LocalThreadId> {
+    pub fn local_thread_id(&self, gtid: GlobalThreadId) -> Option<LocalThreadId> {
         self.thread_states.local_thread_id(gtid)
     }
 
@@ -528,7 +540,7 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn session_tag_and_thread_id(&self, gtid: u64) -> Option<(String, u64)> {
+    pub async fn session_tag_and_thread_id(&self, gtid: GlobalThreadId) -> Option<(String, u64)> {
         let local_tid = self.thread_states.local_thread_id(gtid)?;
         let sid = local_tid.session_id();
         let tid = local_tid.thread_id();
@@ -539,7 +551,7 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn session_tag_for_thread(&self, gtid: u64) -> Option<String> {
+    pub async fn session_tag_for_thread(&self, gtid: GlobalThreadId) -> Option<String> {
         self.session_tag_and_thread_id(gtid)
             .await
             .map(|value| value.0)
@@ -600,7 +612,7 @@ mod tests {
         assert_eq!(mgr.current_session_id(), None);
         assert_eq!(mgr.current_thread_id(), None);
         assert_eq!(mgr.session_tag_and_thread_id(gtid).await, None);
-        assert!(gtgid > 0);
+        assert!(gtgid.value() > 0);
     }
 
     #[tokio::test]

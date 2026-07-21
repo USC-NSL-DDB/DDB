@@ -255,7 +255,7 @@ impl SourceResolver {
             return Ok(());
         }
 
-        debug!(sid, group_id, "resolving complete debugger source listing");
+        debug!(sid, group_id = %group_id, "resolving complete debugger source listing");
         let _slot = self
             .slots
             .acquire()

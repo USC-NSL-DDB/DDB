@@ -8,8 +8,8 @@ use crate::{
     group_operation::GroupOperationCoordinator,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
     state::{
-        BkptLoc, BreakpointMgr, BreakpointStateChange, GroupMgr, GroupSubBkpt, SessionSubBkpt,
-        SubBkptType,
+        BkptLoc, BreakpointMgr, BreakpointStateChange, GroupId, GroupMgr, GroupSubBkpt,
+        SessionSubBkpt, SubBkptType,
     },
 };
 
@@ -100,7 +100,7 @@ impl BreakpointService {
         }
     }
 
-    fn group_ids_for_breakpoint(&self, breakpoint_id: u64) -> Vec<u64> {
+    fn group_ids_for_breakpoint(&self, breakpoint_id: u64) -> Vec<GroupId> {
         self.breakpoints
             .breakpoint(breakpoint_id)
             .map(|breakpoint| {
@@ -271,7 +271,7 @@ impl BreakpointService {
         &self,
         breakpoint_id: u64,
         debugger_command: &str,
-        group_id: u64,
+        group_id: GroupId,
     ) -> Result<()> {
         let _group_operation = self.group_operations.lock(group_id).await;
         let group = self

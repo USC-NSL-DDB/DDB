@@ -134,10 +134,12 @@ impl InputCmdParser {
         if let Some(index) = rest.iter().position(|s| *s == "--thread") {
             // --thread for targeting a specific thread
             if index < rest.len() - 1 {
-                let gtid = rest[index + 1].parse::<u64>().context(format!(
-                    "Invalid gtid provided for --thread flag. Command: {}",
-                    raw_cmd
-                ))?;
+                let gtid = rest[index + 1]
+                    .parse::<crate::state::GlobalThreadId>()
+                    .context(format!(
+                        "Invalid gtid provided for --thread flag. Command: {}",
+                        raw_cmd
+                    ))?;
                 let target = Target::Thread(gtid);
                 return Ok((target, prefix, rest.join(" ")));
             }
@@ -163,10 +165,12 @@ impl InputCmdParser {
         if let Some(index) = rest.iter().position(|s| *s == "--group") {
             // --group for targeting a specific group
             if index < rest.len() - 1 {
-                let gid = rest[index + 1].parse::<u64>().context(format!(
-                    "invalid gid when use --group flag. Command: {}",
-                    raw_cmd
-                ))?;
+                let gid = rest[index + 1]
+                    .parse::<crate::state::GroupId>()
+                    .context(format!(
+                        "invalid gid when use --group flag. Command: {}",
+                        raw_cmd
+                    ))?;
                 let target = Target::Group(gid);
                 let mut rest = rest.clone();
                 // remove the `--group` and its argument from the rest.
@@ -191,7 +195,7 @@ impl InputCmdParser {
                         ))?;
                         target_list.push(Target::Session(sid));
                     } else if ele.starts_with('g') {
-                        let gid = ele[1..].parse::<u64>().context(format!(
+                        let gid = ele[1..].parse::<crate::state::GroupId>().context(format!(
                             "invalid gid when use --multiple flag. Command: {}",
                             raw_cmd
                         ))?;
@@ -315,7 +319,10 @@ mod tests {
     #[test]
     fn thread_target_parsing_does_not_require_live_state() {
         let parsed: ParsedInputCmd = "-stack-list-frames --thread 9001".try_into().unwrap();
-        assert_eq!(parsed.target, super::Target::Thread(9001));
+        assert_eq!(
+            parsed.target,
+            super::Target::Thread(crate::state::GlobalThreadId::new(9001))
+        );
         assert_eq!(parsed.args, "--thread 9001");
     }
 

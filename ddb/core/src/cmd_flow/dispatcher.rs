@@ -162,7 +162,7 @@ impl CommandDispatcher {
     async fn thread_select(&self, cmd: ParsedInputCmd) -> Result<CommandOutcome> {
         let parts = cmd.args.split_whitespace().collect::<Vec<_>>();
         let response = if let Some(global_tid) = parts.last() {
-            let global_tid = global_tid.parse::<u64>()?;
+            let global_tid = global_tid.parse::<crate::state::GlobalThreadId>()?;
             let (session_id, local_tid) = self
                 .state
                 .local_thread_id(global_tid)

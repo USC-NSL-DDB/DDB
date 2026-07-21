@@ -16,7 +16,7 @@ use super::{
 use crate::{
     common::counter::SimpleCounter,
     runtime_model::RuntimeModel,
-    state::{GroupId, LocalThreadId},
+    state::{GlobalThreadId, GroupId, LocalThreadId},
 };
 
 const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -27,7 +27,7 @@ pub enum Target {
     /// must resolve this explicitly before routing.
     Unspecified,
     Session(u64),
-    Thread(u64),
+    Thread(GlobalThreadId),
     Group(GroupId),
     CurrThread,
     CurrSession,

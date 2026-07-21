@@ -61,14 +61,14 @@ mod tests {
     #[tokio::test]
     async fn same_group_operations_are_serialized() {
         let coordinator = Arc::new(GroupOperationCoordinator::new());
-        let first = coordinator.lock(7).await;
+        let first = coordinator.lock(GroupId::new(7)).await;
         let (events, mut observed) = mpsc::unbounded_channel();
 
         let waiter = tokio::spawn({
             let coordinator = Arc::clone(&coordinator);
             async move {
                 events.send("waiting").unwrap();
-                let _guard = coordinator.lock(7).await;
+                let _guard = coordinator.lock(GroupId::new(7)).await;
                 events.send("acquired").unwrap();
             }
         });
@@ -91,10 +91,13 @@ mod tests {
     #[tokio::test]
     async fn different_groups_do_not_block_each_other() {
         let coordinator = Arc::new(GroupOperationCoordinator::new());
-        let _first = coordinator.lock(7).await;
+        let _first = coordinator.lock(GroupId::new(7)).await;
 
-        timeout(Duration::from_millis(100), coordinator.lock(8))
-            .await
-            .expect("an unrelated group should not share the gate");
+        timeout(
+            Duration::from_millis(100),
+            coordinator.lock(GroupId::new(8)),
+        )
+        .await
+        .expect("an unrelated group should not share the gate");
     }
 }

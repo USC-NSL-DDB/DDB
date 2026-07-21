@@ -223,71 +223,7 @@ impl Formatter for ProcessReadableFormatter {
     }
 }
 
-/// handle `-thread-select`
-#[derive(Clone)]
-pub struct ThreadSelectFormatter(u64); // gtid
-impl ThreadSelectFormatter {
-    #[allow(unused)]
-    pub fn new(gtid: u64) -> Self {
-        Self(gtid)
-    }
-}
-
-impl Formatter for ThreadSelectFormatter {
-    type Transformed = (Option<u64>, Dict);
-
-    #[inline]
-    fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
-        let mut payload = responses
-            .get_responses()
-            .first()
-            .unwrap()
-            .get_payload()
-            .unwrap()
-            .clone();
-        payload.insert("new-thread-id".into(), Value::String(self.0.to_string()));
-        (responses.get_external_token(), payload)
-    }
-
-    #[inline]
-    fn format(&self, input: &Self::Transformed) -> String {
-        MIFormatter::format("^", "done", Some(&input.1), input.0)
-    }
-}
-
-// /// handle `-break-insert`
-// #[derive(Clone)]
-// pub struct BreakInsertFormatter(u64); // gtid
-// impl BreakInsertFormatter {
-//     #[allow(unused)]
-//     pub fn new(gtid: u64) -> Self {
-//         Self(gtid)
-//     }
-// }
-
-// impl Formatter for BreakInsertFormatter {
-//     type Transformed = (Option<u64>, Dict);
-
-//     #[inline]
-//     fn transform(&self, responses: FinishedCmd) -> Self::Transformed {
-//         let mut payload = responses
-//             .get_responses()
-//             .first()
-//             .unwrap()
-//             .get_payload()
-//             .unwrap()
-//             .clone();
-//         payload.insert("new-thread-id".into(), Value::String(self.0.to_string()));
-//         (responses.get_external_token(), payload)
-//     }
-
-//     #[inline]
-//     fn format(&self, input: &Self::Transformed) -> String {
-//         MIFormatter::format("^", "done", Some(&input.1), input.0)
-//     }
-// }
-
-/// static dispatched version of the emit based on the formatter.
+/// Static dispatched version of the emit based on the formatter.
 /// this is useful when the formatter is known at compile time.
 #[inline]
 pub fn emit_static<T: Formatter>(finished: FinishedCmd, formatter: T) {

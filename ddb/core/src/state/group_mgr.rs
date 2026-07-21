@@ -5,9 +5,8 @@ use std::{
     sync::RwLock,
 };
 
-use crate::common::counter::SimpleCounter;
+use crate::{common::counter::SimpleCounter, state::ids::GroupId};
 
-pub type GroupId = u64;
 pub type GroupHash = String;
 pub type SessionId = u64;
 
@@ -118,7 +117,7 @@ impl GroupMgr {
 
         let group_hash = group_hash.to_string();
         if !indexes.hash_to_group.contains_key(&group_hash) {
-            let group_id = self.ids.next();
+            let group_id = GroupId::new(self.ids.next());
             indexes.id_to_hash.insert(group_id, group_hash.clone());
             indexes.hash_to_group.insert(
                 group_hash.clone(),

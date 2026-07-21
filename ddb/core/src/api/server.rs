@@ -126,7 +126,7 @@ impl From<&SubBkptMeta> for SubBkptJson {
             },
             SubBkptType::Group(g) => SubBkptJson::Group {
                 id: subbkpt.id(),
-                target_group: g.target_group(),
+                target_group: g.target_group().value(),
                 active_sessions: g.local_ids().len(),
             },
         }
@@ -398,7 +398,7 @@ async fn get_sessions(State(model): State<Arc<RuntimeModel>>) -> impl IntoRespon
             "status": status,
             "group": {
                 "valid": grp_info.is_some(),
-                "id": grp_info.as_ref().map(|(id, _)| *id).unwrap_or(0),
+                "id": grp_info.as_ref().map(|(id, _)| *id).map(crate::state::GroupId::value).unwrap_or(0),
                 "hash": grp_info.as_ref().map(|(_, hash)| hash).unwrap_or(&"UNKNOWN".to_string()),
             }
         });
@@ -428,7 +428,7 @@ async fn get_group(
 ) -> impl IntoResponse {
     let group_mgr = model.groups();
     if let Some(grp_id) = query.grp_id {
-        if let Some(group_meta) = group_mgr.group_by_id(grp_id) {
+        if let Some(group_meta) = group_mgr.group_by_id(GroupId::new(grp_id)) {
             (StatusCode::OK, Json(json!(group_meta)))
         } else {
             (

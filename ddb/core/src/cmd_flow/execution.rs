@@ -272,7 +272,7 @@ mod tests {
     fn context_switch_arguments_are_space_separated_register_assignments() {
         let context = ThreadContext {
             ctx: HashMap::from([("pc".to_string(), 4096), ("sp".to_string(), 8192)]),
-            tid: 7,
+            tid: crate::state::GlobalThreadId::new(7),
         };
 
         let args = prepare_context_switch_args(&context);
@@ -284,7 +284,11 @@ mod tests {
 
     #[test]
     fn stepping_operations_require_a_thread_target() {
-        assert!(require_thread_target(&Target::Thread(9), "exec-step").is_ok());
+        assert!(require_thread_target(
+            &Target::Thread(crate::state::GlobalThreadId::new(9)),
+            "exec-step"
+        )
+        .is_ok());
         assert!(require_thread_target(&Target::Session(2), "exec-step").is_err());
     }
 }

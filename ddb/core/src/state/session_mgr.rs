@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::discovery::discovery_message_producer::ServiceMeta;
+use crate::{discovery::discovery_message_producer::ServiceMeta, state::GlobalThreadId};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum ThreadStatus {
@@ -26,7 +26,7 @@ pub enum ThreadGroupStatus {
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct ThreadContext {
-    pub tid: u64,
+    pub tid: GlobalThreadId,
     pub ctx: HashMap<String, u64>,
 }
 

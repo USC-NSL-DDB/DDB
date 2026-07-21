@@ -258,7 +258,11 @@ impl DebuggerEventReducer {
         })
     }
 
-    fn global_threads(&self, sid: u64, threads: &ThreadSet) -> Result<Vec<u64>> {
+    fn global_threads(
+        &self,
+        sid: u64,
+        threads: &ThreadSet,
+    ) -> Result<Vec<crate::state::GlobalThreadId>> {
         let state = self.model.state();
         match threads {
             ThreadSet::All => Ok(state.global_thread_ids_for_session(sid)),
