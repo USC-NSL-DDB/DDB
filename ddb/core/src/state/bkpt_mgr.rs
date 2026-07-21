@@ -398,6 +398,7 @@ impl BreakpointMgr {
         Some(snapshot)
     }
 
+    #[cfg(test)]
     pub fn add_breakpoint(&self, loc: BkptLoc) -> u64 {
         let bkpt = BkptMeta::new(self.ids.next(), loc);
         let bkpt_id = bkpt.id;
@@ -416,6 +417,7 @@ impl BreakpointMgr {
         }
     }
 
+    #[cfg(test)]
     pub fn add_sub_breakpoint(&self, bkpt_id: u64, subbkpt_type: SubBkptType) {
         let mut state = self.state.write().unwrap();
         if let Some(subbkpt) = state

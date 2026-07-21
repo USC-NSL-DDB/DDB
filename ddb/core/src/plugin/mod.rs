@@ -10,7 +10,7 @@ use anyhow::Result;
 use gdbmi::raw::Value;
 
 use crate::{
-    common::config::{Config, DebuggerCommand, Framework},
+    common::config::{Config, DebuggerCommand},
     debugger::gdb::runtime::CORE_GDB_RUNTIME_ASSET,
     debugger::gdb::runtime::PROCLET_GDB_RUNTIME_ASSET,
     debugger::BundledDebuggerAsset,
@@ -84,10 +84,7 @@ pub struct FrameworkDebuggerBootstrap {
     pub post_start_commands: Vec<DebuggerCommand>,
 }
 
-#[allow(dead_code)]
 pub trait FrameworkPlugin: Send + Sync + std::fmt::Debug {
-    fn id(&self) -> &'static str;
-    fn framework(&self) -> Framework;
     fn command_adapter(&self) -> Arc<dyn FrameworkCommandAdapter>;
     fn service_discovery_mode(&self, _config: &Config) -> ServiceDiscoveryMode {
         ServiceDiscoveryMode::None
@@ -135,14 +132,6 @@ mod tests {
     struct DummyPlugin;
 
     impl FrameworkPlugin for DummyPlugin {
-        fn id(&self) -> &'static str {
-            "dummy"
-        }
-
-        fn framework(&self) -> Framework {
-            Framework::Nu
-        }
-
         fn command_adapter(&self) -> Arc<dyn FrameworkCommandAdapter> {
             Arc::new(GrpcAdapter)
         }

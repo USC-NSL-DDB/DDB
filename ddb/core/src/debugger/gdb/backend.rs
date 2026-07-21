@@ -118,10 +118,6 @@ impl GdbBackend {
 }
 
 impl DebuggerBackend for GdbBackend {
-    fn name(&self) -> &'static str {
-        "gdb"
-    }
-
     fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
         vec![CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET]
     }

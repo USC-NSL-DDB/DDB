@@ -1,83 +1,9 @@
 use anyhow::Result;
-use opentelemetry::KeyValue;
-use quanta::Clock;
 use std::{
     fs, io,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::OnceLock,
 };
-
-#[allow(unused)]
-static COMMAND_HANDLING_HIST: OnceLock<opentelemetry::metrics::Histogram<u64>> = OnceLock::new();
-#[allow(unused)]
-static COMMAND_COUNT_COUNTER: OnceLock<opentelemetry::metrics::Counter<u64>> = OnceLock::new();
-
-#[allow(unused)]
-pub struct Timer {
-    clock: Clock,
-    start: u64,
-}
-
-impl Timer {
-    #[allow(unused)]
-    pub fn start() -> Self {
-        let clock = Clock::new();
-        let start = clock.raw();
-        Timer { clock, start }
-    }
-
-    #[allow(unused)]
-    pub fn elapsed(&self) -> std::time::Duration {
-        let now = self.clock.raw();
-        self.clock.delta(self.start, now)
-    }
-
-    #[allow(unused)]
-    pub fn elapsed_nanos(&self) -> u64 {
-        let now = self.clock.raw();
-        self.clock.delta_as_nanos(self.start, now)
-    }
-
-    #[allow(unused)]
-    pub fn elapsed_micros(&self) -> u64 {
-        let now = self.clock.raw();
-        self.clock.delta_as_nanos(self.start, now) / 1_000
-    }
-
-    #[allow(unused)]
-    pub fn log_command_handle_lat(&self, command: &str) {
-        let elapsed_micros = self.elapsed_micros();
-        let histogram = COMMAND_HANDLING_HIST.get_or_init(|| {
-            let meter = opentelemetry::global::meter("ddb");
-            meter
-                .u64_histogram("command_handle_duration")
-                .with_unit("us")
-                .with_description("Latencies of command handling")
-                .build()
-        });
-        histogram.record(
-            elapsed_micros,
-            &[KeyValue::new("command", command.to_string())],
-        );
-    }
-}
-
-#[allow(unused)]
-pub struct Counter;
-impl Counter {
-    #[allow(unused)]
-    pub fn log_command_count(command: &str) {
-        let counter = COMMAND_COUNT_COUNTER.get_or_init(|| {
-            let meter = opentelemetry::global::meter("ddb");
-            meter
-                .u64_counter("command_count")
-                .with_description("Count of commands handled")
-                .build()
-        });
-        counter.add(1, &[KeyValue::new("command", command.to_string())]);
-    }
-}
 
 pub mod mqtt {
     use core::panic;
@@ -141,11 +67,6 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
     } else {
         Ok(())
     }
-}
-
-#[allow(unused)]
-pub fn run_command_quite(cmd: &str, args: &[&str]) -> Result<(), io::Error> {
-    run_command::<false, true>(cmd, args)
 }
 
 pub fn expand_path(path: &str) -> PathBuf {

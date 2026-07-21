@@ -59,7 +59,7 @@ impl ApplicationServices {
         let group_operations = Arc::new(GroupOperationCoordinator::new());
         let source_resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
-            Arc::clone(runtime_model.groups()),
+            Arc::clone(runtime_model.groups()) as _,
             command_executor,
             SourceResolutionPolicy::configured(),
         );

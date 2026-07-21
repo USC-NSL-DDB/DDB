@@ -11,10 +11,6 @@ use crate::{
 pub struct MockBackend;
 
 impl DebuggerBackend for MockBackend {
-    fn name(&self) -> &'static str {
-        "mock"
-    }
-
     fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
         Vec::new()
     }

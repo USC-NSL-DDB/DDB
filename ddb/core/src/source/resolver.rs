@@ -78,13 +78,37 @@ struct ResolutionKey {
     path: String,
 }
 
+/// Read-only view of group membership used during source resolution.
+///
+/// The resolver only queries groups; depending on this view instead of the
+/// write-capable manager keeps mutation structurally out of reach.
+pub(crate) trait GroupResolutionView: fmt::Debug + Send + Sync {
+    fn group_by_id(&self, group_id: GroupId) -> Option<GroupMeta>;
+    fn group_id_by_session(&self, sid: u64) -> Option<GroupId>;
+    fn matching_groups(&self, predicate: &dyn Fn(&GroupMeta) -> bool) -> Vec<GroupMeta>;
+}
+
+impl GroupResolutionView for GroupMgr {
+    fn group_by_id(&self, group_id: GroupId) -> Option<GroupMeta> {
+        GroupMgr::group_by_id(self, group_id)
+    }
+
+    fn group_id_by_session(&self, sid: u64) -> Option<GroupId> {
+        GroupMgr::group_id_by_session(self, sid)
+    }
+
+    fn matching_groups(&self, predicate: &dyn Fn(&GroupMeta) -> bool) -> Vec<GroupMeta> {
+        GroupMgr::matching_groups(self, predicate)
+    }
+}
+
 /// Owns debugger source discovery and its lifecycle.
 ///
 /// The catalog remains synchronous and passive. All debugger I/O, duplicate
 /// suppression, concurrency limiting, and background task ownership live here.
 pub(crate) struct SourceResolver {
     catalog: Arc<SourceCatalog>,
-    groups: Arc<GroupMgr>,
+    groups: Arc<dyn GroupResolutionView>,
     provider: Arc<dyn SourceListingProvider>,
     path_gates: DashMap<ResolutionKey, Arc<AsyncMutex<()>>>,
     full_gates: DashMap<GroupId, Arc<AsyncMutex<()>>>,
@@ -109,7 +133,7 @@ impl fmt::Debug for SourceResolver {
 impl SourceResolver {
     pub(crate) fn new(
         catalog: Arc<SourceCatalog>,
-        groups: Arc<GroupMgr>,
+        groups: Arc<dyn GroupResolutionView>,
         executor: CommandExecutor,
         policy: SourceResolutionPolicy,
     ) -> Arc<Self> {
@@ -124,7 +148,7 @@ impl SourceResolver {
 
     fn new_with_provider(
         catalog: Arc<SourceCatalog>,
-        groups: Arc<GroupMgr>,
+        groups: Arc<dyn GroupResolutionView>,
         provider: Arc<dyn SourceListingProvider>,
         policy: SourceResolutionPolicy,
         concurrency: usize,
@@ -166,7 +190,7 @@ impl SourceResolver {
     pub(crate) async fn resolve_path(&self, path: &str) -> Result<()> {
         self.ensure_accepting()?;
 
-        let unresolved = self.groups.matching_groups(|group| {
+        let unresolved = self.groups.matching_groups(&|group| {
             !group.session_ids().is_empty() && !self.catalog.is_checked(path, group.id())
         });
         if unresolved.is_empty() {

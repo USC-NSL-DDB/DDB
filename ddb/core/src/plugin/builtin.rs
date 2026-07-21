@@ -26,14 +26,6 @@ struct ServiceWeaverFrameworkPlugin;
 struct UnspecifiedFrameworkPlugin;
 
 impl FrameworkPlugin for NuFrameworkPlugin {
-    fn id(&self) -> &'static str {
-        "nu"
-    }
-
-    fn framework(&self) -> Framework {
-        Framework::Nu
-    }
-
     fn command_adapter(&self) -> Arc<dyn super::FrameworkCommandAdapter> {
         Arc::new(NuAdapter)
     }
@@ -82,14 +74,6 @@ impl FrameworkPlugin for NuFrameworkPlugin {
 }
 
 impl FrameworkPlugin for QuicksandFrameworkPlugin {
-    fn id(&self) -> &'static str {
-        "quicksand"
-    }
-
-    fn framework(&self) -> Framework {
-        Framework::Quicksand
-    }
-
     fn command_adapter(&self) -> Arc<dyn super::FrameworkCommandAdapter> {
         Arc::new(NuAdapter)
     }
@@ -126,14 +110,6 @@ impl FrameworkPlugin for QuicksandFrameworkPlugin {
 }
 
 impl FrameworkPlugin for GrpcFrameworkPlugin {
-    fn id(&self) -> &'static str {
-        "grpc"
-    }
-
-    fn framework(&self) -> Framework {
-        Framework::GRPC
-    }
-
     fn command_adapter(&self) -> Arc<dyn super::FrameworkCommandAdapter> {
         Arc::new(GrpcAdapter)
     }
@@ -165,14 +141,6 @@ impl FrameworkPlugin for GrpcFrameworkPlugin {
 }
 
 impl FrameworkPlugin for ServiceWeaverFrameworkPlugin {
-    fn id(&self) -> &'static str {
-        "serviceweaver-kube"
-    }
-
-    fn framework(&self) -> Framework {
-        Framework::ServiceWeaverKube
-    }
-
     fn command_adapter(&self) -> Arc<dyn super::FrameworkCommandAdapter> {
         Arc::new(ServiceWeaverAdapter)
     }
@@ -183,14 +151,6 @@ impl FrameworkPlugin for ServiceWeaverFrameworkPlugin {
 }
 
 impl FrameworkPlugin for UnspecifiedFrameworkPlugin {
-    fn id(&self) -> &'static str {
-        "unspecified"
-    }
-
-    fn framework(&self) -> Framework {
-        Framework::Unspecified
-    }
-
     fn command_adapter(&self) -> Arc<dyn super::FrameworkCommandAdapter> {
         Arc::new(GrpcAdapter)
     }

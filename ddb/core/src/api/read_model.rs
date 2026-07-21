@@ -212,7 +212,7 @@ mod tests {
         let router = Arc::new(Router::new(Arc::clone(&model)));
         let resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
-            Arc::clone(model.groups()),
+            Arc::clone(model.groups()) as _,
             CommandExecutor::new(Arc::clone(&router)),
             SourceResolutionPolicy::OnDemand,
         );
