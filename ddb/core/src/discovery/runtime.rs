@@ -1,83 +1,33 @@
-use std::sync::Arc;
-
-use anyhow::{bail, Result};
 use flume::Receiver;
-use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::{DiscoveryMessageProducer, ServiceInfo};
-use crate::{
-    dbg_ctrl::ProxyTunnel,
-    session::{factory::SessionFactory, supervisor::SessionSupervisor},
-};
 
-/// Owns the producer-to-session-admission pipeline for service discovery.
+/// Owns a discovery producer and the stream of services it reports.
+///
+/// Discovery only observes: consuming the stream and admitting sessions is
+/// the debugger manager's job.
 pub(crate) struct DiscoveryRuntime {
     producer: Box<dyn DiscoveryMessageProducer>,
     services: Receiver<ServiceInfo>,
-    consumer_task: Option<JoinHandle<()>>,
-    proxy_tunnel: Option<ProxyTunnel>,
-    factory: SessionFactory,
-    supervisor: Arc<SessionSupervisor>,
 }
 
 impl DiscoveryRuntime {
     pub(crate) fn new(
         producer: Box<dyn DiscoveryMessageProducer>,
         services: Receiver<ServiceInfo>,
-        proxy_tunnel: Option<ProxyTunnel>,
-        factory: SessionFactory,
-        supervisor: Arc<SessionSupervisor>,
     ) -> Self {
-        Self {
-            producer,
-            services,
-            consumer_task: None,
-            proxy_tunnel,
-            factory,
-            supervisor,
-        }
+        Self { producer, services }
     }
 
-    pub(crate) fn start(&mut self) -> Result<()> {
-        if self.consumer_task.is_some() {
-            bail!("discovery runtime is already started");
-        }
-
-        let services = self.services.clone();
-        let proxy_tunnel = self.proxy_tunnel.clone();
-        let factory = self.factory.clone();
-        let supervisor = Arc::downgrade(&self.supervisor);
-        self.consumer_task = Some(tokio::spawn(async move {
-            while let Ok(info) = services.recv_async().await {
-                let Some(supervisor) = supervisor.upgrade() else {
-                    break;
-                };
-                debug!(?info, "received discovered service");
-                let process = match factory.create_discovered(info, proxy_tunnel.clone()) {
-                    Ok(process) => process,
-                    Err(error) => {
-                        error!(?error, "failed to construct discovered session");
-                        continue;
-                    }
-                };
-                if let Err(error) = supervisor.admit(process).await {
-                    error!(?error, "failed to admit discovered session");
-                }
-            }
-        }));
-        Ok(())
+    pub(crate) fn services(&self) -> Receiver<ServiceInfo> {
+        self.services.clone()
     }
 
-    pub(crate) async fn shutdown(&mut self) -> Result<()> {
+    pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
+        debug!("stopping discovery producer");
         let producer_result = self.producer.stop_producing().await;
-
-        if let Some(task) = self.consumer_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
         self.services.drain();
-
         producer_result
     }
 }
@@ -92,21 +42,6 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::{
-        cmd_flow::{
-            api::CommandExecutor, breakpoint::BreakpointEventPublisher,
-            event::DebuggerEventReducer, router::Router,
-        },
-        common::Config,
-        notification::NotificationManager,
-        shutdown::ShutdownCtrl,
-        source::{
-            catalog::SourceCatalog,
-            resolver::{SourceResolutionPolicy, SourceResolver},
-        },
-        state::GroupOperationCoordinator,
-        state::RuntimeModel,
-    };
 
     struct TestProducer {
         stopped: Arc<AtomicBool>,
@@ -125,56 +60,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_starts_once_and_stops_its_producer() {
-        let config = Arc::new(Config::default());
-        let plugin = crate::plugin::resolve_framework_plugin(config.as_ref());
-        let backend = crate::debugger::resolve_debugger_backend(config.as_ref());
-        let model = RuntimeModel::new();
-        let notifications = Arc::new(NotificationManager::new());
-        let breakpoint_events = BreakpointEventPublisher::new(Arc::clone(&notifications));
-        let reducer = DebuggerEventReducer::new(Arc::clone(&model), Arc::clone(&breakpoint_events));
-        let factory =
-            SessionFactory::new(Arc::clone(&config), backend, Arc::clone(&plugin), reducer);
-        let router = Arc::new(Router::new(Arc::clone(&model)));
-        let source_resolver = SourceResolver::new(
-            Arc::new(SourceCatalog::new()),
-            Arc::clone(model.groups()),
-            CommandExecutor::new(Arc::clone(&router)),
-            SourceResolutionPolicy::OnDemand,
-        );
-        let supervisor = SessionSupervisor::new(
-            config,
-            plugin,
-            model,
-            router,
-            notifications,
-            breakpoint_events,
-            Arc::new(GroupOperationCoordinator::new()),
-            source_resolver,
-            Arc::new(ShutdownCtrl::new()),
-        );
+    async fn shutdown_stops_the_producer_and_drains_pending_services() {
         let stopped = Arc::new(AtomicBool::new(false));
-        let (_services_tx, services) = flume::bounded(1);
+        let (services_tx, services) = flume::bounded(1);
+        services_tx
+            .send(ServiceInfo::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                "svc".to_string(),
+                42,
+                "hash".to_string(),
+                "api".to_string(),
+                None,
+            ))
+            .unwrap();
         let mut runtime = DiscoveryRuntime::new(
             Box::new(TestProducer {
                 stopped: Arc::clone(&stopped),
             }),
             services,
-            None,
-            factory,
-            supervisor,
         );
 
-        runtime.start().expect("runtime should start");
-        assert_eq!(
-            runtime
-                .start()
-                .expect_err("runtime should reject a second start")
-                .to_string(),
-            "discovery runtime is already started"
-        );
         runtime.shutdown().await.expect("runtime should stop");
 
         assert!(stopped.load(Ordering::Acquire));
+        assert!(runtime.services().is_empty());
     }
 }

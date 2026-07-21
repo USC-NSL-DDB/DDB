@@ -14,6 +14,7 @@ use crate::{
     feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
     notification::NotificationManager,
     plugin::FrameworkPlugin,
+    session::{factory::SessionFactory, supervisor::SessionSupervisor},
     shutdown::ShutdownCtrl,
     source::{
         catalog::SourceCatalog,
@@ -77,17 +78,28 @@ impl ApplicationServices {
             proclet_restoration,
             proclet_queries,
         );
-        let debugger_manager = DbgManager::new(
+        let session_supervisor = SessionSupervisor::new(
             Arc::clone(&config),
             Arc::clone(&plugin),
-            Arc::clone(&backend),
             Arc::clone(&runtime_model),
             Arc::clone(&command_router),
             Arc::clone(&notification_manager),
             breakpoint_events,
             Arc::clone(&group_operations),
             Arc::clone(&source_resolver),
-            Arc::clone(&event_reducer),
+            Arc::clone(&shutdown),
+        );
+        let session_factory = SessionFactory::new(
+            Arc::clone(&config),
+            Arc::clone(&backend),
+            Arc::clone(&plugin),
+            event_reducer,
+        );
+        let debugger_manager = DbgManager::new(
+            Arc::clone(&config),
+            plugin,
+            session_supervisor,
+            session_factory,
             shutdown,
         );
 

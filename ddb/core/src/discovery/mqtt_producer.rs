@@ -15,12 +15,13 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 use super::{
-    broker::{BrokerInfo, MessageBroker},
+    broker::{BrokerInfo, EMQXBroker, MessageBroker, MosquittoBroker},
     discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo},
 };
 use crate::{
-    common::sd_defaults, connection::ssh_client::SSHCred, dbg_ctrl::TransportSpec,
-    discovery::subscriber::AsyncDiscoverClient, shutdown::ShutdownCtrl,
+    common::{config::BrokerType, sd_defaults},
+    discovery::subscriber::AsyncDiscoverClient,
+    shutdown::ShutdownCtrl,
 };
 
 fn write_config(broker: &BrokerInfo, config_path: &str) -> Result<()> {
@@ -61,18 +62,33 @@ pub struct MqttProducer {
 }
 
 impl MqttProducer {
-    /// Create a new MqttProducer, optionally with an owned broker.
-    pub fn new(
-        managed_broker: Option<Box<dyn MessageBroker>>,
+    /// Creates a producer from configuration, owning the managed broker when
+    /// one is configured.
+    pub fn from_config(
         config: Arc<crate::common::config::Config>,
         shutdown: Arc<ShutdownCtrl>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let discovery = config
+            .service_discovery
+            .as_ref()
+            .context("message-broker discovery requires configuration")?;
+        let managed_broker: Option<Box<dyn MessageBroker>> = match discovery.broker.managed.as_ref()
+        {
+            Some(managed) => Some(match managed.broker_type {
+                BrokerType::Mosquitto => Box::new(MosquittoBroker::new()),
+                BrokerType::Emqx => Box::new(EMQXBroker::new()),
+                BrokerType::Unknown => {
+                    anyhow::bail!("managed broker type must be mosquitto or emqx")
+                }
+            }),
+            None => None,
+        };
+        Ok(Self {
             managed_broker,
             handles: Vec::new(),
             config,
             shutdown,
-        }
+        })
     }
     fn monitor(
         &self,
@@ -218,9 +234,6 @@ impl DiscoveryMessageProducer for MqttProducer {
             let event_rx = event_receiver.clone();
             let tx_clone = tx.clone();
 
-            let ssh_port = self.config.ssh.port;
-            let ssh_user = self.config.ssh.user.clone();
-
             let handle = tokio::spawn(async move {
                 while let Ok(event) = event_rx.recv_async().await {
                     if let Event::Incoming(Packet::Publish(publish)) = event {
@@ -236,19 +249,12 @@ impl DiscoveryMessageProducer for MqttProducer {
                                     continue;
                                 }
                             };
-                            let ssh_cred = SSHCred::new(
-                                mqtt_payload.ip.to_string().as_str(),
-                                ssh_port,
-                                ssh_user.as_str(),
-                                None,
-                            );
                             let info = ServiceInfo::new(
                                 mqtt_payload.ip,
                                 mqtt_payload.tag,
                                 mqtt_payload.pid,
                                 mqtt_payload.hash,
                                 mqtt_payload.alias,
-                                TransportSpec::DirectSsh(ssh_cred),
                                 mqtt_payload.user_data,
                             );
 

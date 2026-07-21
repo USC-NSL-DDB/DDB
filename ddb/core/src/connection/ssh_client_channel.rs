@@ -11,6 +11,64 @@ use tracing::debug;
 
 use super::{RemoteConnectable, RunningTransport, TransportEvent, TransportRequest};
 use crate::common::default_vals::DEFAULT_SSH_PRIVATE_KEY_PATH;
+
+/// Connects and password-authenticates the shared bastion session that proxy
+/// SSH transports tunnel through.
+pub async fn connect_jump_host(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+) -> Result<Arc<Handle<SSHProxyClientHandler>>> {
+    use anyhow::{bail, Context};
+
+    let (exited_sender, _exited) = watch::channel(false);
+    let config = Config {
+        nodelay: true,
+        ..Config::default()
+    };
+    let mut jump_host = client::connect(
+        Arc::new(config),
+        (host.to_string(), port),
+        SSHProxyClientHandler(exited_sender),
+    )
+    .await
+    .context("failed to connect to the SSH jump host")?;
+
+    match jump_host
+        .authenticate_password(user.to_string(), password.to_string())
+        .await
+        .context("failed to authenticate with the SSH jump host")?
+    {
+        client::AuthResult::Success => {
+            debug!("jump-host password authentication succeeded");
+        }
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => {
+            bail!(
+                "jump-host password authentication failed; remaining methods: {:?}",
+                remaining_methods
+            );
+        }
+    }
+
+    // OpenSSH enables TCP_NODELAY when a session command starts, but not for
+    // connections that only use direct-tcpip channels. Run a no-op command
+    // once so small forwarded replies are not held behind the peer's delayed
+    // ACK timer.
+    let mut latency_channel = jump_host
+        .channel_open_session()
+        .await
+        .context("failed to open the SSH latency warm-up channel")?;
+    latency_channel
+        .exec(true, "true")
+        .await
+        .context("failed to prime the SSH jump host")?;
+    while latency_channel.wait().await.is_some() {}
+
+    Ok(Arc::new(jump_host))
+}
 /// SSHProxyCred holds the credentials to connect to the "inner" host
 /// (the one behind the bastion). We still need a private key for
 /// the second hop's authentication.

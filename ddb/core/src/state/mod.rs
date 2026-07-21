@@ -12,7 +12,7 @@ pub mod thread_mgr;
 pub use bkpt_mgr::*;
 pub use bkpt_snapshot::*;
 pub use group_mgr::*;
-pub use group_operation::*;
+pub(crate) use group_operation::*;
 pub use ids::*;
 pub use proclet_mgr::*;
 pub use runtime_model::*;

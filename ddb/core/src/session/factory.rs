@@ -1,17 +1,62 @@
 use anyhow::{bail, Result};
-use std::sync::Arc;
+use std::{net::Ipv4Addr, sync::Arc};
 
 use super::{SessionMode, SessionProcess, SessionRequest, SessionRequestBuilder, SessionStart};
 use crate::{
     cmd_flow::event::DebuggerEventReducer,
     common::config::{Config, DebuggerBackendKind, StaticSessionConfig, StaticSessionStartMode},
     common::counter::SimpleCounter,
+    connection::{ssh_client::SSHCred, ssh_client_channel::SSHProxyCred},
     dbg_ctrl::{build_transport, ProxyTunnel, TransportSpec},
     debugger::DebuggerBackend,
     discovery::ServiceInfo,
     plugin::FrameworkPlugin,
     state::ServiceIdentity,
 };
+
+/// How sessions reach services reported by the active discovery source.
+///
+/// Producers report transport-agnostic facts; this policy, chosen from
+/// configuration when discovery starts, decides the transport per service.
+#[derive(Clone)]
+pub(crate) enum DiscoveredTransportPolicy {
+    DirectSsh {
+        port: u16,
+        user: String,
+    },
+    ProxySsh {
+        tunnel: ProxyTunnel,
+        port: u16,
+        user: String,
+        password: Option<String>,
+    },
+}
+
+impl DiscoveredTransportPolicy {
+    pub(crate) fn resolve(&self, ip: Ipv4Addr) -> (TransportSpec, Option<ProxyTunnel>) {
+        match self {
+            Self::DirectSsh { port, user } => (
+                TransportSpec::DirectSsh(SSHCred::new(&ip.to_string(), *port, user, None)),
+                None,
+            ),
+            Self::ProxySsh {
+                tunnel,
+                port,
+                user,
+                password,
+            } => (
+                TransportSpec::ProxySsh(SSHProxyCred::new(
+                    &ip.to_string(),
+                    u32::from(*port),
+                    user,
+                    None,
+                    password.clone(),
+                )),
+                Some(Arc::clone(tunnel)),
+            ),
+        }
+    }
+}
 
 /// Normalizes every session source into one validated process construction path.
 #[derive(Clone)]
@@ -41,9 +86,10 @@ impl SessionFactory {
     pub(crate) fn create_discovered(
         &self,
         info: ServiceInfo,
+        transport: TransportSpec,
         proxy_tunnel: Option<ProxyTunnel>,
     ) -> Result<SessionProcess> {
-        let request = self.build_discovery_request(info)?;
+        let request = self.build_discovery_request(info, transport)?;
         self.materialize(request, proxy_tunnel)
     }
 
@@ -69,14 +115,18 @@ impl SessionFactory {
         ))
     }
 
-    fn build_discovery_request(&self, info: ServiceInfo) -> Result<SessionRequest> {
+    fn build_discovery_request(
+        &self,
+        info: ServiceInfo,
+        transport: TransportSpec,
+    ) -> Result<SessionRequest> {
         let caladan_ip = info.caladan_ip();
         let service_identity = ServiceIdentity::new(info.hash, info.alias);
 
         SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(info.tag)
             .mode(SessionMode::Remote(SessionStart::Attach(info.pid)))
-            .transport(info.transport)
+            .transport(transport)
             .service_identity(service_identity)
             .caladan_ip(caladan_ip)
             .build()
@@ -192,7 +242,6 @@ mod tests {
             42,
             "group".to_string(),
             "api".to_string(),
-            TransportSpec::Local,
             Some(HashMap::from([(
                 "caladan_ip".to_string(),
                 "17".to_string(),
@@ -200,7 +249,7 @@ mod tests {
         );
 
         let request = factory
-            .build_discovery_request(info)
+            .build_discovery_request(info, TransportSpec::Local)
             .expect("discovery request should be valid");
 
         assert_eq!(request.caladan_ip, Some(17));

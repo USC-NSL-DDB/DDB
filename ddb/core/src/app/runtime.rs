@@ -44,6 +44,7 @@ impl ApplicationRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn services(&self) -> &Arc<ApplicationServices> {
         &self.services
     }

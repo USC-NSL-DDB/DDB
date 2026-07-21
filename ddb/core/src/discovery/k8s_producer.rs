@@ -2,8 +2,6 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 
 use super::discovery_message_producer::{DiscoveryMessageProducer, ServiceInfo};
-use crate::connection::ssh_client_channel::SSHProxyCred;
-use crate::dbg_ctrl::TransportSpec;
 use anyhow::Result;
 use flume::Sender;
 use futures::{StreamExt, TryStreamExt};
@@ -106,7 +104,6 @@ impl DiscoveryMessageProducer for K8sProducer {
         let wp = WatchParams::default().labels(label_selector);
         let mut stream = pods.watch(&wp, "0").await?.boxed();
         let mut event_count = 0;
-        let ssh_user = self.config.ssh.user.clone();
 
         let service_name = self.service_name.clone();
         let handle = tokio::task::spawn(async move {
@@ -118,14 +115,6 @@ impl DiscoveryMessageProducer for K8sProducer {
                         let pod_status = pod.status.unwrap_or_default();
                         let pod_ip = pod_status.pod_ip.unwrap_or_default();
                         let ip_str = pod_ip.as_str();
-                        let ssh_cred = SSHProxyCred::new(
-                            ip_str,
-                            22,
-                            ssh_user.as_str(),
-                            None,
-                            Some("admin123".to_string()),
-                        );
-
                         // Get PID using Kubernetes exec
                         match get_pod_pid(&pods, &pod_name, &service_name).await {
                             Ok(pid) => {
@@ -147,7 +136,6 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     pid as u64,
                                     "weaver".to_string(),
                                     pod_name.to_string(),
-                                    TransportSpec::ProxySsh(ssh_cred),
                                     None,
                                 );
                                 if let Err(error) = tx.send_async(info).await {
