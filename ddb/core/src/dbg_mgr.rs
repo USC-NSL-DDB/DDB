@@ -86,7 +86,7 @@ impl DbgManager {
                     tunnel,
                     port: 22,
                     user: config.ssh.user.clone(),
-                    password: Some("admin123".to_string()),
+                    password: Some(service_weaver.pod_ssh_password.clone()),
                 }))
             }
             ServiceDiscoveryMode::None => Ok(None),

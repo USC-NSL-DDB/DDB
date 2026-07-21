@@ -6,8 +6,6 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::Path;
 
-use crate::debugger::gdb::command::{FrameFilterAddArgs, FrameFilterMatchType};
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(rename = "PreTasks", default)]
@@ -53,24 +51,30 @@ impl Config {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrameFilterMatchType {
+    Exact,
+    Glob,
+    Regex,
+}
+
+impl FrameFilterMatchType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            FrameFilterMatchType::Exact => "exact",
+            FrameFilterMatchType::Glob => "glob",
+            FrameFilterMatchType::Regex => "regex",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FrameFilterPatternConfig {
     #[serde(rename = "pattern")]
-    pattern: String,
+    pub pattern: String,
     #[serde(rename = "match_type")]
-    match_type: FrameFilterMatchType,
-}
-
-impl From<FrameFilterPatternConfig> for FrameFilterAddArgs {
-    fn from(config: FrameFilterPatternConfig) -> Self {
-        FrameFilterAddArgs::new(&config.pattern, config.match_type)
-    }
-}
-
-impl From<&FrameFilterPatternConfig> for FrameFilterAddArgs {
-    fn from(config: &FrameFilterPatternConfig) -> Self {
-        FrameFilterAddArgs::new(&config.pattern, config.match_type.clone())
-    }
+    pub match_type: FrameFilterMatchType,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -92,6 +96,13 @@ pub struct ServiceWeaverConf {
     pub jump_client_user: String,
     pub jump_client_password: String,
     pub jump_client_key_path: Option<String>,
+    /// SSH password for the pods reached through the jump host.
+    #[serde(default = "default_pod_ssh_password")]
+    pub pod_ssh_password: String,
+}
+
+fn default_pod_ssh_password() -> String {
+    "admin123".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -523,17 +534,6 @@ mod tests {
         };
 
         assert_eq!(cmd.render(), "source /tmp/runtime.py\n");
-    }
-
-    #[test]
-    fn frame_filter_pattern_conversion_preserves_match_type() {
-        let pattern = FrameFilterPatternConfig {
-            pattern: "runtime::*".to_string(),
-            match_type: FrameFilterMatchType::Glob,
-        };
-
-        let add_args: FrameFilterAddArgs = (&pattern).into();
-        assert_eq!(add_args.to_string(), "runtime::* --match-type glob");
     }
 
     #[test]

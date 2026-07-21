@@ -1,6 +1,4 @@
-use crate::common::config::DebuggerCommand;
-
-use serde::{Deserialize, Serialize};
+use crate::common::config::{DebuggerCommand, FrameFilterMatchType, FrameFilterPatternConfig};
 
 pub trait DbgCmdGenerator {
     fn generate(&self) -> String;
@@ -30,24 +28,6 @@ where
         self.cmds.iter().map(DbgCmdGenerator::generate).collect()
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FrameFilterMatchType {
-    Exact,
-    Glob,
-    Regex,
-}
-
-impl FrameFilterMatchType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            FrameFilterMatchType::Exact => "exact",
-            FrameFilterMatchType::Glob => "glob",
-            FrameFilterMatchType::Regex => "regex",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct FrameFilterAddArgs {
     pattern: String,
@@ -64,6 +44,18 @@ impl FrameFilterAddArgs {
 
     pub fn to_string(&self) -> String {
         format!("{} --match-type {}", self.pattern, self.match_type.as_str())
+    }
+}
+
+impl From<FrameFilterPatternConfig> for FrameFilterAddArgs {
+    fn from(config: FrameFilterPatternConfig) -> Self {
+        FrameFilterAddArgs::new(&config.pattern, config.match_type)
+    }
+}
+
+impl From<&FrameFilterPatternConfig> for FrameFilterAddArgs {
+    fn from(config: &FrameFilterPatternConfig) -> Self {
+        FrameFilterAddArgs::new(&config.pattern, config.match_type.clone())
     }
 }
 
@@ -276,5 +268,16 @@ mod tests {
         let cmds = cmd_bdr.build();
         assert_eq!(cmds[0].trim(), "-gdb-set logging enabled on");
         assert_eq!(cmds[1].trim(), "-gdb-set mi-async on");
+    }
+
+    #[test]
+    fn frame_filter_pattern_conversion_preserves_match_type() {
+        let pattern = FrameFilterPatternConfig {
+            pattern: "runtime::*".to_string(),
+            match_type: FrameFilterMatchType::Glob,
+        };
+
+        let add_args: FrameFilterAddArgs = (&pattern).into();
+        assert_eq!(add_args.to_string(), "runtime::* --match-type glob");
     }
 }
