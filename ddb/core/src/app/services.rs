@@ -5,8 +5,18 @@ use anyhow::Result;
 use crate::{
     api::read_model::ApiQueries,
     cmd_flow::{
-        api::CommandExecutor, breakpoint::BreakpointEventPublisher, engine::CommandEngine,
-        event::DebuggerEventReducer, event_publisher::EventPublisher, router::Router,
+        api::CommandExecutor,
+        backtrace::DistributedBacktraceService,
+        breakpoint::{BreakpointEventPublisher, BreakpointService},
+        diagnostics::DiagnosticConsole,
+        dispatcher::CommandDispatcher,
+        engine::CommandEngine,
+        event::DebuggerEventReducer,
+        event_publisher::EventPublisher,
+        execution::ExecutionService,
+        query::{QueryProjector, QueryService},
+        router::Router,
+        transaction::TransactionCoordinator,
     },
     common::Config,
     dbg_mgr::DbgManager,
@@ -60,7 +70,7 @@ impl ApplicationServices {
         let source_resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
             Arc::clone(runtime_model.groups()) as _,
-            command_executor,
+            command_executor.clone(),
             SourceResolutionPolicy::configured(),
         );
         let api_queries = ApiQueries::new(
@@ -68,18 +78,50 @@ impl ApplicationServices {
             Arc::clone(&command_router),
             Arc::clone(&source_resolver),
         );
-        let command_engine = CommandEngine::new(
-            plugin.command_adapter(),
-            Arc::clone(&command_router),
+        let state = Arc::clone(runtime_model.state());
+        let transactions =
+            TransactionCoordinator::new(Arc::clone(&state), Arc::clone(&command_router));
+        let breakpoint_service = Arc::new(BreakpointService::new(
+            Arc::clone(runtime_model.breakpoints()),
+            Arc::clone(runtime_model.groups()),
             Arc::clone(&breakpoint_events),
+            command_executor.clone(),
             Arc::clone(&group_operations),
-            Arc::clone(&source_resolver),
-            Arc::clone(&runtime_model),
+        ));
+        let execution_service = Arc::new(ExecutionService::new(
+            Arc::clone(&state),
             Arc::clone(&config),
+            Arc::clone(&proclet_restoration),
+            command_executor.clone(),
+            transactions.clone(),
             Arc::clone(&backend),
+        ));
+        let backtrace_service = Arc::new(DistributedBacktraceService::new(
+            plugin.command_adapter(),
+            Arc::clone(&state),
+            Arc::clone(&config),
+            command_executor.clone(),
+            transactions,
             proclet_restoration,
-            proclet_queries,
+        ));
+        let query_service = Arc::new(QueryService::new(
+            command_executor.clone(),
+            QueryProjector::new(Arc::clone(&state)),
+        ));
+        let dispatcher = CommandDispatcher::new(
+            breakpoint_service,
+            execution_service,
+            backtrace_service,
+            query_service,
+            command_executor.clone(),
         );
+        let diagnostics = DiagnosticConsole::new(
+            Arc::clone(&runtime_model),
+            Arc::clone(&source_resolver),
+            proclet_queries,
+            command_executor,
+        );
+        let command_engine = CommandEngine::new(dispatcher, diagnostics, state);
         let session_supervisor = SessionSupervisor::new(
             Arc::clone(&config),
             Arc::clone(&plugin),

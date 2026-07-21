@@ -5,28 +5,10 @@ use tokio::sync::Semaphore;
 use tracing::{debug, error};
 
 use super::{
-    api::CommandExecutor,
-    backtrace::DistributedBacktraceService,
-    breakpoint::{BreakpointEventPublisher, BreakpointService},
-    diagnostics::DiagnosticConsole,
-    dispatcher::CommandDispatcher,
-    execution::ExecutionService,
-    framework_adapter::FrameworkCommandAdapter,
-    input::ParsedInputCmd,
-    query::{QueryProjector, QueryService},
-    router::{Router, Target},
-    transaction::TransactionCoordinator,
-    CommandOutcome,
+    diagnostics::DiagnosticConsole, dispatcher::CommandDispatcher, input::ParsedInputCmd,
+    router::Target, CommandOutcome,
 };
-use crate::{
-    common::Config,
-    debugger::DebuggerBackend,
-    feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
-    source::resolver::SourceResolver,
-    state::GroupOperationCoordinator,
-    state::RuntimeModel,
-    state::StateMgr,
-};
+use crate::state::StateMgr;
 
 const DETACHED_COMMAND_LIMIT: usize = 256;
 
@@ -67,56 +49,10 @@ pub struct CommandEngine {
 
 impl CommandEngine {
     pub(crate) fn new(
-        adapter: Arc<dyn FrameworkCommandAdapter>,
-        router: Arc<Router>,
-        breakpoint_events: Arc<BreakpointEventPublisher>,
-        group_operations: Arc<GroupOperationCoordinator>,
-        source_resolver: Arc<SourceResolver>,
-        model: Arc<RuntimeModel>,
-        config: Arc<Config>,
-        backend: Arc<dyn DebuggerBackend>,
-        proclet_restoration: Arc<ProcletRestorationMgr>,
-        proclet_queries: Arc<ProcletQueryService>,
+        dispatcher: CommandDispatcher,
+        diagnostics: DiagnosticConsole,
+        state: Arc<StateMgr>,
     ) -> Arc<Self> {
-        let state = Arc::clone(model.state());
-        let executor = CommandExecutor::new(Arc::clone(&router));
-        let transactions = TransactionCoordinator::new(Arc::clone(&state), Arc::clone(&router));
-        let breakpoint_service = Arc::new(BreakpointService::new(
-            Arc::clone(model.breakpoints()),
-            Arc::clone(model.groups()),
-            breakpoint_events,
-            executor.clone(),
-            group_operations,
-        ));
-        let execution_service = Arc::new(ExecutionService::new(
-            Arc::clone(&state),
-            Arc::clone(&config),
-            Arc::clone(&proclet_restoration),
-            executor.clone(),
-            transactions.clone(),
-            backend,
-        ));
-        let backtrace_service = Arc::new(DistributedBacktraceService::new(
-            adapter,
-            Arc::clone(&state),
-            config,
-            executor.clone(),
-            transactions,
-            proclet_restoration,
-        ));
-        let query_service = Arc::new(QueryService::new(
-            executor.clone(),
-            QueryProjector::new(Arc::clone(&state)),
-        ));
-        let dispatcher = CommandDispatcher::new(
-            breakpoint_service,
-            execution_service,
-            backtrace_service,
-            query_service,
-            executor.clone(),
-        );
-        let diagnostics = DiagnosticConsole::new(model, source_resolver, proclet_queries, executor);
-
         Arc::new(Self {
             dispatcher,
             diagnostics,
