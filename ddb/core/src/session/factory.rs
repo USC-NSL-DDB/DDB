@@ -195,7 +195,7 @@ mod tests {
         );
         SessionFactory::new(
             Arc::clone(&config),
-            crate::debugger::resolve_debugger_backend(config.as_ref()),
+            crate::debugger::resolve_debugger_backend(config.as_ref()).unwrap(),
             crate::plugin::resolve_framework_plugin(config.as_ref()),
             reducer,
         )

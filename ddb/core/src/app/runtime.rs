@@ -219,7 +219,7 @@ mod tests {
     async fn complete_service_graphs_do_not_share_runtime_state() {
         let config = Arc::new(Config::default());
         let plugin = crate::plugin::resolve_framework_plugin(config.as_ref());
-        let backend = crate::debugger::resolve_debugger_backend(config.as_ref());
+        let backend = crate::debugger::resolve_debugger_backend(config.as_ref()).unwrap();
 
         let first = ApplicationRuntime::new(
             Arc::clone(&config),

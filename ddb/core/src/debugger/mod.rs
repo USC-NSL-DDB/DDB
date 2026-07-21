@@ -47,9 +47,7 @@ pub fn install_bundled_assets(assets: &[BundledDebuggerAsset]) -> Result<Vec<Pat
         .collect::<Result<Vec<_>>>()
 }
 
-#[allow(dead_code)]
 pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
-    fn name(&self) -> &'static str;
     fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset>;
     fn build_start_command(&self, sudo: bool) -> String;
     fn build_remote_attach_commands(
@@ -70,13 +68,13 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     fn console_exec_command(&self, command: &str) -> String;
 }
 
-pub fn resolve_debugger_backend(config: &Config) -> Arc<dyn DebuggerBackend> {
+pub fn resolve_debugger_backend(config: &Config) -> anyhow::Result<Arc<dyn DebuggerBackend>> {
     match config.conf.debugger.backend {
-        DebuggerBackendKind::Gdb => Arc::new(gdb::GdbBackend),
-        DebuggerBackendKind::Mock => Arc::new(mock::MockBackend),
-        DebuggerBackendKind::Unknown => {
-            panic!("Unsupported debugger backend configured.");
-        }
+        DebuggerBackendKind::Gdb => Ok(Arc::new(gdb::GdbBackend)),
+        DebuggerBackendKind::Mock => Ok(Arc::new(mock::MockBackend)),
+        DebuggerBackendKind::Unknown => Err(anyhow::anyhow!(
+            "unsupported debugger backend configured; expected 'gdb' or 'mock'"
+        )),
     }
 }
 

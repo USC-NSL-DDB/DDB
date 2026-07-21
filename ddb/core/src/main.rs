@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let logging_settings = LoggingSettings::from_args(&args);
     let command_workers = args.command_workers;
     let config = Arc::new(Config::load(args.config)?);
-    let backend = resolve_debugger_backend(config.as_ref());
+    let backend = resolve_debugger_backend(config.as_ref())?;
     let plugin = resolve_framework_plugin(config.as_ref());
     let app_dir_conf = AppDirConfig::from_config(config.as_ref());
 

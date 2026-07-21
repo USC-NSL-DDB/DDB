@@ -31,6 +31,13 @@ impl ProcletCtrlCmdResp {
                 // Query response
                 let proclet_id_size = std::mem::size_of::<u64>();
                 let caladan_ip_size = std::mem::size_of::<u32>();
+                if bytes.len() < proclet_id_size + caladan_ip_size {
+                    tracing::warn!(
+                        len = bytes.len(),
+                        "discarding truncated proclet query response frame"
+                    );
+                    return ProcletCtrlCmdResp::Empty;
+                }
                 let proclet_id = u64::from_be_bytes(bytes[0..proclet_id_size].try_into().unwrap());
                 let caladan_ip = u32::from_be_bytes(
                     bytes[proclet_id_size..proclet_id_size + caladan_ip_size]
