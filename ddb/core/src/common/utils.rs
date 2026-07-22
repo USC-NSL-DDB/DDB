@@ -6,18 +6,15 @@ use std::{
 };
 
 pub mod mqtt {
-    use core::panic;
-
     use rumqttc::Transport;
     use tracing::error;
 
     pub fn str_to_transport(s: &str) -> Transport {
         match s {
             "tcp" => Transport::Tcp,
-            // "udp" => Transport::Ws,
-            _ => {
-                error!("Invalid transport type: {}", s);
-                panic!("Invalid transport type");
+            other => {
+                error!(transport = %other, "unsupported broker transport; falling back to tcp");
+                Transport::Tcp
             }
         }
     }
@@ -71,7 +68,13 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
 
 pub fn expand_path(path: &str) -> PathBuf {
     // Expand `~` and `$VAR` environment variables
-    let expanded = shellexpand::full(path).expect("Failed to expand path");
+    let expanded = match shellexpand::full(path) {
+        Ok(expanded) => expanded,
+        Err(error) => {
+            tracing::error!(%path, %error, "failed to expand path; using it verbatim");
+            return PathBuf::from(path);
+        }
+    };
 
     // Convert to an absolute canonicalized path
     fs::canonicalize(&*expanded).unwrap_or_else(|_| PathBuf::from(&*expanded)) // Fallback if the path doesn't exist
