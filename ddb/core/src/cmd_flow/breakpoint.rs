@@ -6,10 +6,9 @@ use tracing::{error, warn};
 use crate::{
     debugger::gdb::parser::MIFormatter,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
-    state::GroupOperationCoordinator,
     state::{
-        BkptLoc, BreakpointMgr, BreakpointSnapshot, BreakpointStateChange, GroupId, GroupMgr,
-        SubBkptSpec, SubBkptType,
+        BkptLoc, BreakpointSnapshot, BreakpointStateChange, GroupId, RuntimeModel, SubBkptSpec,
+        SubBkptType,
     },
 };
 
@@ -95,32 +94,26 @@ impl BreakpointEventPublisher {
 }
 
 pub(crate) struct BreakpointService {
-    breakpoints: Arc<BreakpointMgr>,
-    groups: Arc<GroupMgr>,
+    model: Arc<RuntimeModel>,
     events: Arc<BreakpointEventPublisher>,
     executor: CommandExecutor,
-    group_operations: Arc<GroupOperationCoordinator>,
 }
 
 impl BreakpointService {
     pub(crate) fn new(
-        breakpoints: Arc<BreakpointMgr>,
-        groups: Arc<GroupMgr>,
+        model: Arc<RuntimeModel>,
         events: Arc<BreakpointEventPublisher>,
         executor: CommandExecutor,
-        group_operations: Arc<GroupOperationCoordinator>,
     ) -> Self {
         Self {
-            breakpoints,
-            groups,
+            model,
             events,
             executor,
-            group_operations,
         }
     }
 
     fn group_ids_for_breakpoint(&self, breakpoint_id: u64) -> Vec<GroupId> {
-        self.breakpoints
+        self.model
             .breakpoint(breakpoint_id)
             .map(|breakpoint| {
                 breakpoint
@@ -149,14 +142,14 @@ impl BreakpointService {
         let location = parse_breakpoint_location(&command.args)?;
         let planned_targets = match &command.target {
             Target::Multiple(targets) => {
-                deduplicate_insertion_targets(self.groups.as_ref(), targets)
+                deduplicate_insertion_targets(self.model.as_ref(), targets)
             }
             single => vec![single.clone()],
         };
         let lenient = matches!(&command.target, Target::Multiple(_));
         let group_gates = self
-            .group_operations
-            .lock_many(planned_targets.iter().filter_map(|target| match target {
+            .model
+            .lock_group_operations(planned_targets.iter().filter_map(|target| match target {
                 Target::Group(group_id) => Some(*group_id),
                 _ => None,
             }))
@@ -196,7 +189,7 @@ impl BreakpointService {
             }
         }
 
-        let Some(breakpoint) = self.breakpoints.insert_breakpoint(location, specs) else {
+        let Some(breakpoint) = self.model.insert_breakpoint(location, specs) else {
             bail!("Failed to insert breakpoint into any target.");
         };
         drop(group_gates);
@@ -235,7 +228,7 @@ impl BreakpointService {
     /// be attached. The caller holds the group's operation gate.
     async fn group_spec(&self, debugger_command: &str, group_id: GroupId) -> Result<SubBkptSpec> {
         let group = self
-            .groups
+            .model
             .group_by_id(group_id)
             .ok_or_else(|| anyhow!("Group {} does not exist", group_id))?;
         let mut locals = Vec::new();
@@ -278,12 +271,10 @@ impl BreakpointService {
             .parse::<u64>()
             .with_context(|| format!("Invalid breakpoint id {}", args))?;
         let group_operations = self
-            .group_operations
-            .lock_many(self.group_ids_for_breakpoint(breakpoint_id))
+            .model
+            .lock_group_operations(self.group_ids_for_breakpoint(breakpoint_id))
             .await;
-        for (session_id, local_breakpoint_id) in
-            self.breakpoints.local_breakpoint_ids(breakpoint_id)
-        {
+        for (session_id, local_breakpoint_id) in self.model.local_breakpoint_ids(breakpoint_id) {
             if let Err(error) = self
                 .delete_local_breakpoint(session_id, local_breakpoint_id)
                 .await
@@ -297,7 +288,7 @@ impl BreakpointService {
             }
         }
 
-        self.breakpoints.remove_breakpoint(breakpoint_id);
+        self.model.remove_breakpoint(breakpoint_id);
         drop(group_operations);
         let record = MIFormatter::format(
             "=",
@@ -344,8 +335,8 @@ impl BreakpointService {
         }
 
         Ok(self
-            .breakpoints
-            .record_local_bkpt_deletion(session_id, local_breakpoint_id))
+            .model
+            .record_local_breakpoint_deletion(session_id, local_breakpoint_id))
     }
 
     async fn delete_sub_breakpoint(
@@ -354,7 +345,7 @@ impl BreakpointService {
         sub_breakpoint_id: u64,
     ) -> Result<BreakpointStateChange> {
         let mut sub_breakpoint = self
-            .breakpoints
+            .model
             .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
             .ok_or_else(|| {
                 anyhow!(
@@ -365,15 +356,15 @@ impl BreakpointService {
             })?;
         let group_operation = match sub_breakpoint.kind() {
             SubBkptType::Group(group_breakpoint) => Some(
-                self.group_operations
-                    .lock(group_breakpoint.target_group())
+                self.model
+                    .lock_group_operation(group_breakpoint.target_group())
                     .await,
             ),
             SubBkptType::Session(_) => None,
         };
         if group_operation.is_some() {
             sub_breakpoint = self
-                .breakpoints
+                .model
                 .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
                 .ok_or_else(|| {
                     anyhow!(
@@ -441,7 +432,7 @@ impl BreakpointService {
         breakpoint_id: u64,
         sub_breakpoint_id: u64,
     ) -> BreakpointStateChange {
-        self.breakpoints
+        self.model
             .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id)
     }
 
@@ -517,11 +508,11 @@ fn parse_breakpoint_location(args: &str) -> Result<BkptLoc> {
     Ok(BkptLoc::new(source, line))
 }
 
-fn deduplicate_insertion_targets(groups: &GroupMgr, targets: &[Target]) -> Vec<Target> {
+fn deduplicate_insertion_targets(model: &RuntimeModel, targets: &[Target]) -> Vec<Target> {
     let covered_sessions = targets
         .iter()
         .filter_map(|target| match target {
-            Target::Group(group_id) => groups
+            Target::Group(group_id) => model
                 .group_by_id(*group_id)
                 .map(|group| group.session_ids().clone()),
             _ => None,
@@ -583,15 +574,22 @@ mod tests {
         assert!(parse_breakpoint_location(":10").is_err());
     }
 
-    #[test]
-    fn insertion_target_plan_deduplicates_and_prefers_groups() {
-        let groups = GroupMgr::new();
-        groups.register_session("group-a", "service-a".to_string(), 11);
-        groups.register_session("group-a", "service-b".to_string(), 12);
-        let group_id = groups.group_id_by_session(11).unwrap();
+    #[tokio::test]
+    async fn insertion_target_plan_deduplicates_and_prefers_groups() {
+        let model = RuntimeModel::new();
+        let identity = crate::state::ServiceIdentity::new("group-a", "service-a");
+        model
+            .register_session(11, "service-a", Some(identity.clone()))
+            .await;
+        drop(model.register_service_group(11, &identity).await);
+        model
+            .register_session(12, "service-b", Some(identity.clone()))
+            .await;
+        drop(model.register_service_group(12, &identity).await);
+        let group_id = model.group_id_by_session(11).unwrap();
 
         let plan = deduplicate_insertion_targets(
-            &groups,
+            &model,
             &[
                 Target::Session(11),
                 Target::Group(group_id),
@@ -608,9 +606,9 @@ mod tests {
 
     #[test]
     fn removed_state_change_dominates_target_updates() {
-        let manager = BreakpointMgr::new();
-        let breakpoint_id = manager.add_breakpoint(BkptLoc::new("main.rs", 10));
-        let snapshot = manager.breakpoint(breakpoint_id).unwrap();
+        let model = RuntimeModel::new();
+        let breakpoint_id = model.add_breakpoint(BkptLoc::new("main.rs", 10));
+        let snapshot = model.breakpoint(breakpoint_id).unwrap();
         let merged = merge_state_changes(
             BreakpointStateChange::TargetChanged(snapshot),
             BreakpointStateChange::Removed(breakpoint_id),

@@ -8,7 +8,7 @@ use crate::{
     common::Config,
     debugger::DebuggerBackend,
     feature::proclet_restore::ProcletRestorationMgr,
-    state::{SessionRef, StateMgr, ThreadContext, ThreadStatus},
+    state::{RuntimeModel, ThreadContext, ThreadStatus},
 };
 
 use super::{
@@ -18,7 +18,7 @@ use super::{
 };
 
 pub(crate) struct ExecutionService {
-    state: Arc<StateMgr>,
+    model: Arc<RuntimeModel>,
     config: Arc<Config>,
     proclet_restoration: Arc<ProcletRestorationMgr>,
     executor: CommandExecutor,
@@ -28,7 +28,7 @@ pub(crate) struct ExecutionService {
 
 impl ExecutionService {
     pub(crate) fn new(
-        state: Arc<StateMgr>,
+        model: Arc<RuntimeModel>,
         config: Arc<Config>,
         proclet_restoration: Arc<ProcletRestorationMgr>,
         executor: CommandExecutor,
@@ -36,7 +36,7 @@ impl ExecutionService {
         backend: Arc<dyn DebuggerBackend>,
     ) -> Self {
         Self {
-            state,
+            model,
             config,
             proclet_restoration,
             executor,
@@ -52,12 +52,15 @@ impl ExecutionService {
 
         let external_token = command.external_token;
         let sessions = match &command.target {
-            Target::Session(session_id) => self.state.session(*session_id).into_iter().collect(),
-            _ => self.state.sessions(),
+            Target::Session(session_id) if self.model.has_session(*session_id) => {
+                vec![*session_id]
+            }
+            Target::Session(_) => Vec::new(),
+            _ => self.model.session_ids(),
         };
         let continuations = sessions
             .into_iter()
-            .map(|session| self.continue_session(command.clone(), session));
+            .map(|session_id| self.continue_session(command.clone(), session_id));
         let mut responses = Vec::<ParsedSessionResponse>::new();
         for result in join_all(continuations).await {
             let response = result.context("Failed to continue")?;
@@ -74,7 +77,7 @@ impl ExecutionService {
         let command = command.with_prefix("-exec-interrupt-if-running");
         match command.target {
             Target::Session(session_id) => {
-                if self.state.session(session_id).is_none() {
+                if !self.model.has_session(session_id) {
                     return Ok(CommandOutcome::empty());
                 }
                 let response = self
@@ -172,24 +175,19 @@ impl ExecutionService {
     async fn continue_session(
         &self,
         command: ParsedInputCmd,
-        session: SessionRef,
+        session_id: u64,
     ) -> Result<FinishedCmd> {
-        let session_id = session.read_with(|meta| meta.sid()).await;
         let transaction = self
             .transactions
             .begin(session_id)
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
-        let (session_id, in_custom_context, current_context) = transaction
-            .session()
-            .read_with(|meta| {
-                (
-                    meta.sid(),
-                    meta.is_in_custom_context(),
-                    meta.current_context().cloned(),
-                )
-            })
-            .await;
+        let snapshot = transaction
+            .session_snapshot()
+            .await
+            .ok_or_else(|| anyhow!("Session {} disappeared during transaction", session_id))?;
+        let in_custom_context = snapshot.in_custom_context;
+        let current_context = snapshot.current_context;
 
         if in_custom_context {
             let context = current_context
@@ -207,9 +205,7 @@ impl ExecutionService {
                 .await?;
             let restored = restore.get_responses().len() == 1
                 && Payload::first(&restore)?.string("message")? == "success";
-            session
-                .write_with(|meta| meta.exit_custom_context(restored))
-                .await;
+            transaction.finish_context_restore(restored).await;
             if !restored {
                 bail!("Failed to restore context for session {}", session_id);
             }
@@ -219,9 +215,7 @@ impl ExecutionService {
             .executor
             .execute_parsed_exclusive(command, Target::Session(session_id), transaction.lease())
             .await?;
-        session
-            .write_with(|meta| meta.update_all_status(ThreadStatus::RUNNING))
-            .await;
+        transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
         Ok(response)
     }
 

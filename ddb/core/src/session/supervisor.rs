@@ -21,7 +21,6 @@ use crate::{
     plugin::FrameworkPlugin,
     shutdown::{ShutdownCause, ShutdownCtrl},
     source::resolver::SourceResolver,
-    state::GroupOperationCoordinator,
     state::RuntimeModel,
 };
 
@@ -54,6 +53,7 @@ pub(crate) struct SessionSupervisor {
 }
 
 impl SessionSupervisor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: Arc<Config>,
         plugin: Arc<dyn FrameworkPlugin>,
@@ -61,7 +61,6 @@ impl SessionSupervisor {
         router: Arc<Router>,
         notifications: Arc<NotificationManager>,
         breakpoint_events: Arc<BreakpointEventPublisher>,
-        group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
         shutdown: Arc<ShutdownCtrl>,
     ) -> Arc<Self> {
@@ -74,7 +73,6 @@ impl SessionSupervisor {
                 model,
                 router,
                 breakpoint_events,
-                group_operations,
                 Arc::clone(&source_resolver),
             ),
             source_resolver,

@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::cmd_flow::{router::Router, session_runtime::SessionLease};
-use crate::state::{SessionRef, StateMgr};
+use crate::state::{RuntimeModel, SessionSnapshot, ThreadContext, ThreadStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionError {
@@ -17,22 +17,15 @@ pub enum TransactionError {
     Acquire(u64, String),
 }
 
-/// A primary state reference paired with ordered exclusive runtime leases.
-///
-/// Normal commands hold shared permits through completion. Acquiring every
-/// related session in ascending id order therefore drains earlier work,
-/// prevents later interleaving, and avoids lock-order inversion.
+/// Ordered exclusive runtime leases paired with controlled model operations for
+/// the primary session. No mutable session reference crosses this boundary.
 pub struct SessionTransaction {
     primary_sid: u64,
-    session: SessionRef,
+    model: Arc<RuntimeModel>,
     leases: BTreeMap<u64, SessionLease>,
 }
 
 impl SessionTransaction {
-    pub fn session(&self) -> &SessionRef {
-        &self.session
-    }
-
     pub fn lease(&self) -> &SessionLease {
         self.leases
             .get(&self.primary_sid)
@@ -42,17 +35,44 @@ impl SessionTransaction {
     pub fn lease_for(&self, sid: u64) -> Option<&SessionLease> {
         self.leases.get(&sid)
     }
+
+    pub(crate) async fn session_snapshot(&self) -> Option<SessionSnapshot> {
+        self.model.session_snapshot(self.primary_sid).await
+    }
+
+    pub(crate) async fn enter_custom_context(&self, context: ThreadContext) -> bool {
+        self.model
+            .enter_custom_context(self.primary_sid, context)
+            .await
+    }
+
+    pub(crate) async fn finish_context_restore(&self, restored: bool) -> bool {
+        self.model
+            .finish_context_restore(self.primary_sid, restored)
+            .await
+    }
+
+    pub(crate) async fn all_threads_stopped(&self) -> Option<bool> {
+        self.model.all_threads_stopped(self.primary_sid).await
+    }
+
+    pub(crate) async fn mark_all_threads(
+        &self,
+        status: ThreadStatus,
+    ) -> crate::state::StateTransitionResult<()> {
+        self.model.mark_all_threads(self.primary_sid, status).await
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct TransactionCoordinator {
-    state: Arc<StateMgr>,
+    model: Arc<RuntimeModel>,
     router: Arc<Router>,
 }
 
 impl TransactionCoordinator {
-    pub(crate) fn new(state: Arc<StateMgr>, router: Arc<Router>) -> Self {
-        Self { state, router }
+    pub(crate) fn new(model: Arc<RuntimeModel>, router: Arc<Router>) -> Self {
+        Self { model, router }
     }
 
     pub(crate) async fn begin(
@@ -69,7 +89,7 @@ impl TransactionCoordinator {
         related: impl IntoIterator<Item = u64>,
     ) -> Result<SessionTransaction, TransactionError> {
         acquire_transaction(
-            self.state.as_ref(),
+            Arc::clone(&self.model),
             self.router.as_ref(),
             primary_session_id,
             related,
@@ -91,14 +111,14 @@ fn ordered_session_ids(primary_sid: u64, related: impl IntoIterator<Item = u64>)
 }
 
 async fn acquire_transaction(
-    state: &StateMgr,
+    model: Arc<RuntimeModel>,
     router: &Router,
     primary_sid: u64,
     related: impl IntoIterator<Item = u64>,
 ) -> Result<SessionTransaction, TransactionError> {
-    let session = state
-        .session(primary_sid)
-        .ok_or(TransactionError::SessionNotFound(primary_sid))?;
+    if model.session_snapshot(primary_sid).await.is_none() {
+        return Err(TransactionError::SessionNotFound(primary_sid));
+    }
     let session_ids = ordered_session_ids(primary_sid, related);
 
     let mut handles = Vec::with_capacity(session_ids.len());
@@ -120,7 +140,7 @@ async fn acquire_transaction(
 
     Ok(SessionTransaction {
         primary_sid,
-        session,
+        model,
         leases,
     })
 }

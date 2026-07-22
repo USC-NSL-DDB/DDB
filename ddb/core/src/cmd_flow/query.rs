@@ -16,7 +16,7 @@ use super::{
     router::Target,
     schema, CommandOutcome, FinishedCmd, Presentation,
 };
-use crate::state::{GlobalThreadId, StateMgr};
+use crate::state::{GlobalThreadId, RuntimeModel};
 
 /// Owns the read-only query operations, symmetric to the other domain
 /// services: the dispatcher classifies and delegates, this service resolves
@@ -119,7 +119,7 @@ pub(crate) enum QueryProjectionError {
 
 #[derive(Clone)]
 pub(crate) struct QueryProjector {
-    state: Arc<StateMgr>,
+    model: Arc<RuntimeModel>,
 }
 
 impl fmt::Debug for QueryProjector {
@@ -129,15 +129,15 @@ impl fmt::Debug for QueryProjector {
 }
 
 impl QueryProjector {
-    pub(crate) fn new(state: Arc<StateMgr>) -> Self {
-        Self { state }
+    pub(crate) fn new(model: Arc<RuntimeModel>) -> Self {
+        Self { model }
     }
 
     pub(crate) fn resolve_thread(
         &self,
         global_id: GlobalThreadId,
     ) -> Result<(u64, u64), QueryProjectionError> {
-        self.state
+        self.model
             .local_thread_id(global_id)
             .map(|local| local.into_parts())
             .ok_or(QueryProjectionError::UnknownGlobalThread { global_id })
@@ -146,9 +146,9 @@ impl QueryProjector {
     /// The session queries fall back to when a command has no usable target:
     /// the selected session, else the lowest live session id.
     pub(crate) fn default_query_session(&self) -> Option<u64> {
-        self.state
+        self.model
             .current_session_id()
-            .or_else(|| self.state.session_ids().into_iter().min())
+            .or_else(|| self.model.session_ids().into_iter().min())
     }
 
     pub(crate) fn project_threads(
@@ -156,11 +156,11 @@ impl QueryProjector {
         mut completion: FinishedCmd,
     ) -> Result<FinishedCmd, QueryProjectionError> {
         let current_thread_id = self
-            .state
+            .model
             .current_thread_id()
             .map(|id| id.to_string())
             .unwrap_or_default();
-        let thread_ids = self.state.read_thread_ids();
+        let thread_ids = self.model.read_thread_ids();
 
         for response in completion.get_responses_mut() {
             let sid = response.get_sid();
@@ -193,7 +193,7 @@ impl QueryProjector {
         &self,
         mut completion: FinishedCmd,
     ) -> Result<FinishedCmd, QueryProjectionError> {
-        let thread_ids = self.state.read_thread_ids();
+        let thread_ids = self.model.read_thread_ids();
         for response in completion.get_responses_mut() {
             let sid = response.get_sid();
             let payload = response
@@ -294,11 +294,11 @@ mod tests {
 
     #[tokio::test]
     async fn thread_projection_replaces_local_and_current_ids() {
-        let state = Arc::new(StateMgr::new());
-        state.register_session(3, "svc", None).await;
-        state.register_thread_group(3, "i1").await.unwrap();
-        let global_id = state.register_thread(3, 9, "i1").await.unwrap().thread_id;
-        state.select_thread_context(3, global_id);
+        let model = RuntimeModel::new();
+        model.register_session(3, "svc", None).await;
+        model.register_thread_group(3, "i1").await.unwrap();
+        let global_id = model.register_thread(3, 9, "i1").await.unwrap().thread_id;
+        model.select_thread_context(3, global_id);
         let input = completion(
             3,
             "threads",
@@ -308,7 +308,7 @@ mod tests {
             )])))],
         );
 
-        let projected = QueryProjector::new(Arc::clone(&state))
+        let projected = QueryProjector::new(Arc::clone(&model))
             .project_threads(input)
             .unwrap();
         let payload = projected.get_responses()[0].get_payload().unwrap();
@@ -327,11 +327,11 @@ mod tests {
 
     #[tokio::test]
     async fn thread_projection_reuses_the_owned_record_list() {
-        let state = Arc::new(StateMgr::new());
-        state.register_session(3, "svc", None).await;
-        state.register_thread_group(3, "i1").await.unwrap();
-        state.register_thread(3, 9, "i1").await.unwrap();
-        state.register_thread(3, 10, "i1").await.unwrap();
+        let model = RuntimeModel::new();
+        model.register_session(3, "svc", None).await;
+        model.register_thread_group(3, "i1").await.unwrap();
+        model.register_thread(3, 9, "i1").await.unwrap();
+        model.register_thread(3, 10, "i1").await.unwrap();
         let input = completion(
             3,
             "threads",
@@ -351,7 +351,7 @@ mod tests {
             .unwrap()
             .as_ptr();
 
-        let projected = QueryProjector::new(Arc::clone(&state))
+        let projected = QueryProjector::new(Arc::clone(&model))
             .project_threads(input)
             .unwrap();
         let records_after = projected.get_responses()[0].get_payload().unwrap()["threads"]
@@ -364,16 +364,16 @@ mod tests {
 
     #[tokio::test]
     async fn process_projection_replaces_local_group_ids() {
-        let state = Arc::new(StateMgr::new());
-        state.register_session(4, "svc", None).await;
-        let global_id = state.register_thread_group(4, "i7").await.unwrap();
+        let model = RuntimeModel::new();
+        model.register_session(4, "svc", None).await;
+        let global_id = model.register_thread_group(4, "i7").await.unwrap();
         let process = Value::Dict(Dict::from(HashMap::from([
             ("id".to_string(), Value::from("i7")),
             ("type".to_string(), Value::from("process")),
             ("pid".to_string(), Value::from("42")),
         ])));
 
-        let projected = QueryProjector::new(Arc::clone(&state))
+        let projected = QueryProjector::new(Arc::clone(&model))
             .project_processes(completion(4, "groups", vec![process]))
             .unwrap();
         let process = projected.get_responses()[0].get_payload().unwrap()["groups"]
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn unknown_thread_mapping_is_reported_without_panicking() {
-        let state = Arc::new(StateMgr::new());
+        let model = RuntimeModel::new();
         let input = completion(
             8,
             "threads",
@@ -400,7 +400,7 @@ mod tests {
         );
 
         assert_eq!(
-            QueryProjector::new(Arc::clone(&state))
+            QueryProjector::new(Arc::clone(&model))
                 .project_threads(input)
                 .unwrap_err(),
             QueryProjectionError::UnknownThread {

@@ -7,10 +7,10 @@ use crate::state::GroupId;
 
 /// Serializes membership transitions with debugger operations for one group.
 ///
-/// A session is visible in GroupMgr before it becomes routable. Holding this
-/// gate through activation makes every group operation observe the session
-/// either before registration or after its router and breakpoint projections
-/// are complete.
+/// An empty group can be reserved before activation acquires its gate. Session
+/// membership is published only after acquisition, and the gate stays held
+/// until router and breakpoint projections are complete. Group operations
+/// therefore observe either pre-membership or fully activated state.
 #[derive(Default)]
 pub(crate) struct GroupOperationCoordinator {
     gates: DashMap<GroupId, Arc<Mutex<()>>>,

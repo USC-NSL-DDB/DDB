@@ -8,7 +8,7 @@ use super::{
     diagnostics::DiagnosticConsole, dispatcher::CommandDispatcher, input::ParsedInputCmd,
     router::Target, CommandOutcome,
 };
-use crate::state::StateMgr;
+use crate::state::RuntimeModel;
 
 const DETACHED_COMMAND_LIMIT: usize = 256;
 
@@ -43,7 +43,7 @@ impl CommandError {
 pub struct CommandEngine {
     dispatcher: CommandDispatcher,
     diagnostics: DiagnosticConsole,
-    state: Arc<StateMgr>,
+    model: Arc<RuntimeModel>,
     detached_slots: Arc<Semaphore>,
 }
 
@@ -51,12 +51,12 @@ impl CommandEngine {
     pub(crate) fn new(
         dispatcher: CommandDispatcher,
         diagnostics: DiagnosticConsole,
-        state: Arc<StateMgr>,
+        model: Arc<RuntimeModel>,
     ) -> Arc<Self> {
         Arc::new(Self {
             dispatcher,
             diagnostics,
-            state,
+            model,
             detached_slots: Arc::new(Semaphore::new(DETACHED_COMMAND_LIMIT)),
         })
     }
@@ -73,7 +73,7 @@ impl CommandEngine {
         }
 
         let default_target = self
-            .state
+            .model
             .current_thread_id()
             .map(Target::Thread)
             .unwrap_or(Target::Broadcast);

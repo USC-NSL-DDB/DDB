@@ -92,6 +92,23 @@ impl GroupMgr {
         }
     }
 
+    #[inline]
+    pub fn ensure_group(&self, group_hash: &str, alias: String) -> GroupId {
+        let mut indexes = self.indexes.write().unwrap();
+        if let Some(group) = indexes.hash_to_group.get(group_hash) {
+            return group.id();
+        }
+
+        let group_hash = group_hash.to_string();
+        let group_id = GroupId::new(self.ids.next());
+        indexes.id_to_hash.insert(group_id, group_hash.clone());
+        indexes.hash_to_group.insert(
+            group_hash.clone(),
+            GroupMeta::new(group_id, group_hash, alias),
+        );
+        group_id
+    }
+
     fn remove_session_locked(indexes: &mut GroupIndexes, sid: SessionId) {
         let Some(group_hash) = indexes.sid_to_hash.remove(&sid) else {
             return;

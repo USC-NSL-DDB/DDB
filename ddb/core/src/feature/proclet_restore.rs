@@ -16,7 +16,7 @@ use crate::{
         transaction::SessionTransaction,
     },
     feature::proclet_query::ProcletQueryService,
-    state::ProcletMgr,
+    state::RuntimeModel,
 };
 
 type ProcletId = u64;
@@ -65,7 +65,7 @@ impl From<ProcletHeapInfo> for ProcletHeapMeta {
 /// The goal here is to temporarily restore the proclet to original location.
 /// We should keep states regarding where is a session proclet is restored so that we can properly clean up later.
 pub struct ProcletRestorationMgr {
-    proclets: Arc<ProcletMgr>,
+    model: Arc<RuntimeModel>,
     executor: CommandExecutor,
     proclet_queries: Arc<ProcletQueryService>,
     // cache the result regarding whether the proclet is local to the session
@@ -82,12 +82,12 @@ pub struct ProcletRestorationMgr {
 
 impl ProcletRestorationMgr {
     pub fn new(
-        proclets: Arc<ProcletMgr>,
+        model: Arc<RuntimeModel>,
         executor: CommandExecutor,
         proclet_queries: Arc<ProcletQueryService>,
     ) -> Self {
         Self {
-            proclets,
+            model,
             executor,
             proclet_queries,
             proclet_is_local_cache: DashMap::new(),
@@ -151,17 +151,17 @@ impl ProcletRestorationMgr {
             .proclet_queries
             .query(proclet_id)
             .await
-            .with_context(|| format!("Failed to query proclet {} from ProcletMgr", proclet_id))?;
+            .with_context(|| format!("Failed to query proclet {} location", proclet_id))?;
 
         let caladan_ip = resp.caladan_ip;
-        let owner_sid =
-            self.proclets
-                .session_id_for_caladan_ip(caladan_ip)
-                .ok_or(anyhow::anyhow!(
-                    "Fail to find the owner session for proclet {}. caladan_ip: {}",
-                    proclet_id,
-                    caladan_ip
-                ))?;
+        let owner_sid = self
+            .model
+            .proclet_owner_session(caladan_ip)
+            .ok_or(anyhow::anyhow!(
+                "Fail to find the owner session for proclet {}. caladan_ip: {}",
+                proclet_id,
+                caladan_ip
+            ))?;
         let proc_loc = ProcletLoc { sid: owner_sid };
         *loc_guard = Some(proc_loc.clone());
         Ok(proc_loc)
@@ -277,7 +277,7 @@ impl ProcletRestorationMgr {
         // 3. if not, need to restore the heap.
         //  a. query the proclet ctrl for the current location of the proclet. input: proclet_id
         //  b. read the caladan ip address from the proclet ctrl
-        //  c. query the `ProcletMgr` to get the session id.
+        //  c. query the runtime model to get the owner session id.
         //  d. send `-get-proclet-heap` to the session. input: proclet_id
         //  e. send `-restore-proclet-heap` to the current session. input: start_addr, data_len, data
         //  f. mark the heap is dirty and should clean it up upon continuing!!!!

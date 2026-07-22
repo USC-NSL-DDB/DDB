@@ -20,7 +20,7 @@ use tracing::{debug, warn};
 
 use crate::{
     cmd_flow::{api::CommandExecutor, decoder::SourceFiles, router::Target},
-    state::{GroupId, GroupMeta, GroupMgr},
+    state::{GroupId, GroupMeta, RuntimeModel},
 };
 
 use super::catalog::SourceCatalog;
@@ -88,17 +88,17 @@ pub(crate) trait GroupResolutionView: fmt::Debug + Send + Sync {
     fn matching_groups(&self, predicate: &dyn Fn(&GroupMeta) -> bool) -> Vec<GroupMeta>;
 }
 
-impl GroupResolutionView for GroupMgr {
+impl GroupResolutionView for RuntimeModel {
     fn group_by_id(&self, group_id: GroupId) -> Option<GroupMeta> {
-        GroupMgr::group_by_id(self, group_id)
+        RuntimeModel::group_by_id(self, group_id)
     }
 
     fn group_id_by_session(&self, sid: u64) -> Option<GroupId> {
-        GroupMgr::group_id_by_session(self, sid)
+        RuntimeModel::group_id_by_session(self, sid)
     }
 
     fn matching_groups(&self, predicate: &dyn Fn(&GroupMeta) -> bool) -> Vec<GroupMeta> {
-        GroupMgr::matching_groups(self, predicate)
+        RuntimeModel::matching_groups(self, predicate)
     }
 }
 
@@ -436,8 +436,17 @@ mod tests {
         }
     }
 
+    async fn register_group(model: &Arc<RuntimeModel>, sid: u64, hash: &str) -> GroupId {
+        let identity = crate::state::ServiceIdentity::new(hash, format!("service-{sid}"));
+        model
+            .register_session(sid, &format!("session-{sid}"), Some(identity.clone()))
+            .await;
+        drop(model.register_service_group(sid, &identity).await);
+        model.group_id_by_session(sid).unwrap()
+    }
+
     fn resolver_with(
-        groups: Arc<GroupMgr>,
+        groups: Arc<RuntimeModel>,
         provider: Arc<FakeProvider>,
         policy: SourceResolutionPolicy,
         concurrency: usize,
@@ -455,8 +464,8 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_path_resolution_is_single_flight() {
-        let groups = Arc::new(GroupMgr::new());
-        groups.register_session("binary-a", "service-a".to_owned(), 11);
+        let groups = RuntimeModel::new();
+        register_group(&groups, 11, "binary-a").await;
         let provider =
             FakeProvider::delayed(vec!["/src/main.rs".to_owned()], Duration::from_millis(10));
         let (resolver, _) = resolver_with(
@@ -475,9 +484,9 @@ mod tests {
 
     #[tokio::test]
     async fn resolution_concurrency_is_bounded() {
-        let groups = Arc::new(GroupMgr::new());
+        let groups = RuntimeModel::new();
         for sid in 1..=5 {
-            groups.register_session(&format!("binary-{sid}"), format!("service-{sid}"), sid);
+            register_group(&groups, sid, &format!("binary-{sid}")).await;
         }
         let provider =
             FakeProvider::delayed(vec!["/src/main.rs".to_owned()], Duration::from_millis(10));
@@ -496,8 +505,8 @@ mod tests {
 
     #[tokio::test]
     async fn removed_group_is_not_reintroduced_by_late_resolution() {
-        let groups = Arc::new(GroupMgr::new());
-        groups.register_session("binary-a", "service-a".to_owned(), 11);
+        let groups = RuntimeModel::new();
+        register_group(&groups, 11, "binary-a").await;
         let group_id = groups.group_id_by_session(11).unwrap();
         let release = Arc::new(Notify::new());
         let provider = FakeProvider::blocked(vec!["/src/main.rs".to_owned()], Arc::clone(&release));
@@ -514,7 +523,7 @@ mod tests {
             async move { resolver.group_ids_for("/src/main.rs").await }
         });
         started.notified().await;
-        groups.remove_session(11);
+        drop(groups.begin_session_retirement(11).await.finish().await);
         resolver.remove_group(group_id).await;
         release.notify_one();
 
@@ -524,8 +533,8 @@ mod tests {
 
     #[tokio::test]
     async fn eager_resolution_task_is_owned_and_cancellable() {
-        let groups = Arc::new(GroupMgr::new());
-        groups.register_session("binary-a", "service-a".to_owned(), 11);
+        let groups = RuntimeModel::new();
+        register_group(&groups, 11, "binary-a").await;
         let group_id = groups.group_id_by_session(11).unwrap();
         let release = Arc::new(Notify::new());
         let provider = FakeProvider::blocked(vec!["/src/main.rs".to_owned()], release);
@@ -547,8 +556,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_rejects_new_resolution() {
-        let groups = Arc::new(GroupMgr::new());
-        groups.register_session("binary-a", "service-a".to_owned(), 11);
+        let groups = RuntimeModel::new();
+        register_group(&groups, 11, "binary-a").await;
         let provider = FakeProvider::new(vec!["/src/main.rs".to_owned()]);
         let (resolver, _) = resolver_with(groups, provider, SourceResolutionPolicy::OnDemand, 8);
 

@@ -12,7 +12,7 @@ use tracing::{debug, error};
 use crate::{
     common::Config,
     feature::proclet_restore::ProcletRestorationMgr,
-    state::{GlobalThreadId, LocalThreadId, SessionRef, StateMgr, ThreadContext},
+    state::{GlobalThreadId, LocalThreadId, RuntimeModel, ThreadContext},
 };
 
 use super::{
@@ -45,7 +45,7 @@ struct ParentMetadata {
 
 pub(crate) struct DistributedBacktraceService {
     adapter: Arc<dyn FrameworkCommandAdapter>,
-    state: Arc<StateMgr>,
+    model: Arc<RuntimeModel>,
     config: Arc<Config>,
     executor: CommandExecutor,
     transactions: TransactionCoordinator,
@@ -55,7 +55,7 @@ pub(crate) struct DistributedBacktraceService {
 impl DistributedBacktraceService {
     pub(crate) fn new(
         adapter: Arc<dyn FrameworkCommandAdapter>,
-        state: Arc<StateMgr>,
+        model: Arc<RuntimeModel>,
         config: Arc<Config>,
         executor: CommandExecutor,
         transactions: TransactionCoordinator,
@@ -63,7 +63,7 @@ impl DistributedBacktraceService {
     ) -> Self {
         Self {
             adapter,
-            state,
+            model,
             config,
             executor,
             transactions,
@@ -124,7 +124,7 @@ impl DistributedBacktraceService {
 
     async fn capture_thread(&self, global_thread_id: GlobalThreadId) -> Result<BacktraceData> {
         let LocalThreadId(session_id, _) = self
-            .state
+            .model
             .local_thread_id(global_thread_id)
             .ok_or_else(|| anyhow!("Unknown global thread {}", global_thread_id))?;
         let transaction = self
@@ -188,15 +188,19 @@ impl DistributedBacktraceService {
     }
 
     async fn capture_parent(&self, parent: &ParentMetadata) -> Result<ParentCapture> {
-        let session = self
-            .state
-            .session_by_tag(&parent.id)
+        let session_id = self
+            .model
+            .session_id_by_tag(&parent.id)
+            .await
             .ok_or_else(|| anyhow!("No session matches distributed parent {}", parent.id))?;
-        let (session_id, in_custom_context) = session
-            .read_with(|session| (session.sid(), session.is_in_custom_context()))
-            .await;
+        let in_custom_context = self
+            .model
+            .session_snapshot(session_id)
+            .await
+            .ok_or_else(|| anyhow!("Session {} disappeared", session_id))?
+            .in_custom_context;
         let global_thread_id = self
-            .state
+            .model
             .global_thread_ids_for_session(session_id)
             .first()
             .copied()
@@ -205,7 +209,7 @@ impl DistributedBacktraceService {
         let data = if in_custom_context {
             self.capture_thread(global_thread_id).await?
         } else {
-            self.capture_parent_with_context(&session, session_id, global_thread_id, parent)
+            self.capture_parent_with_context(session_id, global_thread_id, parent)
                 .await?
         };
 
@@ -218,7 +222,6 @@ impl DistributedBacktraceService {
 
     async fn capture_parent_with_context(
         &self,
-        session: &SessionRef,
         session_id: u64,
         global_thread_id: GlobalThreadId,
         parent: &ParentMetadata,
@@ -248,7 +251,7 @@ impl DistributedBacktraceService {
             )
             .await
             .with_context(|| format!("Failed to interrupt session {}", session_id))?;
-        wait_for_all_threads_stopped(session).await?;
+        wait_for_all_threads_stopped(&transaction).await?;
 
         let switch = self
             .executor
@@ -269,10 +272,9 @@ impl DistributedBacktraceService {
             );
         }
         let context = extract_context(switch_payload, global_thread_id)?;
-        transaction
-            .session()
-            .write_with(|session| session.enter_custom_context(context))
-            .await;
+        if !transaction.enter_custom_context(context).await {
+            bail!("Session {} disappeared during context switch", session_id);
+        }
 
         self.handle_migration(global_thread_id, parent, Some(&transaction))
             .await;
@@ -289,7 +291,7 @@ impl DistributedBacktraceService {
         if !self.config.handle_migration() {
             return;
         }
-        let Some(LocalThreadId(session_id, _)) = self.state.local_thread_id(global_thread_id)
+        let Some(LocalThreadId(session_id, _)) = self.model.local_thread_id(global_thread_id)
         else {
             error!(
                 global_thread_id = %global_thread_id,
@@ -316,13 +318,10 @@ impl fmt::Debug for DistributedBacktraceService {
     }
 }
 
-async fn wait_for_all_threads_stopped(session: &SessionRef) -> Result<()> {
+async fn wait_for_all_threads_stopped(transaction: &SessionTransaction) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        if session
-            .read_with(|metadata| metadata.all_threads_stopped())
-            .await
-        {
+        if transaction.all_threads_stopped().await == Some(true) {
             return Ok(());
         }
         if Instant::now() > deadline {

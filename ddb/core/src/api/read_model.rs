@@ -36,20 +36,15 @@ impl ApiQueries {
 
     pub(crate) async fn sessions(&self) -> Vec<SessionView> {
         let mut sessions = Vec::new();
-        for session in self.model.state().sessions() {
-            let (sid, tag, alias, status) = session
-                .read_with(|meta| {
-                    (
-                        meta.sid(),
-                        meta.tag().to_string(),
-                        meta.service_identity()
-                            .map(|service| service.alias.clone())
-                            .unwrap_or_else(|| "UNKNOWN".to_string()),
-                        meta.status().to_string(),
-                    )
-                })
-                .await;
-            let group = match self.model.groups().group_info_by_session(sid) {
+        for session in self.model.session_snapshots().await {
+            let sid = session.sid;
+            let tag = session.tag;
+            let alias = session
+                .service_identity
+                .map(|service| service.alias)
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            let status = session.status.to_string();
+            let group = match self.model.group_info_by_session(sid) {
                 Some((id, hash)) => SessionGroupView {
                     valid: true,
                     id: id.value(),
@@ -90,7 +85,6 @@ impl ApiQueries {
         let mut groups = self
             .model
             .groups()
-            .groups()
             .iter()
             .map(GroupView::from)
             .collect::<Vec<_>>();
@@ -100,18 +94,13 @@ impl ApiQueries {
 
     pub(crate) fn group_by_id(&self, id: u64) -> Option<GroupView> {
         self.model
-            .groups()
             .group_by_id(id.into())
             .as_ref()
             .map(GroupView::from)
     }
 
     pub(crate) fn group_by_hash(&self, hash: &str) -> Option<GroupView> {
-        self.model
-            .groups()
-            .group_by_hash(hash)
-            .as_ref()
-            .map(GroupView::from)
+        self.model.group_by_hash(hash).as_ref().map(GroupView::from)
     }
 
     pub(crate) async fn group_ids_for_source(&self, source: &str) -> Result<Vec<u64>> {
@@ -139,13 +128,7 @@ impl ApiQueries {
     }
 
     pub(crate) fn breakpoints(&self) -> Vec<BreakpointSnapshot> {
-        let mut breakpoints = self
-            .model
-            .breakpoints()
-            .breakpoints()
-            .iter()
-            .map(BreakpointSnapshot::from)
-            .collect::<Vec<_>>();
+        let mut breakpoints = self.model.breakpoint_snapshots();
         breakpoints.sort_unstable_by_key(|breakpoint| breakpoint.id);
         breakpoints
     }
@@ -212,7 +195,7 @@ mod tests {
         let router = Arc::new(Router::new(Arc::clone(&model)));
         let resolver = SourceResolver::new(
             Arc::new(SourceCatalog::new()),
-            Arc::clone(model.groups()) as _,
+            Arc::clone(&model) as _,
             CommandExecutor::new(Arc::clone(&router)),
             SourceResolutionPolicy::OnDemand,
         );
@@ -222,15 +205,12 @@ mod tests {
     #[tokio::test]
     async fn returns_api_owned_snapshots_with_stable_wire_shapes() {
         let model = RuntimeModel::new();
-        model.state().register_session(7, "worker-7", None).await;
-        model
-            .groups()
-            .register_session("binary-worker", "worker".to_string(), 7);
-        let group_id = model.groups().group_id_by_session(7).unwrap();
-        let breakpoint_id = model
-            .breakpoints()
-            .add_breakpoint(BkptLoc::new("src/worker.rs", 42));
-        model.breakpoints().add_sub_breakpoint(
+        model.register_session(7, "worker-7", None).await;
+        let identity = crate::state::ServiceIdentity::new("binary-worker", "worker");
+        drop(model.register_service_group(7, &identity).await);
+        let group_id = model.group_id_by_session(7).unwrap();
+        let breakpoint_id = model.add_breakpoint(BkptLoc::new("src/worker.rs", 42));
+        model.add_sub_breakpoint(
             breakpoint_id,
             SubBkptType::Group(GroupSubBkpt::new(group_id)),
         );

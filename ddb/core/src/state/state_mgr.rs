@@ -4,8 +4,9 @@ use crate::common::counter::SimpleCounter;
 
 use super::{
     session_mgr,
+    session_mgr::SessionRef,
     thread_mgr::{self, LocalThreadGroupId, LocalThreadId},
-    GlobalThreadGroupId, GlobalThreadId, ServiceIdentity, SessionRef,
+    GlobalThreadGroupId, GlobalThreadId, ServiceIdentity,
 };
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]

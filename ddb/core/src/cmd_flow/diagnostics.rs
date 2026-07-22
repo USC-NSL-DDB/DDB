@@ -43,10 +43,14 @@ impl DiagnosticConsole {
     pub(crate) async fn execute(&self, command: &str) -> Result<CommandOutcome> {
         match command {
             "p-source-resolver" => info!("p-source-resolver: {:#?}", self.source_resolver),
-            "p-session-meta" => info!("p-session-meta: {:?}", self.model.state().sessions()),
+            "p-session-meta" => {
+                info!("p-session-meta: {:?}", self.model.session_snapshots().await)
+            }
             "p-group-mgr" => info!("p-group-mgr: {:#?}", self.model.groups()),
-            "p-bkpt-mgr" => info!("p-bkpt-mgr: {:#?}", self.model.breakpoints()),
-            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", self.model.proclets()),
+            "p-bkpt-mgr" => {
+                info!("p-bkpt-mgr: {:#?}", self.model.breakpoint_snapshots())
+            }
+            "p-proclet-mgr" => info!("p-proclet-mgr: {:#?}", self.model.proclet_owners()),
             _ if command.starts_with("p-resolve-src ") => {
                 let path = &command["p-resolve-src ".len()..];
                 self.source_resolver.resolve_path(path).await?;

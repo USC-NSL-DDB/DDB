@@ -38,7 +38,17 @@ impl ProcletMgr {
     pub fn session_id_for_caladan_ip(&self, caladan_ip: u32) -> Option<u64> {
         self.caladan_ip_to_sid
             .get(&caladan_ip)
-            .map(|sid| sid.value().clone())
+            .map(|sid| *sid.value())
+    }
+
+    pub fn owners(&self) -> Vec<(u32, u64)> {
+        let mut owners = self
+            .caladan_ip_to_sid
+            .iter()
+            .map(|entry| (*entry.key(), *entry.value()))
+            .collect::<Vec<_>>();
+        owners.sort_unstable();
+        owners
     }
 }
 

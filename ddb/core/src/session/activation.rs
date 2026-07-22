@@ -13,7 +13,6 @@ use crate::{
     common::Config,
     plugin::FrameworkPlugin,
     source::resolver::SourceResolver,
-    state::GroupOperationCoordinator,
     state::RuntimeModel,
 };
 
@@ -24,7 +23,6 @@ pub(crate) struct SessionActivation {
     model: Arc<RuntimeModel>,
     router: Arc<Router>,
     breakpoint_events: Arc<BreakpointEventPublisher>,
-    group_operations: Arc<GroupOperationCoordinator>,
     source_resolver: Arc<SourceResolver>,
 }
 
@@ -35,7 +33,6 @@ impl SessionActivation {
         model: Arc<RuntimeModel>,
         router: Arc<Router>,
         breakpoint_events: Arc<BreakpointEventPublisher>,
-        group_operations: Arc<GroupOperationCoordinator>,
         source_resolver: Arc<SourceResolver>,
     ) -> Self {
         Self {
@@ -44,7 +41,6 @@ impl SessionActivation {
             model,
             router,
             breakpoint_events,
-            group_operations,
             source_resolver,
         }
     }
@@ -64,21 +60,13 @@ impl SessionActivation {
         let caladan_ip = request.caladan_ip;
 
         self.model
-            .state()
             .register_session(sid, &tag, service_identity.clone())
             .await;
 
         let handle = process.launch(termination.clone()).await?;
 
-        let group_id = service_identity.as_ref().map(|identity| {
-            let groups = self.model.groups();
-            groups.register_session(&identity.hash, identity.alias.clone(), sid);
-            groups
-                .group_id_by_session(sid)
-                .expect("registered session must have a group")
-        });
-        let group_operation = match group_id {
-            Some(group_id) => Some(self.group_operations.lock(group_id).await),
+        let group_operation = match service_identity.as_ref() {
+            Some(identity) => Some(self.model.register_service_group(sid, identity).await),
             None => None,
         };
 
@@ -93,24 +81,23 @@ impl SessionActivation {
         drop(group_operation);
         self.source_resolver.session_activated(sid);
 
-        if self.plugin.should_register_caladan_ip(self.config.as_ref()) {
-            if let Some(caladan_ip) = caladan_ip {
-                self.model
-                    .proclets()
-                    .register_owner_session(caladan_ip, sid);
-            }
-        }
-
-        self.model.state().update_session_status_on(sid).await;
+        let proclet_owner = self
+            .plugin
+            .should_register_caladan_ip(self.config.as_ref())
+            .then_some(caladan_ip)
+            .flatten();
+        self.model
+            .complete_session_activation(sid, proclet_owner)
+            .await;
         Ok(())
     }
 
     async fn sync_group_breakpoints(&self, sid: u64, handle: &SessionHandle) -> Result<()> {
-        let Some(group_id) = self.model.groups().group_id_by_session(sid) else {
+        let Some(group_id) = self.model.group_id_by_session(sid) else {
             return Ok(());
         };
 
-        for breakpoint in self.model.breakpoints().group_breakpoints(group_id) {
+        for breakpoint in self.model.group_breakpoints(group_id) {
             let path = breakpoint.location().breakpoint_path();
             let response = handle
                 .execute(SessionCommand {
@@ -121,8 +108,7 @@ impl SessionActivation {
                 .await
                 .with_context(|| format!("Failed to insert existing breakpoint at {}", path))?;
             let local_id = BreakpointCreated::decode(&response)?.local_id;
-            let breakpoints = self.model.breakpoints();
-            let change = breakpoints.attach_group_breakpoint_session_target(
+            let change = self.model.attach_group_breakpoint_session_target(
                 breakpoint.id(),
                 group_id,
                 sid,
@@ -137,24 +123,17 @@ impl SessionActivation {
         let sid = process.sid();
 
         self.source_resolver.cancel_session(sid).await;
-        let group_operation = match self.model.groups().group_id_by_session(sid) {
-            Some(group_id) => Some(self.group_operations.lock(group_id).await),
-            None => None,
-        };
-
+        let retirement = self.model.begin_session_retirement(sid).await;
         self.router.remove_session(sid);
-        let retirement = self.model.retire_session(sid).await;
+        let mut retirement = retirement.finish().await;
         self.breakpoint_events
-            .publish_state_changes(retirement.breakpoint_changes)
+            .publish_state_changes(std::mem::take(&mut retirement.breakpoint_changes))
             .await;
 
         if let Some(group_id) = retirement.emptied_group {
             self.source_resolver.remove_group(group_id).await;
         }
-        drop(group_operation);
-        if let Some(group_id) = retirement.emptied_group {
-            self.group_operations.remove_group(group_id);
-        }
+        drop(retirement);
         process.shutdown().await
     }
 }

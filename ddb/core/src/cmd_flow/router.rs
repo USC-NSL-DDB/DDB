@@ -119,7 +119,6 @@ impl Router {
             Target::Thread(gtid) => {
                 let LocalThreadId(sid, thread_id) = self
                     .model
-                    .state()
                     .local_thread_id(*gtid)
                     .ok_or_else(|| anyhow!("Thread {} is not in a session", gtid))?;
                 Ok(vec![self.session_route(sid, Some(thread_id))?])
@@ -127,7 +126,6 @@ impl Router {
             Target::Group(gid) => {
                 let group = self
                     .model
-                    .groups()
                     .group_by_id(*gid)
                     .ok_or_else(|| anyhow!("Group {} does not exist", gid))?;
                 let session_ids = group.session_ids().clone();
@@ -137,7 +135,7 @@ impl Router {
                 })
             }
             Target::CurrThread => {
-                let gtid = self.model.state().current_thread_id().ok_or_else(|| {
+                let gtid = self.model.current_thread_id().ok_or_else(|| {
                     anyhow!("use -thread-select #gtid to select the thread first")
                 })?;
                 self.resolve_target(&Target::Thread(gtid))
@@ -145,7 +143,6 @@ impl Router {
             Target::CurrSession => {
                 let sid = self
                     .model
-                    .state()
                     .current_session_id()
                     .ok_or_else(|| anyhow!("No current session selected"))?;
                 self.resolve_target(&Target::Session(sid))

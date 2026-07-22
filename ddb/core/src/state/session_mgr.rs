@@ -10,6 +10,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::state::{GlobalThreadId, ServiceIdentity};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ThreadStatus {
     INIT,
     STOPPED,
@@ -17,9 +18,9 @@ pub enum ThreadStatus {
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ThreadGroupStatus {
     INIT,
-    STOPPED,
     RUNNING,
     EXITED,
 }
@@ -31,6 +32,7 @@ pub struct ThreadContext {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum SessionStatus {
     ON,
     OFF,
@@ -310,11 +312,6 @@ impl SessionMeta {
     #[inline]
     pub fn tag(&self) -> &str {
         &self.tag
-    }
-
-    #[inline]
-    pub fn service_identity(&self) -> Option<&ServiceIdentity> {
-        self.service_identity.as_ref()
     }
 
     #[inline]

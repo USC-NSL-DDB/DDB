@@ -60,17 +60,17 @@ pub(crate) fn bkpt_deleted_payload(breakpoint_id: u64) -> Dict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{BkptLoc, BreakpointMgr, GroupId, GroupSubBkpt, SubBkptType};
+    use crate::state::{BkptLoc, GroupId, GroupSubBkpt, RuntimeModel, SubBkptType};
 
     #[test]
     fn breakpoint_payload_preserves_the_established_wire_shape() {
-        let manager = BreakpointMgr::new();
-        let breakpoint_id = manager.add_breakpoint(BkptLoc::new("src/worker.rs", 42));
-        manager.add_sub_breakpoint(
+        let model = RuntimeModel::new();
+        let breakpoint_id = model.add_breakpoint(BkptLoc::new("src/worker.rs", 42));
+        model.add_sub_breakpoint(
             breakpoint_id,
             SubBkptType::Group(GroupSubBkpt::new(GroupId::new(3))),
         );
-        let snapshot = BreakpointSnapshot::from(&manager.breakpoint(breakpoint_id).unwrap());
+        let snapshot = BreakpointSnapshot::from(&model.breakpoint(breakpoint_id).unwrap());
 
         let payload = bkpt_payload(&snapshot);
 

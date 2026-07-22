@@ -7,7 +7,8 @@ use std::{
 };
 
 use super::GroupId;
-use crate::{common::counter::SimpleCounter, state::SessionId};
+use crate::common::counter::SimpleCounter;
+use crate::state::group_mgr::SessionId;
 
 #[derive(Debug, Clone)]
 pub struct BkptLoc {
@@ -185,7 +186,7 @@ impl BkptMeta {
         BkptMeta {
             id: bkpt_id,
             subbkpts: Vec::new(),
-            loc: loc,
+            loc,
             enabled: Arc::new(AtomicBool::new(true)),
             times: Arc::new(AtomicU64::new(0)),
             sub_bkpt_counter: Arc::new(SimpleCounter::new()),
@@ -250,13 +251,10 @@ impl BkptMeta {
     }
 
     fn delete_local_bkpt(&mut self, subbkpt_id: u64, sid: u64) -> Option<SubBkptMeta> {
-        let Some(index) = self
+        let index = self
             .subbkpts
             .iter()
-            .position(|subbkpt| subbkpt.id == subbkpt_id)
-        else {
-            return None;
-        };
+            .position(|subbkpt| subbkpt.id == subbkpt_id)?;
 
         let remove_subbkpt = match &mut self.subbkpts[index].subbkpt_type {
             SubBkptType::Group(group_subbkpt) => {
