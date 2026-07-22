@@ -115,7 +115,6 @@ impl ThreadIdView<'_> {
     }
 }
 
-#[allow(unused)]
 pub struct ThreadStateMgr {
     // All four maps form two bidirectional indexes and must change together.
     indexes: RwLock<ThreadIndexes>,

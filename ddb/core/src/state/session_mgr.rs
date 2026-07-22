@@ -174,13 +174,6 @@ impl SessionThreadRegistry {
         threads
     }
 
-    #[allow(unused)]
-    #[inline]
-    fn add_thread_to_group(&mut self, tid: u64, tgid: &str) {
-        self.ensure_group(tgid).threads.insert(tid);
-        self.tid_to_group.insert(tid, tgid.to_string());
-    }
-
     #[inline]
     fn remove_thread_metadata(
         &mut self,
@@ -290,18 +283,6 @@ impl SessionMeta {
     #[inline]
     pub fn exit_thread_group(&mut self, tgid: &str) -> HashSet<u64> {
         self.threads.exit_thread_group(tgid, &mut self.t_status)
-    }
-
-    #[allow(unused)]
-    #[inline]
-    pub fn add_thread_to_group(&mut self, tid: u64, tgid: &str) {
-        self.threads.add_thread_to_group(tid, tgid);
-    }
-
-    #[allow(unused)]
-    #[inline]
-    pub fn get_curr_tid(&self) -> Option<u64> {
-        self.curr_tid
     }
 
     #[inline]
@@ -557,15 +538,6 @@ impl SessionStateMgr {
     {
         let session = self.session(sid)?;
         Some(session.write_with(f).await)
-    }
-
-    #[inline]
-    pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
-    where
-        F: FnOnce(&SessionMeta) -> U,
-    {
-        let session = self.session_by_tag(tag)?;
-        Some(session.read_with(f).await)
     }
 }
 

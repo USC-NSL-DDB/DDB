@@ -410,12 +410,7 @@ impl Default for SshConfig {
     }
 }
 
-#[allow(dead_code)]
 impl Config {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Load configuration from a YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
@@ -426,13 +421,6 @@ impl Config {
     pub fn from_str(contents: &str) -> Result<Self> {
         let config = serde_yml::from_str(contents)?;
         Ok(config)
-    }
-
-    /// Save configuration to a YAML file
-    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let yaml = serde_yml::to_string(self)?;
-        fs::write(path, yaml)?;
-        Ok(())
     }
 
     /// Load configuration from a path, or use defaults when no path is supplied.

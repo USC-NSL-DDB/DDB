@@ -67,58 +67,26 @@ impl From<&FrameFilterPatternConfig> for FrameFilterAddArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct FrameFilterRemoveArgs {
-    pattern: String,
-}
-
-impl FrameFilterRemoveArgs {
-    #[allow(dead_code)]
-    pub fn new(pattern: &str) -> Self {
-        Self {
-            pattern: pattern.to_string(),
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.pattern
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
 pub enum FrameFilterCmdArg {
     Enable,
-    Disable,
     AddFunction(FrameFilterAddArgs),
-    RemoveFunction(FrameFilterRemoveArgs),
     AddFile(FrameFilterAddArgs),
-    RemoveFile(FrameFilterRemoveArgs),
     PresetEnable(String),
-    PresetDisable(String),
-    Clear,
 }
 
 impl FrameFilterCmdArg {
     pub fn to_str(&self) -> String {
         match self {
             FrameFilterCmdArg::Enable => "--enable".to_string(),
-            FrameFilterCmdArg::Disable => "--disable".to_string(),
             FrameFilterCmdArg::AddFunction(args) => format!("--add-function {args}"),
-            FrameFilterCmdArg::RemoveFunction(args) => {
-                format!("--remove-function {}", args.as_str())
-            }
             FrameFilterCmdArg::AddFile(args) => format!("--add-file {args}"),
-            FrameFilterCmdArg::RemoveFile(args) => format!("--remove-file {}", args.as_str()),
             FrameFilterCmdArg::PresetEnable(name) => format!("--preset-enable {}", name),
-            FrameFilterCmdArg::PresetDisable(name) => format!("--preset-disable {}", name),
-            FrameFilterCmdArg::Clear => "--clear".to_string(),
         }
     }
 }
 
 const DDB_FILTER_CONFIG_CMD: &str = "-ddb-filter-config";
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum GdbCmd {
     SetOption(GdbOption),
@@ -179,34 +147,11 @@ impl DbgCmdGenerator for GdbCmd {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
-pub enum GdbSchedulerLock {
-    On,
-    Off,
-    Step,
-    #[default]
-    Replay,
-}
-
-impl DbgCmdGenerator for GdbSchedulerLock {
-    fn generate(&self) -> String {
-        match self {
-            GdbSchedulerLock::On => "on".to_string(),
-            GdbSchedulerLock::Off => "off".to_string(),
-            GdbSchedulerLock::Step => "step".to_string(),
-            GdbSchedulerLock::Replay => "replay".to_string(),
-        }
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum GdbOption {
     LoggingFile(String),
     Logging(bool),
     MiAsync(bool),
-    SchedulerLock(GdbSchedulerLock),
 }
 
 impl DbgCmdGenerator for GdbOption {
@@ -220,9 +165,6 @@ impl DbgCmdGenerator for GdbOption {
             }
             GdbOption::MiAsync(enable) => {
                 format!("mi-async {}", if *enable { "on" } else { "off" })
-            }
-            GdbOption::SchedulerLock(lock) => {
-                format!("scheduler-locking {}", lock.generate())
             }
         }
     }

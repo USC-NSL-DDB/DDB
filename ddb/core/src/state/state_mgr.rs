@@ -20,8 +20,6 @@ pub enum StateTransitionError {
     },
     #[error("unknown thread {thread_id} in session {session_id}")]
     ThreadNotFound { session_id: u64, thread_id: u64 },
-    #[error("unknown global thread {0}")]
-    GlobalThreadNotFound(GlobalThreadId),
     #[error(
         "thread {thread_id} in session {session_id} belongs to group {actual_group_id}, not {expected_group_id}"
     )]
@@ -53,15 +51,6 @@ struct SelectionState {
 }
 
 impl SelectionState {
-    #[inline]
-    fn select_session(&self, sid: u64) {
-        let mut current = self.current.lock().unwrap();
-        if current.curr_session != Some(sid) {
-            current.selected_gthread = None;
-        }
-        current.curr_session = Some(sid);
-    }
-
     #[inline]
     fn current_session_id(&self) -> Option<u64> {
         self.current.lock().unwrap().curr_session
@@ -105,7 +94,6 @@ pub struct StateMgr {
     global_thread_group_ids: SimpleCounter,
 }
 
-#[allow(unused)]
 impl StateMgr {
     pub fn new() -> Self {
         Self {
@@ -422,15 +410,6 @@ impl StateMgr {
     }
 
     #[inline]
-    pub async fn select_thread(&self, gtid: GlobalThreadId) -> StateTransitionResult<()> {
-        let local_tid = self
-            .local_thread_id(gtid)
-            .ok_or(StateTransitionError::GlobalThreadNotFound(gtid))?;
-        self.select_local_thread(local_tid.session_id(), local_tid.thread_id())
-            .await
-    }
-
-    #[inline]
     pub async fn select_local_thread(&self, sid: u64, tid: u64) -> StateTransitionResult<()> {
         let gtid = self
             .global_thread_id(sid, tid)
@@ -454,7 +433,7 @@ impl StateMgr {
         Ok(())
     }
 
-    #[inline]
+    #[cfg(test)]
     pub fn select_thread_context(&self, sid: u64, gtid: GlobalThreadId) {
         self.selection.select_thread(sid, gtid);
     }
@@ -462,11 +441,6 @@ impl StateMgr {
     #[inline]
     pub fn current_thread_id(&self) -> Option<GlobalThreadId> {
         self.selection.current_thread_id()
-    }
-
-    #[inline]
-    pub fn select_session(&self, sid: u64) {
-        self.selection.select_session(sid);
     }
 
     #[inline]
@@ -542,15 +516,7 @@ impl StateMgr {
         self.session_states.with_session_mut(sid, f).await
     }
 
-    #[inline]
-    pub async fn with_session_by_tag<U, F>(&self, tag: &str, f: F) -> Option<U>
-    where
-        F: FnOnce(&session_mgr::SessionMeta) -> U,
-    {
-        self.session_states.with_session_by_tag(tag, f).await
-    }
-
-    #[inline]
+    #[cfg(test)]
     pub async fn session_tag_and_thread_id(&self, gtid: GlobalThreadId) -> Option<(String, u64)> {
         let local_tid = self.thread_states.local_thread_id(gtid)?;
         let sid = local_tid.session_id();
@@ -559,13 +525,6 @@ impl StateMgr {
             .with_session(sid, |session| session.tag().to_string())
             .await?;
         Some((tag, tid))
-    }
-
-    #[inline]
-    pub async fn session_tag_for_thread(&self, gtid: GlobalThreadId) -> Option<String> {
-        self.session_tag_and_thread_id(gtid)
-            .await
-            .map(|value| value.0)
     }
 }
 
@@ -589,8 +548,7 @@ mod tests {
             Some(LocalThreadId::new(1, 10))
         );
 
-        mgr.select_session(1);
-        mgr.select_thread(identity.thread_id).await.unwrap();
+        mgr.select_local_thread(1, 10).await.unwrap();
 
         assert_eq!(mgr.current_session_id(), Some(1));
         assert_eq!(mgr.current_thread_id(), Some(identity.thread_id));
@@ -612,8 +570,7 @@ mod tests {
         let gtgid = mgr.register_thread_group(1, "i1").await.unwrap();
         let gtid = mgr.register_thread(1, 10, "i1").await.unwrap().thread_id;
 
-        mgr.select_session(1);
-        mgr.select_thread(gtid).await.unwrap();
+        mgr.select_local_thread(1, 10).await.unwrap();
         mgr.remove_session(1).await;
 
         assert!(mgr.session(1).is_none());
@@ -637,15 +594,11 @@ mod tests {
         mgr.register_thread_group(2, "i2").await.unwrap();
         let second_gtid = mgr.register_thread(2, 20, "i2").await.unwrap().thread_id;
 
-        mgr.select_thread(first_gtid).await.unwrap();
+        mgr.select_local_thread(1, 10).await.unwrap();
         assert_eq!(mgr.current_session_id(), Some(1));
         assert_eq!(mgr.current_thread_id(), Some(first_gtid));
 
-        mgr.select_session(2);
-        assert_eq!(mgr.current_session_id(), Some(2));
-        assert_eq!(mgr.current_thread_id(), None);
-
-        mgr.select_thread(second_gtid).await.unwrap();
+        mgr.select_local_thread(2, 20).await.unwrap();
         assert_eq!(mgr.current_session_id(), Some(2));
         assert_eq!(mgr.current_thread_id(), Some(second_gtid));
     }
@@ -670,7 +623,7 @@ mod tests {
         mgr.register_session(1, "svc-a", None).await;
         mgr.register_thread_group(1, "i1").await.unwrap();
         let identity = mgr.register_thread(1, 10, "i1").await.unwrap();
-        mgr.select_thread(identity.thread_id).await.unwrap();
+        mgr.select_local_thread(1, 10).await.unwrap();
 
         let removed = mgr.remove_thread(1, 10, "i1").await.unwrap();
 
