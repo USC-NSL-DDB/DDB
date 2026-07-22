@@ -121,12 +121,15 @@ impl Handler for SSHProxyClientHandler {
         Ok(())
     }
 
-    #[allow(unused_variables)]
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        // TODO: properly handle public key checking
+        // TODO: verify against known hosts instead of accepting every key
+        tracing::warn!(
+            algorithm = %server_public_key.algorithm(),
+            "accepting SSH server key without verification; connection is exposed to MITM"
+        );
         Ok(true)
     }
 }

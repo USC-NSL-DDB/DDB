@@ -81,6 +81,10 @@ impl DiscoveryMessageProducer for K8sProducer {
         let kubeconfig = Kubeconfig::read_from(kubeconfig_path)?;
         let mut config =
             Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default()).await?;
+        // TODO: trust the cluster CA from kubeconfig instead of disabling validation
+        tracing::warn!(
+            "kubernetes API certificate validation is disabled; connection is exposed to MITM"
+        );
         config.accept_invalid_certs = true;
         let client = Client::try_from(config)?;
         let pods: Api<Pod> = Api::namespaced(client, "default");
