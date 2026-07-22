@@ -91,6 +91,11 @@ impl PendingCommands {
 
 /// Completes a command once the event projector has caught up to the events
 /// observed before its result, honoring the command's consistency mode.
+///
+/// The common case — protocol-complete commands and state-consistent commands
+/// whose observed events are already projected — completes inline on the
+/// caller's task. A barrier task is spawned only when completion must actually
+/// wait for the projector.
 pub(super) fn complete_after_events(
     sid: u64,
     token: u64,
@@ -100,23 +105,28 @@ pub(super) fn complete_after_events(
     mut applied: watch::Receiver<u64>,
     in_flight: Arc<AtomicUsize>,
 ) {
+    if command.consistency != CompletionConsistency::StateConsistent
+        || *applied.borrow() >= required_sequence
+    {
+        let _permit = command.permit;
+        let _ = command.completion.send(Ok(response));
+        in_flight.fetch_sub(1, Ordering::AcqRel);
+        return;
+    }
+
     tokio::spawn(async move {
         let _permit = command.permit;
-        let result = if command.consistency == CompletionConsistency::StateConsistent {
-            while *applied.borrow_and_update() < required_sequence {
-                if applied.changed().await.is_err() {
-                    break;
-                }
+        while *applied.borrow_and_update() < required_sequence {
+            if applied.changed().await.is_err() {
+                break;
             }
-            if *applied.borrow() < required_sequence {
-                Err(anyhow!(
-                    "session {} event projector stopped before command {} became state-consistent",
-                    sid,
-                    token
-                ))
-            } else {
-                Ok(response)
-            }
+        }
+        let result = if *applied.borrow() < required_sequence {
+            Err(anyhow!(
+                "session {} event projector stopped before command {} became state-consistent",
+                sid,
+                token
+            ))
         } else {
             Ok(response)
         };
