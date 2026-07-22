@@ -89,21 +89,17 @@ impl DiscoveryMessageProducer for K8sProducer {
         let label_selector = selector_string.as_str();
         let lp = ListParams::default().labels(label_selector);
 
-        // List existing pods
-        let _pod_list = pods.list(&lp).await?;
-        // println!(
-        //     "Found {} pods with label {}:",
-        //     pod_list.items.len(),
-        //     label_selector
-        // );
-        // for pod in pod_list.items {
-        //     println!(" - {}", pod.metadata.name.unwrap_or_default());
-        // }
+        // Fail fast before spawning the watch if the pod API is unreachable.
+        let pod_list = pods.list(&lp).await?;
+        tracing::debug!(
+            pods = pod_list.items.len(),
+            %label_selector,
+            "kubernetes discovery starting"
+        );
 
         // Start watching for pod events
         let wp = WatchParams::default().labels(label_selector);
         let mut stream = pods.watch(&wp, "0").await?.boxed();
-        let mut event_count = 0;
 
         let service_name = self.service_name.clone();
         let handle = tokio::task::spawn(async move {
@@ -111,7 +107,6 @@ impl DiscoveryMessageProducer for K8sProducer {
                 match status {
                     WatchEvent::Added(pod) => {
                         let pod_name = pod.metadata.name.unwrap_or_default();
-                        // println!("New pod added: {}", pod_name);
                         let pod_status = pod.status.unwrap_or_default();
                         let pod_ip = pod_status.pod_ip.unwrap_or_default();
                         let ip_str = pod_ip.as_str();
@@ -143,25 +138,21 @@ impl DiscoveryMessageProducer for K8sProducer {
                                     break;
                                 }
                             }
-                            Err(e) => {
-                                println!("Failed to get PID for pod {}: {}", pod_name, e);
+                            Err(error) => {
+                                tracing::warn!(pod = %pod_name, %error, "failed to get PID for pod");
                             }
                         }
                     }
                     WatchEvent::Modified(_) => {}
                     WatchEvent::Deleted(_) => {}
                     WatchEvent::Bookmark(_) => { /* Ignore bookmarks */ }
-                    WatchEvent::Error(e) => {
-                        eprintln!("Watch error: {:?}", e);
+                    WatchEvent::Error(error) => {
+                        tracing::error!(?error, "kubernetes pod watch reported an error");
                         break;
                     }
                 }
-                event_count += 1;
-                // For test purposes, break after a few events
-                if event_count >= 10000 {
-                    break;
-                }
             }
+            tracing::warn!("kubernetes pod watch ended; service discovery is no longer active");
         });
         self.handles.push(handle);
 
