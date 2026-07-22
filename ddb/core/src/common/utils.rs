@@ -53,7 +53,7 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
                     full_cmd, stdout, stderr
                 );
             }
-            return Ok(());
+            Ok(())
         } else {
             let msg = format!(
                 "Command {} failed with stdout: {}, stderr: {}",
@@ -62,7 +62,7 @@ pub fn run_command<const VERBOSE: bool, const WAIT_RESULT: bool>(
             if VERBOSE {
                 debug!(msg);
             }
-            return Err(io::Error::new(io::ErrorKind::Other, msg));
+            Err(io::Error::other(msg))
         }
     } else {
         Ok(())

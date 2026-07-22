@@ -44,6 +44,12 @@ pub struct NotificationManager {
     heartbeat_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+impl Default for NotificationManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotificationManager {
     pub fn new() -> Self {
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);

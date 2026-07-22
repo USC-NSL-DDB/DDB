@@ -33,10 +33,22 @@ jobs:
           toolchain: stable
           rustflags: ""
       
-      - name: Run cargo check
+      - name: Check formatting
         working-directory: ddb
-        run: cargo check -p ddb
+        run: cargo fmt --all -- --check
+
+      - name: Check every target and feature
+        working-directory: ddb
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: Lint DDB targets
+        working-directory: ddb
+        run: cargo clippy -p ddb --all-targets --all-features --no-deps -- -D warnings
       
-      - name: Run cargo test for ddb package
+      - name: Run workspace tests
         working-directory: ddb
-        run: cargo test -p ddb
+        run: cargo test --workspace --all-targets
+
+      - name: Run DDB all-feature tests
+        working-directory: ddb
+        run: cargo test -p ddb --all-targets --all-features

@@ -26,7 +26,6 @@ use anyhow::Result;
 use app::ApplicationRuntime;
 use clap::Parser;
 use common::config::Config;
-use console_subscriber;
 use debugger::resolve_debugger_backend;
 use plugin::resolve_framework_plugin;
 use rust_embed::Embed;

@@ -170,14 +170,14 @@ impl InputCmdParser {
             if index < rest.len() - 1 {
                 let mut target_list = Vec::new();
                 for ele in rest[index + 1].split(',') {
-                    if ele.starts_with('s') {
-                        let sid = ele[1..].parse::<u64>().context(format!(
+                    if let Some(sid) = ele.strip_prefix('s') {
+                        let sid = sid.parse::<u64>().context(format!(
                             "invalid sid when use --multiple flag. Command: {}",
                             raw_cmd
                         ))?;
                         target_list.push(Target::Session(sid));
-                    } else if ele.starts_with('g') {
-                        let gid = ele[1..].parse::<crate::state::GroupId>().context(format!(
+                    } else if let Some(gid) = ele.strip_prefix('g') {
+                        let gid = gid.parse::<crate::state::GroupId>().context(format!(
                             "invalid gid when use --multiple flag. Command: {}",
                             raw_cmd
                         ))?;
@@ -221,7 +221,7 @@ impl TryInto<ParsedInputCmd> for &str {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<ParsedInputCmd> {
-        Ok(InputCmdParser(self.to_string()).parse()?)
+        InputCmdParser(self.to_string()).parse()
     }
 }
 
@@ -229,7 +229,7 @@ impl TryInto<ParsedInputCmd> for String {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<ParsedInputCmd> {
-        Ok(InputCmdParser(self).parse()?)
+        InputCmdParser(self).parse()
     }
 }
 

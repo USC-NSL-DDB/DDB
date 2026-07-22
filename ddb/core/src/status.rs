@@ -27,6 +27,12 @@ pub struct RuntimeStatus {
     monitor: Mutex<HashMap<Component, bool>>,
 }
 
+impl Default for RuntimeStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeStatus {
     #[inline]
     pub fn new() -> Self {

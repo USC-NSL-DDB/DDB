@@ -70,10 +70,8 @@ async fn guard_against_shutdown<T>(
 ) -> Guarded<T> {
     tokio::select! {
         control_request = control.recv() => {
-            let acknowledgement = match control_request {
-                Some(ControlRequest::Shutdown { stopped }) => Some(stopped),
-                None => None,
-            };
+            let acknowledgement =
+                control_request.map(|ControlRequest::Shutdown { stopped }| stopped);
             Guarded::ShutdownRequested(acknowledgement)
         }
         result = work => Guarded::Completed(result),

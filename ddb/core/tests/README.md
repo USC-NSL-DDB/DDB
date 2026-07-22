@@ -109,13 +109,12 @@ cargo test -p ddb --test real_breakpoint_sync -- --nocapture
 
 ## CI
 
-GitHub Actions runs the full suite through `.github/workflows/ci.yml` on both:
-
-- `ubuntu-24.04`
-- `ubuntu-24.04-arm`
-
-That workflow installs `gdb`, installs the stable Rust toolchain, and runs:
+GitHub Actions runs the full workspace suite through
+`.github/workflows/rust-check.yml` on `ubuntu-latest`. The workflow installs
+the stable Rust toolchain and runs formatting, all-target/all-feature
+compilation, strict Clippy checks for the DDB package, and:
 
 ```bash
-cargo test -p ddb
+cargo test --workspace --all-targets
+cargo test -p ddb --all-targets --all-features
 ```

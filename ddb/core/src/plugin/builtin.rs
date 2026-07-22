@@ -172,8 +172,10 @@ mod tests {
 
     #[test]
     fn quicksand_plugin_preserves_migration_behavior() {
-        let mut config = Config::default();
-        config.framework = Framework::Quicksand;
+        let mut config = Config {
+            framework: Framework::Quicksand,
+            ..Config::default()
+        };
         config.conf.support_migration = true;
 
         let plugin = resolve_framework_plugin(&config);

@@ -13,8 +13,8 @@ impl GdbParser {
     #[inline]
     pub fn parse(output: &str) -> Result<Message> {
         let output = output.trim();
-        Ok(gdbmi::parser::parse_message(output)
-            .context(format!("Failed to parse a raw string: {}", output))?)
+        gdbmi::parser::parse_message(output)
+            .context(format!("Failed to parse a raw string: {}", output))
     }
 
     #[inline]
@@ -246,7 +246,7 @@ mod tests {
             }) => {
                 assert_eq!(token, None);
                 assert_eq!(message, "stopped");
-                assert_eq!(payload.0.is_empty(), false);
+                assert!(!payload.0.is_empty());
                 let formatted_out = MIFormatter::format("*", "stopped", Some(&payload), None);
                 let reparse = GdbParser::parse(&formatted_out).unwrap();
                 assert_eq!(msg, reparse);

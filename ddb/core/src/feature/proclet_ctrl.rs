@@ -125,8 +125,8 @@ pub struct QueryProcletResp {
 
 pub struct ProcletCtrlClient {
     to_send: flume::Sender<Bytes>,
-    sender_handle: tokio::task::JoinHandle<()>,
-    receiver_handle: tokio::task::JoinHandle<()>,
+    _sender_handle: tokio::task::JoinHandle<()>,
+    _receiver_handle: tokio::task::JoinHandle<()>,
     inflights: Arc<DashMap<RPCToken, oneshot::Sender<ProcletCtrlCmdResp>>>,
     rpc_tokens: SimpleCounter,
 }
@@ -150,8 +150,8 @@ impl ProcletCtrlClient {
 
         Ok(Self {
             to_send,
-            sender_handle,
-            receiver_handle,
+            _sender_handle: sender_handle,
+            _receiver_handle: receiver_handle,
             inflights,
             rpc_tokens: SimpleCounter::new(),
         })
@@ -193,15 +193,13 @@ impl ProcletCtrlClient {
                     debug!("Received Payload ({} bytes)", payload_len);
 
                     let payload_buf = payload_buf.freeze();
-                    return Ok(ProcletCtrlCmdResp::from_hdr(&hdr, payload_buf));
+                    Ok(ProcletCtrlCmdResp::from_hdr(hdr, payload_buf))
                 }
-                Err(e) => {
-                    return Err(e.into());
-                }
+                Err(e) => Err(e.into()),
             }
         } else {
             debug!("Received header with zero payload length.");
-            return Ok(ProcletCtrlCmdResp::Empty);
+            Ok(ProcletCtrlCmdResp::Empty)
         }
     }
 

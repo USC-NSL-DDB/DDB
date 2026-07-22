@@ -747,7 +747,7 @@ pub fn capture_session_context(ddb: &DdbProcess, sid: u64) -> BTreeMap<String, u
         .collect()
 }
 
-fn single_response_payload<'a>(response: &'a Value) -> &'a serde_json::Map<String, Value> {
+fn single_response_payload(response: &Value) -> &serde_json::Map<String, Value> {
     response["payload"]["responses"]
         .as_array()
         .and_then(|responses| responses.first())
@@ -788,11 +788,11 @@ fn encoded_list(value: &Value) -> Option<&Vec<Value>> {
 }
 
 fn encoded_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
-    value.as_object().and_then(|object| {
+    value.as_object().map(|object| {
         if let Some(dict) = object.get("Dict").and_then(Value::as_object) {
-            Some(dict)
+            dict
         } else {
-            Some(object)
+            object
         }
     })
 }

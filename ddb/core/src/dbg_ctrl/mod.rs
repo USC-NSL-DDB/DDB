@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 mod dbg_ctrl;
 mod local_ctrl;
 mod mock_ctrl;

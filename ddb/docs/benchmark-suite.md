@@ -1,34 +1,35 @@
 # Benchmark Suite
 
-This repository did not have a repeatable benchmark harness for debugger-scale questions such as:
+The `ddb-bench` workspace tool answers debugger-scale questions such as:
 
 - How command latency changes as the number of attached processes grows.
-- Whether the hot path is the CLI handler layer, the API layer, the router/tracker fanout path, or notification delivery.
+- Whether the hot path is command admission, session-runtime fanout, response projection, or notification delivery.
 - How much cold-start time is spent bringing mock sessions online before any user command runs.
 
-The new `ddb-bench` workspace tool is designed around the current code structure rather than generic microbenchmarks.
+The harness follows the production process boundary rather than relying on generic microbenchmarks.
 
 ## Why These Scenarios
 
 The codebase has a few distinct execution paths that matter for debugger responsiveness:
 
 - Startup path:
-  `DbgManager::init_static_sessions` -> `ServiceDiscover::start_session` -> `DbgSession::start`
+  `DbgManager::init_static_sessions` -> `SessionSupervisor::admit` -> `SessionActivation::activate`
 - CLI command path:
-  `CmdHandler::handle_cmd` -> command-specific handler -> router -> tracker -> stdout
+  `CommandEngine::execute_cli` -> `CommandDispatcher` -> command service -> `Router` -> session runtime -> stdout
 - API command path:
-  `POST /send` -> command-flow facade -> router -> tracker -> JSON response
+  `POST /send` -> `CommandEngine::execute_api` -> command service -> `Router` -> session runtime -> JSON response
 - Notification path:
   `NotificationManager::broadcast` -> per-subscriber queue send
 
 Those paths live in:
 
 - `core/src/dbg_mgr.rs`
-- `core/src/session/dbg_session.rs`
+- `core/src/session/activation.rs`
 - `core/src/cmd_flow/input.rs`
-- `core/src/cmd_flow/handler.rs`
+- `core/src/cmd_flow/engine.rs`
+- `core/src/cmd_flow/dispatcher.rs`
 - `core/src/cmd_flow/router.rs`
-- `core/src/cmd_flow/tracker.rs`
+- `core/src/cmd_flow/session_runtime/`
 - `core/src/api/server.rs`
 - `core/src/notification/manager.rs`
 
@@ -45,12 +46,14 @@ Current scenarios:
   Measures cold-start time until all static mock sessions are attached and visible from `/sessions`.
 - `api-thread-info`
   Measures API round-trip latency for broadcast `-thread-info`.
+- `api-thread-info-burst`
+  Measures concurrent API broadcasts to expose admission, pipelining, correlation, and fanout contention.
 - `api-list-groups`
   Measures API round-trip latency for broadcast `-list-thread-groups`.
 - `cli-thread-info`
-  Measures full CLI command-handler latency for `-thread-info`.
+  Measures full CLI command-engine latency for `-thread-info`.
 - `cli-break-insert`
-  Measures group-targeted breakpoint insertion through the CLI handler layer.
+  Measures group-targeted breakpoint insertion through the breakpoint service.
 - `notifications`
   Measures WebSocket notification fanout latency to subscribed clients.
 - `distributed-backtrace`
@@ -103,7 +106,7 @@ If you want to reuse an already-built binary instead, pass `--binary /path/to/dd
 - The distributed-backtrace benchmark uses a real dummy application instead of the mock backend.
   The runtime GDB script needs real frames, local variables, interrupts, and register context switching to make the measurement meaningful.
 - API and CLI scenarios are both present.
-  The API path bypasses command-specific CLI handlers; the CLI path includes them.
+  Both use the same command engine and dispatcher while retaining their distinct targeting and presentation policies.
 - Notification fanout is measured separately from command fanout.
   The debugger has a distinct WebSocket delivery plane and it should not be inferred from command latency.
 

@@ -6,7 +6,7 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Config {
     #[serde(rename = "PreTasks", default)]
     pub pre_tasks: Vec<Task>,
@@ -105,16 +105,10 @@ fn default_pod_ssh_password() -> String {
     "admin123".to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct GdbConf {
     #[serde(default)]
     pub logging: bool,
-}
-
-impl Default for GdbConf {
-    fn default() -> Self {
-        Self { logging: false }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -246,6 +240,7 @@ impl Default for Conf {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 #[serde(rename_all = "lowercase")]
 pub enum OnExit {
     DETACH,
@@ -259,6 +254,7 @@ impl Default for OnExit {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 #[serde(rename_all = "lowercase")]
 pub enum Framework {
     Nu,
@@ -340,19 +336,14 @@ pub struct BrokerConfig {
     pub max_timeout_secs: Option<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BrokerType {
+    #[default]
     Emqx,
     Mosquitto,
     #[serde(other)]
     Unknown,
-}
-
-impl Default for BrokerType {
-    fn default() -> Self {
-        BrokerType::Emqx
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -419,24 +410,6 @@ impl Default for SshConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            pre_tasks: Vec::new(),
-            post_tasks: Vec::new(),
-            framework: Framework::default(),
-            prerun_gdb_cmds: Vec::new(),
-            postrun_gdb_cmds: Vec::new(),
-            ssh: SshConfig::default(),
-            service_discovery: None,
-            conf: Conf::default(),
-            plugin: None,
-            frame_filter: None,
-            static_sessions: Vec::new(),
-        }
-    }
-}
-
 #[allow(dead_code)]
 impl Config {
     pub fn new() -> Self {
@@ -446,8 +419,7 @@ impl Config {
     /// Load configuration from a YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
-        let conf = Self::from_str(&contents);
-        conf
+        Self::from_str(&contents)
     }
 
     /// Parse configuration from a YAML string

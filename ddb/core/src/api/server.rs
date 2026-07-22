@@ -188,7 +188,7 @@ fn source_resolution_error(error: anyhow::Error) -> (StatusCode, Json<ApiRespons
     )
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn resolve_src_to_group_ids(
     State(queries): State<Arc<ApiQueries>>,
     Query(src): Query<SourceQuery>,
@@ -200,7 +200,7 @@ async fn resolve_src_to_group_ids(
     Ok(Json(GroupIdsResponse { grp_ids }))
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn resolve_src_to_groups(
     State(queries): State<Arc<ApiQueries>>,
     Query(src): Query<SourceQuery>,
@@ -212,7 +212,7 @@ async fn resolve_src_to_groups(
     Ok(Json(GroupsResponse { grps }))
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(engine)))]
 async fn send_cmd(
     State(engine): State<Arc<CommandEngine>>,
     Json(send_cmd): Json<SendCommand>,
@@ -260,7 +260,7 @@ async fn send_cmd(
     }
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(status)))]
 async fn get_status(State(status): State<Arc<RuntimeStatus>>) -> impl IntoResponse {
     let is_up = status.is_up();
     if is_up {
@@ -273,22 +273,22 @@ async fn get_status(State(status): State<Arc<RuntimeStatus>>) -> impl IntoRespon
     }
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn get_sessions(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
     (StatusCode::OK, Json(queries.sessions().await))
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn get_pending_commands(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
     (StatusCode::OK, Json(queries.pending_commands()))
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn get_groups(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
     (StatusCode::OK, Json(queries.groups()))
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn get_group(
     State(queries): State<Arc<ApiQueries>>,
     Query(query): Query<GetGroupQuery>,
@@ -319,7 +319,7 @@ async fn get_group(
     }
 }
 
-#[cfg_attr(feature = "profile", tracing::instrument)]
+#[cfg_attr(feature = "profile", tracing::instrument(skip(queries)))]
 async fn get_bkpts(State(queries): State<Arc<ApiQueries>>) -> impl IntoResponse {
     (
         StatusCode::OK,

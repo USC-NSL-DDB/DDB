@@ -93,7 +93,7 @@ impl SSHProxyCred {
             target_hostname: target_hostname.to_string(),
             target_port,
             target_username: target_username.to_string(),
-            target_password: target_password,
+            target_password,
             target_private_key_path: target_private_key_path
                 .or_else(|| Some(DEFAULT_SSH_PRIVATE_KEY_PATH.clone())),
         }
@@ -349,36 +349,4 @@ impl RemoteConnectable for SSHProxyConnection {
         // trickier to do reliably with russh. For demonstration, we rely on the watch.
         true
     }
-}
-
-// Typically in tests/integration_tests/ssh_proxy_integration.rs
-#[cfg(test)]
-mod integration_tests {
-
-    use super::*;
-    use std::sync::Once;
-    use tracing::debug;
-    use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-    static INIT: Once = Once::new();
-
-    fn init_tracing() {
-        INIT.call_once(|| {
-            // Build a subscriber that reads filter directives from the `RUST_LOG`
-            // env var if set, or defaults to "debug" otherwise:
-            let subscriber = FmtSubscriber::builder()
-                .with_env_filter(EnvFilter::from_default_env())
-                .with_test_writer() // Use a writer suitable for tests
-                .with_target(false) // If you prefer to hide module/target info
-                .finish();
-
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
-        });
-    }
-    use super::*;
-    use anyhow::Result;
-    use russh::client::Config as SSHConfig;
-    use std::sync::Arc;
-    use tokio::{runtime::Runtime, time::Duration};
 }

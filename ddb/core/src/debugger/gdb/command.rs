@@ -1,4 +1,5 @@
 use crate::common::config::{DebuggerCommand, FrameFilterMatchType, FrameFilterPatternConfig};
+use std::fmt;
 
 pub trait DbgCmdGenerator {
     fn generate(&self) -> String;
@@ -41,9 +42,15 @@ impl FrameFilterAddArgs {
             match_type,
         }
     }
-
-    pub fn to_string(&self) -> String {
-        format!("{} --match-type {}", self.pattern, self.match_type.as_str())
+}
+impl fmt::Display for FrameFilterAddArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} --match-type {}",
+            self.pattern,
+            self.match_type.as_str()
+        )
     }
 }
 
@@ -96,11 +103,11 @@ impl FrameFilterCmdArg {
         match self {
             FrameFilterCmdArg::Enable => "--enable".to_string(),
             FrameFilterCmdArg::Disable => "--disable".to_string(),
-            FrameFilterCmdArg::AddFunction(args) => format!("--add-function {}", args.to_string()),
+            FrameFilterCmdArg::AddFunction(args) => format!("--add-function {args}"),
             FrameFilterCmdArg::RemoveFunction(args) => {
                 format!("--remove-function {}", args.as_str())
             }
-            FrameFilterCmdArg::AddFile(args) => format!("--add-file {}", args.to_string()),
+            FrameFilterCmdArg::AddFile(args) => format!("--add-file {args}"),
             FrameFilterCmdArg::RemoveFile(args) => format!("--remove-file {}", args.as_str()),
             FrameFilterCmdArg::PresetEnable(name) => format!("--preset-enable {}", name),
             FrameFilterCmdArg::PresetDisable(name) => format!("--preset-disable {}", name),
@@ -173,11 +180,12 @@ impl DbgCmdGenerator for GdbCmd {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum GdbSchedulerLock {
     On,
     Off,
     Step,
+    #[default]
     Replay,
 }
 
@@ -189,12 +197,6 @@ impl DbgCmdGenerator for GdbSchedulerLock {
             GdbSchedulerLock::Step => "step".to_string(),
             GdbSchedulerLock::Replay => "replay".to_string(),
         }
-    }
-}
-
-impl Default for GdbSchedulerLock {
-    fn default() -> Self {
-        GdbSchedulerLock::Replay
     }
 }
 
