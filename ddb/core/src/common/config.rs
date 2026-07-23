@@ -17,11 +17,19 @@ pub struct Config {
     #[serde(rename = "Framework", default)]
     pub framework: Framework,
 
-    #[serde(rename = "PrerunGdbCommands", default)]
-    pub prerun_gdb_cmds: Vec<GdbCommand>,
+    #[serde(
+        rename = "PrerunDebuggerCommands",
+        alias = "PrerunGdbCommands",
+        default
+    )]
+    pub prerun_debugger_cmds: Vec<DebuggerCommand>,
 
-    #[serde(rename = "PostrunGdbCommands", default)]
-    pub postrun_gdb_cmds: Vec<GdbCommand>,
+    #[serde(
+        rename = "PostrunDebuggerCommands",
+        alias = "PostrunGdbCommands",
+        default
+    )]
+    pub postrun_debugger_cmds: Vec<DebuggerCommand>,
 
     #[serde(rename = "SSH", default)]
     pub ssh: SshConfig,
@@ -299,8 +307,6 @@ impl DebuggerCommand {
     }
 }
 
-pub type GdbCommand = DebuggerCommand;
-
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct PluginConfig {
     #[serde(rename = "DebuggerScripts", default)]
@@ -495,6 +501,30 @@ mod tests {
         };
 
         assert_eq!(cmd.render(), "source /tmp/runtime.py\n");
+    }
+
+    #[test]
+    fn legacy_gdb_command_keys_deserialize_into_backend_neutral_fields() {
+        let config = Config::from_str(
+            r#"
+PrerunGdbCommands:
+  - name: before
+    command: before-command
+PostrunGdbCommands:
+  - name: after
+    command: after-command
+"#,
+        )
+        .expect("legacy debugger command keys should remain compatible");
+
+        assert_eq!(config.prerun_debugger_cmds[0].command, "before-command");
+        assert_eq!(config.postrun_debugger_cmds[0].command, "after-command");
+
+        let serialized = serde_yml::to_string(&config).expect("config should serialize");
+        assert!(serialized.contains("PrerunDebuggerCommands:"));
+        assert!(serialized.contains("PostrunDebuggerCommands:"));
+        assert!(!serialized.contains("PrerunGdbCommands:"));
+        assert!(!serialized.contains("PostrunGdbCommands:"));
     }
 
     #[test]

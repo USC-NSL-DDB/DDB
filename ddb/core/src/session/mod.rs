@@ -54,8 +54,8 @@ impl SessionRequestBuilder {
             sudo: config.conf.sudo,
             on_exit: config.conf.on_exit.clone(),
             tag: None,
-            prerun_debugger_cmds: config.prerun_gdb_cmds.clone(),
-            postrun_debugger_cmds: config.postrun_gdb_cmds.clone(),
+            prerun_debugger_cmds: config.prerun_debugger_cmds.clone(),
+            postrun_debugger_cmds: config.postrun_debugger_cmds.clone(),
             stop_at_entry: false,
             service_identity: None,
             transport: None,
@@ -154,7 +154,7 @@ mod tests {
         let mut config = Config::default();
         config.conf.sudo = true;
         config.conf.on_exit = OnExit::KILL;
-        config.prerun_gdb_cmds.push(DebuggerCommand {
+        config.prerun_debugger_cmds.push(DebuggerCommand {
             name: "setup".to_string(),
             command: "set pagination off".to_string(),
         });

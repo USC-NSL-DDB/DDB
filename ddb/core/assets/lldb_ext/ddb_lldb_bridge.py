@@ -17,6 +17,7 @@ import shlex
 import signal
 import sys
 import threading
+import time
 import traceback
 
 import lldb  # type: ignore
@@ -25,6 +26,42 @@ import lldb  # type: ignore
 RECORD_PREFIX = "@DDB@"
 GROUP_ID = "i1"
 INVALID_ADDRESS = getattr(lldb, "LLDB_INVALID_ADDRESS", (1 << 64) - 1)
+FRAMEWORK_PRESETS = {
+    "ddb-runtime": {
+        "functions": ["DDB::*"],
+        "files": [],
+    },
+    "serviceweaver": {
+        "functions": ["*runHandler", "github.com/ServiceWeaver/*"],
+        "files": [],
+    },
+    "go-runtime": {
+        "functions": ["runtime.*", "runtime/internal/*"],
+        "files": [],
+    },
+    "cpp-stdlib": {
+        "functions": ["std::*", "__gnu_cxx::*", "__cxx*"],
+        "files": ["/usr/include/*", "/usr/lib/*"],
+    },
+    "networking": {
+        "functions": ["net.*", "net::*"],
+        "files": [],
+    },
+    "grpc": {
+        "functions": ["grpc::*", "grpc_*", "google::protobuf::*"],
+        "files": [
+            "*/grpc/*",
+            "*/grpcpp/*",
+            "*/google/protobuf/*",
+            "/usr/include/grpc*/*",
+            "/usr/local/include/grpc*/*",
+        ],
+    },
+    "protobuf-gen": {
+        "functions": [],
+        "files": ["*.grpc.pb.cc"],
+    },
+}
 
 
 def _text(value):
@@ -63,41 +100,136 @@ class Emitter(object):
 class FrameFilters(object):
     def __init__(self):
         self.enabled = False
+        self.mode = "blacklist"
         self.files = []
         self.functions = []
+        self.active_presets = set()
 
     def configure(self, arguments):
-        if "--enable" in arguments:
+        if not arguments or arguments[0] == "--status":
+            return self._response("success", "Filter status")
+        action = arguments[0]
+        if action == "--enable":
             self.enabled = True
-        self._append(arguments, "--add-file", self.files)
-        self._append(arguments, "--add-function", self.functions)
-        # Presets are intentionally accepted for compatibility. Backend-neutral
-        # presets can be added without changing the bridge protocol.
-        return {"enabled": _text(self.enabled)}
+            return self._response("success", "Filter enabled")
+        if action == "--disable":
+            self.enabled = False
+            return self._response("success", "Filter disabled")
+        if action == "--add-file":
+            pattern = self._required_argument(arguments, action)
+            self.files.append((pattern, self._match_type(arguments)))
+            return self._response("success", "Added file rule: {}".format(pattern))
+        if action == "--add-function":
+            pattern = self._required_argument(arguments, action)
+            self.functions.append((pattern, self._match_type(arguments)))
+            return self._response("success", "Added function rule: {}".format(pattern))
+        if action == "--remove-file":
+            pattern = self._required_argument(arguments, action)
+            self.files = [rule for rule in self.files if rule[0] != pattern]
+            return self._response("success", "Removed file rule: {}".format(pattern))
+        if action == "--remove-function":
+            pattern = self._required_argument(arguments, action)
+            self.functions = [rule for rule in self.functions if rule[0] != pattern]
+            return self._response("success", "Removed function rule: {}".format(pattern))
+        if action == "--preset-enable":
+            name = self._required_argument(arguments, action)
+            self._enable_preset(name)
+            return self._response("success", "Enabled preset: {}".format(name))
+        if action == "--preset-disable":
+            name = self._required_argument(arguments, action)
+            self._disable_preset(name)
+            return self._response("success", "Disabled preset: {}".format(name))
+        if action == "--list-presets":
+            response = self._response("success", "Available presets")
+            response["presets"] = sorted(FRAMEWORK_PRESETS)
+            return response
+        if action == "--clear":
+            self.files = []
+            self.functions = []
+            self.active_presets = set()
+            return self._response("success", "Cleared all rules")
+        if action == "--mode":
+            mode = self._required_argument(arguments, action)
+            if mode not in ("blacklist", "whitelist"):
+                raise ValueError("filter mode must be blacklist or whitelist")
+            self.mode = mode
+            return self._response("success", "Mode set to: {}".format(mode))
+        raise ValueError("unknown frame-filter action: {}".format(action))
 
     @staticmethod
-    def _append(arguments, option, destination):
-        if option not in arguments:
-            return
-        index = arguments.index(option)
-        if index + 1 >= len(arguments):
-            raise ValueError("{} requires a pattern".format(option))
-        match_type = "exact"
+    def _required_argument(arguments, option):
+        if len(arguments) < 2:
+            raise ValueError("{} requires an argument".format(option))
+        return arguments[1]
+
+    @staticmethod
+    def _match_type(arguments):
+        match_type = "glob"
         if "--match-type" in arguments:
             type_index = arguments.index("--match-type")
             if type_index + 1 < len(arguments):
                 match_type = arguments[type_index + 1]
-        destination.append((arguments[index + 1], match_type))
+        if match_type not in ("exact", "glob", "regex"):
+            raise ValueError("unknown frame-filter match type: {}".format(match_type))
+        return match_type
+
+    def _enable_preset(self, name):
+        preset = FRAMEWORK_PRESETS.get(name)
+        if preset is None:
+            raise ValueError("unknown frame-filter preset: {}".format(name))
+        if name in self.active_presets:
+            return
+        self.functions.extend((pattern, "glob") for pattern in preset["functions"])
+        self.files.extend((pattern, "glob") for pattern in preset["files"])
+        self.active_presets.add(name)
+
+    def _disable_preset(self, name):
+        preset = FRAMEWORK_PRESETS.get(name)
+        if preset is None or name not in self.active_presets:
+            raise ValueError("frame-filter preset is not active: {}".format(name))
+        function_patterns = set(preset["functions"])
+        file_patterns = set(preset["files"])
+        self.functions = [
+            rule
+            for rule in self.functions
+            if not (rule[1] == "glob" and rule[0] in function_patterns)
+        ]
+        self.files = [
+            rule
+            for rule in self.files
+            if not (rule[1] == "glob" and rule[0] in file_patterns)
+        ]
+        self.active_presets.remove(name)
+
+    def _response(self, message, info):
+        return {
+            "message": message,
+            "info": info,
+            "config": {
+                "enabled": self.enabled,
+                "mode": self.mode,
+                "function_rules": [
+                    {"pattern": pattern, "match_type": match_type}
+                    for pattern, match_type in self.functions
+                ],
+                "file_rules": [
+                    {"pattern": pattern, "match_type": match_type}
+                    for pattern, match_type in self.files
+                ],
+                "active_presets": sorted(self.active_presets),
+            },
+        }
 
     def include(self, frame):
         if not self.enabled:
             return True
         function_name = frame.GetFunctionName() or ""
         file_name = _file_path(frame.GetLineEntry().GetFileSpec())
-        return not (
+        matched = (
             self._matches(function_name, self.functions)
             or self._matches(file_name, self.files)
         )
+        return not matched if self.mode == "blacklist" else matched
 
     @staticmethod
     def _matches(value, patterns):
@@ -119,6 +251,13 @@ def _file_path(file_spec):
     return os.path.join(directory, filename) if directory else filename
 
 
+def _normalized_source_path(path):
+    # Rust emits one DWARF compile unit per codegen unit using
+    # `<source>/@/<unit-hash>` file specs. The suffix identifies the codegen
+    # unit, not a real source path.
+    return path.split("/@/", 1)[0]
+
+
 def _error_text(error):
     if error and error.Fail():
         return error.GetCString() or str(error)
@@ -137,7 +276,10 @@ def _value_u64(value, default=0):
     result = value.GetValueAsUnsigned(INVALID_ADDRESS)
     if result != INVALID_ADDRESS:
         return int(result)
-    rendered = _value_text(value).split(None, 1)[0]
+    rendered_parts = _value_text(value).split(None, 1)
+    if not rendered_parts:
+        return default
+    rendered = rendered_parts[0]
     try:
         return int(rendered, 0)
     except (TypeError, ValueError):
@@ -151,20 +293,21 @@ def _child(value, name):
     return child if child and child.IsValid() else None
 
 
-def _frame_payload(frame, target, level=None):
+def _frame_payload(frame, target, level=None, include_arguments=True):
     line_entry = frame.GetLineEntry()
     file_path = _file_path(line_entry.GetFileSpec())
     address = frame.GetPCAddress().GetLoadAddress(target)
     arguments = []
-    variables = frame.GetVariables(True, False, False, True)
-    for index in range(variables.GetSize()):
-        value = variables.GetValueAtIndex(index)
-        arguments.append(
-            {
-                "name": _text(value.GetName()),
-                "value": _value_text(value),
-            }
-        )
+    if include_arguments:
+        variables = frame.GetVariables(True, False, False, True)
+        for index in range(variables.GetSize()):
+            value = variables.GetValueAtIndex(index)
+            arguments.append(
+                {
+                    "name": _text(value.GetName()),
+                    "value": _value_text(value),
+                }
+            )
     payload = {
         "level": _text(frame.GetFrameID() if level is None else level),
         "addr": "0x{:x}".format(address if address != INVALID_ADDRESS else 0),
@@ -193,6 +336,7 @@ class ProcessMonitor(object):
         self._process_uid = None
         self._last_state = None
         self._last_stop_id = None
+        self.pause_started_ns = None
         self._lock = threading.Lock()
 
     def start(self):
@@ -209,6 +353,7 @@ class ProcessMonitor(object):
             self._process_uid = None
             self._last_state = None
             self._last_stop_id = None
+            self.pause_started_ns = None
 
     def snapshot(self, process=None):
         process = process or self.debugger.GetSelectedTarget().GetProcess()
@@ -288,6 +433,7 @@ class ProcessMonitor(object):
             if state in (lldb.eStateRunning, lldb.eStateStepping):
                 self.emitter.event("running", {"thread-id": "all"})
             elif state in (lldb.eStateStopped, lldb.eStateCrashed, lldb.eStateSuspended):
+                self.pause_started_ns = time.monotonic_ns()
                 thread = process.GetSelectedThread()
                 if not thread or not thread.IsValid():
                     thread = process.GetThreadAtIndex(0)
@@ -348,6 +494,7 @@ class Bridge(object):
         self.running = True
         self.requests = queue.Queue()
         self.reader = None
+        self.accumulated_pause_seconds = 0.0
         self.debugger.SetAsync(True)
         self.monitor.start()
 
@@ -397,6 +544,9 @@ class Bridge(object):
                 self.monitor.poll()
                 self.emitter.result(token, message, payload)
                 if not self.running:
+                    # DDB owns this dedicated LLDB process. Native shutdown and
+                    # result flushing are complete; SystemExit would only unwind
+                    # this nested script command and leave LLDB running.
                     os._exit(0)
             except Exception as error:
                 self.emitter.result(
@@ -421,15 +571,15 @@ class Bridge(object):
             "-target-attach": self._attach,
             "-exec-run": self._run,
             "-exec-continue": self._continue,
-            "-record-time-and-continue": self._continue,
+            "-record-time-and-continue": self._record_time_and_continue,
             "-exec-interrupt": self._interrupt,
             "-exec-interrupt-if-running": self._interrupt_if_running,
             "-exec-next": self._next,
-            "-record-time-and-next": self._next,
+            "-record-time-and-next": self._record_time_and_next,
             "-exec-step": self._step,
-            "-record-time-and-step": self._step,
+            "-record-time-and-step": self._record_time_and_step,
             "-exec-finish": self._finish,
-            "-record-time-and-finish": self._finish,
+            "-record-time-and-finish": self._record_time_and_finish,
             "-exec-jump": self._jump,
             "-thread-select": self._thread_select,
             "-thread-info": self._thread_info,
@@ -437,6 +587,7 @@ class Bridge(object):
             "-stack-list-frames": self._stack_frames,
             "-data-list-register-names": self._register_names,
             "-data-list-register-values": self._register_values,
+            "-data-evaluate-expression": self._evaluate_expression,
             "-file-list-exec-source-files": self._source_files,
             "-file-list-lines": self._source_lines,
             "-break-insert": self._break_insert,
@@ -522,6 +673,10 @@ class Bridge(object):
     def _run(self, arguments):
         target = self._target()
         launch_info = lldb.SBLaunchInfo(self.launch_arguments)
+        launch_info.SetEnvironmentEntries(
+            ["{}={}".format(name, value) for name, value in os.environ.items()],
+            True,
+        )
         if "--start" in arguments:
             launch_info.SetLaunchFlags(
                 launch_info.GetLaunchFlags() | lldb.eLaunchFlagStopAtEntry
@@ -538,6 +693,96 @@ class Bridge(object):
         if error.Fail():
             raise RuntimeError(_error_text(error))
         return "running", {}
+
+    def _find_environment_variable(self, name):
+        process = self._process()
+        target = self._target()
+        pointer_size = target.GetAddressByteSize()
+        symbols = target.FindSymbols("environ", lldb.eSymbolTypeData)
+        for symbol_index in range(symbols.GetSize()):
+            symbol = symbols.GetContextAtIndex(symbol_index).GetSymbol()
+            if not symbol or not symbol.IsValid():
+                continue
+            storage_address = symbol.GetStartAddress().GetLoadAddress(target)
+            if storage_address == INVALID_ADDRESS:
+                continue
+            error = lldb.SBError()
+            environ_address = process.ReadPointerFromMemory(storage_address, error)
+            if error.Fail() or not environ_address:
+                continue
+            for index in range(4096):
+                error = lldb.SBError()
+                entry_address = process.ReadPointerFromMemory(
+                    environ_address + index * pointer_size,
+                    error,
+                )
+                if error.Fail() or not entry_address:
+                    break
+                entry = process.ReadCStringFromMemory(entry_address, 4096, error)
+                if error.Fail():
+                    break
+                if entry.startswith(name + "="):
+                    return entry_address, entry
+        return None
+
+    def _sync_faketime(self):
+        pause_started_ns = self.monitor.pause_started_ns
+        if pause_started_ns is None:
+            return None
+        environment = self._find_environment_variable("FAKETIME")
+        if environment is None:
+            return None
+        address, old_entry = environment
+        now_ns = time.monotonic_ns()
+        if now_ns < pause_started_ns:
+            return None
+        self.accumulated_pause_seconds += (now_ns - pause_started_ns) / 1e9
+        new_entry = "FAKETIME=-{:.9f}".format(self.accumulated_pause_seconds)
+        if len(new_entry) > len(old_entry):
+            self.emitter.stream(
+                "cannot synchronize FAKETIME: existing environment buffer is too small",
+                "log",
+            )
+            return None
+        error = lldb.SBError()
+        encoded = (new_entry + "\0").encode("utf-8")
+        written = self._process().WriteMemory(address, encoded, error)
+        if error.Fail() or written != len(encoded):
+            self.emitter.stream(
+                "failed to synchronize FAKETIME: {}".format(_error_text(error)),
+                "log",
+            )
+            return None
+        self.monitor.pause_started_ns = None
+        return new_entry
+
+    def _record_time_and_continue(self, arguments):
+        faketime = self._sync_faketime()
+        message, payload = self._continue(arguments)
+        if faketime is not None:
+            payload["faketime"] = faketime
+        return message, payload
+
+    def _record_time_and_next(self, arguments):
+        faketime = self._sync_faketime()
+        message, payload = self._next(arguments)
+        if faketime is not None:
+            payload["faketime"] = faketime
+        return message, payload
+
+    def _record_time_and_step(self, arguments):
+        faketime = self._sync_faketime()
+        message, payload = self._step(arguments)
+        if faketime is not None:
+            payload["faketime"] = faketime
+        return message, payload
+
+    def _record_time_and_finish(self, arguments):
+        faketime = self._sync_faketime()
+        message, payload = self._finish(arguments)
+        if faketime is not None:
+            payload["faketime"] = faketime
+        return message, payload
 
     def _interrupt(self, _arguments):
         error = self._process().Stop()
@@ -649,7 +894,14 @@ class Bridge(object):
         for index in range(low, high + 1):
             frame = thread.GetFrameAtIndex(index)
             if frame and frame.IsValid() and self.filters.include(frame):
-                frames.append(_frame_payload(frame, thread.GetProcess().GetTarget(), output_level))
+                frames.append(
+                    _frame_payload(
+                        frame,
+                        thread.GetProcess().GetTarget(),
+                        output_level,
+                        include_arguments=False,
+                    )
+                )
                 output_level += 1
         return "done", {"stack": frames}
 
@@ -683,6 +935,16 @@ class Bridge(object):
             ]
         }
 
+    def _evaluate_expression(self, arguments):
+        if not arguments:
+            raise ValueError("-data-evaluate-expression requires an expression")
+        expression = " ".join(arguments)
+        value = self._thread().GetFrameAtIndex(0).EvaluateExpression(expression)
+        if not value or not value.IsValid() or value.GetError().Fail():
+            error = value.GetError() if value and value.IsValid() else None
+            raise RuntimeError(_error_text(error) or "LLDB expression evaluation failed")
+        return "done", {"value": _value_text(value)}
+
     def _source_files(self, arguments):
         dirname = None
         if "--dirname" in arguments:
@@ -696,7 +958,7 @@ class Bridge(object):
                 path = _file_path(unit.GetFileSpec())
                 if not path:
                     continue
-                full_path = os.path.realpath(path)
+                full_path = os.path.realpath(_normalized_source_path(path))
                 if dirname and not (
                     full_path == dirname or full_path.startswith(dirname + os.sep)
                 ):
@@ -709,8 +971,47 @@ class Bridge(object):
             ]
         }
 
-    def _source_lines(self, _arguments):
-        return "done", {"lines": []}
+    def _source_lines(self, arguments):
+        if not arguments:
+            raise ValueError("-file-list-lines requires a source file")
+        requested = arguments[-1]
+        requested_realpath = os.path.realpath(requested)
+        target = self._target()
+        lines = set()
+        for module in target.module_iter():
+            for unit in module.compile_unit_iter():
+                unit_path = _file_path(unit.GetFileSpec())
+                if not unit_path:
+                    continue
+                unit_path = _normalized_source_path(unit_path)
+                if (
+                    os.path.realpath(unit_path) != requested_realpath
+                    and os.path.basename(unit_path) != os.path.basename(requested)
+                ):
+                    continue
+                for index in range(unit.GetNumLineEntries()):
+                    entry = unit.GetLineEntryAtIndex(index)
+                    if not entry or not entry.IsValid():
+                        continue
+                    entry_path = _normalized_source_path(
+                        _file_path(entry.GetFileSpec())
+                    )
+                    if (
+                        os.path.realpath(entry_path) != requested_realpath
+                        and os.path.basename(entry_path)
+                        != os.path.basename(requested)
+                    ):
+                        continue
+                    address = entry.GetStartAddress().GetLoadAddress(target)
+                    if address == INVALID_ADDRESS:
+                        continue
+                    lines.add((int(address), int(entry.GetLine())))
+        return "done", {
+            "lines": [
+                {"pc": "0x{:x}".format(address), "line": _text(line)}
+                for address, line in sorted(lines)
+            ]
+        }
 
     def _break_insert(self, arguments):
         if not arguments:

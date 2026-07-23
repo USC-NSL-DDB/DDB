@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::{
     common::config::{Config, OnExit},
@@ -35,12 +35,7 @@ impl LldbBackend {
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
         commands: &mut Vec<String>,
     ) -> Result<()> {
-        if plugin_bootstrap.requires_proclet_runtime {
-            bail!(
-                "proclet migration is not yet supported by the LLDB backend; \
-                 disable Conf.support_migration or select GDB"
-            );
-        }
+        self.validate_config(config)?;
 
         commands.push("settings set auto-confirm true\n".to_string());
         commands.push(format!(
@@ -98,6 +93,10 @@ impl LldbBackend {
 }
 
 impl DebuggerBackend for LldbBackend {
+    fn name(&self) -> &'static str {
+        "lldb"
+    }
+
     fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
         Box::new(LldbJsonProtocol::default())
     }

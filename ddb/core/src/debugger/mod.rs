@@ -52,7 +52,36 @@ pub fn install_bundled_assets(assets: &[BundledDebuggerAsset]) -> Result<Vec<Pat
         .collect::<Result<Vec<_>>>()
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DebuggerCapabilities {
+    pub proclet_migration: bool,
+    pub serviceweaver_remote_backtrace: bool,
+}
+
 pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
+    fn name(&self) -> &'static str;
+    fn capabilities(&self) -> DebuggerCapabilities {
+        DebuggerCapabilities::default()
+    }
+    fn validate_config(&self, config: &Config) -> Result<()> {
+        if config.handle_migration() && !self.capabilities().proclet_migration {
+            anyhow::bail!(
+                "debugger backend '{}' does not support proclet migration",
+                self.name()
+            );
+        }
+        if matches!(
+            config.framework,
+            crate::common::config::Framework::ServiceWeaverKube
+        ) && !self.capabilities().serviceweaver_remote_backtrace
+        {
+            anyhow::bail!(
+                "debugger backend '{}' does not support Service Weaver remote backtraces",
+                self.name()
+            );
+        }
+        Ok(())
+    }
     fn create_protocol(&self) -> Box<dyn protocol::DebuggerProtocol>;
     fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset>;
     fn build_start_command(&self, sudo: bool) -> String;
@@ -77,14 +106,18 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
 }
 
 pub fn resolve_debugger_backend(config: &Config) -> anyhow::Result<Arc<dyn DebuggerBackend>> {
-    match config.conf.debugger.backend {
-        DebuggerBackendKind::Gdb => Ok(Arc::new(gdb::GdbBackend)),
-        DebuggerBackendKind::Lldb => Ok(Arc::new(lldb::LldbBackend)),
-        DebuggerBackendKind::Mock => Ok(Arc::new(mock::MockBackend)),
-        DebuggerBackendKind::Unknown => Err(anyhow::anyhow!(
-            "unsupported debugger backend configured; expected 'gdb', 'lldb', or 'mock'"
-        )),
-    }
+    let backend: Arc<dyn DebuggerBackend> = match config.conf.debugger.backend {
+        DebuggerBackendKind::Gdb => Arc::new(gdb::GdbBackend),
+        DebuggerBackendKind::Lldb => Arc::new(lldb::LldbBackend),
+        DebuggerBackendKind::Mock => Arc::new(mock::MockBackend),
+        DebuggerBackendKind::Unknown => {
+            anyhow::bail!(
+                "unsupported debugger backend configured; expected 'gdb', 'lldb', or 'mock'"
+            )
+        }
+    };
+    backend.validate_config(config)?;
+    Ok(backend)
 }
 
 #[cfg(test)]
@@ -166,5 +199,34 @@ mod tests {
 
         assert_eq!(installed.len(), 2);
         assert!(installed.iter().all(|path| path.exists()));
+    }
+
+    #[test]
+    fn unsupported_backend_capabilities_fail_during_resolution() {
+        let mut config = Config::default();
+        config.framework = crate::common::config::Framework::Nu;
+        config.conf.support_migration = true;
+        config.conf.debugger.backend = DebuggerBackendKind::Lldb;
+
+        let error = resolve_debugger_backend(&config)
+            .expect_err("LLDB proclet migration should fail before runtime startup");
+
+        assert_eq!(
+            error.to_string(),
+            "debugger backend 'lldb' does not support proclet migration"
+        );
+
+        config.conf.debugger.backend = DebuggerBackendKind::Gdb;
+        assert!(resolve_debugger_backend(&config).is_ok());
+
+        config.framework = crate::common::config::Framework::ServiceWeaverKube;
+        config.conf.support_migration = false;
+        config.conf.debugger.backend = DebuggerBackendKind::Lldb;
+        let error = resolve_debugger_backend(&config)
+            .expect_err("LLDB Service Weaver support should fail before runtime startup");
+        assert_eq!(
+            error.to_string(),
+            "debugger backend 'lldb' does not support Service Weaver remote backtraces"
+        );
     }
 }

@@ -2,6 +2,9 @@
 
 This document defines the ownership and synchronization rules for DDB's in-memory debugger model. Treat these rules as architecture constraints, not implementation suggestions.
 
+Debugger-native ownership and backend extension rules are documented in
+[`debugger-backends.md`](debugger-backends.md).
+
 ## Composition
 
 `ApplicationServices::build` is the composition root. It creates one `Arc<RuntimeModel>` and gives clones of that facade to command, API, session, source-resolution, and event-reduction services.

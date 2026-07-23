@@ -9,7 +9,9 @@ use crate::{
         default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_FRAME_FILTER_NAME},
         utils::get_hostname,
     },
-    debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
+    debugger::{
+        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerCapabilities,
+    },
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
@@ -133,6 +135,17 @@ impl GdbBackend {
 }
 
 impl DebuggerBackend for GdbBackend {
+    fn name(&self) -> &'static str {
+        "gdb"
+    }
+
+    fn capabilities(&self) -> DebuggerCapabilities {
+        DebuggerCapabilities {
+            proclet_migration: true,
+            serviceweaver_remote_backtrace: true,
+        }
+    }
+
     fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
         Box::new(super::protocol::GdbMiProtocol::default())
     }

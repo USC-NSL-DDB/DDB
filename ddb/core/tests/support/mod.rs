@@ -59,6 +59,14 @@ pub struct BinarySessionSpec<'a> {
     pub stop_at_entry: bool,
 }
 
+pub struct AttachSessionSpec<'a> {
+    pub tag: &'a str,
+    pub alias: &'a str,
+    pub hash: &'a str,
+    pub pid: u64,
+    pub ip: &'a str,
+}
+
 #[derive(Clone, Debug)]
 pub struct BuiltRealExample {
     pub manifest_path: PathBuf,
@@ -104,7 +112,17 @@ impl DdbProcess {
     pub fn spawn_lldb_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
         ensure_debugger_environment("lldb");
         let config_contents = render_real_binary_config(sessions, "lldb");
-        Self::spawn_with_config("ddb-real-lldb-integration.yaml", config_contents)
+        Self::spawn_with_config_and_env(
+            "ddb-real-lldb-integration.yaml",
+            config_contents,
+            &[("FAKETIME", "-00000000000000000000.000000000")],
+        )
+    }
+
+    pub fn spawn_lldb_attach_sessions(sessions: &[AttachSessionSpec<'_>]) -> Self {
+        ensure_debugger_environment("lldb");
+        let config_contents = render_real_attach_config(sessions, "lldb");
+        Self::spawn_with_config("ddb-real-lldb-attach-integration.yaml", config_contents)
     }
 
     pub fn spawn_real_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
@@ -119,6 +137,14 @@ impl DdbProcess {
     }
 
     fn spawn_with_config(config_name: &str, config_contents: String) -> Self {
+        Self::spawn_with_config_and_env(config_name, config_contents, &[])
+    }
+
+    fn spawn_with_config_and_env(
+        config_name: &str,
+        config_contents: String,
+        environment: &[(&str, &str)],
+    ) -> Self {
         let port = reserve_port();
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
         let config_path = tempdir.path().join(config_name);
@@ -143,14 +169,17 @@ impl DdbProcess {
             .or_else(|| option_env!("CARGO_BIN_EXE_ddb").map(str::to_string))
             .expect("ddb binary path should be set");
 
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg(config_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .spawn()
-            .expect("ddb should spawn");
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().expect("ddb should spawn");
 
         let stdin = child.stdin.take().expect("stdin should be piped");
         let child_stdout = child.stdout.take().expect("stdout should be piped");
@@ -517,6 +546,45 @@ fn render_real_binary_config(sessions: &[BinarySessionSpec<'_>], backend: &str) 
                 binary_path = session.binary_path,
                 stop_at_entry = session.stop_at_entry,
                 args_yaml = args_yaml,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"Framework: unspecified
+Conf:
+  auto_shutdown: false
+  on_exit: kill
+  api_server_port: __API_PORT__
+  base_dir: "__BASE_DIR__"
+  log_dir: "__LOG_DIR__"
+  Debugger:
+    backend: {backend}
+StaticSessions:
+{sessions_yaml}
+"#,
+        backend = backend,
+        sessions_yaml = sessions_yaml,
+    )
+}
+
+fn render_real_attach_config(sessions: &[AttachSessionSpec<'_>], backend: &str) -> String {
+    let sessions_yaml = sessions
+        .iter()
+        .map(|session| {
+            format!(
+                r#"  - tag: "{tag}"
+    alias: "{alias}"
+    hash: "{hash}"
+    pid: {pid}
+    ip: "{ip}"
+    start_mode: attach"#,
+                tag = session.tag,
+                alias = session.alias,
+                hash = session.hash,
+                pid = session.pid,
+                ip = session.ip,
             )
         })
         .collect::<Vec<_>>()
