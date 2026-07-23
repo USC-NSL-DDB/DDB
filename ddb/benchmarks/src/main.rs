@@ -81,6 +81,9 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     startup_warmup: usize,
 
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    lldb_eager_stack_warmup: bool,
+
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_MS)]
     timeout_ms: u64,
 
@@ -103,6 +106,7 @@ struct BenchmarkReport {
     samples: usize,
     startup_warmup: usize,
     startup_samples: usize,
+    lldb_eager_stack_warmup: bool,
     results: Vec<ScenarioResult>,
 }
 
@@ -123,6 +127,7 @@ fn main() -> Result<()> {
         samples: args.samples,
         startup_warmup: args.startup_warmup,
         startup_samples: args.startup_samples,
+        lldb_eager_stack_warmup: args.lldb_eager_stack_warmup,
     };
 
     let mut results = Vec::new();
@@ -155,6 +160,7 @@ fn main() -> Result<()> {
         samples: args.samples,
         startup_warmup: args.startup_warmup,
         startup_samples: args.startup_samples,
+        lldb_eager_stack_warmup: args.lldb_eager_stack_warmup,
         results,
     };
 

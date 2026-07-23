@@ -107,6 +107,7 @@ pub struct ScenarioConfig<'a> {
     pub samples: usize,
     pub startup_warmup: usize,
     pub startup_samples: usize,
+    pub lldb_eager_stack_warmup: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -310,8 +311,13 @@ fn measure_distributed_backtrace(
 ) -> Result<Vec<Duration>> {
     let mut samples = Vec::with_capacity(config.samples);
     for iteration in 0..(config.warmup + config.samples) {
-        let mut harness =
-            DdbHarness::spawn_real_dbt(config.binary, config.workspace_root, debugger, depth)?;
+        let mut harness = DdbHarness::spawn_real_dbt(
+            config.binary,
+            config.workspace_root,
+            debugger,
+            depth,
+            config.lldb_eager_stack_warmup,
+        )?;
         harness.wait_for_status_up(config.timeout)?;
         let sessions = harness.provision_real_dbt_contexts(depth, config.timeout)?;
 

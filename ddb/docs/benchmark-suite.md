@@ -61,6 +61,11 @@ Current scenarios:
 - `lldb-distributed-backtrace`
   Runs the identical real distributed-backtrace chain through LLDB, making
   backend cost and regressions directly comparable.
+  The command timer starts only after every session is stopped and its register
+  context has been provisioned. Consequently, LLDB's default one-time stack
+  warmup is charged to session readiness rather than this command-latency
+  metric. Pass `--lldb-eager-stack-warmup false` to measure cold LLDB command
+  behavior and keep the selected policy alongside results in JSON output.
 
 Primary scaling axis:
 

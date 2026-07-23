@@ -84,6 +84,12 @@ impl RealDebugger {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RealDebuggerConfig {
+    backend: RealDebugger,
+    eager_stack_warmup: bool,
+}
+
 impl HarnessSpec {
     pub fn validate(&self) -> Result<()> {
         if self.sessions == 0 {
@@ -172,6 +178,7 @@ impl DdbHarness {
         workspace_root: &Path,
         debugger: RealDebugger,
         depth: usize,
+        lldb_eager_stack_warmup: bool,
     ) -> Result<Self> {
         if depth == 0 {
             bail!("distributed backtrace benchmark requires depth >= 1");
@@ -192,7 +199,10 @@ impl DdbHarness {
         std::fs::create_dir_all(&ctx_dir).context("failed to create real DBT context directory")?;
 
         let config_contents = render_real_dbt_config(
-            debugger,
+            RealDebuggerConfig {
+                backend: debugger,
+                eager_stack_warmup: lldb_eager_stack_warmup,
+            },
             depth,
             &fixture_binary,
             port,
@@ -745,7 +755,7 @@ StaticSessions:
 }
 
 fn render_real_dbt_config(
-    debugger: RealDebugger,
+    debugger: RealDebuggerConfig,
     depth: usize,
     fixture_binary: &Path,
     port: u16,
@@ -771,10 +781,12 @@ Conf:
   log_dir: "{log_dir}"
   Debugger:
     backend: {backend}
+    eager_stack_warmup: {lldb_eager_stack_warmup}
 StaticSessions:
 {sessions_yaml}
 "#,
-        backend = debugger.config_name(),
+        backend = debugger.backend.config_name(),
+        lldb_eager_stack_warmup = debugger.eager_stack_warmup,
         port = port,
         base_dir = state_dir.display(),
         log_dir = log_dir.display(),
