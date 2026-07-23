@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
-use crate::{
-    common::config::{Config, Framework},
-    debugger::BundledDebuggerAsset,
-};
+use crate::common::config::{Config, Framework};
 
 use super::{
-    default_runtime_asset, proclet_runtime_asset, runtime_script_path, FrameworkDebuggerBootstrap,
-    FrameworkPlugin, GrpcAdapter, NuAdapter, ServiceDiscoveryMode, ServiceWeaverAdapter,
+    DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin, GrpcAdapter, NuAdapter,
+    ServiceDiscoveryMode, ServiceWeaverAdapter,
 };
 
 #[derive(Debug, Default)]
@@ -38,31 +35,16 @@ impl FrameworkPlugin for NuFrameworkPlugin {
         config.conf.support_migration
     }
 
-    fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset> {
-        let mut assets = Vec::new();
-        if config.conf.support_migration {
-            assets.push(proclet_runtime_asset());
-        }
-        assets
-    }
-
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap {
-            scripts: vec![runtime_script_path(&default_runtime_asset())],
+            requires_core_runtime: true,
+            requires_proclet_runtime: config.handle_migration(),
             ..FrameworkDebuggerBootstrap::default()
         };
-        if config.conf.support_migration {
-            bootstrap
-                .scripts
-                .push(runtime_script_path(&proclet_runtime_asset()));
-        }
         if config.service_discovery.is_some() {
             bootstrap
-                .post_start_commands
-                .push(crate::common::config::DebuggerCommand {
-                    name: "sig40".to_string(),
-                    command: r#"-interpreter-exec console "signal SIG40""#.to_string(),
-                });
+                .post_start_actions
+                .push(DebuggerBootstrapAction::Signal("SIG40".to_string()));
         }
         if let Some(plugin) = config.plugin.as_ref() {
             bootstrap
@@ -82,24 +64,12 @@ impl FrameworkPlugin for QuicksandFrameworkPlugin {
         config.conf.support_migration
     }
 
-    fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset> {
-        let mut assets = Vec::new();
-        if config.conf.support_migration {
-            assets.push(proclet_runtime_asset());
-        }
-        assets
-    }
-
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap {
-            scripts: vec![runtime_script_path(&default_runtime_asset())],
+            requires_core_runtime: true,
+            requires_proclet_runtime: config.handle_migration(),
             ..FrameworkDebuggerBootstrap::default()
         };
-        if config.conf.support_migration {
-            bootstrap
-                .scripts
-                .push(runtime_script_path(&proclet_runtime_asset()));
-        }
         if let Some(plugin) = config.plugin.as_ref() {
             bootstrap
                 .scripts
@@ -120,16 +90,13 @@ impl FrameworkPlugin for GrpcFrameworkPlugin {
 
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap {
-            scripts: vec![runtime_script_path(&default_runtime_asset())],
+            requires_core_runtime: true,
             ..FrameworkDebuggerBootstrap::default()
         };
         if config.service_discovery.is_some() {
             bootstrap
-                .post_start_commands
-                .push(crate::common::config::DebuggerCommand {
-                    name: "sig40".to_string(),
-                    command: r#"-interpreter-exec console "signal SIG40""#.to_string(),
-                });
+                .post_start_actions
+                .push(DebuggerBootstrapAction::Signal("SIG40".to_string()));
         }
         if let Some(plugin) = config.plugin.as_ref() {
             bootstrap
@@ -182,11 +149,13 @@ mod tests {
         assert!(plugin.supports_migration(&config));
 
         let bootstrap = plugin.debugger_bootstrap(&config);
-        assert_eq!(bootstrap.scripts.len(), 2);
+        assert!(bootstrap.requires_core_runtime);
+        assert!(bootstrap.requires_proclet_runtime);
+        assert!(bootstrap.scripts.is_empty());
     }
 
     #[test]
-    fn grpc_plugin_bootstrap_keeps_runtime_script_and_sig40() {
+    fn grpc_plugin_bootstrap_keeps_runtime_requirement_and_sig40() {
         let mut config = Config::default();
         config.framework = Framework::GRPC;
         config.service_discovery = Some(crate::common::config::ServiceDiscovery::default());
@@ -194,10 +163,10 @@ mod tests {
         let plugin = resolve_framework_plugin(&config);
         let bootstrap = plugin.debugger_bootstrap(&config);
 
+        assert!(bootstrap.requires_core_runtime);
         assert_eq!(
-            bootstrap.scripts,
-            vec![runtime_script_path(&default_runtime_asset())]
+            bootstrap.post_start_actions,
+            vec![DebuggerBootstrapAction::Signal("SIG40".to_string())]
         );
-        assert_eq!(bootstrap.post_start_commands.len(), 1);
     }
 }

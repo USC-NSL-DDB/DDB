@@ -60,14 +60,10 @@ async fn main() -> Result<()> {
 
     // Directories, logging, and bundled assets must exist before the service
     // graph is built: construction performs network I/O and emits tracing.
-    let tracing_guards = SetupProcedure::new(
-        Arc::clone(&config),
-        Arc::clone(&backend),
-        Arc::clone(&plugin),
-    )
-    .with_app_dir_config(app_dir_conf)
-    .with_logging_settings(logging_settings)
-    .run()?;
+    let tracing_guards = SetupProcedure::new(Arc::clone(&config), Arc::clone(&backend))
+        .with_app_dir_config(app_dir_conf)
+        .with_logging_settings(logging_settings)
+        .run()?;
 
     let runtime = ApplicationRuntime::new(config, plugin, backend).await?;
     runtime.run(command_workers).await?;

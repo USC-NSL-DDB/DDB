@@ -1,17 +1,10 @@
 mod builtin;
 
-use std::{
-    net::Ipv4Addr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{net::Ipv4Addr, path::PathBuf, sync::Arc};
 
 use crate::{
     common::config::{Config, DebuggerCommand},
-    debugger::gdb::runtime::CORE_GDB_RUNTIME_ASSET,
-    debugger::gdb::runtime::PROCLET_GDB_RUNTIME_ASSET,
     debugger::protocol::Value,
-    debugger::BundledDebuggerAsset,
 };
 use anyhow::Result;
 
@@ -78,9 +71,16 @@ pub enum ServiceDiscoveryMode {
 
 #[derive(Debug, Clone, Default)]
 pub struct FrameworkDebuggerBootstrap {
+    pub requires_core_runtime: bool,
+    pub requires_proclet_runtime: bool,
     pub scripts: Vec<PathBuf>,
     pub pre_attach_commands: Vec<DebuggerCommand>,
-    pub post_start_commands: Vec<DebuggerCommand>,
+    pub post_start_actions: Vec<DebuggerBootstrapAction>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DebuggerBootstrapAction {
+    Signal(String),
 }
 
 pub trait FrameworkPlugin: Send + Sync + std::fmt::Debug {
@@ -94,9 +94,6 @@ pub trait FrameworkPlugin: Send + Sync + std::fmt::Debug {
     fn should_register_caladan_ip(&self, config: &Config) -> bool {
         self.supports_migration(config)
     }
-    fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
-        Vec::new()
-    }
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap::default();
         if let Some(plugin) = config.plugin.as_ref() {
@@ -106,18 +103,6 @@ pub trait FrameworkPlugin: Send + Sync + std::fmt::Debug {
         }
         bootstrap
     }
-}
-
-pub(crate) fn runtime_script_path(asset: &BundledDebuggerAsset) -> PathBuf {
-    Path::new(asset.output_dir).join(asset.file_name)
-}
-
-pub(crate) fn default_runtime_asset() -> BundledDebuggerAsset {
-    CORE_GDB_RUNTIME_ASSET
-}
-
-pub(crate) fn proclet_runtime_asset() -> BundledDebuggerAsset {
-    PROCLET_GDB_RUNTIME_ASSET
 }
 
 #[cfg(test)]
@@ -177,6 +162,6 @@ mod tests {
             vec![PathBuf::from("/tmp/a.py"), PathBuf::from("/tmp/b.py")]
         );
         assert!(bootstrap.pre_attach_commands.is_empty());
-        assert!(bootstrap.post_start_commands.is_empty());
+        assert!(bootstrap.post_start_actions.is_empty());
     }
 }

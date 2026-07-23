@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::{
     common::config::Config,
     debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
-    plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
+    plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
 };
 
@@ -74,5 +74,13 @@ impl DebuggerBackend for MockBackend {
 
     fn console_exec_command(&self, command: &str) -> String {
         format!("-interpreter-exec console \"{}\"", command)
+    }
+
+    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
+        match action {
+            DebuggerBootstrapAction::Signal(signal) => {
+                self.console_exec_command(&format!("signal {signal}"))
+            }
+        }
     }
 }

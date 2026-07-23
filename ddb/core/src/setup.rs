@@ -2,7 +2,6 @@ use crate::{
     common::{config::Config, default_vals},
     debugger::{install_bundled_assets, DebuggerBackend},
     logging,
-    plugin::FrameworkPlugin,
 };
 use std::sync::Arc;
 
@@ -179,21 +178,15 @@ impl LoggingSettings {
 pub struct SetupProcedure {
     config: Arc<Config>,
     backend: Arc<dyn DebuggerBackend>,
-    plugin: Arc<dyn FrameworkPlugin>,
     app_dir_config: AppDirConfig,
     logging_settings: LoggingSettings,
 }
 
 impl SetupProcedure {
-    pub fn new(
-        config: Arc<Config>,
-        backend: Arc<dyn DebuggerBackend>,
-        plugin: Arc<dyn FrameworkPlugin>,
-    ) -> Self {
+    pub fn new(config: Arc<Config>, backend: Arc<dyn DebuggerBackend>) -> Self {
         SetupProcedure {
             config,
             backend,
-            plugin,
             app_dir_config: AppDirConfig::default(),
             logging_settings: LoggingSettings::default(),
         }
@@ -223,17 +216,15 @@ impl SetupProcedure {
 
         let config = self.config.as_ref();
         let backend_assets = self.backend.bundled_assets(config);
-        install_bundled_assets(&backend_assets)?;
-        let plugin_assets = self.plugin.bundled_assets(config);
-        let installed_plugin_assets = install_bundled_assets(&plugin_assets)?;
+        let installed_backend_assets = install_bundled_assets(&backend_assets)?;
 
-        if config.conf.support_migration {
-            let path = installed_plugin_assets
+        if config.handle_migration() {
+            let path = installed_backend_assets
                 .last()
                 .cloned()
                 .unwrap_or_else(|| std::path::PathBuf::from("<not-installed>"));
             info!(
-                "feature: [ENABLED] proclet migration. Proclet gdb ext script written to: {}",
+                "feature: [ENABLED] proclet migration. Debugger runtime written to: {}",
                 path.display()
             );
         } else {

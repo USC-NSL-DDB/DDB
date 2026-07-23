@@ -10,7 +10,7 @@ use crate::{
         utils::get_hostname,
     },
     debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
-    plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
+    plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
 
@@ -19,7 +19,10 @@ use super::{
         DbgCmdGenerator, DbgCmdListBuilder, FrameFilterAddArgs, FrameFilterCmdArg, GdbCmd,
         GdbOption,
     },
-    runtime::{gdb_start_cmd, CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET},
+    runtime::{
+        gdb_start_cmd, CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET,
+        PROCLET_GDB_RUNTIME_ASSET,
+    },
 };
 
 #[derive(Debug, Default)]
@@ -48,6 +51,18 @@ impl GdbBackend {
 
         builder.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
 
+        if plugin_bootstrap.requires_core_runtime {
+            builder.add(GdbCmd::ConsoleExec(format!(
+                "source {}",
+                CORE_GDB_RUNTIME_ASSET.output_path().to_string_lossy()
+            )));
+        }
+        if plugin_bootstrap.requires_proclet_runtime {
+            builder.add(GdbCmd::ConsoleExec(format!(
+                "source {}",
+                PROCLET_GDB_RUNTIME_ASSET.output_path().to_string_lossy()
+            )));
+        }
         for script in &plugin_bootstrap.scripts {
             builder.add(GdbCmd::ConsoleExec(format!(
                 "source {}",
@@ -122,8 +137,12 @@ impl DebuggerBackend for GdbBackend {
         Box::new(super::protocol::GdbMiProtocol::default())
     }
 
-    fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
-        vec![CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET]
+    fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset> {
+        let mut assets = vec![CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET];
+        if config.handle_migration() {
+            assets.push(PROCLET_GDB_RUNTIME_ASSET);
+        }
+        assets
     }
 
     fn build_start_command(&self, sudo: bool) -> String {
@@ -196,5 +215,13 @@ impl DebuggerBackend for GdbBackend {
 
     fn console_exec_command(&self, command: &str) -> String {
         GdbCmd::ConsoleExec(command.to_string()).generate()
+    }
+
+    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
+        match action {
+            DebuggerBootstrapAction::Signal(signal) => {
+                self.console_exec_command(&format!("signal {signal}"))
+            }
+        }
     }
 }

@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     common::config::{Config, DebuggerBackendKind},
-    plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
+    plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
     Asset,
 };
@@ -34,6 +34,9 @@ pub fn install_bundled_asset(asset: &BundledDebuggerAsset) -> Result<PathBuf> {
     let script_content =
         Asset::get(asset.embedded_path).context("Failed to load embedded debugger asset")?;
     let file_path = asset.output_path();
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create debugger asset directory")?;
+    }
     fs::write(&file_path, script_content.data.as_ref())
         .context("Failed to write debugger asset to disk")?;
     file_path
@@ -68,6 +71,7 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<String>>;
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
+    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String;
 }
 
 pub fn resolve_debugger_backend(config: &Config) -> anyhow::Result<Arc<dyn DebuggerBackend>> {

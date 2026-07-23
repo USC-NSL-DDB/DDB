@@ -107,9 +107,9 @@ impl SessionProcess {
         let commands = self
             .plugin
             .debugger_bootstrap(self.config.as_ref())
-            .post_start_commands
+            .post_start_actions
             .iter()
-            .map(|command| command.render())
+            .map(|action| self.backend.bootstrap_action_command(action))
             .collect::<Vec<_>>()
             .join("");
         if !commands.is_empty() {
