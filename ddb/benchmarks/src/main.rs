@@ -127,7 +127,10 @@ fn main() -> Result<()> {
 
     let mut results = Vec::new();
     for scenario in &args.scenarios {
-        let scales = if matches!(scenario, ScenarioKind::DistributedBacktrace) {
+        let scales = if matches!(
+            scenario,
+            ScenarioKind::DistributedBacktrace | ScenarioKind::LldbDistributedBacktrace
+        ) {
             &args.dbt_depths
         } else {
             &args.scales

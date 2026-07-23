@@ -58,6 +58,9 @@ Current scenarios:
   Measures WebSocket notification fanout latency to subscribed clients.
 - `distributed-backtrace`
   Measures end-to-end `-bt-remote` latency using a real dummy application chain, including remote metadata extraction, parent interrupt, context switch, and recursive stack aggregation.
+- `lldb-distributed-backtrace`
+  Runs the identical real distributed-backtrace chain through LLDB, making
+  backend cost and regressions directly comparable.
 
 Primary scaling axis:
 
@@ -90,7 +93,7 @@ Distributed backtrace depth sweep:
 
 ```bash
 cargo run -p ddb-bench --release -- \
-  --scenarios distributed-backtrace \
+  --scenarios distributed-backtrace,lldb-distributed-backtrace \
   --dbt-depths 1,2,4,8,16
 ```
 

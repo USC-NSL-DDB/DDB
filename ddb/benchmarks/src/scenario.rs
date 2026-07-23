@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    harness::{dbt_session_tag, session_id_by_tag, DdbHarness, HarnessSpec},
+    harness::{dbt_session_tag, session_id_by_tag, DdbHarness, HarnessSpec, RealDebugger},
     stats::SummaryStats,
 };
 
@@ -25,6 +25,7 @@ pub enum ScenarioKind {
     CliBreakInsert,
     Notifications,
     DistributedBacktrace,
+    LldbDistributedBacktrace,
 }
 
 impl ScenarioKind {
@@ -38,6 +39,7 @@ impl ScenarioKind {
             Self::CliBreakInsert => "cli-break-insert",
             Self::Notifications => "notifications",
             Self::DistributedBacktrace => "distributed-backtrace",
+            Self::LldbDistributedBacktrace => "lldb-distributed-backtrace",
         }
     }
 
@@ -67,6 +69,9 @@ impl ScenarioKind {
             Self::DistributedBacktrace => {
                 "Real GDB-backed end-to-end distributed backtrace latency for a synthetic cross-process call chain, including parent metadata lookup, interrupt, context switch, and recursive stack aggregation."
             }
+            Self::LldbDistributedBacktrace => {
+                "Real LLDB-backed end-to-end distributed backtrace latency for the same synthetic cross-process call chain and backend-neutral command path."
+            }
         }
     }
 
@@ -79,7 +84,8 @@ impl ScenarioKind {
             | Self::CliThreadInfo
             | Self::CliBreakInsert
             | Self::Notifications
-            | Self::DistributedBacktrace => "latency_ms",
+            | Self::DistributedBacktrace
+            | Self::LldbDistributedBacktrace => "latency_ms",
         }
     }
 }
@@ -269,13 +275,18 @@ pub fn run_scenario(
                     Ok(elapsed)
                 })?,
             ),
-            ScenarioKind::DistributedBacktrace => {
-                SummaryStats::from_durations(&measure_distributed_backtrace(scale, config)?)
-            }
+            ScenarioKind::DistributedBacktrace => SummaryStats::from_durations(
+                &measure_distributed_backtrace(RealDebugger::Gdb, scale, config)?,
+            ),
+            ScenarioKind::LldbDistributedBacktrace => SummaryStats::from_durations(
+                &measure_distributed_backtrace(RealDebugger::Lldb, scale, config)?,
+            ),
         };
 
     let (sessions, dbt_depth, threads_per_session) = match kind {
-        ScenarioKind::DistributedBacktrace => (scale, Some(scale), 1),
+        ScenarioKind::DistributedBacktrace | ScenarioKind::LldbDistributedBacktrace => {
+            (scale, Some(scale), 1)
+        }
         _ => (scale, None, config.threads_per_session),
     };
 
@@ -293,12 +304,14 @@ pub fn run_scenario(
 }
 
 fn measure_distributed_backtrace(
+    debugger: RealDebugger,
     depth: usize,
     config: &ScenarioConfig<'_>,
 ) -> Result<Vec<Duration>> {
     let mut samples = Vec::with_capacity(config.samples);
     for iteration in 0..(config.warmup + config.samples) {
-        let mut harness = DdbHarness::spawn_real_dbt(config.binary, config.workspace_root, depth)?;
+        let mut harness =
+            DdbHarness::spawn_real_dbt(config.binary, config.workspace_root, debugger, depth)?;
         harness.wait_for_status_up(config.timeout)?;
         let sessions = harness.provision_real_dbt_contexts(depth, config.timeout)?;
 

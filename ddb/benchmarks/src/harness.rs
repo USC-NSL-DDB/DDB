@@ -65,6 +65,25 @@ pub struct HarnessSpec {
     pub exit_on_continue: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum RealDebugger {
+    Gdb,
+    Lldb,
+}
+
+impl RealDebugger {
+    fn executable(self) -> &'static str {
+        match self {
+            Self::Gdb => "gdb",
+            Self::Lldb => "lldb",
+        }
+    }
+
+    fn config_name(self) -> &'static str {
+        self.executable()
+    }
+}
+
 impl HarnessSpec {
     pub fn validate(&self) -> Result<()> {
         if self.sessions == 0 {
@@ -148,7 +167,12 @@ impl DdbHarness {
         })
     }
 
-    pub fn spawn_real_dbt(binary: &Path, workspace_root: &Path, depth: usize) -> Result<Self> {
+    pub fn spawn_real_dbt(
+        binary: &Path,
+        workspace_root: &Path,
+        debugger: RealDebugger,
+        depth: usize,
+    ) -> Result<Self> {
         if depth == 0 {
             bail!("distributed backtrace benchmark requires depth >= 1");
         }
@@ -156,7 +180,7 @@ impl DdbHarness {
             bail!("distributed backtrace benchmark currently supports depth <= 16");
         }
 
-        ensure_real_debugger_environment()?;
+        ensure_real_debugger_environment(debugger)?;
         let fixture_binary = build_real_dbt_fixture(workspace_root)?;
 
         let port = reserve_port()?;
@@ -167,8 +191,15 @@ impl DdbHarness {
         let ctx_dir = tempdir.path().join("dbt-context");
         std::fs::create_dir_all(&ctx_dir).context("failed to create real DBT context directory")?;
 
-        let config_contents =
-            render_real_dbt_config(depth, &fixture_binary, port, &state_dir, &log_dir, &ctx_dir);
+        let config_contents = render_real_dbt_config(
+            debugger,
+            depth,
+            &fixture_binary,
+            port,
+            &state_dir,
+            &log_dir,
+            &ctx_dir,
+        );
         std::fs::write(&config_path, config_contents)
             .context("failed to write real DBT benchmark config")?;
 
@@ -512,7 +543,7 @@ impl DdbHarness {
             .collect::<BTreeMap<_, _>>();
 
         register_alias_names()
-            .into_iter()
+            .iter()
             .map(|(alias, name)| {
                 values_by_name
                     .get(*name)
@@ -532,7 +563,7 @@ impl DdbHarness {
             .ok_or_else(|| anyhow!("real DBT context directory not configured"))?;
         let path = ctx_dir.join(format!("ctx-{role_index}.txt"));
         let payload = register_alias_names()
-            .into_iter()
+            .iter()
             .filter_map(|(alias, _)| {
                 context
                     .get(*alias)
@@ -714,6 +745,7 @@ StaticSessions:
 }
 
 fn render_real_dbt_config(
+    debugger: RealDebugger,
     depth: usize,
     fixture_binary: &Path,
     port: u16,
@@ -738,10 +770,11 @@ Conf:
   base_dir: "{base_dir}"
   log_dir: "{log_dir}"
   Debugger:
-    backend: gdb
+    backend: {backend}
 StaticSessions:
 {sessions_yaml}
 "#,
+        backend = debugger.config_name(),
         port = port,
         base_dir = state_dir.display(),
         log_dir = log_dir.display(),
@@ -822,6 +855,7 @@ fn render_real_dbt_session(role_index: usize, binary_path: &str, ctx_dir: &Path)
         .map(|arg| format!("      - \"{}\"", arg))
         .collect::<Vec<_>>()
         .join("\n");
+    let alias = format!("dbt-{role_index}");
 
     format!(
         r#"  - tag: "{tag}"
@@ -836,7 +870,7 @@ fn render_real_dbt_session(role_index: usize, binary_path: &str, ctx_dir: &Path)
     binary_args:
 {args_yaml}"#,
         tag = dbt_session_tag(role_index),
-        alias = format!("dbt-{role_index}"),
+        alias = alias,
         hash = DBT_GROUP,
         pid = logical_pid,
         ip = DBT_IP,
@@ -868,15 +902,16 @@ fn reserve_port() -> Result<u16> {
         .port())
 }
 
-fn ensure_real_debugger_environment() -> Result<()> {
-    let status = Command::new("gdb")
+fn ensure_real_debugger_environment(debugger: RealDebugger) -> Result<()> {
+    let executable = debugger.executable();
+    let status = Command::new(executable)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .context("failed to invoke gdb --version")?;
+        .with_context(|| format!("failed to invoke {executable} --version"))?;
     if !status.success() {
-        bail!("gdb --version failed");
+        bail!("{executable} --version failed");
     }
     Ok(())
 }
@@ -969,12 +1004,11 @@ fn encoded_list(value: &Value) -> Option<&Vec<Value>> {
 }
 
 fn encoded_object(value: &Value) -> Option<&Map<String, Value>> {
-    value.as_object().and_then(|object| {
-        if let Some(dict) = object.get("Dict").and_then(Value::as_object) {
-            Some(dict)
-        } else {
-            Some(object)
-        }
+    value.as_object().map(|object| {
+        object
+            .get("Dict")
+            .and_then(Value::as_object)
+            .unwrap_or(object)
     })
 }
 
