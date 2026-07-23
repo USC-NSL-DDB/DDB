@@ -63,6 +63,22 @@ GDB and LLDB. New configuration uses `PrerunDebuggerCommands` and
 `PostrunDebuggerCommands`. The legacy `PrerunGdbCommands` and
 `PostrunGdbCommands` keys remain accepted when reading existing files.
 
+LLDB eagerly warms at most 64 stack frames after the first stop for each
+process. LLDB otherwise charges its one-time unwind and symbol-cache
+construction to the first backtrace request. The stop event is flushed before
+the warmup runs, warmup failures are non-fatal, and later stops reuse LLDB's
+caches. Startup-sensitive deployments can disable this latency optimization:
+
+```yaml
+Conf:
+  Debugger:
+    backend: lldb
+    eager_stack_warmup: false
+```
+
+Disabling it preserves stack contents but makes the first stack or remote
+metadata request substantially slower on debug-info-heavy binaries.
+
 Debugger commands and scripts are backend-native. A script configured under
 `Plugin.DebuggerScripts` must therefore be valid for the selected backend.
 
@@ -111,6 +127,11 @@ Application payloads move as owned neutral values; compatibility rendering is
 deferred until presentation. Native debugger noise is classified as stream
 output instead of triggering parser retries. Backend shutdown must close its
 transport promptly rather than consuming the generic forced-close timeout.
+
+Distributed-backtrace latency is measured after sessions are stopped and ready.
+For LLDB this means the default one-time stack warmup is session-readiness work,
+not command work. Benchmark startup/readiness separately when changing the
+warmup policy; do not treat moving work across that boundary as eliminating it.
 
 Do not add a second parse/serialize cycle between `DebuggerProtocol` and
 command flow. If a backend requires a bridge, its structured output should map

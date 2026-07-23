@@ -26,6 +26,7 @@ import lldb  # type: ignore
 RECORD_PREFIX = "@DDB@"
 GROUP_ID = "i1"
 INVALID_ADDRESS = getattr(lldb, "LLDB_INVALID_ADDRESS", (1 << 64) - 1)
+STACK_PREWARM_FRAME_LIMIT = 64
 FRAMEWORK_PRESETS = {
     "ddb-runtime": {
         "functions": ["DDB::*"],
@@ -330,12 +331,14 @@ class ProcessMonitor(object):
         self.listener = lldb.SBListener("ddb.process-monitor")
         self.running = True
         self.thread = None
+        self.stack_prewarm_enabled = False
         self._group_started = False
         self._group_added = False
         self._threads = set()
         self._process_uid = None
         self._last_state = None
         self._last_stop_id = None
+        self._stack_prewarmed = False
         self.pause_started_ns = None
         self._lock = threading.Lock()
 
@@ -353,6 +356,7 @@ class ProcessMonitor(object):
             self._process_uid = None
             self._last_state = None
             self._last_stop_id = None
+            self._stack_prewarmed = False
             self.pause_started_ns = None
 
     def snapshot(self, process=None):
@@ -390,6 +394,7 @@ class ProcessMonitor(object):
             self._process_uid = uid
             self._last_state = None
             self._last_stop_id = None
+            self._stack_prewarmed = False
         if not self._group_added:
             self.emitter.event("thread-group-added", {"id": GROUP_ID})
             self._group_added = True
@@ -438,6 +443,7 @@ class ProcessMonitor(object):
                 if not thread or not thread.IsValid():
                     thread = process.GetThreadAtIndex(0)
                 self.emitter.event("stopped", self._stop_payload(process, thread, state))
+                self._prewarm_stack_once(thread)
             elif state in (lldb.eStateExited, lldb.eStateDetached):
                 reason = "exited-normally" if process.GetExitStatus() == 0 else "exited"
                 self.emitter.event(
@@ -451,6 +457,35 @@ class ProcessMonitor(object):
                     )
                 self._threads = set()
                 self.emitter.event("thread-group-exited", {"id": GROUP_ID})
+
+    def _prewarm_stack_once(self, thread):
+        if (
+            not self.stack_prewarm_enabled
+            or self._stack_prewarmed
+            or not thread
+            or not thread.IsValid()
+        ):
+            return
+        self._stack_prewarmed = True
+        try:
+            # LLDB lazily constructs its unwind and symbol caches on the first
+            # stack query. Emit the stop first, then use the bridge's idle window
+            # to pay that one-time cost instead of charging the first interactive
+            # backtrace. Subsequent stops reuse LLDB's caches. Bound speculative
+            # symbolization so an unusually deep or damaged stack cannot stall
+            # session readiness indefinitely.
+            target = thread.GetProcess().GetTarget()
+            for index in range(STACK_PREWARM_FRAME_LIMIT):
+                frame = thread.GetFrameAtIndex(index)
+                if not frame or not frame.IsValid():
+                    break
+                _frame_payload(frame, target, index, include_arguments=False)
+        except Exception:
+            # Prewarming is an optimization and must never make a valid stop
+            # unusable. The real stack command will report any persistent error.
+            self.emitter.stream(
+                "LLDB stack prewarm failed:\n{}".format(traceback.format_exc()), "log"
+            )
 
     @staticmethod
     def _stop_payload(process, thread, state):
@@ -598,6 +633,7 @@ class Bridge(object):
             "-list-signals": self._list_signals,
             "-interpreter-exec": self._interpreter_exec,
             "-ddb-filter-config": self._filter_config,
+            "-ddb-set-stack-prewarm": self._set_stack_prewarm,
             "-enable-frame-filters": self._no_op,
             "-gdb-set": self._no_op,
             "-target-detach": self._detach,
@@ -1154,6 +1190,16 @@ class Bridge(object):
 
     def _filter_config(self, arguments):
         return "done", self.filters.configure(arguments)
+
+    def _set_stack_prewarm(self, arguments):
+        if arguments == ["true"]:
+            enabled = True
+        elif arguments == ["false"]:
+            enabled = False
+        else:
+            raise ValueError("-ddb-set-stack-prewarm requires true or false")
+        self.monitor.stack_prewarm_enabled = enabled
+        return "done", {"enabled": _text(enabled).lower()}
 
     @staticmethod
     def _no_op(_arguments):

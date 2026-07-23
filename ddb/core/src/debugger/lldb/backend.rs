@@ -43,6 +43,10 @@ impl LldbBackend {
             LLDB_BRIDGE_ASSET.output_path().to_string_lossy()
         ));
         commands.push("script ddb_lldb_bridge.run(lldb.debugger)\n".to_string());
+        commands.push(Self::bridge_command(&format!(
+            "-ddb-set-stack-prewarm {}",
+            config.conf.debugger.eager_stack_warmup
+        ))?);
 
         for script in &plugin_bootstrap.scripts {
             commands.push(Self::console_command(&format!(
@@ -240,6 +244,7 @@ mod tests {
         assert_eq!(commands[0], "settings set auto-confirm true\n");
         assert!(commands[1].starts_with("command script import "));
         assert_eq!(commands[2], "script ddb_lldb_bridge.run(lldb.debugger)\n");
+        assert!(commands[3].contains("-ddb-set-stack-prewarm true"));
         assert!(commands
             .iter()
             .any(|command| command.contains("-file-exec-and-symbols")));

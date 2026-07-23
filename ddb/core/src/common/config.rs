@@ -192,16 +192,23 @@ impl Default for DebuggerBackendKind {
     }
 }
 
+fn default_eager_stack_warmup() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct DebuggerConf {
     #[serde(default)]
     pub backend: DebuggerBackendKind,
+    #[serde(default = "default_eager_stack_warmup")]
+    pub eager_stack_warmup: bool,
 }
 
 impl Default for DebuggerConf {
     fn default() -> Self {
         Self {
             backend: DebuggerBackendKind::Gdb,
+            eager_stack_warmup: true,
         }
     }
 }
@@ -601,10 +608,13 @@ StaticSessions:
 Conf:
   Debugger:
     backend: lldb
+    eager_stack_warmup: false
 "#,
         )
         .expect("LLDB configuration should parse");
 
         assert_eq!(config.conf.debugger.backend, DebuggerBackendKind::Lldb);
+        assert!(!config.conf.debugger.eager_stack_warmup);
+        assert!(DebuggerConf::default().eager_stack_warmup);
     }
 }
