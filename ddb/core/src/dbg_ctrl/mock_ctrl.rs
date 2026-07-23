@@ -6,10 +6,10 @@ use std::{
     },
 };
 
+use crate::debugger::protocol::{Dict, Value};
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use gdbmi::raw::{Dict, Value};
 use tokio::{
     sync::Mutex,
     task::JoinHandle,
@@ -743,7 +743,9 @@ mod tests {
         let message = GdbParser::parse(text).expect("mock output should parse");
         match message {
             Message::Response(gdbmi::parser::Response::Result { payload, .. }) => {
-                payload.expect("result response should include payload")
+                crate::debugger::gdb::parser::normalize_dict(
+                    payload.expect("result response should include payload"),
+                )
             }
             other => panic!("expected result response, got {other:?}"),
         }

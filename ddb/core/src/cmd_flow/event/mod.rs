@@ -5,7 +5,7 @@ mod render;
 pub(crate) use decode::decode_event;
 pub(crate) use reducer::DebuggerEventReducer;
 
-use gdbmi::raw::Dict;
+use crate::debugger::protocol::Dict;
 
 use crate::session::lifecycle::SessionTerminationCause;
 

@@ -6,8 +6,8 @@
 
 use std::{fmt, sync::Arc};
 
+use crate::debugger::protocol::{Dict, Value};
 use anyhow::{anyhow, Result};
-use gdbmi::raw::{Dict, Value};
 
 use super::{
     api::{self, CommandExecutor},

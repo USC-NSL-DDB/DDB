@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use gdbmi::raw::{Dict, Value};
+use crate::debugger::protocol::{Dict, Value};
 
 use crate::state::{BreakpointSnapshot, SubBreakpointSnapshot};
 

@@ -7,8 +7,9 @@ use tokio::sync::{mpsc, watch};
 use tracing::{trace, warn};
 
 use crate::{
-    cmd_flow::event::decode_event, cmd_flow::response::ParsedSessionResponse,
-    debugger::gdb::parser::GdbParser,
+    cmd_flow::event::decode_event,
+    cmd_flow::response::ParsedSessionResponse,
+    debugger::gdb::parser::{normalize_dict, GdbParser},
 };
 
 use super::{
@@ -60,7 +61,11 @@ impl OutputDemux {
                     message,
                     payload,
                 }) => {
-                    let event = match decode_event(token, message, payload) {
+                    let event = match decode_event(
+                        token.map(|token| token.0 as u64),
+                        message,
+                        normalize_dict(payload),
+                    ) {
                         Ok(event) => event,
                         Err(error) => {
                             warn!(sid, ?error, "discarding malformed debugger event");
@@ -86,7 +91,7 @@ impl OutputDemux {
                         complete_after_events(
                             sid,
                             token,
-                            ParsedSessionResponse::new(sid, message, payload),
+                            ParsedSessionResponse::new(sid, message, payload.map(normalize_dict)),
                             command,
                             self.event_sequence,
                             self.applied.clone(),

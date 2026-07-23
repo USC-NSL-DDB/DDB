@@ -137,7 +137,7 @@ pub(super) fn render(effect: EventEffect, event: DebuggerEvent, sid: u64) -> Eve
                     .collect();
                 projected_payload.insert(
                     "stopped-threads".into(),
-                    gdbmi::raw::Value::List(stopped_threads),
+                    crate::debugger::protocol::Value::List(stopped_threads),
                 );
             }
             projected_payload.insert("session-id".into(), sid.to_string().into());
@@ -153,11 +153,11 @@ pub(super) fn render(effect: EventEffect, event: DebuggerEvent, sid: u64) -> Eve
 
 #[cfg(test)]
 mod tests {
-    use gdbmi::raw::Dict;
+    use crate::debugger::protocol::Dict;
 
     use super::*;
 
-    fn event(message: &str, payload: &[(&str, gdbmi::raw::Value)]) -> DebuggerEvent {
+    fn event(message: &str, payload: &[(&str, crate::debugger::protocol::Value)]) -> DebuggerEvent {
         DebuggerEvent {
             token: Some(9),
             message: message.to_string(),

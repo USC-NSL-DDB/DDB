@@ -5,8 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::debugger::protocol::{Dict, Value};
 use anyhow::{anyhow, bail, Context, Result};
-use gdbmi::raw::{Dict, Value};
 use tracing::{debug, error};
 
 use crate::{

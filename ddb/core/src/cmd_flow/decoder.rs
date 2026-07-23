@@ -6,7 +6,7 @@
 
 use std::fmt::Display;
 
-use gdbmi::raw::{Dict, Value};
+use crate::debugger::protocol::{Dict, Value};
 
 use super::{FinishedCmd, ParsedSessionResponse};
 

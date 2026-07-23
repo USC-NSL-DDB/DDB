@@ -61,7 +61,7 @@ impl BreakpointEventPublisher {
         self.broadcast(event).await;
     }
 
-    async fn publish_record(&self, message: &str, payload: gdbmi::raw::Dict) {
+    async fn publish_record(&self, message: &str, payload: crate::debugger::protocol::Dict) {
         let output = ProjectedDebuggerOutput {
             records: vec![ProjectedDebuggerRecord {
                 prefix: "=",

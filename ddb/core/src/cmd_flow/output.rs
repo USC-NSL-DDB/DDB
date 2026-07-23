@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gdbmi::raw::{Dict, Value};
+use crate::debugger::protocol::{Dict, Value};
 
 use crate::debugger::gdb::parser::MIFormatter;
 

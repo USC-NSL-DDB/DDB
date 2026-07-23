@@ -1,4 +1,4 @@
-use gdbmi::raw::Dict;
+use crate::debugger::protocol::Dict;
 
 use super::{
     output::{

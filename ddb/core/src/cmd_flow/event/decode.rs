@@ -1,7 +1,7 @@
 //! Pure decoding of raw debugger notifications into typed events.
 
+use crate::debugger::protocol::{Dict, Value};
 use anyhow::{anyhow, bail, Context, Result};
-use gdbmi::{raw::Dict, Token};
 
 use super::{DebuggerEvent, DebuggerEventKind, ThreadSet};
 
@@ -27,7 +27,7 @@ fn optional_lenient_u64(payload: &Dict, key: &str) -> Option<u64> {
         .and_then(|value| value.parse::<u64>().ok())
 }
 
-fn parse_thread_set(value: &gdbmi::raw::Value, key: &str) -> Result<ThreadSet> {
+fn parse_thread_set(value: &Value, key: &str) -> Result<ThreadSet> {
     if let Ok(value) = value.expect_string_ref() {
         if value == "all" {
             return Ok(ThreadSet::All);
@@ -77,7 +77,7 @@ fn parse_reasons(payload: &Dict) -> Result<Vec<String>> {
 }
 
 pub(crate) fn decode_event(
-    token: Option<Token>,
+    token: Option<u64>,
     message: String,
     payload: Dict,
 ) -> Result<DebuggerEvent> {
@@ -131,7 +131,7 @@ pub(crate) fn decode_event(
     };
 
     Ok(DebuggerEvent {
-        token: token.map(|token| token.0 as u64),
+        token,
         message,
         payload,
         kind,
@@ -141,8 +141,6 @@ pub(crate) fn decode_event(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
-    use gdbmi::raw::Value;
 
     use super::*;
 
@@ -273,7 +271,7 @@ mod tests {
     #[test]
     fn preserves_unknown_events_without_guessing_their_schema() {
         let event = decode_event(
-            Some(Token(12)),
+            Some(12),
             "library-loaded".into(),
             payload(&[("id", "libexample.so".into())]),
         )

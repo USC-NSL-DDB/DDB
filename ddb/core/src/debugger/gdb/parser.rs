@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use gdbmi::{
-    self,
-    raw::{Dict, List},
-};
+use gdbmi::{self};
 use tracing::error;
 
+use crate::debugger::protocol::{Dict, List, Value};
 use gdbmi::parser::Message;
 
 pub struct GdbParser;
@@ -39,6 +37,26 @@ impl GdbParser {
     }
 }
 
+pub(crate) fn normalize_dict(payload: gdbmi::raw::Dict) -> Dict {
+    Dict(
+        payload
+            .0
+            .into_iter()
+            .map(|(key, value)| (key, normalize_value(value)))
+            .collect(),
+    )
+}
+
+fn normalize_value(value: gdbmi::raw::Value) -> Value {
+    match value {
+        gdbmi::raw::Value::String(value) => Value::String(value),
+        gdbmi::raw::Value::List(values) => {
+            Value::List(values.into_iter().map(normalize_value).collect())
+        }
+        gdbmi::raw::Value::Dict(value) => Value::Dict(normalize_dict(value)),
+    }
+}
+
 pub struct MIFormatter;
 
 impl MIFormatter {
@@ -55,14 +73,14 @@ impl MIFormatter {
             .iter()
             .fold(String::new(), |acc, (k, v)| {
                 let out = match v {
-                    gdbmi::raw::Value::String(s) => {
+                    Value::String(s) => {
                         let s = MIFormatter::escape_str(s);
                         format!("\"{}\"", s)
                     }
-                    gdbmi::raw::Value::List(l) => {
+                    Value::List(l) => {
                         format!("[{}]", MIFormatter::format_list(l))
                     }
-                    gdbmi::raw::Value::Dict(d) => {
+                    Value::Dict(d) => {
                         format!("{{{}}}", MIFormatter::format_dict(d))
                     }
                 };
@@ -78,13 +96,13 @@ impl MIFormatter {
             .iter()
             .fold(String::new(), |acc, v| {
                 let out = match v {
-                    gdbmi::raw::Value::String(s) => {
+                    Value::String(s) => {
                         format!("\"{}\"", s)
                     }
-                    gdbmi::raw::Value::List(l) => {
+                    Value::List(l) => {
                         format!("[{}]", MIFormatter::format_list(l))
                     }
-                    gdbmi::raw::Value::Dict(d) => {
+                    Value::Dict(d) => {
                         format!("{{{}}}", MIFormatter::format_dict(d))
                     }
                 };
@@ -110,7 +128,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use gdbmi::{parser::*, raw::Value, Token};
+    use gdbmi::{parser::*, Token};
 
     #[test]
     #[should_panic]
@@ -247,6 +265,7 @@ mod tests {
                 assert_eq!(token, None);
                 assert_eq!(message, "stopped");
                 assert!(!payload.0.is_empty());
+                let payload = normalize_dict(payload);
                 let formatted_out = MIFormatter::format("*", "stopped", Some(&payload), None);
                 let reparse = GdbParser::parse(&formatted_out).unwrap();
                 assert_eq!(msg, reparse);

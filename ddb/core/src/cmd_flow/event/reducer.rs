@@ -246,7 +246,7 @@ impl DebuggerEventReducer {
 mod tests {
     use std::collections::HashMap;
 
-    use gdbmi::raw::{Dict, Value};
+    use crate::debugger::protocol::{Dict, Value};
 
     use super::super::decode_event;
     use super::*;

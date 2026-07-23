@@ -1,5 +1,6 @@
 pub mod gdb;
 pub mod mock;
+pub mod protocol;
 
 use std::{
     fs,

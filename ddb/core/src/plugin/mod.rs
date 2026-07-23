@@ -6,15 +6,14 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
-use gdbmi::raw::Value;
-
 use crate::{
     common::config::{Config, DebuggerCommand},
     debugger::gdb::runtime::CORE_GDB_RUNTIME_ASSET,
     debugger::gdb::runtime::PROCLET_GDB_RUNTIME_ASSET,
+    debugger::protocol::Value,
     debugger::BundledDebuggerAsset,
 };
+use anyhow::Result;
 
 pub use builtin::resolve_framework_plugin;
 
@@ -126,7 +125,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use gdbmi::raw::{Dict, Value};
+    use crate::debugger::protocol::{Dict, Value};
 
     #[derive(Debug)]
     struct DummyPlugin;
