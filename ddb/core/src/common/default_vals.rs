@@ -20,6 +20,10 @@ pub const PROCLET_GDB_EXT_NAME: &str = "proclet.py";
 
 pub const DEFAULT_MI_VERSION: &str = "mi3";
 
+pub const DEFAULT_EMBEDDED_LLDB_BRIDGE_PATH: &str = "lldb_ext/ddb_lldb_bridge.py";
+pub const DEFAULT_LLDB_EXT_DIR: &str = "/tmp/ddb/lldb_ext";
+pub const DEFAULT_LLDB_BRIDGE_NAME: &str = "ddb_lldb_bridge.py";
+
 pub const DEFAULT_FRAMEWORK: Framework = Framework::Nu;
 
 lazy_static::lazy_static! {

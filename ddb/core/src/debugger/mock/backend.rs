@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    common::config::Config,
+    common::config::{Config, OnExit},
     debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
@@ -82,5 +82,13 @@ impl DebuggerBackend for MockBackend {
                 self.console_exec_command(&format!("signal {signal}"))
             }
         }
+    }
+
+    fn shutdown_commands(&self, on_exit: &OnExit) -> String {
+        let policy = match on_exit {
+            OnExit::DETACH => "detach\n",
+            OnExit::KILL => "kill\n",
+        };
+        format!("{policy}exit\n")
     }
 }

@@ -97,13 +97,25 @@ impl DdbProcess {
     }
 
     pub fn spawn_real_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
-        let config_contents = render_real_binary_config(sessions);
+        let config_contents = render_real_binary_config(sessions, "gdb");
         Self::spawn_with_config("ddb-real-integration.yaml", config_contents)
     }
 
+    pub fn spawn_lldb_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
+        ensure_debugger_environment("lldb");
+        let config_contents = render_real_binary_config(sessions, "lldb");
+        Self::spawn_with_config("ddb-real-lldb-integration.yaml", config_contents)
+    }
+
     pub fn spawn_real_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
-        let config_contents = render_real_dbt_config(sessions);
+        let config_contents = render_real_dbt_config(sessions, "gdb");
         Self::spawn_with_config("ddb-real-dbt-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_lldb_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
+        ensure_debugger_environment("lldb");
+        let config_contents = render_real_dbt_config(sessions, "lldb");
+        Self::spawn_with_config("ddb-real-lldb-dbt-integration.yaml", config_contents)
     }
 
     fn spawn_with_config(config_name: &str, config_contents: String) -> Self {
@@ -346,7 +358,25 @@ impl DdbProcess {
     fn debug_dump(&self) -> String {
         let stdout = self.stdout.snapshot().join("\n");
         let stderr = self.stderr.snapshot().join("\n");
-        format!("stdout:\n{}\n\nstderr:\n{}", stdout, stderr)
+        let log_dir = self._tempdir.path().join("logs");
+        let logs = std::fs::read_dir(&log_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                path.is_file().then(|| {
+                    std::fs::read_to_string(&path)
+                        .ok()
+                        .map(|contents| format!("{}:\n{}", path.display(), contents))
+                })?
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!(
+            "stdout:\n{}\n\nstderr:\n{}\n\nlogs:\n{}",
+            stdout, stderr, logs
+        )
     }
 
     fn shutdown(&mut self) {
@@ -456,7 +486,7 @@ StaticSessions:
     )
 }
 
-fn render_real_binary_config(sessions: &[BinarySessionSpec<'_>]) -> String {
+fn render_real_binary_config(sessions: &[BinarySessionSpec<'_>], backend: &str) -> String {
     let sessions_yaml = sessions
         .iter()
         .map(|session| {
@@ -501,15 +531,16 @@ Conf:
   base_dir: "__BASE_DIR__"
   log_dir: "__LOG_DIR__"
   Debugger:
-    backend: gdb
+    backend: {backend}
 StaticSessions:
 {sessions_yaml}
 "#,
+        backend = backend,
         sessions_yaml = sessions_yaml,
     )
 }
 
-fn render_real_dbt_config(sessions: &[BinarySessionSpec<'_>]) -> String {
+fn render_real_dbt_config(sessions: &[BinarySessionSpec<'_>], backend: &str) -> String {
     let sessions_yaml = sessions
         .iter()
         .map(|session| {
@@ -554,10 +585,11 @@ Conf:
   base_dir: "__BASE_DIR__"
   log_dir: "__LOG_DIR__"
   Debugger:
-    backend: gdb
+    backend: {backend}
 StaticSessions:
 {sessions_yaml}
 "#,
+        backend = backend,
         sessions_yaml = sessions_yaml,
     )
 }
@@ -569,15 +601,23 @@ fn fixture_root() -> PathBuf {
 }
 
 fn ensure_real_debugger_environment() {
-    let status = Command::new("gdb")
+    ensure_debugger_environment("gdb");
+}
+
+fn ensure_debugger_environment(debugger: &str) {
+    let status = Command::new(debugger)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .expect("gdb should be installed and invokable for real integration tests");
+        .unwrap_or_else(|error| {
+            panic!(
+                "{debugger} should be installed and invokable for real integration tests: {error}"
+            )
+        });
     assert!(
         status.success(),
-        "gdb --version should succeed for real integration tests"
+        "{debugger} --version should succeed for real integration tests"
     );
 }
 

@@ -1,4 +1,5 @@
 pub mod gdb;
+pub mod lldb;
 pub mod mock;
 pub mod protocol;
 
@@ -11,7 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use crate::{
-    common::config::{Config, DebuggerBackendKind},
+    common::config::{Config, DebuggerBackendKind, OnExit},
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
     Asset,
@@ -72,14 +73,16 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
     fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String;
+    fn shutdown_commands(&self, on_exit: &OnExit) -> String;
 }
 
 pub fn resolve_debugger_backend(config: &Config) -> anyhow::Result<Arc<dyn DebuggerBackend>> {
     match config.conf.debugger.backend {
         DebuggerBackendKind::Gdb => Ok(Arc::new(gdb::GdbBackend)),
+        DebuggerBackendKind::Lldb => Ok(Arc::new(lldb::LldbBackend)),
         DebuggerBackendKind::Mock => Ok(Arc::new(mock::MockBackend)),
         DebuggerBackendKind::Unknown => Err(anyhow::anyhow!(
-            "unsupported debugger backend configured; expected 'gdb' or 'mock'"
+            "unsupported debugger backend configured; expected 'gdb', 'lldb', or 'mock'"
         )),
     }
 }

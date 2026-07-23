@@ -6,7 +6,7 @@ use tracing::debug;
 use super::{SessionMode, SessionRequest, SessionStart};
 use crate::{
     cmd_flow::{event::DebuggerEventReducer, session_runtime::SessionHandle},
-    common::{self, Config},
+    common::Config,
     dbg_ctrl::DebuggerTransportHandle,
     debugger::DebuggerBackend,
     plugin::FrameworkPlugin,
@@ -126,17 +126,9 @@ impl SessionProcess {
         debug!(sid = self.sid, "shutting down debugger session process");
         let mut first_error = None;
         if self.transport.is_open() && self.runtime.is_some() {
-            let exit_policy = match &self.request.on_exit {
-                common::config::OnExit::DETACH => "detach\n",
-                common::config::OnExit::KILL => "kill\n",
-            };
-            if let Err(error) = self.write(exit_policy).await {
-                first_error = Some(error.context("Failed to apply debugger exit policy"));
-            }
-            if let Err(error) = self.write("exit\n").await {
-                if first_error.is_none() {
-                    first_error = Some(error.context("Failed to exit debugger"));
-                }
+            let shutdown_commands = self.backend.shutdown_commands(&self.request.on_exit);
+            if let Err(error) = self.write(shutdown_commands).await {
+                first_error = Some(error.context("Failed to shut down debugger"));
             }
 
             let mut retries = 0;

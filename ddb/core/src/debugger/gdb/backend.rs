@@ -5,7 +5,7 @@ use tracing::debug;
 
 use crate::{
     common::{
-        config::Config,
+        config::{Config, OnExit},
         default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_FRAME_FILTER_NAME},
         utils::get_hostname,
     },
@@ -223,5 +223,13 @@ impl DebuggerBackend for GdbBackend {
                 self.console_exec_command(&format!("signal {signal}"))
             }
         }
+    }
+
+    fn shutdown_commands(&self, on_exit: &OnExit) -> String {
+        let policy = match on_exit {
+            OnExit::DETACH => "detach\n",
+            OnExit::KILL => "kill\n",
+        };
+        format!("{policy}exit\n")
     }
 }

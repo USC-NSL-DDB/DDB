@@ -11,6 +11,12 @@ use tempfile::tempdir;
 const DBT_IP: &str = "127.0.0.1";
 const DBT_GROUP: &str = "grp-real-dbt";
 
+#[derive(Clone, Copy)]
+enum DebuggerUnderTest {
+    Gdb,
+    Lldb,
+}
+
 fn logical_pid(role_index: usize) -> u64 {
     9_500 + role_index as u64
 }
@@ -19,7 +25,12 @@ fn session_tag(role_index: usize) -> String {
     format!("{DBT_IP}:-{}", logical_pid(role_index))
 }
 
-fn spawn_real_dbt(depth: usize, binary_path: &str, ctx_dir: &Path) -> DdbProcess {
+fn spawn_real_dbt(
+    debugger: DebuggerUnderTest,
+    depth: usize,
+    binary_path: &str,
+    ctx_dir: &Path,
+) -> DdbProcess {
     let tags = (1..=depth).map(session_tag).collect::<Vec<_>>();
     let specs = (1..=depth)
         .map(|role_index| {
@@ -67,7 +78,10 @@ fn spawn_real_dbt(depth: usize, binary_path: &str, ctx_dir: &Path) -> DdbProcess
         })
         .collect::<Vec<_>>();
 
-    DdbProcess::spawn_real_dbt_sessions(&specs)
+    match debugger {
+        DebuggerUnderTest::Gdb => DdbProcess::spawn_real_dbt_sessions(&specs),
+        DebuggerUnderTest::Lldb => DdbProcess::spawn_lldb_dbt_sessions(&specs),
+    }
 }
 
 fn extract_first_thread_id(line: &str) -> u64 {
@@ -120,7 +134,7 @@ fn write_context_file(
         .expect("context file should be written");
 }
 
-fn assert_distributed_backtrace(depth: usize) {
+fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
     let _guard = real_test_guard();
     let example = build_real_dbt_example();
     let binary_path = example
@@ -128,7 +142,7 @@ fn assert_distributed_backtrace(depth: usize) {
         .to_str()
         .expect("fixture binary path should be valid utf-8");
     let ctx_dir = tempdir().expect("temporary context directory should be created");
-    let mut ddb = spawn_real_dbt(depth, binary_path, ctx_dir.path());
+    let mut ddb = spawn_real_dbt(debugger, depth, binary_path, ctx_dir.path());
 
     let sessions = ddb.wait_for_sessions_len(depth);
     ddb.wait_for_stdout_count("thread-created", depth);
@@ -178,10 +192,20 @@ fn assert_distributed_backtrace(depth: usize) {
 
 #[test]
 fn distributed_backtrace_depth_1_stays_local() {
-    assert_distributed_backtrace(1);
+    assert_distributed_backtrace(DebuggerUnderTest::Gdb, 1);
 }
 
 #[test]
 fn distributed_backtrace_depth_4_walks_across_sessions() {
-    assert_distributed_backtrace(4);
+    assert_distributed_backtrace(DebuggerUnderTest::Gdb, 4);
+}
+
+#[test]
+fn lldb_distributed_backtrace_depth_1_stays_local() {
+    assert_distributed_backtrace(DebuggerUnderTest::Lldb, 1);
+}
+
+#[test]
+fn lldb_distributed_backtrace_depth_4_walks_across_sessions() {
+    assert_distributed_backtrace(DebuggerUnderTest::Lldb, 4);
 }

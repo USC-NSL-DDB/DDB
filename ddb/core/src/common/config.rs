@@ -172,6 +172,7 @@ impl Default for StaticSessionStartMode {
 #[serde(rename_all = "lowercase")]
 pub enum DebuggerBackendKind {
     Gdb,
+    Lldb,
     Mock,
     #[serde(other)]
     Unknown,
@@ -561,5 +562,19 @@ StaticSessions:
             vec!["--mode".to_string(), "loop".to_string()]
         );
         assert!(config.static_sessions[0].stop_at_entry);
+    }
+
+    #[test]
+    fn lldb_backend_parses_from_yaml() {
+        let config = Config::from_str(
+            r#"
+Conf:
+  Debugger:
+    backend: lldb
+"#,
+        )
+        .expect("LLDB configuration should parse");
+
+        assert_eq!(config.conf.debugger.backend, DebuggerBackendKind::Lldb);
     }
 }

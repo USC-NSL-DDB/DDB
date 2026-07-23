@@ -147,7 +147,7 @@ impl SessionFactory {
                     config: session.mock,
                     pid: session.pid,
                 }),
-            DebuggerBackendKind::Gdb => {
+            DebuggerBackendKind::Gdb | DebuggerBackendKind::Lldb => {
                 let mode = match session.start_mode {
                     StaticSessionStartMode::Attach => {
                         if session.pid == 0 {
