@@ -18,6 +18,7 @@ pub(crate) mod event_publisher;
 pub(crate) mod execution;
 pub mod framework_adapter;
 pub mod input;
+pub(crate) mod mi;
 pub mod outcome;
 pub mod output;
 pub(crate) mod query;

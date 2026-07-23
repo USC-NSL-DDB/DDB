@@ -14,11 +14,12 @@ use crate::{
     cmd_flow::response::{ParsedSessionResponse, SessionRuntimeStatus},
     common::counter::SimpleCounter,
     connection::RunningTransport,
+    debugger::protocol::DebuggerProtocol,
     session::lifecycle::SessionTerminationReporter,
 };
 
 use super::{
-    actor::{run_session, RuntimeShared},
+    actor::{run_session, RuntimeShared, RuntimeWire},
     RuntimeConfig, SessionCommand, COMMAND_MAILBOX_CAPACITY,
 };
 
@@ -98,12 +99,14 @@ impl SessionHandle {
     pub(crate) fn spawn(
         sid: u64,
         transport: RunningTransport,
+        protocol: Box<dyn DebuggerProtocol>,
         termination: SessionTerminationReporter,
         reducer: Arc<DebuggerEventReducer>,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         Self::spawn_with_config(
             sid,
             transport,
+            protocol,
             termination,
             reducer,
             RuntimeConfig::default(),
@@ -113,6 +116,7 @@ impl SessionHandle {
     pub(super) fn spawn_with_config(
         sid: u64,
         transport: RunningTransport,
+        protocol: Box<dyn DebuggerProtocol>,
         termination: SessionTerminationReporter,
         reducer: Arc<DebuggerEventReducer>,
         config: RuntimeConfig,
@@ -134,7 +138,10 @@ impl SessionHandle {
             sid,
             request_rx,
             control_rx,
-            transport,
+            RuntimeWire {
+                transport,
+                protocol,
+            },
             RuntimeShared {
                 in_flight,
                 closed,

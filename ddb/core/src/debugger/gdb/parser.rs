@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use gdbmi::{self};
 use tracing::error;
 
-use crate::debugger::protocol::{Dict, List, Value};
+use crate::debugger::protocol::{Dict, Value};
 use gdbmi::parser::Message;
 
 pub struct GdbParser;
@@ -57,76 +57,8 @@ fn normalize_value(value: gdbmi::raw::Value) -> Value {
     }
 }
 
-pub struct MIFormatter;
-
-impl MIFormatter {
-    #[inline]
-    fn escape_str(input: &str) -> String {
-        input.replace(r#"\"#, r#"\\"#).replace(r#"""#, r#"\""#)
-    }
-
-    #[inline]
-    pub fn format_dict(payload: &Dict) -> String {
-        let payload = &payload.0;
-
-        payload
-            .iter()
-            .fold(String::new(), |acc, (k, v)| {
-                let out = match v {
-                    Value::String(s) => {
-                        let s = MIFormatter::escape_str(s);
-                        format!("\"{}\"", s)
-                    }
-                    Value::List(l) => {
-                        format!("[{}]", MIFormatter::format_list(l))
-                    }
-                    Value::Dict(d) => {
-                        format!("{{{}}}", MIFormatter::format_dict(d))
-                    }
-                };
-                format!("{},{}={}", acc, k, out)
-            })
-            .trim_matches(',')
-            .to_string()
-    }
-
-    #[inline]
-    pub fn format_list(payload: &List) -> String {
-        payload
-            .iter()
-            .fold(String::new(), |acc, v| {
-                let out = match v {
-                    Value::String(s) => {
-                        format!("\"{}\"", s)
-                    }
-                    Value::List(l) => {
-                        format!("[{}]", MIFormatter::format_list(l))
-                    }
-                    Value::Dict(d) => {
-                        format!("{{{}}}", MIFormatter::format_dict(d))
-                    }
-                };
-                format!("{},{}", acc, out)
-            })
-            .trim_matches(',')
-            .to_string()
-    }
-
-    #[inline]
-    pub fn format(task_sym: &str, msg: &str, payload: Option<&Dict>, token: Option<u64>) -> String {
-        let token = token.map(|t| t.to_string()).unwrap_or_default();
-        let payload = payload
-            .map(|p| format!(",{}", MIFormatter::format_dict(p)))
-            .unwrap_or_default();
-
-        format!("{}{}{}{}", token, task_sym, msg, payload)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use gdbmi::{parser::*, Token};
 
@@ -191,67 +123,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mi_formatter_dict() {
-        let args = vec![
-            Value::Dict(Dict(
-                vec![
-                    ("name".to_string(), Value::String("name".to_string())),
-                    ("value".to_string(), Value::String("John".to_string())),
-                ]
-                .into_iter()
-                .collect::<HashMap<String, Value>>(),
-            )),
-            Value::Dict(Dict(
-                vec![
-                    ("name".to_string(), Value::String("age".to_string())),
-                    ("value".to_string(), Value::String("30".to_string())),
-                ]
-                .into_iter()
-                .collect::<HashMap<String, Value>>(),
-            )),
-        ];
-        let inner_frame = Dict(
-            vec![
-                (
-                    "addr".to_string(),
-                    Value::String("0x00007f8d6f6b6b7f".to_string()),
-                ),
-                ("func".to_string(), Value::String("say_hello".to_string())),
-                ("args".to_string(), Value::List(args)),
-            ]
-            .into_iter()
-            .collect::<HashMap<String, Value>>(),
-        );
-
-        let payload = Dict(
-            vec![
-                (
-                    "reason".to_string(),
-                    Value::String("there should be some reason".to_string()),
-                ),
-                ("frame".to_string(), Value::Dict(inner_frame)),
-                (
-                    "stopped-threads".to_string(),
-                    Value::List(vec![
-                        Value::String("2".to_string()),
-                        Value::String("3".to_string()),
-                        Value::String("4".to_string()),
-                    ]),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let output = MIFormatter::format("^", "stop", Some(&payload), None);
-        let output = GdbParser::parse(&output).unwrap();
-        let test_str = r#"^stop,reason="there should be some reason",frame={addr="0x00007f8d6f6b6b7f",func="say_hello",args=[{name="name",value="John"},{name="age",value="30"}]},stopped-threads=["2","3","4"]"#;
-        let expected = GdbParser::parse(test_str).unwrap();
-
-        assert_eq!(output, expected);
-    }
-
-    #[test]
     fn test_mi_parse_inner_string_escape() {
         let output = r#"*stopped,reason="end-stepping-range",frame={addr="0x000075e25f7082a5",func="clusterInit",args=[{name="cluster_id",value="0x7ffedc6a85d0 \"cd6fab923d16922ebae3ade229880640\\300\\210j\\334\\376\\177\""}],file="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",fullname="/home/ybyan/proj/distributed-debugger/apps/redisraft/redisraft-bug-raft-c4de21/src/redisraft.c",line="1087",arch="i386:x86-64"},thread-id="1",stopped-threads="all",core="21""#;
         let msg = GdbParser::parse(output.trim()).unwrap();
@@ -265,10 +136,7 @@ mod tests {
                 assert_eq!(token, None);
                 assert_eq!(message, "stopped");
                 assert!(!payload.0.is_empty());
-                let payload = normalize_dict(payload);
-                let formatted_out = MIFormatter::format("*", "stopped", Some(&payload), None);
-                let reparse = GdbParser::parse(&formatted_out).unwrap();
-                assert_eq!(msg, reparse);
+                assert!(!normalize_dict(payload).is_empty());
             }
             _ => panic!("unexpected message type"),
         }

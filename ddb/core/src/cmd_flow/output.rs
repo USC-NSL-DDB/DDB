@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use crate::debugger::protocol::{Dict, Value};
 
-use crate::debugger::gdb::parser::MIFormatter;
-
-use super::{schema, FinishedCmd};
+use super::{mi::MiFormatter, schema, FinishedCmd};
 
 /// Formatter trait for transforming and formatting GDB responses
 ///
@@ -68,7 +66,7 @@ impl Formatter for PlainFormatter {
     #[inline]
     fn format(&self, input: &Self::Transformed) -> String {
         let r = input.get_responses().first().unwrap();
-        MIFormatter::format(
+        MiFormatter::format(
             "^",
             r.get_message(),
             r.get_payload(),
@@ -94,7 +92,7 @@ impl Formatter for UnitFormatter {
             .get_responses()
             .iter()
             .map(|r| {
-                MIFormatter::format(
+                MiFormatter::format(
                     "^",
                     r.get_message(),
                     r.get_payload(),
@@ -216,13 +214,13 @@ impl Formatter for ProcessReadableFormatter {
 /// The one `^done` completion record shape shared by aggregate presenters.
 #[inline]
 fn format_done(token: Option<u64>, payload: &Dict) -> String {
-    MIFormatter::format("^", "done", Some(payload), token)
+    MiFormatter::format("^", "done", Some(payload), token)
 }
 
 #[inline]
 pub fn format_error(err_msg: &str, token: Option<u64>) -> String {
     let payload: Dict = HashMap::from([("msg".to_string(), err_msg.to_string().into())]).into();
-    MIFormatter::format("^", "error", Some(&payload), token)
+    MiFormatter::format("^", "error", Some(&payload), token)
 }
 #[cfg(test)]
 mod tests {

@@ -13,6 +13,7 @@ use crate::session::lifecycle::{self, SessionTermination, SessionTerminationCaus
 use crate::{
     cmd_flow::breakpoint::BreakpointEventPublisher,
     connection::{RunningTransport, TransportEvent, TransportRequest},
+    debugger::gdb::protocol::GdbMiProtocol,
     notification::NotificationManager,
     state::RuntimeModel,
 };
@@ -62,7 +63,13 @@ fn spawn_runtime(
     mpsc::UnboundedReceiver<SessionTermination>,
 ) {
     let (lifecycle, terminations) = lifecycle::channel();
-    let (handle, task) = SessionHandle::spawn(sid, transport, lifecycle.bind(sid), test_reducer());
+    let (handle, task) = SessionHandle::spawn(
+        sid,
+        transport,
+        Box::new(GdbMiProtocol::default()),
+        lifecycle.bind(sid),
+        test_reducer(),
+    );
     (handle, task, terminations)
 }
 
@@ -79,6 +86,7 @@ fn spawn_runtime_with_config(
     let (handle, task) = SessionHandle::spawn_with_config(
         sid,
         transport,
+        Box::new(GdbMiProtocol::default()),
         lifecycle.bind(sid),
         test_reducer(),
         config,

@@ -71,8 +71,13 @@ impl SessionProcess {
         let launch_command = backend.build_start_command(self.request.sudo);
 
         let running = self.transport.launch(&launch_command).await?;
-        let (handle, task) =
-            SessionHandle::spawn(self.sid, running, termination, Arc::clone(&self.reducer));
+        let (handle, task) = SessionHandle::spawn(
+            self.sid,
+            running,
+            self.backend.create_protocol(),
+            termination,
+            Arc::clone(&self.reducer),
+        );
         self.runtime = Some(handle.clone());
         self.runtime_task = Some(task);
 

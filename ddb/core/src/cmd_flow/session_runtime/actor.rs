@@ -11,7 +11,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use futures::{stream::FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, warn};
@@ -20,6 +19,7 @@ use crate::{
     cmd_flow::event::DebuggerEventReducer,
     cmd_flow::event_publisher::EventPublisher,
     connection::{RunningTransport, TransportEvent},
+    debugger::protocol::{DebuggerProtocol, ProtocolCommand},
     session::lifecycle::SessionTerminationCause,
 };
 
@@ -35,6 +35,11 @@ pub(super) struct RuntimeShared {
     pub in_flight: Arc<AtomicUsize>,
     pub closed: Arc<AtomicBool>,
     pub termination: crate::session::lifecycle::SessionTerminationReporter,
+}
+
+pub(super) struct RuntimeWire {
+    pub transport: RunningTransport,
+    pub protocol: Box<dyn DebuggerProtocol>,
 }
 
 enum WriteOwner {
@@ -94,11 +99,15 @@ pub(super) async fn run_session(
     sid: u64,
     mut requests: mpsc::Receiver<RuntimeRequest>,
     mut control: mpsc::UnboundedReceiver<ControlRequest>,
-    transport: RunningTransport,
+    wire: RuntimeWire,
     shared: RuntimeShared,
     reducer: Arc<DebuggerEventReducer>,
     config: RuntimeConfig,
 ) {
+    let RuntimeWire {
+        transport,
+        mut protocol,
+    } = wire;
     let RuntimeShared {
         in_flight,
         closed,
@@ -155,9 +164,20 @@ pub(super) async fn run_session(
                             consistency: command.consistency,
                             created_at: Instant::now(),
                         });
+                        let wire = match protocol.encode_command(ProtocolCommand {
+                            token,
+                            command: &command.command,
+                            thread_id: command.thread_id,
+                        }) {
+                            Ok(wire) => wire,
+                            Err(error) => {
+                                pending.fail(token, error);
+                                continue;
+                            }
+                        };
                         let acknowledgement = guarded!(
                             &mut control,
-                            writer.start_write(Bytes::from(command.wire_command(token))),
+                            writer.start_write(wire),
                             shutdown_ack,
                             'runtime
                         );
@@ -204,7 +224,7 @@ pub(super) async fn run_session(
                     Ok(TransportEvent::Stdout(bytes)) => {
                         let result = guarded!(
                             &mut control,
-                            demux.process(bytes, &mut pending),
+                            demux.process(bytes, &mut pending, protocol.as_mut()),
                             shutdown_ack,
                             'runtime
                         );

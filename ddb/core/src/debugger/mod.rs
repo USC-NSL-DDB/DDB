@@ -49,6 +49,7 @@ pub fn install_bundled_assets(assets: &[BundledDebuggerAsset]) -> Result<Vec<Pat
 }
 
 pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
+    fn create_protocol(&self) -> Box<dyn protocol::DebuggerProtocol>;
     fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset>;
     fn build_start_command(&self, sudo: bool) -> String;
     fn build_remote_attach_commands(

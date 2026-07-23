@@ -17,9 +17,9 @@ use tokio::{
 };
 
 use crate::{
+    cmd_flow::mi::MiFormatter,
     common::mock_fixture::{MockDbtParentConfig, MockSessionConfig, MockStackFrameConfig},
     connection::{RunningTransport, TransportEvent, TransportRequest},
-    debugger::gdb::parser::MIFormatter,
 };
 
 use super::DebuggerTransport;
@@ -247,7 +247,7 @@ impl MockAttachController {
         message: &str,
         payload: Option<Dict>,
     ) -> Result<()> {
-        let line = MIFormatter::format("^", message, payload.as_ref(), token);
+        let line = MiFormatter::format("^", message, payload.as_ref(), token);
         Self::send_line(out_tx, line).await
     }
 
@@ -257,12 +257,12 @@ impl MockAttachController {
         message: &str,
         payload: Dict,
     ) -> Result<()> {
-        let line = MIFormatter::format("*", message, Some(&payload), token);
+        let line = MiFormatter::format("*", message, Some(&payload), token);
         Self::send_line(out_tx, line).await
     }
 
     async fn send_status(out_tx: &OutputSender, message: &str, payload: Dict) -> Result<()> {
-        let line = MIFormatter::format("=", message, Some(&payload), None);
+        let line = MiFormatter::format("=", message, Some(&payload), None);
         Self::send_line(out_tx, line).await
     }
 

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::debugger::gdb::parser::MIFormatter;
+use super::mi::MiFormatter;
 
 use super::event::ProjectedDebuggerOutput;
 
@@ -54,7 +54,7 @@ async fn run_publisher(
             .records
             .iter()
             .map(|record| {
-                MIFormatter::format(
+                MiFormatter::format(
                     record.prefix,
                     &record.message,
                     record.payload.as_ref(),
@@ -90,7 +90,7 @@ mod tests {
         };
         let record = &output.records[0];
         assert_eq!(
-            MIFormatter::format(
+            MiFormatter::format(
                 record.prefix,
                 &record.message,
                 record.payload.as_ref(),

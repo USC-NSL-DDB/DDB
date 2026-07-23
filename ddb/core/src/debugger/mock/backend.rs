@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::{
     common::config::Config,
-    debugger::{BundledDebuggerAsset, DebuggerBackend},
+    debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
     plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
 };
@@ -11,6 +11,12 @@ use crate::{
 pub struct MockBackend;
 
 impl DebuggerBackend for MockBackend {
+    fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
+        // The deterministic mock transport intentionally emulates the
+        // established GDB/MI fixture protocol.
+        Box::new(crate::debugger::gdb::protocol::GdbMiProtocol::default())
+    }
+
     fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
         Vec::new()
     }

@@ -9,7 +9,7 @@ use crate::{
         default_vals::{DEFAULT_GDB_EXT_DIR, DEFAULT_GDB_EXT_FRAME_FILTER_NAME},
         utils::get_hostname,
     },
-    debugger::{BundledDebuggerAsset, DebuggerBackend},
+    debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
     plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
@@ -118,6 +118,10 @@ impl GdbBackend {
 }
 
 impl DebuggerBackend for GdbBackend {
+    fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
+        Box::new(super::protocol::GdbMiProtocol::default())
+    }
+
     fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
         vec![CORE_GDB_RUNTIME_ASSET, FRAME_FILTER_GDB_RUNTIME_ASSET]
     }

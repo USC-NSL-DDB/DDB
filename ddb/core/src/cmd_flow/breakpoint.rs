@@ -4,7 +4,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use tracing::{error, warn};
 
 use crate::{
-    debugger::gdb::parser::MIFormatter,
     notification::{BreakpointChangeEvent, Notification, NotificationManager, NotificationPayload},
     state::{
         BkptLoc, BreakpointSnapshot, BreakpointStateChange, GroupId, RuntimeModel, SubBkptSpec,
@@ -19,6 +18,7 @@ use super::{
     event::{ProjectedDebuggerOutput, ProjectedDebuggerRecord},
     event_publisher::EventPublisher,
     input::ParsedInputCmd,
+    mi::MiFormatter,
     router::Target,
     CommandOutcome, Presentation,
 };
@@ -290,7 +290,7 @@ impl BreakpointService {
 
         self.model.remove_breakpoint(breakpoint_id);
         drop(group_operations);
-        let record = MIFormatter::format(
+        let record = MiFormatter::format(
             "=",
             "breakpoint-deleted",
             Some(&bkpt_deleted_payload(breakpoint_id)),
@@ -444,7 +444,7 @@ impl BreakpointService {
         match change {
             BreakpointStateChange::TargetChanged(breakpoint) => {
                 let snapshot = BreakpointSnapshot::from(&breakpoint);
-                let record = MIFormatter::format(
+                let record = MiFormatter::format(
                     "=",
                     "breakpoint-modified",
                     Some(&bkpt_payload(&snapshot)),
@@ -460,7 +460,7 @@ impl BreakpointService {
                 Ok(outcome)
             }
             BreakpointStateChange::Removed(breakpoint_id) => {
-                let record = MIFormatter::format(
+                let record = MiFormatter::format(
                     "=",
                     "breakpoint-deleted",
                     Some(&bkpt_deleted_payload(breakpoint_id)),
