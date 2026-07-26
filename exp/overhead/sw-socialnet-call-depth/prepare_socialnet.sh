@@ -8,7 +8,7 @@ case "${1:-}" in
   "") ;;
   -h|--help)
     echo "Usage: $0"
-    echo "Build and deploy SocialNet only when the one-node cluster does not already contain it."
+    echo "Build and deploy SocialNet only when the cluster does not already contain it."
     exit 0
     ;;
   *) die "unknown option: $1" ;;
@@ -22,14 +22,11 @@ validate_local_assets
 resolve_target_node
 
 ensure_native_k3s
-cluster_nodes="$(kubectl --kubeconfig "$KUBECONFIG" get nodes --no-headers | wc -l)"
-[[ "$cluster_nodes" -eq "$EXPECTED_CLUSTER_NODES" ]] \
-  || die "SocialNet preparation requires a one-node native-k3s cluster; found $cluster_nodes nodes"
 
 deployment_count="$(app_deployment_count)"
 listener="$(apilistener_service)"
 app_present=0
-if [[ "$deployment_count" -eq "$EXPECTED_PROCESSES" && -n "$listener" ]]; then
+if [[ "$deployment_count" -eq "$EXPECTED_DEPLOYMENTS" && -n "$listener" ]]; then
   ensure_apilistener_nodeport
   app_present=1
 elif [[ "$deployment_count" -ne 0 || -n "$listener" ]]; then
@@ -108,7 +105,7 @@ require_command sudo
 docker info >/dev/null 2>&1 \
   || die "cannot access the Docker daemon as $(id -un)"
 
-allow_single_node_workloads
+allow_target_node_workloads
 kubectl --kubeconfig "$KUBECONFIG" get namespace "$NAMESPACE" >/dev/null 2>&1 \
   || kubectl --kubeconfig "$KUBECONFIG" create namespace "$NAMESPACE" >/dev/null
 
@@ -155,12 +152,12 @@ note "Applying the generated SocialNet manifests"
 kubectl --kubeconfig "$KUBECONFIG" apply -f "$runtime_dir/manifests.yaml" >/dev/null
 
 for _ in $(seq 1 30); do
-  [[ "$(app_deployment_count)" -eq "$EXPECTED_PROCESSES" ]] && break
+  [[ "$(app_deployment_count)" -eq "$EXPECTED_DEPLOYMENTS" ]] && break
   sleep 2
 done
 mapfile -t deployments < <(app_deployments)
-[[ "${#deployments[@]}" -eq "$EXPECTED_PROCESSES" ]] \
-  || die "expected $EXPECTED_PROCESSES SocialNet deployments, found ${#deployments[@]}"
+[[ "${#deployments[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS SocialNet deployments, found ${#deployments[@]}"
 for deployment in "${deployments[@]}"; do
   k rollout status "$deployment" --timeout=300s
 done

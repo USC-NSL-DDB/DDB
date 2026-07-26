@@ -115,6 +115,20 @@ seeder. It does not add packages other than the Kubernetes tools listed above.
 If a worker already contains a k3s *server* service, setup refuses to erase it
 and prints the explicit cleanup command instead.
 
+### Switch from call depth
+
+The existing cluster and SocialNet deployment can be reused. From the
+command-latency directory, rerun setup without rebuilding or redeploying the
+application:
+
+```bash
+./artifact.sh setup --skip-app-build --skip-app-deploy
+```
+
+Setup reads `workers.txt` and `SOCIALNET_REPLICAS`, restores worker-only
+placement and topology spreading, and prepares the command-latency debugger
+configuration. Calling call-depth `restore` first is unnecessary.
+
 `smoke` runs one excluded warm-up batch followed by two measured batches on one
 thread. `run` uses one excluded warm-up batch followed by 30 measured batches.
 Every batch submits exactly one DBT for every discovered thread, waits for the

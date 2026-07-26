@@ -1,9 +1,10 @@
 # Call-depth methodology
 
-All 14 processes run on one physical native-k3s host. A one-shot request reaches
-the selected handler breakpoint. DDB then interrupts every other process and
-timing begins only after all 14 have a nonzero kernel `TracerPid` and tracing-
-stop state.
+All 14 processes are co-located on one physical native-k3s node. Other nodes
+may remain joined to the cluster, but they host no measured application
+process. A one-shot request reaches the selected handler breakpoint. DDB then
+interrupts every other process, and timing begins only after all 14 have a
+nonzero kernel `TracerPid` and tracing-stop state.
 
 Latency starts at DDB's timestamped `received cmd` record and ends at its final
 token-matched timestamped MI output. Each reported DBT is rejected if it causes

@@ -23,7 +23,7 @@ kubectl_path="$(command -v kubectl 2>/dev/null || true)"
 weaver_kube_path="$(command -v weaver-kube 2>/dev/null || true)"
 
 cat <<EOF
-Recipe:                    single-host call depth
+Recipe:                    single-node call depth
 Artifact directory:        $ARTIFACT_DIR
 DDB repository:            ${DDB_REPO_ROOT:-<not detected>}
 DDB Rust source:           $DDB_SOURCE_DIR
@@ -37,8 +37,9 @@ kubectl:                   ${kubectl_path:-<setup installs $KUBECTL_INSTALL_VERS
 weaver-kube:               ${weaver_kube_path:-<setup installs $WEAVER_KUBE_INSTALL_VERSION>}
 Namespace:                 $NAMESPACE
 Target Kubernetes node:    $display_target
-Expected cluster nodes:    $EXPECTED_CLUSTER_NODES
+Expected app deployments:  $EXPECTED_DEPLOYMENTS
 Expected app processes:    $EXPECTED_PROCESSES
+Deployment topology:       all app processes on the target node
 Application label key:     $APP_LABEL_KEY
 SocialNet build mode:      $SOCIALNET_BUILD_MODE
 SocialNet build image:     $SOCIALNET_GO_IMAGE

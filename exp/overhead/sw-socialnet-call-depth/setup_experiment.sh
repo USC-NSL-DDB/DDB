@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare the application and DDB for the single-machine latency evaluation.
+# Prepare the application and DDB for the single-node latency evaluation.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -42,27 +42,64 @@ bootstrap_runtime_tools
 resolve_target_node
 ensure_native_k3s
 
-cluster_nodes="$(kubectl --kubeconfig "$KUBECONFIG" get nodes --no-headers | wc -l)"
-[[ "$cluster_nodes" -eq "$EXPECTED_CLUSTER_NODES" ]] \
-  || die "call depth requires a one-node native-k3s cluster; found $cluster_nodes nodes"
+target_ready="$(kubectl --kubeconfig "$KUBECONFIG" get node "$TARGET_NODE" \
+  -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')"
+[[ "$target_ready" == "True" ]] \
+  || die "target node $TARGET_NODE is not Ready"
 
 note "Incrementally building the selected Rust DDB source"
 cargo build --release --manifest-path "$DDB_SOURCE_DIR/Cargo.toml"
 validate_ddb_binary
 
 note "Preparing the recipe-owned SocialNet deployment"
-allow_single_node_workloads
+allow_target_node_workloads
 bash "$ARTIFACT_DIR/prepare_socialnet.sh"
 
-note "Pinning the ServiceWeaver application to $TARGET_NODE"
 mapfile -t deployments < <(app_deployments)
-[[ "${#deployments[@]}" -eq "$EXPECTED_PROCESSES" ]] \
-  || die "expected $EXPECTED_PROCESSES application deployments, found ${#deployments[@]}"
+[[ "${#deployments[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS application deployments, found ${#deployments[@]}"
 
+label_value="$(app_label_value)"
+mapfile -t autoscalers < <(k get horizontalpodautoscalers \
+  -l "$APP_LABEL_KEY=$label_value" -o name)
+[[ "${#autoscalers[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS SocialNet autoscalers, found ${#autoscalers[@]}"
+
+note "Fixing each application process at one replica"
+for autoscaler in "${autoscalers[@]}"; do
+  k patch "$autoscaler" --type merge \
+    -p '{"spec":{"minReplicas":1,"maxReplicas":1}}' >/dev/null
+done
+
+placement_patch="$(python3 - "$TARGET_NODE" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "spec": {
+        "template": {
+            "spec": {
+                "nodeSelector": {
+                    "kubernetes.io/hostname": sys.argv[1],
+                },
+            },
+        },
+    },
+}))
+PY
+)"
+note "Pinning all $EXPECTED_PROCESSES application processes to $TARGET_NODE"
 for deployment in "${deployments[@]}"; do
-  k patch "$deployment" --type merge -p \
-    "{\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"$TARGET_NODE\"}}}}}" \
-    >/dev/null
+  # Replace any multi-node recipe selector instead of merging incompatible
+  # placement requirements into it.
+  k patch "$deployment" --type json -p \
+    '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' \
+    >/dev/null 2>&1 || true
+  k patch "$deployment" --type json -p \
+    '[{"op":"remove","path":"/spec/template/spec/topologySpreadConstraints"}]' \
+    >/dev/null 2>&1 || true
+  k patch "$deployment" --type merge -p "$placement_patch" >/dev/null
+  k scale "$deployment" --replicas=1 >/dev/null
 done
 note "Restarting all application pods to remove stale ephemeral containers"
 for deployment in "${deployments[@]}"; do
@@ -71,6 +108,10 @@ done
 for deployment in "${deployments[@]}"; do
   k rollout status "$deployment" --timeout=300s
 done
+
+note "Removing debugger resources from the command-latency recipe"
+k delete pod,service -l ddb-artifact=sw-socialnet-command-latency \
+  --ignore-not-found >/dev/null
 
 if [[ "$seed" -eq 1 ]]; then
   note "Seeding the in-memory social graph"

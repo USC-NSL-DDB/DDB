@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared configuration and helpers for the single-host call-depth recipe.
+# Shared configuration and helpers for the single-node call-depth deployment.
 
 ARTIFACT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$HOME/.local/bin:/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH"
@@ -40,9 +40,10 @@ SOCIALNET_DIR="${SOCIALNET_DIR:-${DDB_REPO_ROOT:+$DDB_REPO_ROOT/fwks/socialnetwo
 
 NAMESPACE="${NAMESPACE:-default}"
 APP_LABEL_KEY="${APP_LABEL_KEY:-serviceweaver/app}"
-# Fixed topology of the evaluated artifact; these are assertions, not knobs.
+# Fixed application topology of the evaluated artifact; these are assertions,
+# not knobs. The Kubernetes cluster may contain additional unused nodes.
+readonly EXPECTED_DEPLOYMENTS=14
 readonly EXPECTED_PROCESSES=14
-readonly EXPECTED_CLUSTER_NODES=1
 readonly K3S_INSTALL_VERSION="v1.36.2+k3s1"
 readonly KUBECTL_INSTALL_VERSION="v1.36.2"
 readonly WEAVER_KUBE_INSTALL_VERSION="v0.23.0"
@@ -220,7 +221,7 @@ ensure_apilistener_nodeport() {
   k patch "$service" --type merge -p '{"spec":{"type":"NodePort"}}' >/dev/null
 }
 
-allow_single_node_workloads() {
+allow_target_node_workloads() {
   resolve_target_node
   kubectl --kubeconfig "$KUBECONFIG" taint node "$TARGET_NODE" \
     node-role.kubernetes.io/control-plane:NoSchedule- >/dev/null 2>&1 || true

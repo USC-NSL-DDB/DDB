@@ -4,7 +4,8 @@ Measure DDB backtrace latency at RPC depths 1, 2, and 3.
 
 ## Requirements
 
-- One physical host.
+- One physical target host with enough capacity for all 14 SocialNet processes.
+  The Kubernetes cluster may contain additional nodes.
 - Linux with systemd and passwordless or interactive `sudo` access.
 - `python3`, `curl`, `patch`, Docker, Cargo, Go, and Git.
 - Registry access for the build, debugger, and gateway images
@@ -15,9 +16,9 @@ Measure DDB backtrace latency at RPC depths 1, 2, and 3.
 the official installer and may prompt for the sudo password. Existing active
 native-k3s installations are reused.
 
-Run every command on the experiment host. The recipe rejects multi-node
-clusters. All experiment configuration and test code is in this directory;
-only DDB Rust and ServiceWeaver SocialNet are external source inputs.
+Run every command on the k3s controller. All experiment configuration and test
+code is in this directory; only DDB Rust and ServiceWeaver SocialNet are
+external source inputs.
 
 ## 1. Configure
 
@@ -49,10 +50,12 @@ nonstandard existing native-k3s service. The recipe automatically discovers
 the SocialNet NodePort, so no endpoint setting is needed for a normal run.
 
 The topology is built into the recipe, not configured by the evaluator.
-Before measuring, `setup` and `check` require exactly one Ready k3s node and
-14 Ready SocialNet pods, all scheduled on that node with 14 debugger sidecars.
-The run also requires exactly 14 DDB sessions. A mismatch stops the recipe
-before any latency samples are collected.
+Before measuring, `setup` fixes all 14 SocialNet deployments at one replica and
+pins them to `TARGET_NODE`. `check` requires exactly 14 Ready SocialNet pods on
+that one node with 14 debugger sidecars. Other Kubernetes nodes may remain
+joined, but no measured application process may run on them. The run also
+requires exactly 14 DDB sessions. A mismatch stops the recipe before any
+latency samples are collected.
 
 The fixed SocialNet revision is
 `613f316ca060b94545e850324f91eef1ceb7639b`. Full runs use three preparation
@@ -76,10 +79,29 @@ loads `/workspace/extension.py` first and then
 ```
 
 `setup` installs any missing Kubernetes tools, builds and deploys SocialNet,
-pins all 14 processes to the sole node, seeds the application, builds DDB,
-creates the private SSH gateway, injects debugger sidecars, and renders the
-DDB configuration. It builds the graph seeder with the checked-in
-random-number race fix; the measured SocialNet server is unchanged.
+fixes each process at one replica, pins all 14 processes to `TARGET_NODE`,
+seeds the application, builds DDB, creates the private SSH gateway, injects
+debugger sidecars, and renders the DDB configuration. It builds the graph
+seeder with the checked-in random-number race fix; the measured SocialNet
+server is unchanged.
+
+An existing command-latency cluster does not need to be torn down. Run
+call-depth setup on its controller; setup reuses the deployed application and
+reconfigures only its replicas and placement:
+
+```bash
+cd ../sw-socialnet-call-depth
+./artifact.sh setup
+```
+
+To switch back, rerun command-latency setup with the application build and
+deployment steps skipped. It restores the replica count and worker placement
+from that recipe's configuration:
+
+```bash
+cd ../sw-socialnet-command-latency
+./artifact.sh setup --skip-app-build --skip-app-deploy
+```
 
 `config` is an optional read-only report of what setup resolved. It does not
 install or configure anything.

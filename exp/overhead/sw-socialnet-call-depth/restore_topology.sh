@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clean call-depth-only placement and debugger resources on the single node.
+# Clean call-depth-only placement and debugger resources.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -42,5 +42,5 @@ note "Reseeding the in-memory social graph"
 bash "$ARTIFACT_DIR/seed_data.sh" --addr "$(detect_endpoint)"
 
 echo ""
-echo "Single-node cleanup complete; SocialNet is running without call-depth debugger resources."
+echo "Call-depth cleanup complete; SocialNet is running without call-depth debugger resources."
 echo "Node taints were not changed because their pre-run state was not recorded."

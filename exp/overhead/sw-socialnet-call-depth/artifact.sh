@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Front door for the single-host call-depth experiment.
+# Front door for the single-node call-depth experiment.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +11,7 @@ Usage: ./artifact.sh COMMAND [OPTIONS]
 Commands:
   config     Optionally print the currently resolved configuration
   setup      Install missing cluster tools, deploy, and prepare all 14 processes
-  check      Validate the single-host topology and clean kernel state
+  check      Validate the one-node application topology and clean kernel state
   smoke      Run three DBTs at each of depths 1, 2, and 3
   run        Run the full depth-1/2/3 evaluation
   results    Print the latest call-depth table

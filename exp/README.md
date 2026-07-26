@@ -16,6 +16,9 @@ This doc goes over shared part of setting up DDB and needed components for these
 | [`overhead/faketime-overhead`](overhead/faketime-overhead/) | per-call cost of libfaketime time-API interposition | 1 |
 | [`pet-perceived-gap`](pet-perceived-gap/) | wall-clock time an app perceives across a DDB-compensated pause | 1 | 
 
+For call depth, `1` means that all application processes run on one target
+node; additional Chameleon nodes may remain joined to the cluster.
+
 ## Cluster assumptions
 
 Four of the overhead experiments and the PET-perceived-gap experiment use

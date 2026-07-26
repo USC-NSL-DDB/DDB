@@ -117,6 +117,10 @@ for deployment in "${deployments[@]}"; do
   k rollout status "$deployment" --timeout=300s
 done
 
+note "Removing debugger resources from the call-depth recipe"
+k delete pod,service -l ddb-artifact=sw-socialnet-call-depth \
+  --ignore-not-found >/dev/null
+
 if [[ "$seed" -eq 1 ]]; then
   note "Seeding the distributed application"
   "$ARTIFACT_DIR/seed_data.sh" --addr "$(detect_endpoint)"
