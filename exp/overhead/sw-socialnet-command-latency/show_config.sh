@@ -24,13 +24,9 @@ if [[ -r "$WORKERS_FILE" ]]; then
   worker_count="$(awk '{sub(/#.*/, ""); if ($0 ~ /[^[:space:]]/) count++} END {print count + 0}' "$WORKERS_FILE")"
 fi
 cluster_node_count=$((worker_count + 1))
-app_node_count="$worker_count"
-if [[ "$app_node_count" -gt "$EXPECTED_PROCESSES" ]]; then
-  app_node_count="$EXPECTED_PROCESSES"
-fi
 
 cat <<EOF
-Recipe:                    full-cluster command latency
+Recipe:                    command latency
 Artifact directory:        $ARTIFACT_DIR
 DDB repository:            ${DDB_REPO_ROOT:-<not detected>}
 DDB Rust source:           $DDB_SOURCE_DIR
@@ -49,7 +45,8 @@ weaver-kube:               ${weaver_kube_path:-<setup installs $WEAVER_KUBE_INST
 Namespace:                 $NAMESPACE
 Control Kubernetes node:   $display_target
 Expected cluster nodes:    $cluster_node_count
-Expected app worker nodes: $app_node_count
+Application deployments:   $EXPECTED_DEPLOYMENTS
+Replicas per deployment:   $SOCIALNET_REPLICAS
 Expected app processes:    $EXPECTED_PROCESSES
 Application label key:     $APP_LABEL_KEY
 Debugger prefix:           $DEBUGGER_CONTAINER_PREFIX

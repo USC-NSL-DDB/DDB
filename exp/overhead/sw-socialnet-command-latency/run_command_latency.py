@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ddb-revision", default="unknown")
     parser.add_argument("--socialnet-revision", default="unknown")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--expected-sessions", type=int, default=14)
+    parser.add_argument("--expected-sessions", type=int, required=True)
     parser.add_argument("--api-port", type=int, default=5000)
     parser.add_argument(
         "--repetitions",

@@ -72,13 +72,24 @@ if [[ "$deployment_count" -eq 0 ]]; then
   mkdir -p "$deploy_config_dir"
   python3 - "$SOCIALNET_CONFIG_TEMPLATE" "$deploy_config_dir/config.yaml" \
     "$SOCIALNET_APP_TEMPLATE" "$deploy_config_dir/weaver.toml" \
-    "$server_bin" "$NAMESPACE" <<'PY'
+    "$server_bin" "$NAMESPACE" "$SOCIALNET_REPLICAS" <<'PY'
 from pathlib import Path
 import sys
 
-config_template, config_output, app_template, app_output, binary, namespace = sys.argv[1:]
+(
+    config_template,
+    config_output,
+    app_template,
+    app_output,
+    binary,
+    namespace,
+    replicas,
+) = sys.argv[1:]
 Path(config_output).write_text(
-    Path(config_template).read_text().replace("@NAMESPACE@", namespace)
+    Path(config_template)
+    .read_text()
+    .replace("@NAMESPACE@", namespace)
+    .replace("@SOCIALNET_REPLICAS@", replicas)
 )
 Path(app_output).write_text(
     Path(app_template).read_text().replace(
@@ -91,13 +102,13 @@ PY
   [[ -r "$generated" ]] || die "weaver-kube did not return a readable manifest: $generated"
   k apply -f "$generated"
   k wait --for=condition=Available deployment -l "$APP_LABEL_KEY" --timeout=300s
-elif [[ "$deployment_count" -ne "$EXPECTED_PROCESSES" ]]; then
-  die "found a partial SocialNet deployment: $deployment_count/$EXPECTED_PROCESSES deployments"
+elif [[ "$deployment_count" -ne "$EXPECTED_DEPLOYMENTS" ]]; then
+  die "found a partial SocialNet deployment: $deployment_count/$EXPECTED_DEPLOYMENTS deployments"
 fi
 
 deployment_count="$(k get deployments -l "$APP_LABEL_KEY" -o name | wc -l)"
-[[ "$deployment_count" -eq "$EXPECTED_PROCESSES" ]] \
-  || die "expected $EXPECTED_PROCESSES SocialNet deployments, found $deployment_count"
+[[ "$deployment_count" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS SocialNet deployments, found $deployment_count"
 
 listener="$(apilistener_service)"
 [[ -n "$listener" ]] || die "SocialNet apilistener service was not created"

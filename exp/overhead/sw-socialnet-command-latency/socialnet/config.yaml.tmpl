@@ -8,13 +8,13 @@ listeners:
     public: true
 
 scalingSpec:
-  minReplicas: 1
-  maxReplicas: 1
+  minReplicas: @SOCIALNET_REPLICAS@
+  maxReplicas: @SOCIALNET_REPLICAS@
 
 groups:
   - name: scalingMachines
     components:
       - SocialNetwork/server/IStorage
     scalingSpec:
-      minReplicas: 1
-      maxReplicas: 1
+      minReplicas: @SOCIALNET_REPLICAS@
+      maxReplicas: @SOCIALNET_REPLICAS@

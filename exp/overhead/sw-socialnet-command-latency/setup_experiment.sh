@@ -73,11 +73,22 @@ kubectl --kubeconfig "$KUBECONFIG" taint node "$TARGET_NODE" \
 "$ARTIFACT_DIR/prepare_socialnet.sh" "${app_args[@]}"
 
 mapfile -t deployments < <(app_deployments)
-[[ "${#deployments[@]}" -eq "$EXPECTED_PROCESSES" ]] \
-  || die "expected $EXPECTED_PROCESSES application deployments, found ${#deployments[@]}"
+[[ "${#deployments[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS application deployments, found ${#deployments[@]}"
 
-note "Restoring multi-node application placement"
+note "Configuring application placement and replicas"
 label_value="$(app_label_value)"
+mapfile -t autoscalers < <(k get horizontalpodautoscalers \
+  -l "$APP_LABEL_KEY=$label_value" -o name)
+[[ "${#autoscalers[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \
+  || die "expected $EXPECTED_DEPLOYMENTS SocialNet autoscalers, found ${#autoscalers[@]}"
+replica_patch="$(printf '{"spec":{"minReplicas":%s,"maxReplicas":%s}}' \
+  "$SOCIALNET_REPLICAS" "$SOCIALNET_REPLICAS")"
+for autoscaler in "${autoscalers[@]}"; do
+  k patch "$autoscaler" --type merge -p "$replica_patch" >/dev/null
+done
+
+note "Scaling $EXPECTED_DEPLOYMENTS deployments to $SOCIALNET_REPLICAS replica(s) each"
 spread_patch="$(python3 - "$APP_LABEL_KEY" "$label_value" <<'PY'
 import json, sys
 key, value = sys.argv[1:]
@@ -98,6 +109,7 @@ for deployment in "${deployments[@]}"; do
     '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' \
     >/dev/null 2>&1 || true
   k patch "$deployment" --type merge -p "$spread_patch" >/dev/null
+  k scale "$deployment" --replicas="$SOCIALNET_REPLICAS" >/dev/null
   k rollout restart "$deployment" >/dev/null
 done
 
@@ -120,10 +132,10 @@ mkdir -p "$RESULTS_ROOT"
 
 if [[ "$setup_ddb" -eq 1 ]]; then
   validate_runtime_config
-  note "Running the full-cluster preflight"
+  note "Running the command-latency preflight"
   "$ARTIFACT_DIR/check_cluster.sh"
 else
-  note "Skipped DDB setup and full preflight as requested"
+  note "Skipped DDB setup and preflight as requested"
 fi
 
 echo ""

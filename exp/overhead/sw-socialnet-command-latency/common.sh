@@ -41,12 +41,12 @@ SOCIALNET_DIR="${SOCIALNET_DIR:-${DDB_REPO_ROOT:+$DDB_REPO_ROOT/fwks/socialnetwo
 NAMESPACE="${NAMESPACE:-default}"
 APP_LABEL_KEY="${APP_LABEL_KEY:-serviceweaver/app}"
 DEBUGGER_CONTAINER_PREFIX="${DEBUGGER_CONTAINER_PREFIX:-ssh-debugger-}"
-# The application has a fixed process count. Cluster expectations are derived
-# from the worker inventory by load_worker_targets().
-readonly EXPECTED_PROCESSES=14
+# Worker count and process replication are independent configuration axes.
+readonly EXPECTED_DEPLOYMENTS=14
+SOCIALNET_REPLICAS="${SOCIALNET_REPLICAS:-1}"
+EXPECTED_PROCESSES=0
 EXPECTED_WORKERS=0
 EXPECTED_CLUSTER_NODES=1
-EXPECTED_APP_NODES=0
 readonly K3S_INSTALL_VERSION="v1.36.2+k3s1"
 readonly KUBECTL_INSTALL_VERSION="v1.36.2"
 readonly WEAVER_KUBE_INSTALL_VERSION="v0.23.0"
@@ -82,6 +82,11 @@ die() {
   exit 1
 }
 
+[[ "$SOCIALNET_REPLICAS" =~ ^[1-9][0-9]*$ ]] \
+  || die "SOCIALNET_REPLICAS must be a positive integer, got '$SOCIALNET_REPLICAS'"
+EXPECTED_PROCESSES=$((EXPECTED_DEPLOYMENTS * SOCIALNET_REPLICAS))
+readonly SOCIALNET_REPLICAS EXPECTED_PROCESSES
+
 note() {
   echo "==> $*"
 }
@@ -114,10 +119,6 @@ load_worker_targets() {
 
   EXPECTED_WORKERS="${#WORKER_TARGETS[@]}"
   EXPECTED_CLUSTER_NODES=$((EXPECTED_WORKERS + 1))
-  EXPECTED_APP_NODES="$EXPECTED_WORKERS"
-  if [[ "$EXPECTED_APP_NODES" -gt "$EXPECTED_PROCESSES" ]]; then
-    EXPECTED_APP_NODES="$EXPECTED_PROCESSES"
-  fi
 }
 
 validate_cluster_inputs() {

@@ -1,7 +1,6 @@
 # Command-latency methodology
 
-The application remains distributed across the full Chameleon worker cluster.
-DDB attaches to all 14 processes through their debugger sidecars, broadcasts
+DDB attaches to every process through its debugger sidecar, broadcasts
 its global interrupt command, and begins timing only after every process is in
 kernel tracing-stop state. Each debugger loads the upstream `extension.py`
 before the ServiceWeaver runtime extension; the DDB Rust source is unchanged.

@@ -1,6 +1,6 @@
 # ServiceWeaver SocialNet Command-Latency Experiment
 
-Measure warm DDB `dbt` latency for every application thread while all 14
+Measure warm DDB `dbt` latency for every application thread while all
 SocialNet processes remain stopped.
 
 ## Requirements
@@ -39,6 +39,17 @@ In `artifact.env`, set `CONTROLLER_IP` to the controller's private Chameleon
 address. Set `SSH_IDENTITY_FILE` only when the controller's normal SSH
 configuration cannot reach the workers.
 
+Set `SOCIALNET_REPLICAS` to the number of replicas for each of SocialNet's 14
+deployments. It defaults to one; for example, two replicas produce 28
+application processes and 28 DDB sessions:
+
+```bash
+SOCIALNET_REPLICAS=2
+```
+
+Rerun `./artifact.sh setup` after changing this value. Setup reconciles the
+autoscalers, deployments, debugger sidecars, and DDB session count.
+
 In `workers.txt`, enter one SSH target per worker. The recipe derives its
 cluster size from this inventory:
 
@@ -50,9 +61,8 @@ cc@<worker-4-private-address>
 # Add or remove lines to match the workers allocated to this run.
 ```
 
-Any nonempty worker inventory is accepted. SocialNet has 14 processes, so at
-most 14 configured workers host application pods; additional workers may join
-the cluster but remain application-idle.
+Any nonempty worker inventory is accepted. Kubernetes distributes the
+SocialNet processes across the available workers.
 
 The worker addresses must be reachable from the controller without a jump
 host, and SSH must work non-interactively. Verify the resolved configuration:
@@ -94,12 +104,11 @@ security groups or configure firewalld when public exposure is a concern.
    `weaver-kube`;
 2. forms the inventory-sized cluster and taints the controller;
 3. builds DDB and the accepted SocialNet source;
-4. spreads all 14 SocialNet processes across as many configured workers as the
-   process count allows;
+4. deploys and distributes the configured SocialNet replicas;
 5. seeds the social graph;
-6. creates the private SSH gateway, injects 14 debugger sidecars, and renders
-   the DDB configuration;
-7. runs the full topology and attachment preflight.
+6. creates the private SSH gateway, injects one debugger sidecar per process,
+   and renders the DDB configuration;
+7. runs the cluster and attachment preflight.
 
 Setup applies non-persistent controller TCP settings needed by the graph
 seeder. It does not add packages other than the Kubernetes tools listed above.
@@ -110,10 +119,10 @@ and prints the explicit cleanup command instead.
 thread. `run` uses one excluded warm-up batch followed by 30 measured batches.
 Every batch submits exactly one DBT for every discovered thread, waits for the
 entire batch to complete, and only then starts the next batch. Threads are
-ordered round-robin across the 14 DDB sessions so DDB's command workers can run
+ordered round-robin across the DDB sessions so DDB's command workers can run
 requests for different processes concurrently. DDB pauses the entire
-14-process application once; no process is continued between batches. Kernel
-state is checked before sampling and after DDB exits.
+application once; no process is continued between batches. Kernel state is
+checked before sampling and after DDB exits.
 
 The DDB template loads `/workspace/extension.py` first and then
 `/workspace/runtime-serviceweaver.py`. Generated files under `runtime/` and
