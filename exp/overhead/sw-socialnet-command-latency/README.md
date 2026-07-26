@@ -5,10 +5,10 @@ SocialNet processes remain stopped.
 
 ## Requirements
 
-Use five Chameleon instances on one private network:
+Use Chameleon instances on one private network:
 
 - one controller, where this recipe, DDB, and the experiment driver run;
-- four workers reachable directly by SSH from the controller;
+- one or more workers reachable directly by SSH from the controller;
 - Linux with systemd on every instance;
 - passwordless `sudo` on the workers and `sudo` access on the controller.
 
@@ -17,7 +17,7 @@ Git, and an OpenSSH client. Workers need `curl`, `ip`, and systemd. Setup checks
 and installs the following when absent:
 
 - native k3s `v1.36.2+k3s1` server on the controller;
-- the matching native k3s agents on all four workers;
+- the matching native k3s agents on every configured worker;
 - `kubectl` `v1.36.2` on the controller;
 - `weaver-kube` `v0.23.0` on the controller.
 
@@ -39,14 +39,20 @@ In `artifact.env`, set `CONTROLLER_IP` to the controller's private Chameleon
 address. Set `SSH_IDENTITY_FILE` only when the controller's normal SSH
 configuration cannot reach the workers.
 
-In `workers.txt`, enter exactly four SSH targets, one per line:
+In `workers.txt`, enter one SSH target per worker. The recipe derives its
+cluster size from this inventory:
 
 ```text
 cc@<worker-1-private-address>
 cc@<worker-2-private-address>
 cc@<worker-3-private-address>
 cc@<worker-4-private-address>
+# Add or remove lines to match the workers allocated to this run.
 ```
+
+Any nonempty worker inventory is accepted. SocialNet has 14 processes, so at
+most 14 configured workers host application pods; additional workers may join
+the cluster but remain application-idle.
 
 The worker addresses must be reachable from the controller without a jump
 host, and SSH must work non-interactively. Verify the resolved configuration:
@@ -61,7 +67,8 @@ The recipe discovers worker node IPs and interfaces from their route to
 Chameleon images may start `firewalld` with only SSH allowed. Setup stops
 before changing the cluster when it detects this. Either permit the k3s
 control-plane, kubelet, and Flannel traffic on the private network, then set
-`ALLOW_ACTIVE_FIREWALL=1`, or explicitly disable firewalld on all five nodes:
+`ALLOW_ACTIVE_FIREWALL=1`, or explicitly disable firewalld on the controller
+and every configured worker:
 
 ```bash
 sudo systemctl disable --now firewalld
@@ -85,9 +92,10 @@ security groups or configure firewalld when public exposure is a concern.
 
 1. installs or validates the pinned k3s server, agents, `kubectl`, and
    `weaver-kube`;
-2. forms the five-node cluster and taints the controller;
+2. forms the inventory-sized cluster and taints the controller;
 3. builds DDB and the accepted SocialNet source;
-4. deploys all 14 SocialNet processes across all four workers;
+4. spreads all 14 SocialNet processes across as many configured workers as the
+   process count allows;
 5. seeds the social graph;
 6. creates the private SSH gateway, injects 14 debugger sidecars, and renders
    the DDB configuration;

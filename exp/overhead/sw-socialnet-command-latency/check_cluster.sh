@@ -77,7 +77,7 @@ print(len(items), ready, debug, len(nodes), on_control)
 [[ "$sidecars" -eq "$EXPECTED_PROCESSES" ]] \
   || die "only $sidecars/$EXPECTED_PROCESSES debugger sidecars are running; run ./artifact.sh setup"
 [[ "$app_nodes" -eq "$EXPECTED_APP_NODES" ]] \
-  || die "application spans $app_nodes nodes; expected all $EXPECTED_APP_NODES worker nodes"
+  || die "application spans $app_nodes nodes; expected $EXPECTED_APP_NODES of $EXPECTED_WORKERS configured workers"
 [[ "$control_pods" -eq 0 ]] \
   || die "$control_pods application pods are on control node $TARGET_NODE; run ./artifact.sh setup"
 
@@ -94,7 +94,7 @@ if [[ "$quiet" -eq 0 ]]; then
   echo "=== Full-cluster command-latency preflight ==="
   echo "  Cluster nodes:       $ready_nodes/$EXPECTED_CLUSTER_NODES Ready"
   echo "  Worker nodes:        $worker_nodes/$EXPECTED_WORKERS Ready"
-  echo "  Application nodes:   $app_nodes/$EXPECTED_APP_NODES workers"
+  echo "  Application nodes:   $app_nodes/$EXPECTED_APP_NODES expected workers"
   echo "  App processes:       $ready/$EXPECTED_PROCESSES Ready"
   echo "  Control-node pods:   0"
   echo "  Debug sidecars:      $sidecars/$EXPECTED_PROCESSES running"

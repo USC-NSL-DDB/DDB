@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install and assemble the five-node native-k3s cluster from the controller.
+# Install and assemble a native-k3s cluster from the controller and worker inventory.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -342,7 +342,7 @@ main() {
   sudo sysctl -w net.ipv4.tcp_tw_reuse=1 >/dev/null
   sudo sysctl -w 'net.ipv4.ip_local_port_range=1024 65535' >/dev/null
   sudo sysctl -w net.ipv4.tcp_fin_timeout=15 >/dev/null
-  note "Five-node native-k3s cluster is Ready"
+  note "$EXPECTED_CLUSTER_NODES-node native-k3s cluster is Ready"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

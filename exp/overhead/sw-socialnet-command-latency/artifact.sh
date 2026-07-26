@@ -10,8 +10,8 @@ Usage: ./artifact.sh COMMAND [OPTIONS]
 
 Commands:
   config     Print the resolved paths, topology, images, and overrides
-  setup      Bootstrap five-node k3s, deploy/seed app, and prepare DDB
-  check      Validate all five k3s nodes and distributed application placement
+  setup      Bootstrap k3s from workers.txt, deploy/seed app, and prepare DDB
+  check      Validate the configured k3s nodes and application placement
   smoke      Run two DBTs on one thread across the attached cluster
   run        Run 30 DBTs for every thread across all 14 cluster processes
   results    Print the latest aggregate table

@@ -25,19 +25,22 @@ done
 require_command python3
 require_command curl
 require_command patch
+require_command awk
+require_command ip
 require_command docker
 require_command cargo
 require_command go
 require_command git
 require_command ssh
 require_command sudo
+validate_cluster_inputs
 ensure_no_ddb
 validate_source_inputs
 validate_local_assets
 docker info >/dev/null 2>&1 \
   || die "cannot access the Docker daemon as $(id -un)"
 
-note "Bootstrapping the controller and four worker nodes"
+note "Bootstrapping the controller and $EXPECTED_WORKERS worker node(s)"
 "$ARTIFACT_DIR/bootstrap_cluster.sh"
 
 require_command kubectl

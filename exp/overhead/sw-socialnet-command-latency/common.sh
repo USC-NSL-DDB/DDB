@@ -41,11 +41,12 @@ SOCIALNET_DIR="${SOCIALNET_DIR:-${DDB_REPO_ROOT:+$DDB_REPO_ROOT/fwks/socialnetwo
 NAMESPACE="${NAMESPACE:-default}"
 APP_LABEL_KEY="${APP_LABEL_KEY:-serviceweaver/app}"
 DEBUGGER_CONTAINER_PREFIX="${DEBUGGER_CONTAINER_PREFIX:-ssh-debugger-}"
-# Fixed topology of the evaluated artifact; these are assertions, not knobs.
+# The application has a fixed process count. Cluster expectations are derived
+# from the worker inventory by load_worker_targets().
 readonly EXPECTED_PROCESSES=14
-readonly EXPECTED_CLUSTER_NODES=5
-readonly EXPECTED_APP_NODES=4
-readonly EXPECTED_WORKERS=4
+EXPECTED_WORKERS=0
+EXPECTED_CLUSTER_NODES=1
+EXPECTED_APP_NODES=0
 readonly K3S_INSTALL_VERSION="v1.36.2+k3s1"
 readonly KUBECTL_INSTALL_VERSION="v1.36.2"
 readonly WEAVER_KUBE_INSTALL_VERSION="v0.23.0"
@@ -91,10 +92,10 @@ require_command() {
 
 load_worker_targets() {
   [[ -r "$WORKERS_FILE" ]] || die "worker inventory not found: $WORKERS_FILE
-  Copy workers.txt.example to workers.txt and list four SSH targets."
+  Copy workers.txt.example to workers.txt and list one or more SSH targets."
 
   WORKER_TARGETS=()
-  local line
+  local line unique_workers
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
     line="$(awk '{$1=$1; print}' <<<"$line")"
@@ -105,10 +106,18 @@ load_worker_targets() {
     fi
   done < "$WORKERS_FILE"
 
-  [[ "${#WORKER_TARGETS[@]}" -eq "$EXPECTED_WORKERS" ]] \
-    || die "command latency requires exactly $EXPECTED_WORKERS worker SSH targets; found ${#WORKER_TARGETS[@]} in $WORKERS_FILE"
-  [[ "$(printf '%s\n' "${WORKER_TARGETS[@]}" | sort -u | wc -l)" -eq "$EXPECTED_WORKERS" ]] \
+  [[ "${#WORKER_TARGETS[@]}" -gt 0 ]] \
+    || die "command latency requires at least one worker SSH target in $WORKERS_FILE"
+  unique_workers="$(printf '%s\n' "${WORKER_TARGETS[@]}" | sort -u | wc -l)"
+  [[ "$unique_workers" -eq "${#WORKER_TARGETS[@]}" ]] \
     || die "$WORKERS_FILE contains duplicate worker SSH targets"
+
+  EXPECTED_WORKERS="${#WORKER_TARGETS[@]}"
+  EXPECTED_CLUSTER_NODES=$((EXPECTED_WORKERS + 1))
+  EXPECTED_APP_NODES="$EXPECTED_WORKERS"
+  if [[ "$EXPECTED_APP_NODES" -gt "$EXPECTED_PROCESSES" ]]; then
+    EXPECTED_APP_NODES="$EXPECTED_PROCESSES"
+  fi
 }
 
 validate_cluster_inputs() {
