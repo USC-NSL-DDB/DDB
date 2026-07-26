@@ -8,8 +8,9 @@ nonzero kernel `TracerPid` and tracing-stop state.
 
 Latency starts at DDB's timestamped `received cmd` record and ends at its final
 token-matched timestamped MI output. Each reported DBT is rejected if it causes
-another stop event or returns a boundary count different from the requested
-depth.
+another stop event or returns an RPC-boundary count different from
+`call_depth - 1`. Call depth includes the originating process, so one crossed
+RPC boundary is call depth 2.
 
 The first same-pause DBT primes the command path and is excluded from all
 reported results and terminal progress. It remains only in the raw per-depth

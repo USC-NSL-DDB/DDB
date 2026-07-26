@@ -14,10 +14,15 @@ from analyze_latency import percentile, print_table
 
 def parse_run(value: str) -> tuple[int, Path]:
     try:
-        depth_text, path_text = value.split("=", 1)
-        return int(depth_text), Path(path_text).expanduser().resolve()
+        call_depth_text, path_text = value.split("=", 1)
+        call_depth = int(call_depth_text)
+        if call_depth < 1:
+            raise ValueError
+        return call_depth, Path(path_text).expanduser().resolve()
     except (ValueError, TypeError) as exc:
-        raise argparse.ArgumentTypeError("use DEPTH=RESULT_DIRECTORY") from exc
+        raise argparse.ArgumentTypeError(
+            "use CALL_DEPTH=RESULT_DIRECTORY with a positive call depth"
+        ) from exc
 
 
 def main() -> None:
@@ -26,20 +31,21 @@ def main() -> None:
         "run",
         nargs="+",
         type=parse_run,
-        help="One DEPTH=RESULT_DIRECTORY entry per call depth.",
+        help="One CALL_DEPTH=RESULT_DIRECTORY entry per call depth.",
     )
     parser.add_argument("--output", type=Path, default=Path("call-depth-summary.csv"))
     args = parser.parse_args()
 
     table = []
-    for expected_depth, directory in sorted(args.run):
+    for call_depth, directory in sorted(args.run):
+        expected_boundaries = call_depth - 1
         metadata = json.loads((directory / "metadata.json").read_text())
         with (directory / "same-pause-dbt.csv").open(newline="") as stream:
             samples = list(csv.DictReader(stream))
         invalid = [
             row
             for row in samples
-            if int(row["rpc_boundaries"]) != expected_depth
+            if int(row["rpc_boundaries"]) != expected_boundaries
             or int(row["new_stop_events"]) != 0
         ]
         if invalid:
@@ -52,7 +58,7 @@ def main() -> None:
             raise SystemExit(f"{directory}: no selected latency samples")
         table.append(
             {
-                "rpc_boundaries": expected_depth,
+                "call_depth": call_depth,
                 "process_count": int(metadata["expected_sessions"]),
                 "count": len(values),
                 "mean_ms": f"{statistics.fmean(values):.3f}",
@@ -74,7 +80,7 @@ def main() -> None:
 
     print_table(table)
     if len(table) >= 2:
-        xs = [float(row["rpc_boundaries"]) for row in table]
+        xs = [float(row["call_depth"]) for row in table]
         ys = [float(row["mean_ms"]) for row in table]
         x_mean = statistics.fmean(xs)
         y_mean = statistics.fmean(ys)
@@ -82,7 +88,7 @@ def main() -> None:
             (x - x_mean) ** 2 for x in xs
         )
         intercept = y_mean - slope * x_mean
-        print(f"\nLinear fit: latency_ms = {intercept:.3f} + {slope:.3f} * rpc_boundaries")
+        print(f"\nLinear fit: latency_ms = {intercept:.3f} + {slope:.3f} * call_depth")
     print(f"\nWrote {args.output}")
 
 

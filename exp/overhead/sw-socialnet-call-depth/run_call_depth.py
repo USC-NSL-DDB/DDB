@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure one DBT per breakpoint hit for a chosen RPC call depth."""
+"""Measure one DBT per breakpoint hit for a chosen call depth."""
 
 from __future__ import annotations
 
@@ -33,7 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Command that sends one request (it may block until DDB resumes the cluster).",
     )
-    parser.add_argument("--expected-depth", type=int, help="Expected number of RPC boundaries")
+    parser.add_argument(
+        "--expected-call-depth",
+        "--expected-depth",
+        dest="expected_call_depth",
+        type=int,
+        help="Expected call depth, including the originating process.",
+    )
     parser.add_argument("--group-id", type=int, help="DDB group ID; auto-selected when only one exists")
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=3)
@@ -72,6 +78,13 @@ def choose_group(session: DdbSession, requested: int | None) -> int:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.expected_call_depth is not None and args.expected_call_depth < 1:
+        raise SystemExit("--expected-call-depth must be positive")
+    expected_boundaries = (
+        args.expected_call_depth - 1
+        if args.expected_call_depth is not None
+        else None
+    )
     output_dir = (args.output_dir or default_output_dir("call-depth")).expanduser().resolve()
     write_metadata(
         output_dir,
@@ -83,7 +96,8 @@ def main() -> None:
             ),
             "breakpoint": args.breakpoint,
             "trigger": args.trigger,
-            "expected_depth": args.expected_depth,
+            "expected_call_depth": args.expected_call_depth,
+            "expected_rpc_boundaries": expected_boundaries,
             "expected_sessions": args.expected_sessions,
             "pause_policy": "all attached DDB sessions stopped before DBT submission",
             "samples": args.samples,
@@ -186,7 +200,8 @@ def main() -> None:
                         f"was verified first: {sorted(dbt_stop_sessions)}"
                     )
                 matches_expected = (
-                    args.expected_depth is None or dbt.rpc_boundaries == args.expected_depth
+                    args.expected_call_depth is None
+                    or dbt.service_frames == args.expected_call_depth
                 )
                 if not matches_expected:
                     depth_mismatches += 1
@@ -200,6 +215,7 @@ def main() -> None:
                         "pause_command_latency_ms": pause.latency_ms,
                         "pause_to_all_stopped_ms": pause_to_all_stopped_ms,
                         "latency_ms": dbt.latency_ms,
+                        "call_depth": dbt.service_frames,
                         "rpc_boundaries": dbt.rpc_boundaries,
                         "service_frames": dbt.service_frames,
                         "dbt_stop_events": len(dbt_stop_sessions),
@@ -209,12 +225,14 @@ def main() -> None:
                 print(
                     f"[{phase} {cycle + 1}/{total}] all {len(stopped_sessions)} sessions "
                     f"stopped in {pause_to_all_stopped_ms:.3f} ms; "
-                    f"dbt={dbt.latency_ms:.3f} ms, boundaries={dbt.rpc_boundaries}, "
+                    f"dbt={dbt.latency_ms:.3f} ms, depth={dbt.service_frames}, "
+                    f"boundaries={dbt.rpc_boundaries}, "
                     f"thread={thread}"
                 )
                 if not matches_expected:
                     print(
-                        f"  WARNING: expected {args.expected_depth} RPC boundaries; "
+                        f"  WARNING: expected call depth {args.expected_call_depth} "
+                        f"({expected_boundaries} RPC boundaries); "
                         "check the breakpoint/request pair and ServiceWeaver extension"
                     )
             finally:
@@ -242,6 +260,7 @@ def main() -> None:
             "pause_command_latency_ms",
             "pause_to_all_stopped_ms",
             "latency_ms",
+            "call_depth",
             "rpc_boundaries",
             "service_frames",
             "dbt_stop_events",
@@ -258,7 +277,7 @@ def main() -> None:
     print(f"\nResults: {output_dir}")
     if depth_mismatches:
         raise SystemExit(
-            f"{depth_mismatches} sample(s) did not match --expected-depth; "
+            f"{depth_mismatches} sample(s) did not match --expected-call-depth; "
             f"inspect {depth_csv}"
         )
 

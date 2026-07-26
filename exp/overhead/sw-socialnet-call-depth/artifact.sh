@@ -12,8 +12,8 @@ Commands:
   config     Optionally print the currently resolved configuration
   setup      Install missing cluster tools, deploy, and prepare all 14 processes
   check      Validate the one-node application topology and clean kernel state
-  smoke      Run three DBTs at each of depths 1, 2, and 3
-  run        Run the full depth-1/2/3 evaluation
+  smoke      Run three DBTs at each of depths 2, 3, and 4
+  run        Run the full depth-2/3/4 evaluation
   results    Print the latest call-depth table
   restore    Remove call-depth debugger resources; keep SocialNet running
 EOF

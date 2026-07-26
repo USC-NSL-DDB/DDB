@@ -1,6 +1,6 @@
 # ServiceWeaver SocialNet Call-Depth Experiment
 
-Measure DDB backtrace latency at RPC depths 1, 2, and 3.
+Measure DDB backtrace latency at call depths 2, 3, and 4.
 
 ## Requirements
 
@@ -108,11 +108,11 @@ install or configure anything.
 
 The experiment calls `read-user-timeline` and uses these fixed breakpoints:
 
-| RPC depth | Breakpoint |
-|---:|---|
-| 1 | `backend_service.go:245` |
-| 2 | `user_timeline_service.go:28` |
-| 3 | `storage.go:263` |
+| Call depth | RPC boundaries | Breakpoint |
+|---:|---:|---|
+| 2 | 1 | `backend_service.go:245` |
+| 3 | 2 | `user_timeline_service.go:28` |
+| 4 | 3 | `storage.go:263` |
 
 See [METHODOLOGY.md](METHODOLOGY.md) for the timing boundary, kernel-stop
 verification, sample validation, and aggregation rules.
@@ -125,13 +125,13 @@ logs, boundary counts, and kernel evidence are stored beside it.
 
 Reference result from 29 reported warm DBTs per depth:
 
-| RPC depth | Steady samples | Mean | Median | P95 |
+| Call depth | Steady samples | Mean | Median | P95 |
 |---:|---:|---:|---:|---:|
-| 1 | 29 | 86.694 ms | 86.769 ms | 87.823 ms |
-| 2 | 29 | 130.136 ms | 129.778 ms | 131.326 ms |
-| 3 | 29 | 175.885 ms | 175.666 ms | 178.396 ms |
+| 2 | 29 | 86.694 ms | 86.769 ms | 87.823 ms |
+| 3 | 29 | 130.136 ms | 129.778 ms | 131.326 ms |
+| 4 | 29 | 175.885 ms | 175.666 ms | 178.396 ms |
 
-Linear fit: `latency_ms = 41.714 + 44.596 * RPC_depth`.
+Linear fit: `latency_ms = -2.882 + 44.596 * call_depth`.
 
 ## 4. Cleanup
 

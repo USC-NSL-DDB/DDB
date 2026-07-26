@@ -20,7 +20,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--breakpoint", required=True)
     parser.add_argument("--trigger", required=True)
-    parser.add_argument("--expected-depth", type=int, required=True)
+    parser.add_argument(
+        "--expected-boundaries",
+        dest="expected_boundaries",
+        type=int,
+        required=True,
+        help="Expected RPC boundary count; call depth is this value plus one.",
+    )
     parser.add_argument("--ddb", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--kubeconfig", type=Path, required=True)
@@ -106,13 +112,17 @@ def reach_cluster_pause(
 
 def main() -> None:
     args = parse_args()
+    if args.expected_boundaries < 0:
+        raise SystemExit("--expected-boundaries must be nonnegative")
+    call_depth = args.expected_boundaries + 1
     output_dir = args.output_dir.expanduser().resolve()
     write_metadata(
         output_dir,
         {
             "kind": "same-pause-repeated-dbt",
             "breakpoint": args.breakpoint,
-            "expected_depth": args.expected_depth,
+            "call_depth": call_depth,
+            "expected_rpc_boundaries": args.expected_boundaries,
             "expected_sessions": args.expected_sessions,
             "warmup_fresh_cycles": args.warmup,
             "same_pause_repetitions": args.repetitions,
@@ -211,6 +221,7 @@ def main() -> None:
                 row = {
                     "repeat": repeat,
                     "latency_ms": result.latency_ms,
+                    "call_depth": result.service_frames,
                     "rpc_boundaries": result.rpc_boundaries,
                     "new_stop_events": len(new_stops),
                 }
@@ -219,6 +230,7 @@ def main() -> None:
                     print(
                         f"[warm {repeat - 1:02d}/{args.repetitions - 1}] "
                         f"dbt={result.latency_ms:.3f} ms "
+                        f"depth={result.service_frames} "
                         f"boundaries={result.rpc_boundaries} "
                         f"new-stops={len(new_stops)}",
                         flush=True,
@@ -233,12 +245,23 @@ def main() -> None:
     with (output_dir / "same-pause-dbt.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(
             stream,
-            fieldnames=["repeat", "latency_ms", "rpc_boundaries", "new_stop_events"],
+            fieldnames=[
+                "repeat",
+                "latency_ms",
+                "call_depth",
+                "rpc_boundaries",
+                "new_stop_events",
+            ],
         )
         writer.writeheader()
         writer.writerows(repeated)
 
-    bad_depth = [row for row in repeated if row["rpc_boundaries"] != args.expected_depth]
+    bad_depth = [
+        row
+        for row in repeated
+        if row["call_depth"] != call_depth
+        or row["rpc_boundaries"] != args.expected_boundaries
+    ]
     new_stops = [row for row in repeated if row["new_stop_events"] != 0]
     if bad_depth or new_stops:
         raise SystemExit(

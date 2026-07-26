@@ -16,12 +16,13 @@ CONFIG=${CONFIG:-$DDB_CONFIG}
 mkdir -p "$OUT"
 
 run_depth() {
-  local depth=$1
+  local boundaries=$1
   local breakpoint=$2
+  local call_depth=$((boundaries + 1))
   python3 "$HERE/run_same_pause_depth.py" \
     --breakpoint "$breakpoint" \
     --trigger "python3 $HERE/trigger_socialnet.py --addr $ADDR --request read-user-timeline" \
-    --expected-depth "$depth" \
+    --expected-boundaries "$boundaries" \
     --ddb "$DDB" \
     --config "$CONFIG" \
     --kubeconfig "$KUBECONFIG" \
@@ -30,7 +31,7 @@ run_depth() {
     --expected-sessions "$EXPECTED_SESSIONS" \
     --warmup "$WARMUP" \
     --repetitions "$REPETITIONS" \
-    --output-dir "$OUT/depth$depth"
+    --output-dir "$OUT/depth$call_depth"
 }
 
 run_depth 1 backend_service.go:245
@@ -38,7 +39,7 @@ run_depth 2 user_timeline_service.go:28
 run_depth 3 storage.go:263
 
 python3 "$HERE/summarize_depth_matrix.py" \
-  "1=$OUT/depth1" "2=$OUT/depth2" "3=$OUT/depth3" \
+  "2=$OUT/depth2" "3=$OUT/depth3" "4=$OUT/depth4" \
   --output "$OUT/call-depth-summary.csv"
 
 echo "Results: $OUT"
