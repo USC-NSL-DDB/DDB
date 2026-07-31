@@ -358,6 +358,7 @@ class DdbSession:
         }
         deadline = time.monotonic() + (timeout or self.command_timeout)
         scan = min(item.cursor for item in pending)
+        remaining_tokens = set(by_token)
 
         def ready(token: int) -> bool:
             if not responses[token]:
@@ -369,31 +370,39 @@ class DdbSession:
         with self._cv:
             while True:
                 for item in self.lines[scan:]:
+                    touched: set[int] = set()
                     match = received.search(item.text)
                     if match:
                         token = int(match.group("token"))
                         if token in by_token and token not in first_received:
                             first_received[token] = item
+                            touched.add(token)
 
                     match = direct.search(item.text.strip())
                     if match:
                         token = int(match.group("token"))
                         if token in by_token:
                             responses[token].append(item)
+                            touched.add(token)
 
                     match = logged_output.search(item.text)
                     if match:
                         token = int(match.group("token"))
                         if token in by_token:
                             logged_responses[token].append(item)
+                            touched.add(token)
+
+                    for token in touched:
+                        if token in remaining_tokens and ready(token):
+                            remaining_tokens.remove(token)
                 scan = len(self.lines)
 
-                if all(ready(token) for token in by_token):
+                if not remaining_tokens:
                     break
                 self._check_alive()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    missing = [token for token in by_token if not ready(token)]
+                    missing = sorted(remaining_tokens)
                     raise TimeoutError(
                         f"batch did not complete; missing {len(missing)}/{len(pending)} "
                         f"tokens (first: {missing[:10]}); see "

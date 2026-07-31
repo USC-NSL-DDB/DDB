@@ -453,7 +453,6 @@ def main() -> None:
                     for thread in inventory
                 ]
                 marker = session.mark()
-                started = time.monotonic()
                 pending = session.submit_many(requests)
                 if phase == "measure":
                     print(
@@ -466,7 +465,6 @@ def main() -> None:
                     timeout=args.batch_timeout,
                     require_logged_response=True,
                 )
-                elapsed = time.monotonic() - started
                 end = session.mark()
                 batch_stops = session.stopped_session_ids(after=marker, before=end)
                 unexpected_stop_sessions.update(batch_stops)
@@ -501,10 +499,8 @@ def main() -> None:
                         pass_latencies.append(result.latency_ms)
 
                 if phase == "measure" and pass_latencies:
-                    rate = len(completed) / elapsed if elapsed else 0.0
                     print(
                         f"[concurrent batch {pass_number}/{pass_count} complete] "
-                        f"elapsed={elapsed:.3f} s throughput={rate:.1f} DBT/s "
                         f"n={len(pass_latencies)} "
                         f"mean={statistics.fmean(pass_latencies):.3f} ms "
                         f"median={statistics.median(pass_latencies):.3f} ms",
