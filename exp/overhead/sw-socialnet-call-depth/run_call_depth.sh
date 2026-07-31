@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the validated depth-2, depth-3, and depth-4 DBT matrix.
+# Run the validated DBT matrix at call depths 2, 3, 4, 5, 6, and 10.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -55,7 +55,7 @@ trap postcheck_detached EXIT
   echo "socialnet_commit=$(git -C "$SOCIALNET_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 } > "$output/source-revisions.txt"
 
-note "Call depth: depths=2,3,4 warmup=$warmup repetitions=$repetitions"
+note "Call depth: depths=2,3,4,5,6,10 warmup=$warmup repetitions=$repetitions"
 ADDR="$(detect_endpoint)" \
 OUT="$output" \
 WARMUP="$warmup" \

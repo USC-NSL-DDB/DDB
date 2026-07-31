@@ -6,12 +6,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 seed=1
 setup_ddb=1
+rebuild_app=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-seed) seed=0; shift ;;
     --skip-ddb-setup) setup_ddb=0; shift ;;
+    --rebuild-app) rebuild_app=1; shift ;;
     -h|--help)
-      echo "Usage: $0 [--skip-seed] [--skip-ddb-setup]"
+      echo "Usage: $0 [--skip-seed] [--skip-ddb-setup] [--rebuild-app]"
       exit 0
       ;;
     *) die "unknown option: $1" ;;
@@ -53,7 +55,9 @@ validate_ddb_binary
 
 note "Preparing the recipe-owned SocialNet deployment"
 allow_target_node_workloads
-bash "$ARTIFACT_DIR/prepare_socialnet.sh"
+prepare_args=()
+[[ "$rebuild_app" -eq 0 ]] || prepare_args+=(--rebuild)
+bash "$ARTIFACT_DIR/prepare_socialnet.sh" "${prepare_args[@]}"
 
 mapfile -t deployments < <(app_deployments)
 [[ "${#deployments[@]}" -eq "$EXPECTED_DEPLOYMENTS" ]] \

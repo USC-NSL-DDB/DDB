@@ -10,7 +10,7 @@ This doc goes over shared part of setting up DDB and needed components for these
 |---|---|---|
 | [`overhead/nu-socialnet-overhead`](overhead/nu-socialnet-overhead/) | DDB attach overhead on Nu's socialNetwork (+ decomposition vs vanilla Nu) | 5 |
 | [`overhead/sw-socialnet-overhead`](overhead/sw-socialnet-overhead/) | DDB overhead on ServiceWeaver socialnet on k3s | 5 |
-| [`overhead/sw-socialnet-call-depth`](overhead/sw-socialnet-call-depth/) | DDB `dbt` latency at call depths 2, 3, and 4 | 1 |
+| [`overhead/sw-socialnet-call-depth`](overhead/sw-socialnet-call-depth/) | DDB `dbt` latency at call depths 2, 3, 4, 5, 6, and 10 | 1 |
 | [`overhead/sw-socialnet-command-latency`](overhead/sw-socialnet-command-latency/) | Warm DDB `dbt` latency for every application thread while all SocialNet processes remain stopped | 10 |
 | [`overhead/raft-overhead`](overhead/raft-overhead/) | debugger overhead on a 3-node Raft cluster (none / DDB / gdb-MI) | 4 |
 | [`overhead/faketime-overhead`](overhead/faketime-overhead/) | per-call cost of libfaketime time-API interposition | 1 |

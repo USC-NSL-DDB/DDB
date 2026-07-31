@@ -4,11 +4,13 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
+rebuild=0
 case "${1:-}" in
   "") ;;
+  --rebuild) rebuild=1 ;;
   -h|--help)
-    echo "Usage: $0"
-    echo "Build and deploy SocialNet only when the cluster does not already contain it."
+    echo "Usage: $0 [--rebuild]"
+    echo "Build and deploy SocialNet; --rebuild replaces an existing deployment."
     exit 0
     ;;
   *) die "unknown option: $1" ;;
@@ -40,7 +42,7 @@ seed_bin="$SOCIALNET_DIR/src/bench/init_social.out"
 [[ -f "$SOCIALNET_DIR/build.sh" ]] \
   || die "SocialNet build entry point not found: $SOCIALNET_DIR/build.sh"
 
-needs_build=0
+needs_build=$rebuild
 for binary in "$server_bin" "$client_bin" "$seed_bin"; do
   [[ -x "$binary" ]] || needs_build=1
 done
@@ -92,9 +94,21 @@ for binary in "$server_bin" "$client_bin" "$seed_bin"; do
   chmod +x "$binary"
 done
 
-if [[ "$app_present" -eq 1 ]]; then
+if [[ "$app_present" -eq 1 && "$rebuild" -eq 0 ]]; then
   note "SocialNet is already deployed ($deployment_count application processes); keeping it"
   exit 0
+fi
+
+if [[ "$app_present" -eq 1 ]]; then
+  note "Replacing the existing SocialNet deployment"
+  k delete all,configmaps -l "$APP_LABEL_KEY=$(app_label_value)" \
+    --ignore-not-found >/dev/null
+  for _ in $(seq 1 30); do
+    [[ "$(app_deployment_count)" -eq 0 ]] && break
+    sleep 2
+  done
+  [[ "$(app_deployment_count)" -eq 0 ]] \
+    || die "the existing SocialNet deployment did not terminate"
 fi
 
 require_command docker

@@ -1,6 +1,6 @@
 # ServiceWeaver SocialNet Call-Depth Experiment
 
-Measure DDB backtrace latency at call depths 2, 3, and 4.
+Measure DDB backtrace latency at call depths 2, 3, 4, 5, 6, and 10.
 
 ## Requirements
 
@@ -78,12 +78,18 @@ loads `/workspace/extension.py` first and then
 ./artifact.sh results
 ```
 
+After updating the SocialNet source on an already configured cluster, replace
+the running application once with:
+
+```bash
+./artifact.sh setup --rebuild-app
+```
+
 `setup` installs any missing Kubernetes tools, builds and deploys SocialNet,
 fixes each process at one replica, pins all 14 processes to `TARGET_NODE`,
 seeds the application, builds DDB, creates the private SSH gateway, injects
 debugger sidecars, and renders the DDB configuration. It builds the graph
-seeder with the checked-in random-number race fix; the measured SocialNet
-server is unchanged.
+seeder with the checked-in random-number race fix.
 
 An existing command-latency cluster does not need to be torn down. Run
 call-depth setup on its controller; setup reuses the deployed application and
@@ -112,7 +118,19 @@ The experiment calls `read-user-timeline` and uses these fixed breakpoints:
 |---:|---:|---|
 | 2 | 1 | `backend_service.go:245` |
 | 3 | 2 | `user_timeline_service.go:28` |
-| 4 | 3 | `storage.go:263` |
+| 4 | 3 | `call_depth_service.go:64` |
+| 5 | 4 | `call_depth_service.go:68` |
+| 6 | 5 | `call_depth_service.go:72` |
+| 10 | 9 | `storage.go:263` |
+
+The request follows one synchronous Service Weaver path:
+
+```text
+Main -> Backend -> UserTimeline -> Relay1 -> Relay2 -> Relay3 -> Relay4 -> Relay5 -> Relay6 -> Storage
+```
+
+The relays are colocated with existing component groups, so the extended path
+does not change the 14-process deployment.
 
 See [METHODOLOGY.md](METHODOLOGY.md) for the timing boundary, kernel-stop
 verification, sample validation, and aggregation rules.
@@ -123,15 +141,9 @@ Results are stored under `results/`. `results/latest` points to the newest run.
 The main table is `call-depth-summary.csv`; per-depth samples, DDB logs, trigger
 logs, boundary counts, and kernel evidence are stored beside it.
 
-Reference result from 29 reported warm DBTs per depth:
-
-| Call depth | Steady samples | Mean | Median | P95 |
-|---:|---:|---:|---:|---:|
-| 2 | 29 | 86.694 ms | 86.769 ms | 87.823 ms |
-| 3 | 29 | 130.136 ms | 129.778 ms | 131.326 ms |
-| 4 | 29 | 175.885 ms | 175.666 ms | 178.396 ms |
-
-Linear fit: `latency_ms = -2.882 + 44.596 * call_depth`.
+Each run prints the six-depth table and its linear fit. The first DBT at every
+depth primes the same-pause command path; the remaining 29 samples appear in
+`call-depth-summary.csv`.
 
 ## 4. Cleanup
 

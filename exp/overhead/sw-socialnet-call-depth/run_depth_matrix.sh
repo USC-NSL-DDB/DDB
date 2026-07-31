@@ -36,10 +36,14 @@ run_depth() {
 
 run_depth 1 backend_service.go:245
 run_depth 2 user_timeline_service.go:28
-run_depth 3 storage.go:263
+run_depth 3 call_depth_service.go:64
+run_depth 4 call_depth_service.go:68
+run_depth 5 call_depth_service.go:72
+run_depth 9 storage.go:263
 
 python3 "$HERE/summarize_depth_matrix.py" \
   "2=$OUT/depth2" "3=$OUT/depth3" "4=$OUT/depth4" \
+  "5=$OUT/depth5" "6=$OUT/depth6" "10=$OUT/depth10" \
   --output "$OUT/call-depth-summary.csv"
 
 echo "Results: $OUT"
