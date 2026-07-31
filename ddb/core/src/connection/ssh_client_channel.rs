@@ -166,7 +166,9 @@ impl SSHProxyConnection {
                     russh::client::AuthResult::Success => {
                         debug!("Password authentication successful");
                     }
-                    russh::client::AuthResult::Failure { remaining_methods } => {
+                    russh::client::AuthResult::Failure {
+                        remaining_methods, ..
+                    } => {
                         return Err(anyhow::anyhow!(
                             "Password authentication failed. Available methods: {:?}",
                             remaining_methods
@@ -195,7 +197,9 @@ impl SSHProxyConnection {
                     russh::client::AuthResult::Success => {
                         debug!("Public key authentication successful");
                     }
-                    russh::client::AuthResult::Failure { remaining_methods } => {
+                    russh::client::AuthResult::Failure {
+                        remaining_methods, ..
+                    } => {
                         return Err(anyhow::anyhow!(
                             "Public key authentication failed. Available methods: {:?}",
                             remaining_methods

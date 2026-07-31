@@ -244,8 +244,12 @@ impl DbgManager {
                     .and_then(|sd| sd.service_weaver_conf.as_ref())
                     .expect("Service weaver config missing for service weaver auto discovery.");
                 let (exited_sender, _exited) = tokio::sync::watch::channel(false);
+                let jump_client_config = RusshClientConfig {
+                    nodelay: true,
+                    ..RusshClientConfig::default()
+                };
                 let mut jump_host_session = russh::client::connect(
-                    Arc::new(RusshClientConfig::default()),
+                    Arc::new(jump_client_config),
                     (swc.jump_client_host.clone(), swc.jump_client_port),
                     crate::connection::ssh_client_channel::SSHProxyClientHandler(exited_sender),
                 )
@@ -262,7 +266,9 @@ impl DbgManager {
                         russh::client::AuthResult::Success => {
                             debug!("Password authentication successful");
                         }
-                        russh::client::AuthResult::Failure { remaining_methods } => {
+                        russh::client::AuthResult::Failure {
+                            remaining_methods, ..
+                        } => {
                             panic!(
                                 "Password authentication failed. Available methods: {:?}",
                                 remaining_methods
@@ -273,6 +279,14 @@ impl DbgManager {
                         panic!("Authentication error: {:?}", e);
                     }
                 }
+
+                // OpenSSH enables TCP_NODELAY when a session command starts,
+                // but not for connections that only use direct-tcpip channels.
+                // Run a no-op command once so small forwarded replies are not
+                // held behind the peer's delayed ACK timer.
+                let mut latency_channel = jump_host_session.channel_open_session().await.unwrap();
+                latency_channel.exec(true, "true").await.unwrap();
+                while latency_channel.wait().await.is_some() {}
 
                 let mut serviceweaver_producer = crate::discovery::k8s_producer::K8sProducer::new(
                     config.clone(),

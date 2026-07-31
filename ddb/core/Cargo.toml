@@ -13,7 +13,7 @@ name = "ddb"
 path = "src/main.rs"
 
 [dependencies]
-russh = "0.50.0" # ssh
+russh = "=0.62.5" # ssh
 gdbmi = { path = "../gdbmi" } # gdbmi
 toml = "0.8.19" # depends on if we want to use toml for config
 rumqttc = "0.24.0" # mqtt client
