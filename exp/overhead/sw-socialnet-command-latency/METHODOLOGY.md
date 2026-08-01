@@ -7,7 +7,7 @@ before the ServiceWeaver runtime extension; the DDB Rust source is unchanged.
 
 Latency starts at DDB's timestamped `received cmd` record and ends at its final
 token-matched timestamped MI output. One warm-up pass is excluded. The reported
-table contains 30 measured batches. Each batch submits one tokened DBT for every
+table contains 10 measured batches. Each batch submits one tokened DBT for every
 discovered thread before waiting for responses, then waits for the entire batch
 before starting the next one. Thread submission is interleaved across DDB
 sessions to expose cross-process concurrency. All batches run under one global

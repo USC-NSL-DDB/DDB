@@ -13,7 +13,7 @@ Commands:
   setup      Bootstrap k3s from workers.txt, deploy/seed app, and prepare DDB
   check      Validate the configured k3s nodes and application placement
   smoke      Run two DBTs on one thread across the attached cluster
-  run        Run 30 DBTs for every thread across all cluster processes
+  run        Run 10 DBTs for every thread across all cluster processes
   results    Print the latest aggregate table
 EOF
 }

@@ -135,7 +135,7 @@ pub fn get_dbg_mgr() -> Arc<DbgManager> {
 }
 
 #[cfg_attr(feature = "profile", tracing::instrument(skip_all))]
-async fn run_main() -> Result<()> {
+async fn run_main(command_workers: usize) -> Result<()> {
     let mut app = App::new(Config::global().conf.api_server_port);
     app.run(get_shutdown_ctrl().subscribe());
 
@@ -154,7 +154,7 @@ async fn run_main() -> Result<()> {
         CmdHandler::new(adapter)
     });
 
-    let cmd_flow_handle = std::thread::spawn(|| {
+    let cmd_flow_handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(5)
             .thread_name("dbg-cmd-flow")
@@ -163,10 +163,10 @@ async fn run_main() -> Result<()> {
             .unwrap();
         rt.block_on(async {
             let tracker = cmd_flow::get_cmd_tracker();
-            tracker.clone().start(10);
+            tracker.clone().start(command_workers);
 
             let cmd_handler = get_cmd_handler();
-            cmd_handler.clone().start(10);
+            cmd_handler.clone().start(command_workers);
 
             get_rt_status().up(Component::CmdFlow);
 
@@ -266,6 +266,7 @@ async fn run_main() -> Result<()> {
 async fn main() -> Result<()> {
     // init_console_subscriber();
     let args = arg::Args::parse();
+    let command_workers = args.command_workers;
     let logging_settings = LoggingSettings::from_args(&args);
     Config::init_global(args.config)?;
     let app_dir_conf = AppDirConfig::from_config(Config::global());
@@ -285,7 +286,7 @@ async fn main() -> Result<()> {
         .with_logging_settings(logging_settings)
         .run()?;
     
-    run_main().await?;
+    run_main(command_workers).await?;
 
     // Gracefully shutdown the OpenTelemetry tracer to flush pending spans
     tracing_guards.shutdown();

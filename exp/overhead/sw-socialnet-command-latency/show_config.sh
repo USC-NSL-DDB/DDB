@@ -48,6 +48,7 @@ Expected cluster nodes:    $cluster_node_count
 Application deployments:   $EXPECTED_DEPLOYMENTS
 Replicas per deployment:   $SOCIALNET_REPLICAS
 Expected app processes:    $EXPECTED_PROCESSES
+Command workers:           $COMMAND_WORKERS
 Application label key:     $APP_LABEL_KEY
 Debugger prefix:           $DEBUGGER_CONTAINER_PREFIX
 SocialNet build image:     $SOCIALNET_GO_IMAGE

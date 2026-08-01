@@ -4,7 +4,7 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-repetitions="${DEPTH_REPETITIONS:-30}"
+repetitions="${DEPTH_REPETITIONS:-10}"
 warmup="${DEPTH_WARMUP:-3}"
 output=""
 

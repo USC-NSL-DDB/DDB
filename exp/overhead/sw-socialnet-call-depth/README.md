@@ -59,8 +59,8 @@ latency samples are collected.
 
 The fixed SocialNet revision is
 `613f316ca060b94545e850324f91eef1ceb7639b`. Full runs use three preparation
-cycles and 30 same-pause commands per depth. The first same-pause command is
-hidden and excluded, leaving 29 reported warm samples.
+cycles and 10 same-pause commands per depth. The first same-pause command is
+hidden and excluded, leaving 9 reported warm samples.
 
 Do not edit generated files under `runtime/` or `results/`. Setup renders all
 DDB and SocialNet configuration from the checked-in templates. The DDB template
@@ -142,7 +142,7 @@ The main table is `call-depth-summary.csv`; per-depth samples, DDB logs, trigger
 logs, boundary counts, and kernel evidence are stored beside it.
 
 Each run prints the six-depth table and its linear fit. The first DBT at every
-depth primes the same-pause command path; the remaining 29 samples appear in
+depth primes the same-pause command path; the remaining 9 samples appear in
 `call-depth-summary.csv`.
 
 ## 4. Cleanup

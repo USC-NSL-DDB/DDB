@@ -130,7 +130,7 @@ placement and topology spreading, and prepares the command-latency debugger
 configuration. Calling call-depth `restore` first is unnecessary.
 
 `smoke` runs one excluded warm-up batch followed by two measured batches on one
-thread. `run` uses one excluded warm-up batch followed by 30 measured batches.
+thread. `run` uses one excluded warm-up batch followed by 10 measured batches.
 Every batch submits exactly one DBT for every discovered thread, waits for the
 entire batch to complete, and only then starts the next batch. Threads are
 ordered round-robin across the DDB sessions so DDB's command workers can run

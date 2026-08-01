@@ -22,5 +22,5 @@ the fixed 14-process deployment.
 
 The first same-pause DBT primes the command path and is excluded from all
 reported results and terminal progress. It remains only in the raw per-depth
-CSV for auditability. The results table uses repeats 2–30. P95 and P99 use
+CSV for auditability. The results table uses repeats 2–10. P95 and P99 use
 `sorted_values[int(p * (n - 1))]`.

@@ -4,9 +4,10 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-repetitions="${COMMAND_REPETITIONS:-30}"
+repetitions="${COMMAND_REPETITIONS:-10}"
 warmup="${COMMAND_WARMUP_PASSES:-1}"
 thread_limit="${COMMAND_THREAD_LIMIT:-0}"
+command_workers="$COMMAND_WORKERS"
 output=""
 
 while [[ $# -gt 0 ]]; do
@@ -20,11 +21,12 @@ while [[ $# -gt 0 ]]; do
     --repetitions) repetitions="$2"; shift 2 ;;
     --warmup-passes) warmup="$2"; shift 2 ;;
     --thread-limit) thread_limit="$2"; shift 2 ;;
+    --command-workers) command_workers="$2"; shift 2 ;;
     --output-dir) output="$2"; shift 2 ;;
     -h|--help)
       cat <<EOF
 Usage: $0 [--smoke] [--repetitions N] [--warmup-passes N]
-          [--thread-limit N] [--output-dir DIR]
+          [--thread-limit N] [--command-workers N] [--output-dir DIR]
 EOF
       exit 0
       ;;
@@ -58,6 +60,9 @@ trap postcheck_detached EXIT
 ddb_revision="$(git -C "$DDB_REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 socialnet_revision="$(git -C "$SOCIALNET_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 
+[[ "$command_workers" =~ ^[1-9][0-9]*$ ]] \
+  || die "command workers must be a positive integer, got '$command_workers'"
+
 note "Command latency: concurrent-batch warmup=$warmup repetitions=$repetitions thread-limit=$thread_limit"
 python3 "$ARTIFACT_DIR/run_command_latency.py" \
   --ddb "$DDB_BIN" \
@@ -72,6 +77,7 @@ python3 "$ARTIFACT_DIR/run_command_latency.py" \
   --warmup-passes "$warmup" \
   --repetitions "$repetitions" \
   --thread-limit "$thread_limit" \
+  --command-workers "$command_workers" \
   --output-dir "$output"
 
 mkdir -p "$RESULTS_ROOT"

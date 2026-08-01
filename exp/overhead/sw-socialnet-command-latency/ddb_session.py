@@ -108,7 +108,10 @@ class DdbSession:
         command_timeout: float = 60.0,
         console_level: str = "debug",
         echo: bool = False,
+        command_workers: int = 20,
     ) -> None:
+        if command_workers < 1:
+            raise ValueError("command_workers must be positive")
         self.ddb = ddb.expanduser().resolve()
         self.config = config.expanduser().resolve()
         self.output_dir = output_dir.expanduser().resolve()
@@ -118,6 +121,7 @@ class DdbSession:
         self.command_timeout = command_timeout
         self.console_level = console_level
         self.echo = echo
+        self.command_workers = command_workers
 
         self.process: subprocess.Popen[str] | None = None
         self.lines: list[ObservedLine] = []
@@ -147,6 +151,8 @@ class DdbSession:
             self.console_level,
             "--file-level",
             "debug",
+            "--command-workers",
+            str(self.command_workers),
         ]
         self.process = subprocess.Popen(
             argv,
@@ -437,6 +443,11 @@ class DdbSession:
             )
             response_text = "\n".join(line.text for line in command_responses)
             boundaries = response_text.count('boundary_frame="1"')
+            status = (
+                "error"
+                if re.search(rf"^{item.token}\^error\b", response_text, re.M)
+                else "ok"
+            )
             result = CommandResult(
                 sample=item.sample,
                 phase=item.phase,
@@ -451,7 +462,7 @@ class DdbSession:
                 submit_to_complete_ms=(completed - item.submitted_ns) / 1_000_000,
                 latency_ms=latency_ms,
                 response_count=len(command_responses),
-                status="ok",
+                status=status,
                 rpc_boundaries=boundaries if command_name(item.command) == "dbt" else -1,
                 service_frames=boundaries + 1 if command_name(item.command) == "dbt" else -1,
             )
@@ -547,6 +558,7 @@ class DdbSession:
         )
         response_text = "\n".join(line.text for line in responses)
         boundaries = response_text.count('boundary_frame="1"')
+        status = "error" if re.search(rf"^{token}\^error\b", response_text, re.M) else "ok"
         result = CommandResult(
             sample=sample,
             phase=phase,
@@ -561,7 +573,7 @@ class DdbSession:
             submit_to_complete_ms=(completed - submitted) / 1_000_000,
             latency_ms=paper_latency_ms,
             response_count=len(responses),
-            status="ok",
+            status=status,
             rpc_boundaries=boundaries if command_name(command) == "dbt" else -1,
             service_frames=boundaries + 1 if command_name(command) == "dbt" else -1,
         )

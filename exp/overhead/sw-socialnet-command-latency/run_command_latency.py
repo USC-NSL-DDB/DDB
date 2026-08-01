@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure repeated DBT latency for every thread during one global pause."""
+"""Measure DBT latency during one global pause and the final continue latency."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 
 from analyze_latency import percentile, print_table
-from ddb_session import DdbSession, default_output_dir, write_metadata
+from ddb_session import CommandResult, DdbSession, default_output_dir, write_metadata
 from kernel_checks import verify_tracers
 
 
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repetitions",
         type=int,
-        default=30,
+        default=10,
         help="Measured concurrent all-thread batches.",
     )
     parser.add_argument(
@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Use N threads selected round-robin across sessions (0 means all).",
+    )
+    parser.add_argument(
+        "--command-workers",
+        type=int,
+        default=20,
+        help="DDB workers used for command execution and response collection.",
     )
     parser.add_argument(
         "--thread-id",
@@ -202,10 +208,13 @@ def write_summaries(
     output_dir: Path,
     inventory: list[dict],
     rows: list[dict],
+    continue_results: list[CommandResult],
     *,
     process_count: int,
+    command_workers: int,
 ) -> list[dict]:
     measured = [row for row in rows if row["phase"] == "measure" and row["status"] == "ok"]
+    measured_continues = [result for result in continue_results if result.status == "ok"]
     by_thread: dict[int, list[dict]] = defaultdict(list)
     by_depth: dict[int, list[dict]] = defaultdict(list)
     for row in measured:
@@ -285,9 +294,21 @@ def write_summaries(
             {
                 "command": "dbt",
                 "process_count": process_count,
+                "command_workers": command_workers,
                 "thread_count": len(by_thread),
                 "repetitions": max(int(row["pass"]) for row in measured),
                 **metric_row([float(row["latency_ms"]) for row in measured]),
+            }
+        )
+    if measured_continues:
+        overall.append(
+            {
+                "command": "continue",
+                "process_count": process_count,
+                "command_workers": command_workers,
+                "thread_count": "",
+                "repetitions": len(measured_continues),
+                **metric_row([result.latency_ms for result in measured_continues]),
             }
         )
     write_csv(
@@ -296,6 +317,7 @@ def write_summaries(
         [
             "command",
             "process_count",
+            "command_workers",
             "thread_count",
             "repetitions",
             "count",
@@ -317,11 +339,12 @@ def main() -> None:
         args.repetitions < 1
         or args.warmup_passes < 0
         or args.thread_limit < 0
+        or args.command_workers < 1
         or args.batch_timeout <= 0
     ):
         raise SystemExit(
             "repetitions and batch-timeout must be positive; "
-            "warmup/thread-limit cannot be negative"
+            "command-workers must be positive; warmup/thread-limit cannot be negative"
         )
 
     output_dir = (args.output_dir or default_output_dir("all-thread-dbt")).expanduser().resolve()
@@ -337,12 +360,14 @@ def main() -> None:
             ),
             "schedule": (
                 "each batch submits one DBT per selected thread concurrently and waits; "
-                "warmup and measured batches repeat inside one global pause"
+                "warmup and measured batches repeat inside one global pause; measured "
+                "broadcast continues are separated by unmeasured cluster pauses"
             ),
             "expected_sessions": args.expected_sessions,
             "warmup_passes": args.warmup_passes,
             "repetitions": args.repetitions,
             "thread_limit": args.thread_limit,
+            "command_workers": args.command_workers,
             "requested_thread_ids": args.thread_id or [],
             "namespace": args.namespace,
             "selector": args.selector,
@@ -355,7 +380,9 @@ def main() -> None:
     workload_log = None
     inventory: list[dict] = []
     rows: list[dict] = []
+    continue_results: list[CommandResult] = []
     unexpected_stop_sessions: set[int] = set()
+    needs_cleanup_continue = False
     session = DdbSession(
         args.ddb,
         args.config,
@@ -365,9 +392,11 @@ def main() -> None:
         command_timeout=args.timeout,
         console_level=args.console_level,
         echo=args.echo_ddb,
+        command_workers=args.command_workers,
     )
     try:
         session.start()
+        needs_cleanup_continue = True
         attached = {int(item["sid"]) for item in session.api_json("/sessions")}
         if len(attached) != args.expected_sessions:
             raise RuntimeError(
@@ -380,8 +409,14 @@ def main() -> None:
                 shlex.split(args.workload), stdout=workload_log, stderr=subprocess.STDOUT
             )
 
-        session.send("-exec-continue", sample=-1, phase="setup", timeout=args.timeout)
+        setup_continue, _ = session.send(
+            "-exec-continue", sample=-1, phase="setup", timeout=args.timeout
+        )
+        if setup_continue.status != "ok":
+            raise RuntimeError("initial continue command failed")
+        needs_cleanup_continue = False
         time.sleep(args.run_seconds)
+        needs_cleanup_continue = True
         pause_marker = session.mark()
         pause, _ = session.send(
             "-exec-interrupt", sample=-1, phase="setup-cluster-pause", timeout=args.timeout
@@ -470,15 +505,9 @@ def main() -> None:
                 unexpected_stop_sessions.update(batch_stops)
 
                 pass_latencies: list[float] = []
-                for ordinal, (thread, (result, response)) in enumerate(
+                for ordinal, (thread, (result, _)) in enumerate(
                     zip(inventory, completed), start=1
                 ):
-                    response_text = "\n".join(item.text for item in response)
-                    status = (
-                        "error"
-                        if re.search(rf"^{result.token}\^error\b", response_text, re.M)
-                        else "ok"
-                    )
                     row = {
                         "phase": phase,
                         "pass": pass_number,
@@ -491,11 +520,11 @@ def main() -> None:
                         "rpc_boundaries": result.rpc_boundaries,
                         "service_frames": result.service_frames,
                         "batch_new_stop_events": len(batch_stops),
-                        "status": status,
+                        "status": result.status,
                         "token": result.token,
                     }
                     rows.append(row)
-                    if status == "ok":
+                    if result.status == "ok":
                         pass_latencies.append(result.latency_ms)
 
                 if phase == "measure" and pass_latencies:
@@ -509,9 +538,42 @@ def main() -> None:
 
         execute_batch("warmup", args.warmup_passes)
         execute_batch("measure", args.repetitions)
+
+        for pass_number in range(1, args.repetitions + 1):
+            result, _ = session.send(
+                "-exec-continue",
+                sample=pass_number,
+                phase="measure",
+                timeout=args.timeout,
+            )
+            continue_results.append(result)
+            if result.status != "ok":
+                raise RuntimeError(f"continue command failed in pass {pass_number}")
+            needs_cleanup_continue = False
+
+            if pass_number < args.repetitions:
+                needs_cleanup_continue = True
+                pause_marker = session.mark()
+                pause_result, _ = session.send(
+                    "-exec-interrupt",
+                    sample=pass_number,
+                    phase="continue-repause",
+                    timeout=args.timeout,
+                )
+                if pause_result.status != "ok":
+                    raise RuntimeError(f"continue repause failed in pass {pass_number}")
+                session.wait_for_stopped_sessions(
+                    attached,
+                    after=pause_marker,
+                    timeout=args.timeout,
+                )
     finally:
         try:
-            if session.process is not None and session.process.poll() is None:
+            if (
+                needs_cleanup_continue
+                and session.process is not None
+                and session.process.poll() is None
+            ):
                 session.send("-exec-continue", sample=-1, phase="cleanup", timeout=args.timeout)
         except Exception as exc:
             print(f"cleanup continue failed: {exc}", flush=True)
@@ -546,18 +608,31 @@ def main() -> None:
         )
 
     overall = write_summaries(
-        output_dir, inventory, rows, process_count=args.expected_sessions
+        output_dir,
+        inventory,
+        rows,
+        continue_results,
+        process_count=args.expected_sessions,
+        command_workers=args.command_workers,
     )
-    print("\nAggregated measured DBT latency:")
+    print("\nAggregated measured command latency:")
     print_table(overall)
     print(f"\nResults: {output_dir}")
 
     failures = [row for row in rows if row["status"] != "ok"]
+    continue_failures = [result for result in continue_results if result.status != "ok"]
     expected_count = len(inventory) * args.repetitions
     measured_count = sum(row["phase"] == "measure" for row in rows)
-    if failures or unexpected_stop_sessions or measured_count != expected_count:
+    if (
+        failures
+        or continue_failures
+        or len(continue_results) != args.repetitions
+        or unexpected_stop_sessions
+        or measured_count != expected_count
+    ):
         raise SystemExit(
-            f"validation failed: errors={len(failures)}, "
+            f"validation failed: errors={len(failures) + len(continue_failures)}, "
+            f"continue-samples={len(continue_results)}, "
             f"unexpected-stop-sessions={sorted(unexpected_stop_sessions)}, "
             f"measured={measured_count}, expected={expected_count}"
         )

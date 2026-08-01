@@ -472,7 +472,7 @@ impl CmdHandler {
         self.handlers.insert(prefix.to_string(), Box::new(handler));
     }
 
-    pub fn start(self: Arc<Self>, num_workers: u32) {
+    pub fn start(self: Arc<Self>, num_workers: usize) {
         let handles: Vec<_> = (0..num_workers)
             .map(|_| {
                 let handler = Arc::clone(&self);

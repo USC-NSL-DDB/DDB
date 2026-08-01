@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected call depth, including the originating process.",
     )
     parser.add_argument("--group-id", type=int, help="DDB group ID; auto-selected when only one exists")
-    parser.add_argument("--samples", type=int, default=30)
+    parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=3)
     configured_ddb = os.environ.get("DDB_BIN")
     parser.add_argument(

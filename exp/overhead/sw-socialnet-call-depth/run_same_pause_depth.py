@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--expected-sessions", type=int, default=14)
     parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--repetitions", type=int, default=30)
+    parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--group-id", type=int)
     parser.add_argument("--api-port", type=int, default=5000)
     parser.add_argument("--timeout", type=float, default=90.0)
