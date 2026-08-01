@@ -32,7 +32,7 @@ mkdir -p "$stage/bench"
 cp "$source_file" "$stage/bench/init_social_graph.go"
 
 patch --dry-run --silent -d "$stage" -p1 < "$patch_file" \
-  || die "the recipe seeder patch does not match the accepted SocialNet source"
+  || die "the recipe seeder patch does not match the current SocialNet source"
 patch --silent -d "$stage" -p1 < "$patch_file"
 
 if [[ "$(grep -Fc 'r.Intn' "$stage/bench/init_social_graph.go")" -ne 3 ]]; then

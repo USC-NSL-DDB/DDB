@@ -94,6 +94,10 @@ PY
 )"
 note "Pinning all $EXPECTED_PROCESSES application processes to $TARGET_NODE"
 for deployment in "${deployments[@]}"; do
+  k set image "$deployment" "serviceweaver=$SOCIALNET_IMAGE" >/dev/null
+  k patch "$deployment" -p \
+    '{"spec":{"template":{"spec":{"containers":[{"name":"serviceweaver","imagePullPolicy":"Never"}]}}}}' \
+    >/dev/null
   # Replace any multi-node recipe selector instead of merging incompatible
   # placement requirements into it.
   k patch "$deployment" --type json -p \

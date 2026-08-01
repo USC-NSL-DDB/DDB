@@ -43,7 +43,9 @@ sudo systemctl disable --now firewalld
 ```
 
 Follow the call-depth or command-latency experiment README linked in the table
-above for its specific topology and run instructions.
+above for its specific topology and run instructions. Those two recipes use
+the same locally built ServiceWeaver image, so switching between them changes
+only placement, replicas, and debugger configuration.
 
 ## Installing DDB on the head/control node
 

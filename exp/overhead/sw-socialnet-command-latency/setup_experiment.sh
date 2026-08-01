@@ -104,7 +104,10 @@ print(json.dumps({"spec": {"template": {"spec": {
 PY
 )"
 for deployment in "${deployments[@]}"; do
-  k set image "$deployment" "serviceweaver=$SOCIALNET_RUNTIME_IMAGE" >/dev/null
+  k set image "$deployment" "serviceweaver=$SOCIALNET_IMAGE" >/dev/null
+  k patch "$deployment" -p \
+    '{"spec":{"template":{"spec":{"containers":[{"name":"serviceweaver","imagePullPolicy":"Never"}]}}}}' \
+    >/dev/null
   k patch "$deployment" --type json -p \
     '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' \
     >/dev/null 2>&1 || true

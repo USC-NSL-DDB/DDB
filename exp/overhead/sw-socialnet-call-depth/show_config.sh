@@ -29,7 +29,6 @@ DDB repository:            ${DDB_REPO_ROOT:-<not detected>}
 DDB Rust source:           $DDB_SOURCE_DIR
 DDB binary:                $DDB_BIN
 SocialNet source:          $SOCIALNET_DIR
-Expected SocialNet commit: $EXPECTED_SOCIALNET_COMMIT
 Kubeconfig:                $KUBECONFIG
 Native-k3s service:        ${display_service:-<no active service detected>}
 Native-k3s install pin:    $K3S_INSTALL_VERSION

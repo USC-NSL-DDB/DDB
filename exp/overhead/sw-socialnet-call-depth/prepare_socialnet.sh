@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and deploy SocialNet using only this recipe's deployment configuration.
+# Build and deploy SocialNet with the shared artifact runtime image.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -24,6 +24,13 @@ validate_local_assets
 resolve_target_node
 
 ensure_native_k3s
+require_command docker
+require_command weaver-kube
+require_command sudo
+[[ -n "$K3S_BIN" && -x "$K3S_BIN" ]] \
+  || die "native k3s executable was not resolved from $K3S_SERVICE"
+docker info >/dev/null 2>&1 \
+  || die "cannot access the Docker daemon as $(id -un)"
 
 deployment_count="$(app_deployment_count)"
 listener="$(apilistener_service)"
@@ -42,7 +49,14 @@ seed_bin="$SOCIALNET_DIR/src/bench/init_social.out"
 [[ -f "$SOCIALNET_DIR/build.sh" ]] \
   || die "SocialNet build entry point not found: $SOCIALNET_DIR/build.sh"
 
+image_present=0
+if docker image inspect "$SOCIALNET_IMAGE" >/dev/null 2>&1; then
+  image_present=1
+fi
+
 needs_build=$rebuild
+[[ "$image_present" -eq 1 ]] || needs_build=1
+[[ "$app_present" -ne 0 ]] || needs_build=1
 for binary in "$server_bin" "$client_bin" "$seed_bin"; do
   [[ -x "$binary" ]] || needs_build=1
 done
@@ -53,7 +67,7 @@ if [[ "$app_present" -eq 0 || "$needs_build" -eq 1 ]]; then
     require_command docker
     docker info >/dev/null 2>&1 \
       || die "cannot access the Docker daemon as $(id -un)"
-    note "Building the accepted SocialNet source with $SOCIALNET_GO_IMAGE"
+    note "Building the current SocialNet source with $SOCIALNET_GO_IMAGE"
     docker run --rm \
       --user "$(id -u):$(id -g)" \
       -v "$SOCIALNET_DIR:/app" \
@@ -80,7 +94,7 @@ if [[ "$app_present" -eq 0 || "$needs_build" -eq 1 ]]; then
       ;;
   native)
     require_command go
-    note "Building the accepted SocialNet source with the host Go toolchain"
+    note "Building the current SocialNet source with the host Go toolchain"
     (cd "$SOCIALNET_DIR" && bash ./build.sh)
       ;;
   *)
@@ -93,31 +107,6 @@ for binary in "$server_bin" "$client_bin" "$seed_bin"; do
   [[ -f "$binary" ]] || die "SocialNet build did not produce $binary"
   chmod +x "$binary"
 done
-
-if [[ "$app_present" -eq 1 && "$rebuild" -eq 0 ]]; then
-  note "SocialNet is already deployed ($deployment_count application processes); keeping it"
-  exit 0
-fi
-
-if [[ "$app_present" -eq 1 ]]; then
-  note "Replacing the existing SocialNet deployment"
-  k delete all,configmaps -l "$APP_LABEL_KEY=$(app_label_value)" \
-    --ignore-not-found >/dev/null
-  for _ in $(seq 1 30); do
-    [[ "$(app_deployment_count)" -eq 0 ]] && break
-    sleep 2
-  done
-  [[ "$(app_deployment_count)" -eq 0 ]] \
-    || die "the existing SocialNet deployment did not terminate"
-fi
-
-require_command docker
-require_command weaver-kube
-require_command sudo
-[[ -n "$K3S_BIN" && -x "$K3S_BIN" ]] \
-  || die "native k3s executable was not resolved from $K3S_SERVICE"
-docker info >/dev/null 2>&1 \
-  || die "cannot access the Docker daemon as $(id -un)"
 
 allow_target_node_workloads
 kubectl --kubeconfig "$KUBECONFIG" get namespace "$NAMESPACE" >/dev/null 2>&1 \
@@ -144,25 +133,51 @@ sed \
   -e "s/@NAMESPACE@/$namespace_escaped/g" \
   "$SOCIALNET_CONFIG_TEMPLATE" > "$kube_config"
 
-note "Generating SocialNet manifests from this recipe's configuration"
-generated_yaml="$(weaver-kube deploy "$kube_config" | tail -n 1)"
-[[ -f "$generated_yaml" ]] \
-  || die "weaver-kube did not produce a manifest (reported '$generated_yaml')"
-cp "$generated_yaml" "$runtime_dir/manifests.yaml"
+if [[ "$app_present" -eq 0 || "$needs_build" -eq 1 ]]; then
+  note "Building the shared SocialNet :latest image from the current source"
+  generated_yaml="$(weaver-kube deploy "$kube_config" | tail -n 1)"
+  [[ -f "$generated_yaml" ]] \
+    || die "weaver-kube did not produce a manifest (reported '$generated_yaml')"
+  cp "$generated_yaml" "$runtime_dir/manifests.yaml"
+  sed -i -E \
+    's/^([[:space:]]*)imagePullPolicy: (Always|IfNotPresent)$/\1imagePullPolicy: Never/' \
+    "$runtime_dir/manifests.yaml"
+else
+  note "Using the shared SocialNet runtime image $SOCIALNET_IMAGE"
+fi
 
 # weaver-kube builds with Docker while native k3s normally uses containerd.
-# Import the exact image built from this source so k3s cannot silently pull a
-# different image with the same tag from a registry.
+# Import the local image so k3s cannot silently pull a different image with the
+# same repository name from a registry.
 image_archive="$runtime_dir/socialnet-image.tar"
 trap 'rm -f "$image_archive"' EXIT
-note "Importing the freshly built SocialNet image into native k3s"
+note "Importing the shared SocialNet image into the controller"
 docker image inspect "$SOCIALNET_IMAGE" >/dev/null \
   || die "weaver-kube did not build the configured image: $SOCIALNET_IMAGE"
 docker save --output "$image_archive" "$SOCIALNET_IMAGE"
 sudo env K3S_DATA_DIR="$K3S_DATA_DIR" \
   "$K3S_BIN" ctr images import "$image_archive" >/dev/null
 
+if [[ "$app_present" -eq 1 && "$rebuild" -eq 0 ]]; then
+  note "Reusing the existing SocialNet resources with the shared runtime image"
+  exit 0
+fi
+
+if [[ "$app_present" -eq 1 ]]; then
+  note "Replacing the existing SocialNet deployment"
+  k delete all,configmaps -l "$APP_LABEL_KEY=$(app_label_value)" \
+    --ignore-not-found >/dev/null
+  for _ in $(seq 1 30); do
+    [[ "$(app_deployment_count)" -eq 0 ]] && break
+    sleep 2
+  done
+  [[ "$(app_deployment_count)" -eq 0 ]] \
+    || die "the existing SocialNet deployment did not terminate"
+fi
+
 note "Applying the generated SocialNet manifests"
+[[ -r "$runtime_dir/manifests.yaml" ]] \
+  || die "generated SocialNet manifest is missing: $runtime_dir/manifests.yaml"
 kubectl --kubeconfig "$KUBECONFIG" apply -f "$runtime_dir/manifests.yaml" >/dev/null
 
 for _ in $(seq 1 30); do

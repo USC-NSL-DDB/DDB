@@ -9,7 +9,6 @@ Measure DDB backtrace latency at call depths 2, 3, 4, 5, 6, and 10.
 - Linux with systemd and passwordless or interactive `sudo` access.
 - `python3`, `curl`, `patch`, Docker, Cargo, Go, and Git.
 - Registry access for the build, debugger, and gateway images
-- SocialNet commit `613f316ca060b94545e850324f91eef1ceb7639b`
 
 `setup` checks and, when missing, installs native k3s `v1.36.2+k3s1`,
 `kubectl` `v1.36.2`, and `weaver-kube` `v0.23.0`. The k3s installation uses
@@ -57,10 +56,14 @@ joined, but no measured application process may run on them. The run also
 requires exactly 14 DDB sessions. A mismatch stops the recipe before any
 latency samples are collected.
 
-The fixed SocialNet revision is
-`613f316ca060b94545e850324f91eef1ceb7639b`. Full runs use three preparation
-cycles and 10 same-pause commands per depth. The first same-pause command is
-hidden and excluded, leaving 9 reported warm samples.
+Full runs use three preparation cycles and 10 same-pause commands per depth.
+The first same-pause command is hidden and excluded, leaving 9 reported warm
+samples.
+
+The call-depth and command-latency recipes use the same locally built
+`socialnet-serviceweaver:latest` image. Setup builds it from the current
+SocialNet checkout when necessary, imports it directly into k3s, and prevents
+Kubernetes from substituting a registry image.
 
 Do not edit generated files under `runtime/` or `results/`. Setup renders all
 DDB and SocialNet configuration from the checked-in templates. The DDB template
@@ -78,35 +81,34 @@ loads `/workspace/extension.py` first and then
 ./artifact.sh results
 ```
 
-After updating the SocialNet source on an already configured cluster, replace
-the running application once with:
+To force a clean application image rebuild and replace the running deployment,
+use:
 
 ```bash
 ./artifact.sh setup --rebuild-app
 ```
 
-`setup` installs any missing Kubernetes tools, builds and deploys SocialNet,
-fixes each process at one replica, pins all 14 processes to `TARGET_NODE`,
-seeds the application, builds DDB, creates the private SSH gateway, injects
-debugger sidecars, and renders the DDB configuration. It builds the graph
-seeder with the checked-in random-number race fix.
+`setup` installs any missing Kubernetes tools, prepares the shared SocialNet
+image, fixes each process at one replica, pins all 14 processes to
+`TARGET_NODE`, seeds the application, builds DDB, creates the private SSH
+gateway, injects debugger sidecars, and renders the DDB configuration. It
+builds the graph seeder with the checked-in random-number race fix.
 
-An existing command-latency cluster does not need to be torn down. Run
-call-depth setup on its controller; setup reuses the deployed application and
-reconfigures only its replicas and placement:
+An existing command-latency cluster does not need to be torn down. Call-depth
+setup selects the shared application image and reconfigures its replicas and
+placement:
 
 ```bash
 cd ../sw-socialnet-call-depth
 ./artifact.sh setup
 ```
 
-To switch back, rerun command-latency setup with the application build and
-deployment steps skipped. It restores the replica count and worker placement
-from that recipe's configuration:
+To switch back, rerun command-latency setup. It distributes the same image to
+the workers and restores that recipe's replica count and placement:
 
 ```bash
 cd ../sw-socialnet-command-latency
-./artifact.sh setup --skip-app-build --skip-app-deploy
+./artifact.sh setup
 ```
 
 `config` is an optional read-only report of what setup resolved. It does not

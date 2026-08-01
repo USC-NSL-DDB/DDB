@@ -71,9 +71,8 @@ GATEWAY_NAME="ddb-command-latency-gateway"
 SIDECAR_INJECTOR="$ARTIFACT_DIR/ddb/setup_debug_container.py"
 SOCIALNET_CONFIG_TEMPLATE="$ARTIFACT_DIR/socialnet/config.yaml.tmpl"
 SOCIALNET_APP_TEMPLATE="$ARTIFACT_DIR/socialnet/weaver.toml.tmpl"
+SOCIALNET_IMAGE="${SOCIALNET_IMAGE:-h21565897/socialnet-serviceweaver:latest}"
 SOCIALNET_GO_IMAGE="${SOCIALNET_GO_IMAGE:-golang:1.21.1}"
-SOCIALNET_RUNTIME_IMAGE="${SOCIALNET_RUNTIME_IMAGE:-docker.io/h21565897/socialnet-serviceweaver@sha256:bb3d4f9de9796a579f450d2c15204becc1db20942cf18bdc11a47293ee017d1d}"
-EXPECTED_SOCIALNET_COMMIT="${EXPECTED_SOCIALNET_COMMIT:-2a0fcf2a9a1de3ed8b2e4352b790dfa20ca5794a}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ARTIFACT_DIR/results}"
 
 export KUBECONFIG
@@ -352,10 +351,6 @@ validate_source_inputs() {
   Set SOCIALNET_DIR in $ARTIFACT_DIR/artifact.env."
   [[ -d "$SOCIALNET_DIR" ]] || die "ServiceWeaver SocialNet source not found: $SOCIALNET_DIR
   Set SOCIALNET_DIR in $ARTIFACT_DIR/artifact.env."
-  local socialnet_commit
-  socialnet_commit="$(git -C "$SOCIALNET_DIR" rev-parse HEAD 2>/dev/null || true)"
-  [[ "$socialnet_commit" == "$EXPECTED_SOCIALNET_COMMIT" ]] \
-    || die "SocialNet revision mismatch: expected $EXPECTED_SOCIALNET_COMMIT, found ${socialnet_commit:-unknown}"
 }
 
 validate_local_assets() {

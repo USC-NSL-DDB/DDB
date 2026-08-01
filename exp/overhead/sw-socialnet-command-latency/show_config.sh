@@ -32,7 +32,6 @@ DDB repository:            ${DDB_REPO_ROOT:-<not detected>}
 DDB Rust source:           $DDB_SOURCE_DIR
 DDB binary:                $DDB_BIN
 SocialNet source:          $SOCIALNET_DIR
-Expected SocialNet commit: $EXPECTED_SOCIALNET_COMMIT
 Controller private IP:     ${CONTROLLER_IP:-<set in artifact.env>}
 Worker SSH inventory:      $WORKERS_FILE ($worker_count configured)
 SSH identity:              ${SSH_IDENTITY_FILE:-<default SSH configuration>}
@@ -52,7 +51,7 @@ Command workers:           $COMMAND_WORKERS
 Application label key:     $APP_LABEL_KEY
 Debugger prefix:           $DEBUGGER_CONTAINER_PREFIX
 SocialNet build image:     $SOCIALNET_GO_IMAGE
-Pinned SocialNet image:    $SOCIALNET_RUNTIME_IMAGE
+SocialNet runtime image:   $SOCIALNET_IMAGE
 Generated DDB config:      $DDB_CONFIG
 Results directory:         $RESULTS_ROOT
 Endpoint override:         ${ADDR:-<auto-detect NodePort>}

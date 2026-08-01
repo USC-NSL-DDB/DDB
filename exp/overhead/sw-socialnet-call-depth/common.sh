@@ -63,10 +63,9 @@ GATEWAY_SERVICE_NAME="sw-socialnet-call-depth-ssh-gateway"
 SIDECAR_INJECTOR="$ARTIFACT_DIR/ddb/setup_debug_container.py"
 SOCIALNET_CONFIG_TEMPLATE="$ARTIFACT_DIR/socialnet/config.yaml.tmpl"
 SOCIALNET_WEAVER_TEMPLATE="$ARTIFACT_DIR/socialnet/weaver.toml.tmpl"
-SOCIALNET_IMAGE="${SOCIALNET_IMAGE:-h21565897/socialnet-serviceweaver:12345}"
+SOCIALNET_IMAGE="${SOCIALNET_IMAGE:-h21565897/socialnet-serviceweaver:latest}"
 SOCIALNET_GO_IMAGE="${SOCIALNET_GO_IMAGE:-golang:1.21.1}"
 SOCIALNET_BUILD_MODE="${SOCIALNET_BUILD_MODE:-docker}"
-EXPECTED_SOCIALNET_COMMIT="${EXPECTED_SOCIALNET_COMMIT:-2a0fcf2a9a1de3ed8b2e4352b790dfa20ca5794a}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ARTIFACT_DIR/results}"
 
 export KUBECONFIG
@@ -310,11 +309,6 @@ validate_source_inputs() {
   Set SOCIALNET_DIR in $ARTIFACT_DIR/artifact.env."
   [[ -d "$SOCIALNET_DIR" ]] || die "ServiceWeaver SocialNet source not found: $SOCIALNET_DIR
   Set SOCIALNET_DIR in $ARTIFACT_DIR/artifact.env."
-  local socialnet_commit
-  socialnet_commit="$(git -C "$SOCIALNET_DIR" rev-parse HEAD 2>/dev/null || true)"
-  [[ "$socialnet_commit" == "$EXPECTED_SOCIALNET_COMMIT" ]] \
-    || die "SocialNet revision mismatch: expected $EXPECTED_SOCIALNET_COMMIT, found ${socialnet_commit:-unknown}
-  The source-line breakpoints in this recipe are revision-specific."
 }
 
 validate_local_assets() {
