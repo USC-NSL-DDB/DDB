@@ -23,6 +23,7 @@ pub(super) struct OutputDemux {
     event_sequence: u64,
     event_tx: mpsc::Sender<ProjectedEvent>,
     applied: watch::Receiver<u64>,
+    ready: watch::Sender<bool>,
 }
 
 impl OutputDemux {
@@ -30,12 +31,14 @@ impl OutputDemux {
         sid: u64,
         event_tx: mpsc::Sender<ProjectedEvent>,
         applied: watch::Receiver<u64>,
+        ready: watch::Sender<bool>,
     ) -> Self {
         Self {
             sid,
             event_sequence: 0,
             event_tx,
             applied,
+            ready,
         }
     }
 
@@ -48,6 +51,9 @@ impl OutputDemux {
         let sid = self.sid;
         for record in protocol.push_stdout(bytes)? {
             match record {
+                ProtocolRecord::Ready => {
+                    self.ready.send_replace(true);
+                }
                 ProtocolRecord::Event {
                     token,
                     message,

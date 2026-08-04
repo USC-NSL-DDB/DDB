@@ -9,11 +9,28 @@ use crate::debugger::protocol::{
 };
 
 const RECORD_PREFIX: &str = "@DDB@";
+const TEST_CHANNEL_ID: &str = "test-channel";
 const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LldbJsonProtocol {
     buffer: BytesMut,
+    record_prefix: String,
+}
+
+impl LldbJsonProtocol {
+    pub fn new(channel_id: &str) -> Self {
+        Self {
+            buffer: BytesMut::new(),
+            record_prefix: format!("{RECORD_PREFIX}{channel_id}@"),
+        }
+    }
+}
+
+impl Default for LldbJsonProtocol {
+    fn default() -> Self {
+        Self::new(TEST_CHANNEL_ID)
+    }
 }
 
 #[derive(Serialize)]
@@ -27,6 +44,10 @@ struct Request<'a> {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Response {
+    Ready {
+        #[serde(rename = "message")]
+        _message: String,
+    },
     Event {
         #[serde(default)]
         token: Option<u64>,
@@ -60,6 +81,10 @@ enum JsonStreamKind {
 }
 
 impl DebuggerProtocol for LldbJsonProtocol {
+    fn starts_ready(&self) -> bool {
+        false
+    }
+
     fn encode_command(&self, command: ProtocolCommand<'_>) -> Result<Bytes> {
         encode_request(command.token, command.command, command.thread_id)
     }
@@ -80,7 +105,7 @@ impl DebuggerProtocol for LldbJsonProtocol {
         let text =
             std::str::from_utf8(&complete).context("LLDB bridge output is not valid UTF-8")?;
         text.lines()
-            .filter_map(decode_line)
+            .filter_map(|line| decode_line(line, &self.record_prefix))
             .collect::<Result<Vec<_>>>()
     }
 }
@@ -96,8 +121,8 @@ pub(crate) fn encode_request(token: u64, command: &str, thread_id: Option<u64>) 
     Ok(Bytes::from(encoded))
 }
 
-fn decode_line(line: &str) -> Option<Result<ProtocolRecord>> {
-    let Some(prefix) = line.find(RECORD_PREFIX) else {
+fn decode_line(line: &str, record_prefix: &str) -> Option<Result<ProtocolRecord>> {
+    let Some(json) = line.strip_prefix(record_prefix) else {
         let line = line.trim();
         return (!line.is_empty()).then(|| {
             Ok(ProtocolRecord::Stream {
@@ -106,7 +131,6 @@ fn decode_line(line: &str) -> Option<Result<ProtocolRecord>> {
             })
         });
     };
-    let json = &line[prefix + RECORD_PREFIX.len()..];
     Some(
         serde_json::from_str::<Response>(json)
             .with_context(|| format!("failed to decode LLDB bridge record: {json}"))
@@ -116,6 +140,7 @@ fn decode_line(line: &str) -> Option<Result<ProtocolRecord>> {
 
 fn normalize_response(response: Response) -> Result<ProtocolRecord> {
     match response {
+        Response::Ready { .. } => Ok(ProtocolRecord::Ready),
         Response::Event {
             token,
             message,
@@ -196,7 +221,7 @@ mod tests {
         let mut protocol = LldbJsonProtocol::default();
         assert!(protocol
             .push_stdout(Bytes::from_static(
-                b"@DDB@{\"type\":\"result\",\"token\":2,"
+                b"@DDB@test-channel@{\"type\":\"result\",\"token\":2,"
             ))
             .unwrap()
             .is_empty());
@@ -231,5 +256,54 @@ mod tests {
                 message: "(lldb) command script import bridge.py".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn embedded_record_marker_in_inferior_output_is_not_protocol() {
+        let mut protocol = LldbJsonProtocol::default();
+        let records = protocol
+            .push_stdout(Bytes::from_static(
+                b"inferior: @DDB@{\"type\":\"result\",\"token\":7,\"message\":\"done\"}\n",
+            ))
+            .unwrap();
+
+        assert_eq!(
+            records,
+            vec![ProtocolRecord::Stream {
+                kind: StreamKind::Console,
+                message: "inferior: @DDB@{\"type\":\"result\",\"token\":7,\"message\":\"done\"}"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn another_sessions_record_prefix_is_plain_output() {
+        let mut protocol = LldbJsonProtocol::new("expected");
+        let records = protocol
+            .push_stdout(Bytes::from_static(
+                b"@DDB@other@{\"type\":\"result\",\"token\":7,\"message\":\"done\"}\n",
+            ))
+            .unwrap();
+
+        assert_eq!(
+            records,
+            vec![ProtocolRecord::Stream {
+                kind: StreamKind::Console,
+                message: "@DDB@other@{\"type\":\"result\",\"token\":7,\"message\":\"done\"}"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn ready_record_marks_the_structured_protocol_boundary() {
+        let mut protocol = LldbJsonProtocol::new("expected");
+        let records = protocol
+            .push_stdout(Bytes::from_static(
+                b"@DDB@expected@{\"type\":\"ready\",\"message\":\"ready\"}\n",
+            ))
+            .unwrap();
+        assert_eq!(records, vec![ProtocolRecord::Ready]);
     }
 }

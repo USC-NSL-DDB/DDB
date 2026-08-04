@@ -7,7 +7,7 @@ use std::sync::{
 
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use tokio::sync::{mpsc, oneshot, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio::sync::{mpsc, oneshot, watch, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 use crate::{
     cmd_flow::event::DebuggerEventReducer,
@@ -79,6 +79,7 @@ pub struct SessionHandle {
     requests: mpsc::Sender<RuntimeRequest>,
     control: mpsc::UnboundedSender<ControlRequest>,
     gate: Arc<RwLock<()>>,
+    ready: watch::Receiver<bool>,
     /// Wire correlation tokens for this session, minted once per submission.
     tokens: Arc<SimpleCounter>,
     in_flight: Arc<AtomicUsize>,
@@ -90,6 +91,7 @@ impl std::fmt::Debug for SessionHandle {
         f.debug_struct("SessionHandle")
             .field("sid", &self.sid)
             .field("in_flight", &self.in_flight.load(Ordering::Acquire))
+            .field("ready", &*self.ready.borrow())
             .field("closed", &self.closed.load(Ordering::Acquire))
             .finish()
     }
@@ -121,6 +123,8 @@ impl SessionHandle {
         reducer: Arc<DebuggerEventReducer>,
         config: RuntimeConfig,
     ) -> (Self, tokio::task::JoinHandle<()>) {
+        let starts_ready = protocol.starts_ready();
+        let (ready_tx, ready) = watch::channel(starts_ready);
         let (requests, request_rx) = mpsc::channel(COMMAND_MAILBOX_CAPACITY);
         let (control, control_rx) = mpsc::unbounded_channel();
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -133,6 +137,7 @@ impl SessionHandle {
             tokens: Arc::new(SimpleCounter::new()),
             in_flight: Arc::clone(&in_flight),
             closed: Arc::clone(&closed),
+            ready,
         };
         let task = tokio::spawn(run_session(
             sid,
@@ -141,6 +146,7 @@ impl SessionHandle {
             RuntimeWire {
                 transport,
                 protocol,
+                ready: ready_tx,
             },
             RuntimeShared {
                 in_flight,
@@ -155,6 +161,21 @@ impl SessionHandle {
 
     pub fn sid(&self) -> u64 {
         self.sid
+    }
+
+    pub async fn wait_until_ready(&self) -> Result<()> {
+        let mut ready = self.ready.clone();
+        if *ready.borrow() {
+            return Ok(());
+        }
+        loop {
+            ready.changed().await.map_err(|_| {
+                anyhow!("session {} stopped before its protocol was ready", self.sid)
+            })?;
+            if *ready.borrow_and_update() {
+                return Ok(());
+            }
+        }
     }
 
     pub async fn submit(&self, command: SessionCommand) -> Result<SessionTicket> {

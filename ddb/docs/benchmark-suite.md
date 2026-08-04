@@ -66,6 +66,9 @@ Current scenarios:
   warmup is charged to session readiness rather than this command-latency
   metric. Pass `--lldb-eager-stack-warmup false` to measure cold LLDB command
   behavior and keep the selected policy alongside results in JSON output.
+  The harness does not issue a remote-metadata lookup before the timed
+  `-bt-remote`; the timer includes command submission, and either a correlated
+  success or error result terminates the wait so failed samples fail promptly.
 
 Primary scaling axis:
 

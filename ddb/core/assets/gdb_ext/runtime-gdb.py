@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Callable
+import os
 from enum import Enum
 import socket
 import time
@@ -59,8 +60,9 @@ def log_level_to_int(level: LogLevel) -> int:
 
 
 gdb.write("Loading DDB support.\n")
-FAKETIME_PRESENT: bool = False
-IN_INIT: bool = True
+FAKETIME_INITIAL_VALUE = "-00000000000000000000.000000000"
+FAKETIME_NO_CACHE_NAME = "FAKETIME_NO_CACHE"
+FAKETIME_NO_CACHE_VALUE = "1"
 G_LOG_LEVEL = LogLevel.INFO
 
 
@@ -752,18 +754,12 @@ class GetThreadKtidMI(gdb.MICommand):
         return result
 
 
-pause_start_time = 0
-accumulated_time = 0
+pause_start_time: Optional[int] = None
+accumulated_time = 0.0
 
 
 def stop_handler(event: gdb.StopEvent):
-    global pause_start_time, IN_INIT, FAKETIME_PRESENT
-    if IN_INIT:
-        check_faketime_present()
-        IN_INIT = False
-    if not FAKETIME_PRESENT:
-        dbg(LogLevel.DEBUG, "FAKETIME not present, stop handler is skipped.")
-        return
+    global pause_start_time
     pause_start_time = time.perf_counter_ns()
     dbg(LogLevel.DEBUG, f"pause detected, ts (ns) at pause: {pause_start_time}")
 
@@ -774,44 +770,37 @@ gdb.events.stop.connect(stop_handler)
 def sync_pause_time(
     on_finish: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    global pause_start_time, accumulated_time, FAKETIME_PRESENT
-    ret = {}
-    if not FAKETIME_PRESENT:
-        ret = on_finish() if on_finish else {}
+    global pause_start_time, accumulated_time
+    faketime_ptr = find_env_variable("FAKETIME")
+    if faketime_ptr is None:
         dbg(LogLevel.DEBUG, "Time sync is skipped due to FAKETIME not present.")
-        return ret
+        return on_finish() if on_finish else {}
 
-    try:
-        curr_ts_ns = time.perf_counter_ns()
-        dbg(LogLevel.DEBUG, f"current timestamp: {curr_ts_ns}")
-
-        start_env_time = curr_ts_ns
-        if pause_start_time > curr_ts_ns:
-            raise Exception("pause_start_time is greater than current time")
-
-        pause_duration_s = (curr_ts_ns - pause_start_time) / 1e9
-        accumulated_time = round(pause_duration_s + accumulated_time, 9)
-
-        dbg(
-            LogLevel.DEBUG,
-            f"pause_duration: {pause_duration_s} s, accumulated_time: {accumulated_time} s",
+    no_cache_ptr = find_env_variable(FAKETIME_NO_CACHE_NAME)
+    no_cache_entry = read_c_string(no_cache_ptr) if no_cache_ptr is not None else ""
+    if no_cache_entry != f"{FAKETIME_NO_CACHE_NAME}={FAKETIME_NO_CACHE_VALUE}":
+        raise gdb.GdbError(
+            "cannot synchronize FAKETIME: the inferior must be started with "
+            f"FAKETIME_NO_CACHE=1 (observed {no_cache_entry!r})"
         )
-        success = modify_env_variable("FAKETIME", f"-{accumulated_time}")
-        if not success:
-            dbg(LogLevel.WARNING, "Setting FAKETIME failed while FAKETIME is present.")
-        else:
-            dbg(
-                LogLevel.DEBUG,
-                f"modify_env_variable time: {(time.perf_counter_ns() - start_env_time) / 1e6} ms",
-            )
-            dbg(
-                LogLevel.DEBUG,
-                f"sync_pause_time completed, total paused time: {accumulated_time} s",
-            )
-    except Exception as e:
-        dbg(LogLevel.ERROR, f"sync_pause_time error: {e}")
-    finally:
-        ret = on_finish() if on_finish else {}
+
+    if pause_start_time is None:
+        raise gdb.GdbError("cannot synchronize FAKETIME: no debugger pause is active")
+    curr_ts_ns = time.perf_counter_ns()
+    if pause_start_time > curr_ts_ns:
+        raise gdb.GdbError("cannot synchronize FAKETIME: pause clock moved backwards")
+
+    pause_duration_s = (curr_ts_ns - pause_start_time) / 1e9
+    candidate_accumulated_time = round(accumulated_time + pause_duration_s, 9)
+    faketime_value = f"-{candidate_accumulated_time:.9f}"
+    modify_env_variable("FAKETIME", faketime_value, faketime_ptr)
+
+    accumulated_time = candidate_accumulated_time
+    pause_start_time = None
+    ret = on_finish() if on_finish else {}
+    if ret is None:
+        ret = {}
+    ret["faketime"] = f"FAKETIME={faketime_value}"
     return ret
 
 
@@ -912,7 +901,10 @@ def find_environ_ptr():
             if line.strip().endswith(" environ"):
                 try:
                     addr_str = line.split()[0]
-                    return gdb.Value(int(addr_str, 16))
+                    storage_addr = gdb.Value(int(addr_str, 16))
+                    char_ptr_t = gdb.lookup_type("char").pointer()
+                    environ_storage_t = char_ptr_t.pointer().pointer()
+                    return storage_addr.cast(environ_storage_t).dereference()
                 except Exception as e:
                     dbg(
                         LogLevel.ERROR,
@@ -924,6 +916,10 @@ def find_environ_ptr():
     except Exception as e:
         dbg(LogLevel.ERROR, f"Error finding environ: {e}")
         return None
+
+
+def read_c_string(value: gdb.Value) -> str:
+    return value.string().split("\0", 1)[0]
 
 
 def find_env_variable(env_name: str) -> gdb.Value | None:
@@ -949,8 +945,7 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
         char_ptr_ptr_t = char_ptr_t.pointer()
         environ_ptr = environ_ptr.cast(char_ptr_ptr_t)
 
-        idx = 0
-        while True:
+        for idx in range(4096):
             # Get pointer to current environment string
             env_str_ptr = environ_ptr[idx]
 
@@ -959,11 +954,10 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
                 break
 
             # Convert to string safely
-            env_str = env_str_ptr.string()
+            env_str = read_c_string(env_str_ptr)
 
             if env_str.startswith(f"{env_name}="):
                 return env_str_ptr
-            idx += 1
     except Exception as e:
         dbg(LogLevel.ERROR, f"Error find environment variable: {e}")
         return None
@@ -972,49 +966,22 @@ def find_env_variable(env_name: str) -> gdb.Value | None:
     return None
 
 
-def check_faketime_present() -> bool:
-    """
-    Checks if the FAKETIME environment variable is present and updates the global flag.
-
-    Returns:
-        bool: True if FAKETIME is present, False otherwise.
-
-    Side effects:
-        - Sets the global FAKETIME_PRESENT flag
-        - Logs INFO if FAKETIME is found, WARNING if not found
-    """
-    global FAKETIME_PRESENT
-
-    env_var_ptr = find_env_variable("FAKETIME")
-
-    if env_var_ptr is not None:
-        FAKETIME_PRESENT = True
-        try:
-            env_str = env_var_ptr.string()
-            dbg(LogLevel.DEBUG, f"FAKETIME environment variable found: {env_str}")
-        except Exception as e:
-            dbg(
-                LogLevel.ERROR,
-                f"FAKETIME environment variable found at {int(env_var_ptr):#x}, but failed to read string: {e}",
-            )
-    else:
-        FAKETIME_PRESENT = False
-        dbg(LogLevel.WARNING, "FAKETIME environment variable not found")
-
-    return FAKETIME_PRESENT
-
-
-def modify_env_variable(env_name, new_value) -> bool:
-    env_var_ptr = find_env_variable(env_name)
+def modify_env_variable(env_name, new_value, env_var_ptr=None) -> None:
+    env_var_ptr = env_var_ptr or find_env_variable(env_name)
     if env_var_ptr is None:
-        dbg(LogLevel.ERROR, f"Environment variable '{env_name}' not found")
-        return False
+        raise gdb.GdbError(
+            f"cannot synchronize FAKETIME: environment variable '{env_name}' not found"
+        )
     try:
         # Convert to string safely
-        env_str = env_var_ptr.string()
+        env_str = read_c_string(env_var_ptr)
 
         # Create new string
         new_env_str = f"{env_name}={new_value}"
+        if len(new_env_str) > len(env_str):
+            raise gdb.GdbError(
+                "cannot synchronize FAKETIME: existing environment buffer is too small"
+            )
 
         # Get the string buffer address
         env_var_addr = int(env_var_ptr)
@@ -1023,15 +990,31 @@ def modify_env_variable(env_name, new_value) -> bool:
             LogLevel.DEBUG,
             f"Modifying environment variable '{env_name}' at address {env_var_addr:#x} from '{env_str}' to '{new_env_str}'",
         )
-        # Write the new string directly to the existing buffer
-        for i, c in enumerate(new_env_str):
-            gdb.execute(f"set *(char*)({env_var_addr + i}) = {ord(c)}")
-        # Null terminate
-        gdb.execute(f"set *(char*)({env_var_addr + len(new_env_str)}) = 0")
-        return True
+        encoded = (new_env_str + "\0").encode("utf-8")
+        inferior = gdb.selected_inferior()
+        inferior.write_memory(env_var_addr, encoded)
+        written = inferior.read_memory(env_var_addr, len(encoded)).tobytes()
+        if written != encoded:
+            raise gdb.GdbError(
+                "failed to synchronize FAKETIME: read-after-write verification failed"
+            )
+    except gdb.GdbError:
+        raise
     except Exception as e:
-        dbg(LogLevel.ERROR, f"Error: {e}")
-    return False
+        raise gdb.GdbError(f"failed to synchronize FAKETIME: {e}") from e
+
+
+def configure_faketime_launch_environment():
+    if os.environ.get("FAKETIME") is None:
+        return
+    gdb.execute(f"set environment FAKETIME {FAKETIME_INITIAL_VALUE}", to_string=True)
+    gdb.execute(
+        f"set environment {FAKETIME_NO_CACHE_NAME} {FAKETIME_NO_CACHE_VALUE}",
+        to_string=True,
+    )
+
+
+configure_faketime_launch_environment()
 
 
 GetGlobalVarCommand()
@@ -1060,6 +1043,3 @@ RecordTimeAndFinishMiCommand()
 
 ListSignalsMICommand()
 InterruptIfRunningMICommand()
-
-# Check if FAKETIME environment variable is present
-# check_faketime_present()

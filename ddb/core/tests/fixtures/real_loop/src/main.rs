@@ -1,4 +1,8 @@
-use std::{thread, time::Duration};
+use std::{
+    path::Path,
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(target_os = "linux")]
 fn allow_debugger_attach() {
@@ -28,6 +32,26 @@ fn parse_arg(args: &[String], flag: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
+fn realtime_nanos() -> i128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("fixture clock should be after the Unix epoch")
+        .as_nanos() as i128
+}
+
+fn write_clock_delta(path: &Path, before_ns: i128, after_ns: i128) {
+    let mappings = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
+    let report = format!(
+        "delta_ns={}\nfaketime={}\nno_cache={}\nld_preload={}\nlibfaketime_loaded={}",
+        after_ns - before_ns,
+        std::env::var("FAKETIME").unwrap_or_else(|_| "<missing>".to_string()),
+        std::env::var("FAKETIME_NO_CACHE").unwrap_or_else(|_| "<missing>".to_string()),
+        std::env::var("LD_PRELOAD").unwrap_or_else(|_| "<missing>".to_string()),
+        mappings.contains("libfaketime"),
+    );
+    std::fs::write(path, report).expect("clock report should be written");
+}
+
 fn main() {
     allow_debugger_attach();
     let args = std::env::args().collect::<Vec<_>>();
@@ -36,10 +60,15 @@ fn main() {
         .unwrap_or(25);
     let max_iterations = parse_arg(&args, "--max-iterations")
         .and_then(|value| value.parse::<u64>().ok());
+    let clock_report = parse_arg(&args, "--clock-report").map(std::path::PathBuf::from);
 
     let mut counter = 0u64;
     loop {
+        let before_ns = realtime_nanos();
         counter = breakpoint_target(counter);
+        if let Some(path) = clock_report.as_deref() {
+            write_clock_delta(path, before_ns, realtime_nanos());
+        }
         if let Some(max_iterations) = max_iterations {
             if counter >= max_iterations {
                 break;

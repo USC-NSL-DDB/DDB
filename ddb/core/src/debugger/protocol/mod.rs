@@ -30,6 +30,7 @@ pub enum StreamKind {
 /// A backend-neutral record decoded from a debugger's native protocol.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ProtocolRecord {
+    Ready,
     Event {
         token: Option<u64>,
         message: String,
@@ -52,6 +53,9 @@ pub enum ProtocolRecord {
 /// session receives its own instance. The runtime never assumes newline
 /// framing, MI syntax, or a particular command-completion model.
 pub trait DebuggerProtocol: Send + std::fmt::Debug {
+    fn starts_ready(&self) -> bool {
+        true
+    }
     fn encode_command(&self, command: ProtocolCommand<'_>) -> Result<Bytes>;
     fn push_stdout(&mut self, bytes: Bytes) -> Result<Vec<ProtocolRecord>>;
 }

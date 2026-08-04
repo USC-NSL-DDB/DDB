@@ -7,12 +7,14 @@ on:
       - dev
     paths:
       - 'ddb/**/*.rs'
+      - 'ddb/**/*.py'
       - 'ddb/**/Cargo.toml'
       - 'ddb/**/Cargo.lock'
       - '.github/workflows/rust-check.yml'
   pull_request:
     paths:
       - 'ddb/**/*.rs'
+      - 'ddb/**/*.py'
       - 'ddb/**/Cargo.toml'
       - 'ddb/**/Cargo.lock'
       - '.github/workflows/rust-check.yml'
@@ -26,6 +28,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install debugger test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdb lldb libfaketime
       
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -10,7 +10,8 @@ use crate::{
         utils::get_hostname,
     },
     debugger::{
-        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerCapabilities,
+        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerBootstrapPlan,
+        DebuggerCapabilities, DebuggerSessionContext,
     },
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
@@ -53,12 +54,10 @@ impl GdbBackend {
 
         builder.add(GdbCmd::SetOption(GdbOption::MiAsync(true)));
 
-        if plugin_bootstrap.requires_core_runtime {
-            builder.add(GdbCmd::ConsoleExec(format!(
-                "source {}",
-                CORE_GDB_RUNTIME_ASSET.output_path().to_string_lossy()
-            )));
-        }
+        builder.add(GdbCmd::ConsoleExec(format!(
+            "source {}",
+            CORE_GDB_RUNTIME_ASSET.output_path().to_string_lossy()
+        )));
         if plugin_bootstrap.requires_proclet_runtime {
             builder.add(GdbCmd::ConsoleExec(format!(
                 "source {}",
@@ -98,11 +97,11 @@ impl GdbBackend {
         }
 
         for cmd in &plugin_bootstrap.pre_attach_commands {
-            builder.add(cmd);
+            builder.add(GdbCmd::ConsoleExec(cmd.command.trim().to_string()));
         }
 
         for cmd in &session.prerun_debugger_cmds {
-            builder.add(cmd);
+            builder.add(GdbCmd::ConsoleExec(cmd.command.trim().to_string()));
         }
 
         Ok(())
@@ -146,7 +145,7 @@ impl DebuggerBackend for GdbBackend {
         }
     }
 
-    fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
+    fn create_protocol(&self, _context: &DebuggerSessionContext) -> Box<dyn DebuggerProtocol> {
         Box::new(super::protocol::GdbMiProtocol::default())
     }
 
@@ -168,7 +167,8 @@ impl DebuggerBackend for GdbBackend {
         session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
+        _context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
         let mut builder = DbgCmdListBuilder::<GdbCmd>::new();
         self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
 
@@ -183,10 +183,10 @@ impl DebuggerBackend for GdbBackend {
         }
 
         for cmd in &session.postrun_debugger_cmds {
-            builder.add(cmd);
+            builder.add(GdbCmd::ConsoleExec(cmd.command.trim().to_string()));
         }
 
-        Ok(builder.build())
+        Ok(DebuggerBootstrapPlan::commands(builder.build()))
     }
 
     fn build_local_binary_commands(
@@ -195,7 +195,8 @@ impl DebuggerBackend for GdbBackend {
         session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
+        _context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
         let mut builder = DbgCmdListBuilder::<GdbCmd>::new();
         self.apply_common_setup(config, session, plugin_bootstrap, &mut builder)?;
 
@@ -210,7 +211,7 @@ impl DebuggerBackend for GdbBackend {
         }
 
         for cmd in &session.postrun_debugger_cmds {
-            builder.add(cmd);
+            builder.add(GdbCmd::ConsoleExec(cmd.command.trim().to_string()));
         }
 
         builder.add(GdbCmd::Plain(if session.stop_at_entry {
@@ -219,7 +220,7 @@ impl DebuggerBackend for GdbBackend {
             "-exec-run".to_string()
         }));
 
-        Ok(builder.build())
+        Ok(DebuggerBootstrapPlan::commands(builder.build()))
     }
 
     fn interrupt_command(&self) -> String {

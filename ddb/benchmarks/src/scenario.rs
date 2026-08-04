@@ -325,29 +325,21 @@ fn measure_distributed_backtrace(
         let root_sid = session_id_by_tag(&sessions, &dbt_session_tag(1))?;
         let leaf_gtid = harness.resolve_single_thread_gtid(leaf_sid, config.timeout)?;
 
-        if depth > 1 {
-            let token = 80_000_u64 + iteration as u64;
-            let cursor =
-                harness.send_cli_cmd(&format!("{token}-get-remote-bt --thread {leaf_gtid}"))?;
-            let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
-                line.starts_with(&format!("{token}^done"))
-            })?;
-            if !line.contains("message=\"success\"") {
-                bail!(
-                    "distributed-backtrace preflight remote metadata lookup failed at depth {}: {}",
-                    depth,
-                    line
-                );
-            }
-        }
-
         let token = 90_000_u64 + iteration as u64;
-        let cursor = harness.send_cli_cmd(&format!("{token}-bt-remote --thread {leaf_gtid}"))?;
         let start = Instant::now();
+        let cursor = harness.send_cli_cmd(&format!("{token}-bt-remote --thread {leaf_gtid}"))?;
         let line = harness.wait_for_stdout_match(cursor, config.timeout, |line| {
-            line.starts_with(&format!("{token}^done"))
+            is_terminal_result(line, token)
         })?;
         let elapsed = start.elapsed();
+
+        if line.starts_with(&format!("{token}^error")) {
+            bail!(
+                "distributed-backtrace command failed at depth {}: {}",
+                depth,
+                line
+            );
+        }
 
         if !line.contains(&format!("session=\"{leaf_sid}\"")) {
             bail!(
@@ -382,6 +374,12 @@ fn measure_distributed_backtrace(
     }
 
     Ok(samples)
+}
+
+fn is_terminal_result(line: &str, token: u64) -> bool {
+    let prefix = format!("{token}^");
+    line.strip_prefix(&prefix)
+        .is_some_and(|result| result.starts_with("done") || result.starts_with("error"))
 }
 
 fn measure_startup(sessions: usize, config: &ScenarioConfig<'_>) -> Result<Vec<Duration>> {
@@ -435,4 +433,17 @@ where
         }
     }
     Ok(samples)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_terminal_result;
+
+    #[test]
+    fn distributed_backtrace_wait_accepts_success_and_error_for_its_token() {
+        assert!(is_terminal_result("90001^done,message=\"success\"", 90001));
+        assert!(is_terminal_result("90001^error,msg=\"failed\"", 90001));
+        assert!(!is_terminal_result("90002^done", 90001));
+        assert!(!is_terminal_result("90001*stopped", 90001));
+    }
 }

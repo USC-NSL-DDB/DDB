@@ -58,6 +58,59 @@ pub struct DebuggerCapabilities {
     pub serviceweaver_remote_backtrace: bool,
 }
 
+/// Per-session values shared by a backend's bootstrap and protocol codec.
+///
+/// The channel id is intentionally unpredictable: LLDB records share stdout
+/// with the inferior, so a session-specific prefix prevents ordinary inferior
+/// output from being accepted as debugger protocol traffic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebuggerSessionContext {
+    channel_id: String,
+}
+
+impl DebuggerSessionContext {
+    pub fn new() -> Self {
+        Self {
+            channel_id: uuid::Uuid::new_v4().simple().to_string(),
+        }
+    }
+
+    pub fn channel_id(&self) -> &str {
+        &self.channel_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(channel_id: impl Into<String>) -> Self {
+        Self {
+            channel_id: channel_id.into(),
+        }
+    }
+}
+
+impl Default for DebuggerSessionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Ordered debugger startup split at the native-to-structured protocol
+/// boundary. Only `protocol_prelude` is written without correlation; every
+/// semantic command is submitted through the session runtime and validated.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DebuggerBootstrapPlan {
+    pub protocol_prelude: String,
+    pub commands: Vec<String>,
+}
+
+impl DebuggerBootstrapPlan {
+    pub fn commands(commands: Vec<String>) -> Self {
+        Self {
+            protocol_prelude: String::new(),
+            commands,
+        }
+    }
+}
+
 pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &'static str;
     fn capabilities(&self) -> DebuggerCapabilities {
@@ -82,7 +135,10 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
         }
         Ok(())
     }
-    fn create_protocol(&self) -> Box<dyn protocol::DebuggerProtocol>;
+    fn create_protocol(
+        &self,
+        context: &DebuggerSessionContext,
+    ) -> Box<dyn protocol::DebuggerProtocol>;
     fn bundled_assets(&self, config: &Config) -> Vec<BundledDebuggerAsset>;
     fn build_start_command(&self, sudo: bool) -> String;
     fn build_remote_attach_commands(
@@ -91,14 +147,16 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
         session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>>;
+        context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan>;
     fn build_local_binary_commands(
         &self,
         config: &Config,
         session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>>;
+        context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan>;
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
     fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String;

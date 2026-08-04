@@ -108,6 +108,27 @@ impl DdbProcess {
         let config_contents = render_real_binary_config(sessions, "gdb");
         Self::spawn_with_config("ddb-real-integration.yaml", config_contents)
     }
+    pub fn spawn_faketime_binary_sessions(
+        backend: &str,
+        sessions: &[BinarySessionSpec<'_>],
+        libfaketime: &Path,
+    ) -> Self {
+        ensure_debugger_environment(backend);
+        let config_contents = render_real_binary_config(sessions, backend);
+        let libfaketime = libfaketime
+            .to_str()
+            .expect("libfaketime path should be valid utf-8");
+        Self::spawn_with_config_and_env(
+            "ddb-real-faketime-integration.yaml",
+            config_contents,
+            &[
+                ("LD_PRELOAD", libfaketime),
+                ("FAKETIME", "-00000000000000000000.000000000"),
+                ("FAKETIME_DONT_FAKE_MONOTONIC", "1"),
+                ("FAKETIME_DISABLE_SHM", "1"),
+            ],
+        )
+    }
 
     pub fn spawn_lldb_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
         ensure_debugger_environment("lldb");
@@ -119,10 +140,14 @@ impl DdbProcess {
         )
     }
 
+    pub fn spawn_attach_sessions(backend: &str, sessions: &[AttachSessionSpec<'_>]) -> Self {
+        ensure_debugger_environment(backend);
+        let config_contents = render_real_attach_config(sessions, backend);
+        Self::spawn_with_config("ddb-real-attach-integration.yaml", config_contents)
+    }
+
     pub fn spawn_lldb_attach_sessions(sessions: &[AttachSessionSpec<'_>]) -> Self {
-        ensure_debugger_environment("lldb");
-        let config_contents = render_real_attach_config(sessions, "lldb");
-        Self::spawn_with_config("ddb-real-lldb-attach-integration.yaml", config_contents)
+        Self::spawn_attach_sessions("lldb", sessions)
     }
 
     pub fn spawn_real_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
@@ -687,6 +712,45 @@ fn ensure_debugger_environment(debugger: &str) {
         status.success(),
         "{debugger} --version should succeed for real integration tests"
     );
+}
+
+pub fn libfaketime_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("LIBFAKETIME_PATH").map(PathBuf::from) {
+        assert!(
+            path.is_file(),
+            "LIBFAKETIME_PATH does not name a file: {}",
+            path.display()
+        );
+        return path;
+    }
+
+    let multiarch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64-linux-gnu",
+        "aarch64" => "aarch64-linux-gnu",
+        architecture => architecture,
+    };
+    let mut candidates = vec![
+        PathBuf::from(format!("/usr/lib/{multiarch}/faketime/libfaketimeMT.so.1")),
+        PathBuf::from("/usr/lib/faketime/libfaketimeMT.so.1"),
+        PathBuf::from("/usr/local/lib/faketime/libfaketimeMT.so.1"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(
+            PathBuf::from(home)
+                .join(".local")
+                .join("lib")
+                .join("faketime")
+                .join("libfaketimeMT.so.1"),
+        );
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "libfaketimeMT.so.1 should be installed or LIBFAKETIME_PATH should be configured"
+            )
+        })
 }
 
 pub fn build_real_loop_example() -> &'static BuiltRealExample {

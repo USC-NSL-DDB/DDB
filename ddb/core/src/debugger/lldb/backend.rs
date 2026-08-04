@@ -2,7 +2,10 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::{
     common::config::{Config, OnExit},
-    debugger::{protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend},
+    debugger::{
+        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerBootstrapPlan,
+        DebuggerSessionContext,
+    },
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
@@ -16,15 +19,24 @@ use super::{
 pub struct LldbBackend;
 
 impl LldbBackend {
-    fn bridge_command(command: &str) -> Result<String> {
+    fn raw_bridge_command(command: &str) -> Result<String> {
         let bytes = encode_request(0, command, None)?;
         String::from_utf8(bytes.to_vec()).context("LLDB bridge request must be UTF-8")
     }
 
     fn console_command(command: &str) -> Result<String> {
-        Self::bridge_command(&format!(
+        Ok(format!(
             "-interpreter-exec console {}",
             serde_json::to_string(command)?
+        ))
+    }
+
+    fn protocol_prelude(context: &DebuggerSessionContext) -> Result<String> {
+        let bridge_path = LLDB_BRIDGE_ASSET.output_path();
+        Ok(format!(
+            "command script import {}\nscript ddb_lldb_bridge.run(lldb.debugger, {})\n",
+            serde_json::to_string(&bridge_path.to_string_lossy())?,
+            serde_json::to_string(context.channel_id())?,
         ))
     }
 
@@ -37,16 +49,11 @@ impl LldbBackend {
     ) -> Result<()> {
         self.validate_config(config)?;
 
-        commands.push("settings set auto-confirm true\n".to_string());
+        commands.push(Self::console_command("settings set auto-confirm true")?);
         commands.push(format!(
-            "command script import {}\n",
-            LLDB_BRIDGE_ASSET.output_path().to_string_lossy()
-        ));
-        commands.push("script ddb_lldb_bridge.run(lldb.debugger)\n".to_string());
-        commands.push(Self::bridge_command(&format!(
             "-ddb-set-stack-prewarm {}",
             config.conf.debugger.eager_stack_warmup
-        ))?);
+        ));
 
         for script in &plugin_bootstrap.scripts {
             commands.push(Self::console_command(&format!(
@@ -56,41 +63,41 @@ impl LldbBackend {
         }
 
         if let Some(frame_filter) = &config.frame_filter {
-            commands.push(Self::bridge_command("-ddb-filter-config --enable")?);
+            commands.push("-ddb-filter-config --enable".to_string());
             for pattern in &frame_filter.filter_file {
-                commands.push(Self::bridge_command(&format!(
+                commands.push(format!(
                     "-ddb-filter-config --add-file {} --match-type {}",
                     serde_json::to_string(&pattern.pattern)?,
                     pattern.match_type.as_str()
-                ))?);
+                ));
             }
             for pattern in &frame_filter.filter_function {
-                commands.push(Self::bridge_command(&format!(
+                commands.push(format!(
                     "-ddb-filter-config --add-function {} --match-type {}",
                     serde_json::to_string(&pattern.pattern)?,
                     pattern.match_type.as_str()
-                ))?);
+                ));
             }
             for preset in &frame_filter.filter_preset {
-                commands.push(Self::bridge_command(&format!(
+                commands.push(format!(
                     "-ddb-filter-config --preset-enable {}",
                     serde_json::to_string(preset)?
-                ))?);
+                ));
             }
         }
 
         for command in &plugin_bootstrap.pre_attach_commands {
-            commands.push(Self::bridge_command(command.command.trim())?);
+            commands.push(Self::console_command(command.command.trim())?);
         }
         for command in &session.prerun_debugger_cmds {
-            commands.push(Self::bridge_command(command.command.trim())?);
+            commands.push(Self::console_command(command.command.trim())?);
         }
         Ok(())
     }
 
     fn append_postrun(session: &SessionRequest, commands: &mut Vec<String>) -> Result<()> {
         for command in &session.postrun_debugger_cmds {
-            commands.push(Self::bridge_command(command.command.trim())?);
+            commands.push(Self::console_command(command.command.trim())?);
         }
         Ok(())
     }
@@ -101,8 +108,8 @@ impl DebuggerBackend for LldbBackend {
         "lldb"
     }
 
-    fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
-        Box::new(LldbJsonProtocol::default())
+    fn create_protocol(&self, context: &DebuggerSessionContext) -> Box<dyn DebuggerProtocol> {
+        Box::new(LldbJsonProtocol::new(context.channel_id()))
     }
 
     fn bundled_assets(&self, _config: &Config) -> Vec<BundledDebuggerAsset> {
@@ -119,7 +126,8 @@ impl DebuggerBackend for LldbBackend {
         session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
+        context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
         let mut commands = Vec::new();
         self.apply_common_setup(config, session, plugin_bootstrap, &mut commands)?;
         let pid = match &session.mode {
@@ -127,9 +135,12 @@ impl DebuggerBackend for LldbBackend {
             | SessionMode::Local(SessionStart::Attach(pid)) => *pid,
             _ => return Err(anyhow!("invalid mode for LLDB attach")),
         };
-        commands.push(Self::bridge_command(&format!("-target-attach {pid}"))?);
+        commands.push(format!("-target-attach {pid}"));
         Self::append_postrun(session, &mut commands)?;
-        Ok(commands)
+        Ok(DebuggerBootstrapPlan {
+            protocol_prelude: Self::protocol_prelude(context)?,
+            commands,
+        })
     }
 
     fn build_local_binary_commands(
@@ -138,32 +149,39 @@ impl DebuggerBackend for LldbBackend {
         session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
+        context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
         let mut commands = Vec::new();
         self.apply_common_setup(config, session, plugin_bootstrap, &mut commands)?;
         let (path, args) = match &session.mode {
             SessionMode::Local(SessionStart::Binary { path, args }) => (path, args),
             _ => return Err(anyhow!("invalid mode for LLDB binary launch")),
         };
-        commands.push(Self::bridge_command(&format!(
+        commands.push(format!(
             "-file-exec-and-symbols {}",
             serde_json::to_string(path)?
-        ))?);
+        ));
         if !args.is_empty() {
             let args = args
                 .iter()
                 .map(serde_json::to_string)
                 .collect::<serde_json::Result<Vec<_>>>()?
                 .join(" ");
-            commands.push(Self::bridge_command(&format!("-exec-arguments {args}"))?);
+            commands.push(format!("-exec-arguments {args}"));
         }
         Self::append_postrun(session, &mut commands)?;
-        commands.push(Self::bridge_command(if session.stop_at_entry {
-            "-exec-run --start"
-        } else {
-            "-exec-run"
-        })?);
-        Ok(commands)
+        commands.push(
+            if session.stop_at_entry {
+                "-exec-run --start"
+            } else {
+                "-exec-run"
+            }
+            .to_string(),
+        );
+        Ok(DebuggerBootstrapPlan {
+            protocol_prelude: Self::protocol_prelude(context)?,
+            commands,
+        })
     }
 
     fn interrupt_command(&self) -> String {
@@ -179,12 +197,11 @@ impl DebuggerBackend for LldbBackend {
 
     fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
         match action {
-            DebuggerBootstrapAction::Signal(signal) => Self::bridge_command(&format!(
+            DebuggerBootstrapAction::Signal(signal) => format!(
                 "-interpreter-exec console {}",
                 serde_json::to_string(&format!("process signal {signal}"))
                     .expect("serializing a string cannot fail")
-            ))
-            .expect("serializing an LLDB bootstrap request cannot fail"),
+            ),
         }
     }
 
@@ -193,7 +210,7 @@ impl DebuggerBackend for LldbBackend {
             OnExit::DETACH => "detach",
             OnExit::KILL => "kill",
         };
-        Self::bridge_command(&format!("-ddb-shutdown {policy}"))
+        Self::raw_bridge_command(&format!("-ddb-shutdown {policy}"))
             .expect("serializing an LLDB shutdown request cannot fail")
     }
 }
@@ -228,27 +245,33 @@ mod tests {
     }
 
     #[test]
-    fn local_launch_bootstrap_enters_bridge_before_json_requests() {
+    fn local_launch_bootstrap_separates_protocol_prelude_from_commands() {
         let config = Config::default();
         let plugin = resolve_framework_plugin(&config);
         let request = binary_request(&config);
-        let commands = LldbBackend
+        let context = DebuggerSessionContext::for_test("0123456789abcdef0123456789abcdef");
+        let plan = LldbBackend
             .build_local_binary_commands(
                 &config,
                 &request,
                 plugin.as_ref(),
                 &plugin.debugger_bootstrap(&config),
+                &context,
             )
             .unwrap();
 
-        assert_eq!(commands[0], "settings set auto-confirm true\n");
-        assert!(commands[1].starts_with("command script import "));
-        assert_eq!(commands[2], "script ddb_lldb_bridge.run(lldb.debugger)\n");
-        assert!(commands[3].contains("-ddb-set-stack-prewarm true"));
-        assert!(commands
+        assert!(plan.protocol_prelude.starts_with("command script import "));
+        assert!(plan
+            .protocol_prelude
+            .contains("0123456789abcdef0123456789abcdef"));
+        assert!(plan.commands[0].contains("settings set auto-confirm true"));
+        assert!(plan.commands[1].contains("-ddb-set-stack-prewarm true"));
+        assert!(plan
+            .commands
             .iter()
             .any(|command| command.contains("-file-exec-and-symbols")));
-        assert!(commands
+        assert!(plan
+            .commands
             .iter()
             .any(|command| command.contains("program with spaces")));
     }
@@ -258,5 +281,39 @@ mod tests {
         let commands = LldbBackend.shutdown_commands(&OnExit::DETACH);
         assert!(commands.contains("-ddb-shutdown detach"));
         assert!(!commands.contains("quit"));
+    }
+
+    #[test]
+    fn configured_debugger_commands_use_the_native_lldb_console() {
+        let mut config = Config::default();
+        config
+            .prerun_debugger_cmds
+            .push(crate::common::config::DebuggerCommand {
+                name: "disable-aslr".to_string(),
+                command: "settings set target.disable-aslr false".to_string(),
+            });
+        let plugin = resolve_framework_plugin(&config);
+        let request = binary_request(&config);
+
+        let context = DebuggerSessionContext::for_test("0123456789abcdef0123456789abcdef");
+        let plan = LldbBackend
+            .build_local_binary_commands(
+                &config,
+                &request,
+                plugin.as_ref(),
+                &plugin.debugger_bootstrap(&config),
+                &context,
+            )
+            .unwrap();
+
+        let configured = plan
+            .commands
+            .iter()
+            .find(|command| command.contains("target.disable-aslr"))
+            .expect("configured debugger command should be present");
+        assert!(
+            configured.contains("-interpreter-exec console"),
+            "configured command did not use LLDB's console interpreter: {configured}"
+        );
     }
 }

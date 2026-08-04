@@ -14,6 +14,7 @@ use crate::{
     cmd_flow::breakpoint::BreakpointEventPublisher,
     connection::{RunningTransport, TransportEvent, TransportRequest},
     debugger::gdb::protocol::GdbMiProtocol,
+    debugger::lldb::protocol::LldbJsonProtocol,
     notification::NotificationManager,
     state::RuntimeModel,
 };
@@ -465,5 +466,37 @@ async fn presentation_io_is_not_part_of_state_consistency() {
         .expect("state-consistent response should wait for publication admission, not output")
         .unwrap();
 
+    stop(&handle, task).await;
+}
+
+#[tokio::test]
+async fn waits_for_protocol_ready_record_before_bootstrap_commands() {
+    let (transport, _requests, events) = test_transport(2);
+    let (lifecycle, _terminations) = lifecycle::channel();
+    let (handle, task) = SessionHandle::spawn(
+        51,
+        transport,
+        Box::new(LldbJsonProtocol::new("runtime-test")),
+        lifecycle.bind(51),
+        test_reducer(),
+    );
+
+    let waiting_handle = handle.clone();
+    let readiness = tokio::spawn(async move { waiting_handle.wait_until_ready().await });
+    tokio::task::yield_now().await;
+    assert!(!readiness.is_finished());
+
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from_static(
+            b"@DDB@runtime-test@{\"type\":\"ready\",\"message\":\"ready\"}\n",
+        )))
+        .await
+        .unwrap();
+
+    tokio::time::timeout(TEST_TIMEOUT, readiness)
+        .await
+        .expect("runtime did not observe protocol readiness")
+        .unwrap()
+        .unwrap();
     stop(&handle, task).await;
 }

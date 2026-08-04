@@ -3,7 +3,8 @@ use anyhow::Result;
 use crate::{
     common::config::{Config, OnExit},
     debugger::{
-        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerCapabilities,
+        protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerBootstrapPlan,
+        DebuggerCapabilities, DebuggerSessionContext,
     },
     plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::SessionRequest,
@@ -24,7 +25,7 @@ impl DebuggerBackend for MockBackend {
         }
     }
 
-    fn create_protocol(&self) -> Box<dyn DebuggerProtocol> {
+    fn create_protocol(&self, _context: &DebuggerSessionContext) -> Box<dyn DebuggerProtocol> {
         // The deterministic mock transport intentionally emulates the
         // established GDB/MI fixture protocol.
         Box::new(crate::debugger::gdb::protocol::GdbMiProtocol::default())
@@ -44,7 +45,8 @@ impl DebuggerBackend for MockBackend {
         session: &SessionRequest,
         _plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
+        _context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
         let mut commands = Vec::new();
 
         for script in &plugin_bootstrap.scripts {
@@ -68,7 +70,7 @@ impl DebuggerBackend for MockBackend {
             commands.push(cmd.render());
         }
 
-        Ok(commands)
+        Ok(DebuggerBootstrapPlan::commands(commands))
     }
 
     fn build_local_binary_commands(
@@ -77,8 +79,9 @@ impl DebuggerBackend for MockBackend {
         session: &SessionRequest,
         plugin: &dyn FrameworkPlugin,
         plugin_bootstrap: &FrameworkDebuggerBootstrap,
-    ) -> Result<Vec<String>> {
-        self.build_remote_attach_commands(config, session, plugin, plugin_bootstrap)
+        context: &DebuggerSessionContext,
+    ) -> Result<DebuggerBootstrapPlan> {
+        self.build_remote_attach_commands(config, session, plugin, plugin_bootstrap, context)
     }
 
     fn interrupt_command(&self) -> String {

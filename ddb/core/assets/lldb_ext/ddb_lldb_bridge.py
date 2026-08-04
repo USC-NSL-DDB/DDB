@@ -27,6 +27,9 @@ RECORD_PREFIX = "@DDB@"
 GROUP_ID = "i1"
 INVALID_ADDRESS = getattr(lldb, "LLDB_INVALID_ADDRESS", (1 << 64) - 1)
 STACK_PREWARM_FRAME_LIMIT = 64
+FAKETIME_INITIAL_VALUE = "-00000000000000000000.000000000"
+FAKETIME_NO_CACHE_NAME = "FAKETIME_NO_CACHE"
+FAKETIME_NO_CACHE_VALUE = "1"
 FRAMEWORK_PRESETS = {
     "ddb-runtime": {
         "functions": ["DDB::*"],
@@ -72,8 +75,11 @@ def _text(value):
 
 
 class Emitter(object):
-    def __init__(self):
+    def __init__(self, channel_id):
+        if not re.match(r"^[0-9a-f]{32}$", channel_id):
+            raise ValueError("invalid DDB LLDB protocol channel id")
         self._lock = threading.Lock()
+        self._record_prefix = "{}{}@".format(RECORD_PREFIX, channel_id)
 
     def emit(self, record_type, message, payload=None, token=None, stream=None):
         record = {"type": record_type, "message": message}
@@ -85,7 +91,7 @@ class Emitter(object):
             record["stream"] = stream
         encoded = json.dumps(record, separators=(",", ":"), sort_keys=True)
         with self._lock:
-            sys.stdout.write(RECORD_PREFIX + encoded + "\n")
+            sys.stdout.write(self._record_prefix + encoded + "\n")
             sys.stdout.flush()
 
     def result(self, token, message="done", payload=None):
@@ -520,9 +526,9 @@ class ProcessMonitor(object):
 
 
 class Bridge(object):
-    def __init__(self, debugger):
+    def __init__(self, debugger, channel_id):
         self.debugger = debugger
-        self.emitter = Emitter()
+        self.emitter = Emitter(channel_id)
         self.monitor = ProcessMonitor(debugger, self.emitter)
         self.filters = FrameFilters()
         self.launch_arguments = []
@@ -551,7 +557,7 @@ class Bridge(object):
                 return
 
     def serve(self):
-        self.emitter.stream("DDB LLDB bridge ready", "log")
+        self.emitter.emit("ready", "ready")
         self.reader = threading.Thread(
             target=self._read_requests,
             name="ddb-lldb-stdin",
@@ -584,14 +590,7 @@ class Bridge(object):
                     # this nested script command and leave LLDB running.
                     os._exit(0)
             except Exception as error:
-                self.emitter.result(
-                    token,
-                    "error",
-                    {
-                        "msg": _text(error),
-                        "traceback": traceback.format_exc(),
-                    },
-                )
+                self.emitter.result(token, "error", {"msg": _text(error)})
 
     def execute(self, command, thread_id=None):
         arguments = shlex.split(command)
@@ -708,9 +707,13 @@ class Bridge(object):
 
     def _run(self, arguments):
         target = self._target()
+        environment = dict(os.environ)
+        if "FAKETIME" in environment:
+            environment["FAKETIME"] = FAKETIME_INITIAL_VALUE
+            environment[FAKETIME_NO_CACHE_NAME] = FAKETIME_NO_CACHE_VALUE
         launch_info = lldb.SBLaunchInfo(self.launch_arguments)
         launch_info.SetEnvironmentEntries(
-            ["{}={}".format(name, value) for name, value in os.environ.items()],
+            ["{}={}".format(name, value) for name, value in environment.items()],
             True,
         )
         if "--start" in arguments:
@@ -762,33 +765,59 @@ class Bridge(object):
         return None
 
     def _sync_faketime(self):
-        pause_started_ns = self.monitor.pause_started_ns
-        if pause_started_ns is None:
-            return None
         environment = self._find_environment_variable("FAKETIME")
         if environment is None:
             return None
+
+        no_cache = self._find_environment_variable(FAKETIME_NO_CACHE_NAME)
+        expected_no_cache = "{}={}".format(
+            FAKETIME_NO_CACHE_NAME,
+            FAKETIME_NO_CACHE_VALUE,
+        )
+        if no_cache is None or no_cache[1] != expected_no_cache:
+            observed_no_cache = no_cache[1] if no_cache is not None else ""
+            raise RuntimeError(
+                "cannot synchronize FAKETIME: the inferior must be started with "
+                "FAKETIME_NO_CACHE=1 (observed {!r})".format(observed_no_cache)
+            )
+
+        pause_started_ns = self.monitor.pause_started_ns
+        if pause_started_ns is None:
+            raise RuntimeError(
+                "cannot synchronize FAKETIME: no debugger pause is active"
+            )
         address, old_entry = environment
         now_ns = time.monotonic_ns()
         if now_ns < pause_started_ns:
-            return None
-        self.accumulated_pause_seconds += (now_ns - pause_started_ns) / 1e9
-        new_entry = "FAKETIME=-{:.9f}".format(self.accumulated_pause_seconds)
+            raise RuntimeError(
+                "cannot synchronize FAKETIME: pause clock moved backwards"
+            )
+        candidate_accumulated_seconds = round(
+            self.accumulated_pause_seconds
+            + (now_ns - pause_started_ns) / 1e9,
+            9,
+        )
+        new_entry = "FAKETIME=-{:.9f}".format(candidate_accumulated_seconds)
         if len(new_entry) > len(old_entry):
-            self.emitter.stream(
-                "cannot synchronize FAKETIME: existing environment buffer is too small",
-                "log",
+            raise RuntimeError(
+                "cannot synchronize FAKETIME: existing environment buffer is too small"
             )
-            return None
         error = lldb.SBError()
+        process = self._process()
         encoded = (new_entry + "\0").encode("utf-8")
-        written = self._process().WriteMemory(address, encoded, error)
+        written = process.WriteMemory(address, encoded, error)
         if error.Fail() or written != len(encoded):
-            self.emitter.stream(
-                "failed to synchronize FAKETIME: {}".format(_error_text(error)),
-                "log",
+            raise RuntimeError(
+                "failed to synchronize FAKETIME: {}".format(_error_text(error))
             )
-            return None
+        verification_error = lldb.SBError()
+        observed = process.ReadMemory(address, len(encoded), verification_error)
+        if verification_error.Fail() or observed != encoded:
+            raise RuntimeError(
+                "failed to synchronize FAKETIME: read-after-write verification failed: "
+                "{}".format(_error_text(verification_error))
+            )
+        self.accumulated_pause_seconds = candidate_accumulated_seconds
         self.monitor.pause_started_ns = None
         return new_entry
 
@@ -1234,9 +1263,9 @@ class Bridge(object):
         return "exit", {}
 
 
-def run(debugger):
+def run(debugger, channel_id):
     """Take ownership of LLDB stdin and serve DDB JSON requests."""
-    bridge = Bridge(debugger)
+    bridge = Bridge(debugger, channel_id)
     try:
         bridge.serve()
     finally:

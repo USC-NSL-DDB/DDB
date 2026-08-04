@@ -40,6 +40,7 @@ pub(super) struct RuntimeShared {
 pub(super) struct RuntimeWire {
     pub transport: RunningTransport,
     pub protocol: Box<dyn DebuggerProtocol>,
+    pub ready: watch::Sender<bool>,
 }
 
 enum WriteOwner {
@@ -107,6 +108,7 @@ pub(super) async fn run_session(
     let RuntimeWire {
         transport,
         mut protocol,
+        ready,
     } = wire;
     let RuntimeShared {
         in_flight,
@@ -131,7 +133,7 @@ pub(super) async fn run_session(
         config.projector_delay,
     ));
     let mut pending = PendingCommands::new(in_flight);
-    let mut demux = OutputDemux::new(sid, event_tx, applied);
+    let mut demux = OutputDemux::new(sid, event_tx, applied, ready);
     let mut sweeper = tokio::time::interval(config.sweep_interval);
     let mut shutdown_ack = None;
     let mut write_completions = FuturesUnordered::<WriteCompletion>::new();

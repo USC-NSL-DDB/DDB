@@ -37,7 +37,6 @@ impl FrameworkPlugin for NuFrameworkPlugin {
 
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap {
-            requires_core_runtime: true,
             requires_proclet_runtime: config.handle_migration(),
             ..FrameworkDebuggerBootstrap::default()
         };
@@ -66,7 +65,6 @@ impl FrameworkPlugin for QuicksandFrameworkPlugin {
 
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
         let mut bootstrap = FrameworkDebuggerBootstrap {
-            requires_core_runtime: true,
             requires_proclet_runtime: config.handle_migration(),
             ..FrameworkDebuggerBootstrap::default()
         };
@@ -89,10 +87,7 @@ impl FrameworkPlugin for GrpcFrameworkPlugin {
     }
 
     fn debugger_bootstrap(&self, config: &Config) -> FrameworkDebuggerBootstrap {
-        let mut bootstrap = FrameworkDebuggerBootstrap {
-            requires_core_runtime: true,
-            ..FrameworkDebuggerBootstrap::default()
-        };
+        let mut bootstrap = FrameworkDebuggerBootstrap::default();
         if config.service_discovery.is_some() {
             bootstrap
                 .post_start_actions
@@ -149,13 +144,12 @@ mod tests {
         assert!(plugin.supports_migration(&config));
 
         let bootstrap = plugin.debugger_bootstrap(&config);
-        assert!(bootstrap.requires_core_runtime);
         assert!(bootstrap.requires_proclet_runtime);
         assert!(bootstrap.scripts.is_empty());
     }
 
     #[test]
-    fn grpc_plugin_bootstrap_keeps_runtime_requirement_and_sig40() {
+    fn grpc_plugin_bootstrap_keeps_sig40_post_start_action() {
         let mut config = Config::default();
         config.framework = Framework::GRPC;
         config.service_discovery = Some(crate::common::config::ServiceDiscovery::default());
@@ -163,7 +157,6 @@ mod tests {
         let plugin = resolve_framework_plugin(&config);
         let bootstrap = plugin.debugger_bootstrap(&config);
 
-        assert!(bootstrap.requires_core_runtime);
         assert_eq!(
             bootstrap.post_start_actions,
             vec![DebuggerBootstrapAction::Signal("SIG40".to_string())]

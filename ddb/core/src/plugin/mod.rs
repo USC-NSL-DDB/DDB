@@ -71,7 +71,6 @@ pub enum ServiceDiscoveryMode {
 
 #[derive(Debug, Clone, Default)]
 pub struct FrameworkDebuggerBootstrap {
-    pub requires_core_runtime: bool,
     pub requires_proclet_runtime: bool,
     pub scripts: Vec<PathBuf>,
     pub pre_attach_commands: Vec<DebuggerCommand>,

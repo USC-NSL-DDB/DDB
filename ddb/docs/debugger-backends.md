@@ -28,6 +28,12 @@ event reducers and domain services
 - interrupt, console, framework-action, and shutdown commands
 - construction of the per-session protocol codec
 
+Startup is an explicit two-phase plan. A backend may first write the minimal
+native prelude needed to install its structured protocol; the session then
+waits for protocol readiness and submits every attach, launch, configuration,
+and framework action as a normal token-correlated command. Any structured
+`error` result aborts activation with the debugger's diagnostic.
+
 `DebuggerProtocol` owns the stateful wire boundary:
 
 - command token and thread framing
@@ -47,6 +53,11 @@ interpreter. The bridge is a native adapter, not a second runtime model: it
 maps the DDB command dialect to `SBTarget`, `SBProcess`, `SBThread`, and
 `SBFrame`, then emits prefixed JSON records. Rust remains the owner of routing,
 global identities, state transitions, and distributed-backtrace traversal.
+
+Each LLDB session uses an unpredictable channel id in its record prefix. A
+record is accepted only when that exact prefix begins the stdout line; inferior
+output containing the static marker or another session's prefix remains stream
+output. The bridge emits readiness through the same session-bound framing.
 
 ## Configuration
 
@@ -101,6 +112,53 @@ Unsupported capability combinations fail during backend resolution, before the
 application runtime starts. They must not degrade into partial sessions or
 silently change command semantics.
 
+## Pause-time and FAKETIME contract
+
+The `-record-time-and-continue`, `-record-time-and-next`,
+`-record-time-and-step`, and `-record-time-and-finish` commands compensate the
+inferior's realtime clock for time spent stopped in either debugger. GDB and
+LLDB follow the same rules:
+
+- If the inferior has no `FAKETIME` environment entry, the command resumes
+  normally without clock synchronization.
+- If `FAKETIME` is present, the inferior must also contain the exact entry
+  `FAKETIME_NO_CACHE=1`. libfaketime otherwise caches its configuration for up
+  to ten seconds and does not observe the debugger's memory update promptly.
+- The existing `FAKETIME` entry must be long enough for the accumulated
+  negative offset. A debugger can overwrite environment storage, but it cannot
+  safely grow that storage in place.
+- Synchronization uses one bounded memory write followed by read-after-write
+  verification. The accumulated pause time is committed only after verification
+  succeeds.
+- A configured-but-invalid target returns an error and remains stopped. The
+  debugger never resumes with a stale or partially written clock offset.
+
+For local binary launch, when DDB itself is started with `FAKETIME`, both
+backends replace the launched inferior's value with a fixed-width initial value
+and add `FAKETIME_NO_CACHE=1` before the process starts. Loading libfaketime is
+still the caller's responsibility, normally through `LD_PRELOAD`.
+
+Attach mode cannot change libfaketime's constructor-time cache policy. Start the
+target with a writable fixed-width value and no-cache mode before attaching:
+
+```bash
+LD_PRELOAD=/path/to/libfaketimeMT.so.1 \
+FAKETIME=-00000000000000000000.000000000 \
+FAKETIME_NO_CACHE=1 \
+FAKETIME_DONT_FAKE_MONOTONIC=1 \
+FAKETIME_DISABLE_SHM=1 \
+./application
+```
+
+`FAKETIME_DONT_FAKE_MONOTONIC=1` keeps duration and sleep clocks monotonic;
+`FAKETIME_DISABLE_SHM=1` prevents independent test or service processes from
+sharing libfaketime state.
+
+The real integration suite verifies this contract against the inferior's actual
+`SystemTime` under both backends. It covers launch, attach, every record-time
+resume action, repeated accumulation, undersized buffers, missing no-cache
+configuration, and the fail-closed no-resume behavior.
+
 ## Adding another backend
 
 1. Add its configuration variant and backend module under `core/src/debugger/`.
@@ -114,6 +172,8 @@ silently change command semantics.
    pass-through commands must return an explicit backend error.
 6. Add codec tests for fragmentation, coalescing, malformed input, scalar
    normalization, and maximum record size.
+   Shared-output protocols must also cover strict record boundaries,
+   per-session channel isolation, and explicit readiness.
 7. Add real integration coverage for launch/attach, breakpoint lifecycle,
    source queries, custom commands, clean shutdown, and distributed backtraces
    where the backend advertises support.

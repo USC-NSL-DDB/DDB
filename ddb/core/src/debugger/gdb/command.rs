@@ -102,13 +102,13 @@ pub enum GdbCmd {
 
 impl From<DebuggerCommand> for GdbCmd {
     fn from(cmd: DebuggerCommand) -> Self {
-        GdbCmd::Plain(cmd.command)
+        GdbCmd::ConsoleExec(cmd.command)
     }
 }
 
 impl From<&DebuggerCommand> for GdbCmd {
     fn from(cmd: &DebuggerCommand) -> Self {
-        GdbCmd::Plain(cmd.command.clone())
+        GdbCmd::ConsoleExec(cmd.command.clone())
     }
 }
 
@@ -126,7 +126,10 @@ impl DbgCmdGenerator for GdbCmd {
     fn generate(&self) -> String {
         let cmd = match self {
             GdbCmd::SetOption(opt) => format!("-gdb-set {}", opt.generate()),
-            GdbCmd::ConsoleExec(cmd) => format!(r#"-interpreter-exec console "{}""#, cmd),
+            GdbCmd::ConsoleExec(cmd) => format!(
+                "-interpreter-exec console {}",
+                serde_json::to_string(cmd).expect("serializing a string cannot fail")
+            ),
             GdbCmd::TargetAttach(pid) => format!("-target-attach {}", pid),
             GdbCmd::FileExecAndSym(bin_path) => format!("-file-exec-and-symbols {}", bin_path),
             GdbCmd::ExeArgs(args) => format!("-exec-arguments {}", args),
@@ -223,5 +226,19 @@ mod tests {
 
         let add_args: FrameFilterAddArgs = (&pattern).into();
         assert_eq!(add_args.to_string(), "runtime::* --match-type glob");
+    }
+
+    #[test]
+    fn configured_commands_use_the_escaped_native_gdb_console() {
+        let configured = DebuggerCommand {
+            name: "prompt".to_string(),
+            command: "set prompt \"ddb> \"".to_string(),
+        };
+
+        let rendered = GdbCmd::from(&configured).generate();
+        assert_eq!(
+            rendered,
+            "-interpreter-exec console \"set prompt \\\"ddb> \\\"\"\n"
+        );
     }
 }

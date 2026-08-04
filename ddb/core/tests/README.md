@@ -24,7 +24,7 @@ These map to:
 - `cargo xtest-unit`: workspace unit tests only
 - `cargo xtest-integration`: all `ddb` integration tests only
 - `cargo xtest-integration-mock`: mock integration tier only
-- `cargo xtest-integration-real`: real GDB-backed integration tier only
+- `cargo xtest-integration-real`: all real GDB/LLDB integration tests
 
 ## Test Tiers
 
@@ -48,16 +48,19 @@ cargo test -p ddb --test session_bootstrap --test breakpoint_sync --test breakpo
 
 ### 2. Real debugger integration tests
 
-These tests launch a real local binary under real `gdb` through DDB:
+These tests launch or attach to real local binaries through GDB and LLDB:
 
 - `real_session_bootstrap.rs`
 - `real_breakpoint_sync.rs`
 - `real_session_cleanup.rs`
+- `real_lldb_session_bootstrap.rs`
+- `real_distributed_backtrace.rs`
+- `real_faketime.rs`
 
 Run only this tier with:
 
 ```bash
-cargo test -p ddb --test real_session_bootstrap --test real_breakpoint_sync --test real_session_cleanup
+cargo xtest-integration-real
 ```
 
 If you want to see the live stdout from DDB during a run, add `-- --nocapture`:
@@ -73,10 +76,16 @@ The mock tier has no external runtime dependency beyond Rust.
 The real tier requires:
 
 - `gdb` to be installed and available on `PATH`
+- `lldb` to be installed and available on `PATH`
+- `libfaketimeMT.so.1` from the `libfaketime` package
 - `cargo` to be available on `PATH`
 - a Linux environment
 
 The real suite is designed primarily for `x86_64` and `aarch64`.
+
+The FAKETIME tests search standard Debian/Ubuntu and local-user library paths.
+Set `LIBFAKETIME_PATH=/absolute/path/to/libfaketimeMT.so.1` when the library is
+installed elsewhere.
 
 ## How The Real Tier Works
 
@@ -87,7 +96,7 @@ The shared harness in `support/mod.rs` will:
 1. Build the fixture crate in `fixtures/real_loop`
 2. Start the real `ddb` binary as a subprocess
 3. Generate a temporary config with static sessions in `start_mode: binary`
-4. Let DDB launch the fixture under local `gdb`
+4. Let DDB launch or attach to the fixture through local GDB or LLDB
 5. Drive DDB through stdin and validate behavior through stdout plus the HTTP API
 
 The fixture is intentionally simple and architecture-neutral:
@@ -95,7 +104,9 @@ The fixture is intentionally simple and architecture-neutral:
 - breakpoints are inserted by source file and line number
 - tests assert MI/API behavior, not register values or instruction addresses
 
-The real tier launches binaries under GDB instead of attaching to an already-running sibling process. This avoids common Linux `ptrace` restrictions that would otherwise make CI and local runs flaky.
+The attach fixture explicitly allows the sibling debugger relationship under
+Linux Yama `ptrace_scope=1`. Production targets remain subject to their normal
+host ptrace policy.
 
 ## Running One Scenario
 
