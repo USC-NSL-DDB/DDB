@@ -1,0 +1,7 @@
+# Add one SSH target per application worker. Use as many workers as needed;
+# these addresses must be reachable directly from the controller over the
+# private Chameleon network.
+cc@worker-private-ip-1
+cc@worker-private-ip-2
+cc@worker-private-ip-3
+cc@worker-private-ip-4

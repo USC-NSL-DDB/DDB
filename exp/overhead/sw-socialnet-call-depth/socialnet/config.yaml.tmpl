@@ -1,0 +1,44 @@
+# Recipe-owned ServiceWeaver Kubernetes deployment configuration.
+appConfig: "@APP_CONFIG@"
+image: "@SOCIALNET_IMAGE@"
+namespace: "@NAMESPACE@"
+
+listeners:
+  - name: apilistener
+    public: true
+
+scalingSpec:
+  minReplicas: 1
+  maxReplicas: 1
+
+groups:
+  - name: callDepthRelay1
+    components:
+      - SocialNetwork/server/IMediaService
+      - SocialNetwork/server/ICallDepthRelay1
+  - name: callDepthRelay2
+    components:
+      - SocialNetwork/server/IUniqueIdService
+      - SocialNetwork/server/ICallDepthRelay2
+  - name: callDepthRelay3
+    components:
+      - SocialNetwork/server/ITextService
+      - SocialNetwork/server/ICallDepthRelay3
+  - name: callDepthRelay4
+    components:
+      - SocialNetwork/server/IUrlShortenService
+      - SocialNetwork/server/ICallDepthRelay4
+  - name: callDepthRelay5
+    components:
+      - SocialNetwork/server/ISocialGraphService
+      - SocialNetwork/server/ICallDepthRelay5
+  - name: callDepthRelay6
+    components:
+      - SocialNetwork/server/UserServicer
+      - SocialNetwork/server/ICallDepthRelay6
+  - name: scalingMachines
+    components:
+      - SocialNetwork/server/IStorage
+    scalingSpec:
+      minReplicas: 1
+      maxReplicas: 1

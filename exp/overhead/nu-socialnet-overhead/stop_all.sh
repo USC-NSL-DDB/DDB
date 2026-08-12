@@ -10,10 +10,16 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 SSH_PREFIX="${SSH_PREFIX:-$(ssh_prefix "$(caladan_nic 2>/dev/null || echo '')" 2>/dev/null || echo '')}"
 
 # Local DDB session first, so gdb detaches before the debuggees are killed.
+# Ask it to exit only if it is actually alive, and never block: opening a fifo
+# whose reader died blocks forever in open(2) -- a `2>/dev/null` cannot save you
+# -- and DDB can die mid-run (e.g. a full root filesystem).
 if [[ -f "$LOG_DIR/ddb.pid" ]]; then
-  echo "exit" > "$LOG_DIR/ddb_in" 2>/dev/null || true
-  sleep 3
-  kill -9 "$(cat "$LOG_DIR/ddb.pid")" 2>/dev/null || true
+  DDB_PID="$(cat "$LOG_DIR/ddb.pid")"
+  if kill -0 "$DDB_PID" 2>/dev/null; then
+    timeout 3 bash -c "echo exit > '$LOG_DIR/ddb_in'" 2>/dev/null || true
+    sleep 3
+  fi
+  kill -9 "$DDB_PID" 2>/dev/null || true
   rm -f "$LOG_DIR/ddb.pid"
 fi
 [[ -f "$LOG_DIR/ddb_holder.pid" ]] && { kill "$(cat "$LOG_DIR/ddb_holder.pid")" 2>/dev/null || true; rm -f "$LOG_DIR/ddb_holder.pid"; }

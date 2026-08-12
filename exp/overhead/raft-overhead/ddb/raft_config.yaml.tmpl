@@ -1,0 +1,47 @@
+---
+# Rendered by start_ddb.sh -- edit this template, not the generated copy.
+#
+# Two things here are easy to get wrong and fail silently:
+#   * `Framework` deserializes with serde(rename_all = "lowercase") and has a
+#     #[serde(other)] catch-all, so a capitalised `GRPC` is accepted and quietly
+#     becomes `Unspecified` -> "Unsupported framework adapter". It must be `grpc`.
+#   * Do NOT add PostrunGdbCommands: [-exec-continue]. After attaching, DDB
+#     sends SIG40, which releases the connector's wait_for_debugger() and then
+#     re-traps via SIGTRAP. An auto-continue races that handshake and can leave a
+#     raft_node parked in sigwait forever. run_benchmark.sh resumes explicitly,
+#     once every node has attached.
+Framework: grpc
+SSH:
+  user: "@SSH_USER@"
+  port: 22
+FrameFilter:
+  # Hide the gRPC/libstdc++ plumbing frames so a backtrace lands in raft code.
+  # Cosmetic: it does not change what gdb attaches to, so it cannot affect the
+  # throughput numbers.
+  filter_preset:
+    - "cpp-stdlib"
+    - "grpc"
+PrerunGdbCommands:
+  - name: "Pretty Print for CPP"
+    command: "-enable-pretty-printing"
+  # gRPC's poller writes to closed fds during teardown. gdb stops on SIGPIPE by
+  # default, which would freeze a raft_node mid-benchmark and destroy the
+  # measurement. The plain-gdb mode (run_benchmark.sh --mode gdb) passes the
+  # same handler, so all three modes see identical signal handling.
+  - name: "do not stop on SIGPIPE"
+    command: "handle SIGPIPE nostop noprint pass"
+ServiceDiscovery:
+  Broker:
+    # Must be an address the raft nodes on the other machines can reach: DDB
+    # writes `tcp://<hostname>:<port>` into the service-discovery config file
+    # that each raft_node reads at startup.
+    hostname: "@BROKER_IP@"
+    managed:
+      type: emqx
+Conf:
+  sudo: true
+  on_exit: "kill"
+  support_migration: false
+  log_dir: "@LOG_DIR@"
+  base_dir: "@BASE_DIR@"
+  api_server_port: 5000

@@ -1,3 +1,18 @@
+# Annotations are evaluated lazily (PEP 563). This file is executed by *gdb's*
+# embedded Python, whose version is decided by how gdb was built, not by whatever
+# is on PATH -- a stock gdb on Ubuntu 20.04 embeds Python 3.8. Several signatures
+# below use `X | None` (3.10+) and `dict[str, object]` (3.9+); without this import
+# they are evaluated at def time and the module dies with
+#
+#   TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'
+#
+# gdb reports that only as a traceback on the console and carries on, so the
+# failure is quiet: none of the MI commands below get registered, and DDB's calls
+# to -exec-interrupt-if-running and -record-time-and-continue come back as
+# "Undefined MI command". That silently disables pause-time compensation -- the
+# debuggee sees the full pause -- which is exactly the bug this line prevents.
+from __future__ import annotations
+
 from typing import Dict, List, Optional, Callable
 from enum import Enum
 import socket

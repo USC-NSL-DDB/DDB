@@ -1,11 +1,23 @@
 #!/bin/bash
 #
 # Run the distributed Nu socialNetwork benchmark, optionally with DDB attached
-# to every backend server.
+# to every backend server, or against a vanilla (non-instrumented) Nu build.
 #
-#   ./run_benchmark.sh                 # baseline, no debugger
+#   ./run_benchmark.sh                 # baseline: CONFIG_DDB=y, no debugger
 #   ./run_benchmark.sh --ddb           # DDB attached to all 4 servers
+#   ./run_benchmark.sh --vanilla       # vanilla Nu: CONFIG_DDB=n, no DDB
+#                                      #   metadata embedding in the RPC path
 #   ./run_benchmark.sh --mops 2.0      # override target load (Mops, total)
+#
+# baseline-vs-ddb isolates the ATTACH cost; vanilla-vs-baseline isolates the
+# INSTRUMENTATION cost (Nu's DDB hooks are compile-time, so both baseline and
+# ddb runs pay them); vanilla-vs-ddb is DDB's total cost on Nu.
+#
+# --vanilla and the other two modes need differently-compiled trees (libnu,
+# ctrl_main and the app must all match -- the RPC wire format differs). The
+# script switches the build flavor automatically and rebuilds when, and only
+# when, the requested mode needs the other flavor (~3-5 min per switch;
+# consecutive runs of the same flavor skip it).
 #
 # Layout (see common.sh):
 #   node0 : controller + init_graph + client  (+ DDB + EMQX broker with --ddb)
@@ -15,21 +27,93 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 USE_DDB=0
+USE_VANILLA=0
 MOPS="1.0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ddb)  USE_DDB=1; shift ;;
-    --mops) MOPS="$2"; shift 2 ;;
+    --ddb)     USE_DDB=1;     shift ;;
+    --vanilla) USE_VANILLA=1; shift ;;
+    --mops)    MOPS="$2";     shift 2 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
+[[ "$USE_DDB" -eq 1 && "$USE_VANILLA" -eq 1 ]] \
+  && die "--ddb needs the instrumented build; --vanilla compiles the connector out. Pick one."
 
 require_built
 detect_network
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
-TAG="mops${MOPS}_n${NUM_SERVERS}$([[ $USE_DDB -eq 1 ]] && echo _ddb || echo _baseline)_$(date +%Y%m%d_%H%M%S)"
+# One run at a time. Two concurrent invocations shoot each other down (each
+# starts by killing every process the other depends on, and a finishing run's
+# exit trap does it again) -- fail fast instead. The lock is held until this
+# process exits, i.e. through the cleanup trap too.
+exec 200>"$EXP_DIR/.run.lock"
+flock -n 200 || die "another run_benchmark.sh is still active (or tearing down); wait for it or ./stop_all.sh"
+
+MODE_TAG=_baseline
+[[ "$USE_DDB" -eq 1 ]]     && MODE_TAG=_ddb
+[[ "$USE_VANILLA" -eq 1 ]] && MODE_TAG=_vanilla
+TAG="mops${MOPS}_n${NUM_SERVERS}${MODE_TAG}_$(date +%Y%m%d_%H%M%S)"
 RESULT="$RESULTS_DIR/$TAG.txt"
+
+# ─── Build flavor: instrumented (CONFIG_DDB=y) vs vanilla (CONFIG_DDB=n) ─────
+# Nu's DDB hooks are compile-time (#ifdef DDB_SUPPORT), and they change the RPC
+# wire format (a DDBTraceMeta is prepended to every argument buffer), so libnu,
+# ctrl_main, the backend, the client and init_graph must all come from the same
+# flavor. The flavor is read from the backend binary itself -- the connector's
+# "[DDB Connector]" log strings are only compiled in under DDB_SUPPORT -- so an
+# interrupted switch or a hand-edited tree cannot fool the check.
+
+binary_flavor() {
+  # grep -c (not -q): -q exits at the first match, strings then dies of
+  # SIGPIPE, and under `set -o pipefail` the pipeline reports failure -- which
+  # would misread every instrumented binary as vanilla.
+  local n
+  n=$(strings "$SOCIALNET_DIR/build/src/main" 2>/dev/null | grep -c "DDB Connector")
+  [[ "${n:-0}" -gt 0 ]] && echo instrumented || echo vanilla
+}
+
+set_tree_flavor() {   # $1 = instrumented|vanilla; edits config + app defines
+  if [[ "$1" == vanilla ]]; then
+    sed -i 's/^CONFIG_DDB=y/CONFIG_DDB=n/' "$NU_DIR/build/config"
+    sed -i 's|^add_compile_definitions(DDB_SUPPORT)|# add_compile_definitions(DDB_SUPPORT) # disabled by run_benchmark.sh --vanilla|' \
+      "$SOCIALNET_DIR/src/CMakeLists.txt" "$SOCIALNET_DIR/bench/CMakeLists.txt"
+  else
+    sed -i 's/^CONFIG_DDB=n/CONFIG_DDB=y/' "$NU_DIR/build/config"
+    sed -i 's|^# add_compile_definitions(DDB_SUPPORT) # disabled by run_benchmark.sh --vanilla|add_compile_definitions(DDB_SUPPORT)|' \
+      "$SOCIALNET_DIR/src/CMakeLists.txt" "$SOCIALNET_DIR/bench/CMakeLists.txt"
+  fi
+}
+
+ensure_flavor() {     # $1 = instrumented|vanilla; rebuild only when needed
+  local want="$1"
+  # Keep the tree consistent with the request even when no rebuild is needed --
+  # a later manual `make` should not silently produce the other flavor.
+  set_tree_flavor "$want"
+  if [[ "$(binary_flavor)" == "$want" ]]; then return 0; fi
+
+  echo ""
+  echo "=== Switching the Nu build flavor to '$want' (one-time rebuild, ~3-5 min) ==="
+  local extra=""
+  [[ "$want" == instrumented ]] && extra="bin/ctrl_proxy"
+  ( cd "$NU_DIR" && make clean >/dev/null 2>&1;
+    TMPDIR=/mnt/local/tmp make -j"$(nproc)" libnu.a bin/ctrl_main $extra >/dev/null 2>&1 ) \
+    || die "libnu rebuild failed for flavor '$want'"
+  # CMakeLists mtimes changed, so make re-runs cmake and recompiles the app
+  # objects. The BINARIES must be removed by hand: cmake records no dependency
+  # on libnu.a's mtime, so without this the app would not relink against the
+  # freshly-flavored libnu and could ship a mixed-wire-format binary.
+  rm -f "$SOCIALNET_DIR/build/src/main" "$SOCIALNET_DIR/build/bench/client" \
+        "$SOCIALNET_DIR/build/init_graph/init_graph"
+  ( cd "$SOCIALNET_DIR/build" && TMPDIR=/mnt/local/tmp make -j"$(nproc)" main client init_graph >/dev/null 2>&1 ) \
+    || die "app rebuild failed for flavor '$want'"
+  [[ "$(binary_flavor)" == "$want" ]] \
+    || die "rebuild finished but the backend binary is still '$(binary_flavor)', wanted '$want'"
+  echo "  flavor is now '$want'"
+}
+
+if [[ "$USE_VANILLA" -eq 1 ]]; then ensure_flavor vanilla; else ensure_flavor instrumented; fi
 
 cleanup_all() { "$EXP_DIR/stop_all.sh" >/dev/null 2>&1 || true; }
 trap cleanup_all EXIT
@@ -63,6 +147,14 @@ echo "=== Distributing binaries ==="
 for idx in "${SERVER_IDXS[@]}"; do
   remote "$idx" "mkdir -p $SOCIALNET_DIR/build/src"
   scp -q "$SOCIALNET_DIR/build/src/main" "$(node_ip "$idx"):$SOCIALNET_DIR/build/src/main" || die "scp main -> idx$idx"
+  # main's RUNPATH must resolve libmlx5/libibverbs to caladan's patched
+  # rdma-core build inside the Nu tree. If it falls back to the system rdma
+  # libs (e.g. the RUNPATH anchor dir was not shipped -- see setup_nodes.sh),
+  # directpath init fails at run time with a bare "failed to start runtime".
+  remote "$idx" "ldd $SOCIALNET_DIR/build/src/main 2>/dev/null \
+      | awk '/libmlx5|libibverbs/{print \$3}' | grep -qv '^$NU_DIR'" \
+    && die "idx$idx: main resolves libmlx5/libibverbs OUTSIDE the Nu tree (system rdma-core).
+       The binary's RUNPATH anchor is missing on that node -- re-run ./setup_nodes.sh"
   echo "  idx$idx <- main"
 done
 # The freshly-rebuilt client goes to every remote client node + its conf.
@@ -72,6 +164,11 @@ for n in $(seq 1 "$NUM_CLIENTS"); do
   remote "$idx" "mkdir -p $SOCIALNET_DIR/build/bench"
   scp -q "$SOCIALNET_DIR/build/bench/client" "$(node_ip "$idx"):$SOCIALNET_DIR/build/bench/client" || die "scp client -> idx$idx"
   scp -q "$EXP_DIR/conf/client$n" "$(node_ip "$idx"):/tmp/nu_client$n.conf" || die "scp conf -> idx$idx"
+  # Same RUNPATH-resolution check as for main above.
+  remote "$idx" "ldd $SOCIALNET_DIR/build/bench/client 2>/dev/null \
+      | awk '/libmlx5|libibverbs/{print \$3}' | grep -qv '^$NU_DIR'" \
+    && die "idx$idx: client resolves libmlx5/libibverbs OUTSIDE the Nu tree (system rdma-core).
+       The binary's RUNPATH anchor is missing on that node -- re-run ./setup_nodes.sh"
   echo "  idx$idx <- client (client$n)"
 done
 
@@ -183,7 +280,26 @@ if [[ "$served" -eq 0 ]]; then
     # if the process is gone, dmesg often shows a segfault / OOM kill
     [[ "$st" == "DEAD" ]] && remote "$idx" 'sudo dmesg | tail -5' 2>/dev/null | grep -iE 'segfault|killed|oom|main' | sed 's/^/      dmesg: /' >&2
   done
-  die "backend never came up (logs saved in $LOG_DIR/backend.idx*.log)"
+  # Nu writes its auto-generated caladan conf with log_level 0 (command_line.cpp),
+  # which suppresses every log_err on the runtime-init path -- a failed backend
+  # can only say "failed to start runtime". Re-run ONE backend in the foreground
+  # with an otherwise-identical conf at log_level 6 so the real error prints.
+  # iokerneld is still up on every node here; the probe is bounded by timeout
+  # and the whole cluster is torn down by `die` right after.
+  diag_idx="${SERVER_IDXS[0]}"
+  diag_ip="$(server_caladan_ip 0)"
+  echo "  re-running the idx$diag_idx backend with a verbose caladan conf..." >&2
+  remote "$diag_idx" "kt=\$(( \$(nproc) / \$(ls -d /sys/devices/system/node/node[0-9]* | wc -l) - 2 ));
+    { echo 'host_addr $diag_ip'; echo 'host_netmask 255.255.255.0'; echo 'host_gateway 18.18.1.1';
+      echo 'host_mtu 9000'; echo \"runtime_kthreads \$kt\"; echo 'runtime_guaranteed_kthreads 0';
+      echo 'runtime_spinning_kthreads 0'; echo 'runtime_priority be'; echo 'runtime_qdelay_us 10';
+      echo 'enable_directpath 1'; echo 'log_level 6'; echo 'runtime_react_mem_pressure 1';
+      echo 'runtime_react_cpu_pressure 1'; } > /tmp/nu_diag.conf;
+    cd $SOCIALNET_DIR && sudo timeout 20 ./build/src/main -l $LPID -f /tmp/nu_diag.conf" \
+    > "$LOG_DIR/backend.diag.log" 2>&1 || true
+  echo "  --- verbose re-run (idx$diag_idx): tail of $LOG_DIR/backend.diag.log ---" >&2
+  tail -25 "$LOG_DIR/backend.diag.log" | sed 's/^/      /' >&2
+  die "backend never came up (logs saved in $LOG_DIR/backend.idx*.log, verbose diagnosis in backend.diag.log)"
 fi
 echo "  up"; sleep 3
 
@@ -233,6 +349,27 @@ fail=0
 for pid in "${client_pids[@]}"; do wait "$pid" || fail=1; done
 [[ "$fail" -eq 0 ]] || echo "  warning: a client exited non-zero; see logs/client.*.log" >&2
 
+# The debugger must have SURVIVED the measurement, or the number is a hybrid of
+# debugged and undebugged execution and would masquerade as "zero overhead" --
+# the most dangerous failure for this experiment. (DDB can die mid-run, e.g. on
+# a full root filesystem, and its orphaned gdbs then detach or freeze.)
+if [[ "$USE_DDB" -eq 1 ]]; then
+  kill -0 "$(cat "$LOG_DIR/ddb.pid" 2>/dev/null)" 2>/dev/null \
+    || die "DDB died during the measurement; discard this run (see $LOG_DIR/ddb.log)"
+  for idx in "${SERVER_IDXS[@]}"; do
+    tp=$(remote "$idx" 'p=$(pgrep -x main|head -1); [[ -n "$p" ]] && sudo awk "/TracerPid/{print \$2}" /proc/$p/status' 2>/dev/null)
+    [[ -n "$tp" && "$tp" != "0" ]] \
+      || die "idx$idx: backend no longer traced after the run (TracerPid=${tp:-gone}); discard this run"
+  done
+else
+  # Symmetric check for baseline/vanilla: nothing may have been attached.
+  for idx in "${SERVER_IDXS[@]}"; do
+    tp=$(remote "$idx" 'p=$(pgrep -x main|head -1); [[ -n "$p" ]] && sudo awk "/TracerPid/{print \$2}" /proc/$p/status' 2>/dev/null)
+    [[ -z "$tp" || "$tp" == "0" ]] \
+      || die "idx$idx: a debugger was attached (TracerPid=$tp) during a ${MODE_TAG#_} run; discard this run"
+  done
+fi
+
 # Total system throughput = sum of the per-client real_mops (each measured its
 # own share over the barrier-synced window).
 echo ""
@@ -251,4 +388,5 @@ echo ""
 echo ""
 echo "=== Done ==="
 echo "Result: $RESULT   (aggregate throughput = sum of $NUM_CLIENTS clients)"
-[[ "$USE_DDB" -eq 1 ]] && echo "DDB log: $LOG_DIR/ddb.log"
+# `[[ ... ]] && echo` as the last command would make the baseline exit 1.
+if [[ "$USE_DDB" -eq 1 ]]; then echo "DDB log: $LOG_DIR/ddb.log"; fi

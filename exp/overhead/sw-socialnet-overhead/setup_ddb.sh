@@ -73,17 +73,41 @@ echo "Found $pod_count app pods"
 # ─── Step 1: ssh-gateway ─────────────────────────────────────────────────────
 
 echo ""
+echo "=== Step 0: pod-network mesh ==="
+# The gateway pod installs sshd from the internet at startup and DDB dials it
+# over a ClusterIP -- both silently hang if flannel dropped a route (see
+# heal_pod_mesh). Cheap to verify, miserable to debug after the fact.
+heal_pod_mesh
+
+echo ""
 echo "=== Step 1: ssh-gateway bastion ==="
-if kubectl get svc ssh-gateway -n "$NAMESPACE" >/dev/null 2>&1; then
-    echo "ssh-gateway already deployed."
-else
-    kubectl apply -f "$GATEWAY_YAML"
-    echo "Waiting for ssh-gateway pod to be Ready..."
-    kubectl wait --for=condition=Ready pod/ssh-gateway -n "$NAMESPACE" --timeout=180s
-fi
+# `apply` is idempotent, so run it unconditionally: gating on the Service
+# existing (as this once did) skips the Pod when it was deleted or is
+# crash-looping, and then DDB hangs on an ssh port nothing listens on.
+kubectl apply -f "$GATEWAY_YAML"
+echo "Waiting for ssh-gateway pod to be Ready..."
+kubectl wait --for=condition=Ready pod/ssh-gateway -n "$NAMESPACE" --timeout=180s
 GATEWAY_IP="$(kubectl get svc ssh-gateway -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}')"
 [[ -n "$GATEWAY_IP" ]] || die "could not read ssh-gateway ClusterIP"
 echo "ssh-gateway ClusterIP: $GATEWAY_IP"
+
+# "Ready" only means the container started: it installs openssh-server from
+# the archive at startup, so sshd comes up seconds-to-minutes later (or never,
+# if the pod has no DNS). Gate on the thing DDB actually needs -- an SSH
+# banner on the ClusterIP -- instead of letting ddb hang on connect later.
+echo -n "Waiting for sshd inside the gateway to accept connections"
+sshd_up=0
+for _ in $(seq 1 60); do
+    if timeout 3 bash -c "exec 3<>/dev/tcp/$GATEWAY_IP/2222 && head -c 4 <&3 | grep -q SSH" 2>/dev/null; then
+        sshd_up=1; break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
+[[ "$sshd_up" -eq 1 ]] || die "gateway sshd not reachable at $GATEWAY_IP:2222 after 180s.
+  Check the install log with: kubectl logs ssh-gateway -n $NAMESPACE --tail=20"
+echo "gateway sshd is up."
 
 # ─── Step 2: debug sidecars ──────────────────────────────────────────────────
 

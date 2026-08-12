@@ -1,0 +1,4 @@
+logs/
+results/
+ddb/raft_config.yaml
+.run.lock
