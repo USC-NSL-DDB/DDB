@@ -1,0 +1,37 @@
+[package]
+name = "ddb-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Modern terminal debugger frontend for DDB"
+license = "Apache-2.0"
+
+# Keep this application independently releasable from DDB's backend workspace.
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+ddb-api-client = { path = "../ddb/api-client" }
+futures-util = "0.3"
+libc = "0.2"
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+ddb-api-extension = { path = "../ddb/api-extension" }
+ddb-sample-extension = { path = "../ddb/examples/extensions/sample-extension" }
+pretty_assertions = "1.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
+vt100 = "0.15"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
