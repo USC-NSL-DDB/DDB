@@ -1,0 +1,144 @@
+{
+  "generated_at_epoch_s": 1786731509,
+  "binary": "/home/ybyan/projs/DDB/ddb/target/release/ddb",
+  "scales": [
+    1,
+    16,
+    64
+  ],
+  "dbt_depths": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "threads_per_session": 4,
+  "notification_subscribers": 8,
+  "warmup": 5,
+  "samples": 30,
+  "startup_warmup": 1,
+  "startup_samples": 4,
+  "lldb_eager_stack_warmup": true,
+  "results": [
+    {
+      "scenario": "v2-http-snapshot",
+      "description": "Full public v2 snapshot over a reused HTTP/ProtoJSON connection, including topology, execution, breakpoints, operations, extensions, and capabilities.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 0.206515,
+        "mean_ms": 0.21288946666666667,
+        "p50_ms": 0.210956,
+        "p95_ms": 0.22722974999999995,
+        "p99_ms": 0.23347407,
+        "max_ms": 0.233682
+      }
+    },
+    {
+      "scenario": "v2-http-snapshot",
+      "description": "Full public v2 snapshot over a reused HTTP/ProtoJSON connection, including topology, execution, breakpoints, operations, extensions, and capabilities.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 0.5826199999999999,
+        "mean_ms": 0.6461127666666666,
+        "p50_ms": 0.644863,
+        "p95_ms": 0.74010855,
+        "p99_ms": 0.76691287,
+        "max_ms": 0.774887
+      }
+    },
+    {
+      "scenario": "v2-http-snapshot",
+      "description": "Full public v2 snapshot over a reused HTTP/ProtoJSON connection, including topology, execution, breakpoints, operations, extensions, and capabilities.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 1.679743,
+        "mean_ms": 1.9406952666666664,
+        "p50_ms": 1.9102235,
+        "p95_ms": 2.28902215,
+        "p99_ms": 2.3129003900000003,
+        "max_ms": 2.321574
+      }
+    },
+    {
+      "scenario": "v2-grpc-snapshot",
+      "description": "The identical full public v2 snapshot over a reused Tonic/Protobuf connection to the opt-in native preview listener.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 0.173181,
+        "mean_ms": 0.18546343333333332,
+        "p50_ms": 0.1841605,
+        "p95_ms": 0.19973154999999998,
+        "p99_ms": 0.20125885,
+        "max_ms": 0.201559
+      }
+    },
+    {
+      "scenario": "v2-grpc-snapshot",
+      "description": "The identical full public v2 snapshot over a reused Tonic/Protobuf connection to the opt-in native preview listener.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 0.459177,
+        "mean_ms": 0.5355057666666666,
+        "p50_ms": 0.5390604999999999,
+        "p95_ms": 0.6275161999999999,
+        "p99_ms": 0.66814692,
+        "max_ms": 0.676978
+      }
+    },
+    {
+      "scenario": "v2-grpc-snapshot",
+      "description": "The identical full public v2 snapshot over a reused Tonic/Protobuf connection to the opt-in native preview listener.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "stats": {
+        "samples": 30,
+        "min_ms": 1.2754109999999999,
+        "mean_ms": 1.5939368000000005,
+        "p50_ms": 1.6156639999999998,
+        "p95_ms": 1.9480595499999998,
+        "p99_ms": 1.9887592,
+        "max_ms": 2.002453
+      }
+    }
+  ]
+}

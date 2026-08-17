@@ -1,0 +1,32 @@
+[package]
+name = "ddb-api-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ddb-api-types = { path = "../api-types" }
+libfuzzer-sys = "0.4"
+prost = "=0.14.3"
+serde = "1.0"
+serde_json = "1.0"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "protobuf_contract"
+path = "fuzz_targets/protobuf_contract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protojson_contract"
+path = "fuzz_targets/protojson_contract.rs"
+test = false
+doc = false
+bench = false

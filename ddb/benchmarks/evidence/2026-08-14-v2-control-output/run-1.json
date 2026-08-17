@@ -1,0 +1,291 @@
+{
+  "generated_at_epoch_s": 1786741458,
+  "binary": "/home/ybyan/projs/DDB/ddb/target/release/ddb",
+  "scales": [
+    1,
+    16,
+    64
+  ],
+  "dbt_depths": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "threads_per_session": 4,
+  "notification_subscribers": 8,
+  "bulk_output_events": 512,
+  "bulk_output_event_bytes": 4096,
+  "bulk_output_total_bytes": 2097152,
+  "warmup": 2,
+  "samples": 12,
+  "startup_warmup": 1,
+  "startup_samples": 4,
+  "lldb_eager_stack_warmup": true,
+  "results": [
+    {
+      "scenario": "v2-http-step-stop",
+      "description": "Typed NEXT admission through HTTP/ProtoJSON until the corresponding replayable stopped execution event is observed.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 26.156447,
+        "mean_ms": 27.102315666666666,
+        "p50_ms": 27.224345,
+        "p95_ms": 27.49923765,
+        "p99_ms": 27.542030730000004,
+        "max_ms": 27.552729000000003
+      }
+    },
+    {
+      "scenario": "v2-http-step-stop",
+      "description": "Typed NEXT admission through HTTP/ProtoJSON until the corresponding replayable stopped execution event is observed.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 27.717543,
+        "mean_ms": 28.49250766666667,
+        "p50_ms": 28.5645245,
+        "p95_ms": 28.780528,
+        "p99_ms": 28.9190664,
+        "max_ms": 28.953701
+      }
+    },
+    {
+      "scenario": "v2-http-step-stop",
+      "description": "Typed NEXT admission through HTTP/ProtoJSON until the corresponding replayable stopped execution event is observed.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 30.911528,
+        "mean_ms": 31.33804008333333,
+        "p50_ms": 31.297340499999997,
+        "p95_ms": 31.86916315,
+        "p99_ms": 32.205467029999994,
+        "max_ms": 32.289542999999995
+      }
+    },
+    {
+      "scenario": "v2-grpc-step-stop",
+      "description": "The identical typed NEXT-to-stopped workflow over reused Tonic/Protobuf unary and state-stream connections.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 26.142497000000002,
+        "mean_ms": 26.98107733333333,
+        "p50_ms": 27.098298999999997,
+        "p95_ms": 27.4591912,
+        "p99_ms": 27.572524639999997,
+        "max_ms": 27.600858
+      }
+    },
+    {
+      "scenario": "v2-grpc-step-stop",
+      "description": "The identical typed NEXT-to-stopped workflow over reused Tonic/Protobuf unary and state-stream connections.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 26.821965,
+        "mean_ms": 28.21271391666667,
+        "p50_ms": 28.3698255,
+        "p95_ms": 28.627487600000002,
+        "p99_ms": 28.66012152,
+        "max_ms": 28.66828
+      }
+    },
+    {
+      "scenario": "v2-grpc-step-stop",
+      "description": "The identical typed NEXT-to-stopped workflow over reused Tonic/Protobuf unary and state-stream connections.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": null,
+      "bulk_output_event_bytes": null,
+      "bulk_output_total_bytes": null,
+      "stats": {
+        "samples": 12,
+        "min_ms": 29.015505,
+        "mean_ms": 31.86619525,
+        "p50_ms": 32.0957875,
+        "p95_ms": 32.41436755,
+        "p99_ms": 32.41888151,
+        "max_ms": 32.42001
+      }
+    },
+    {
+      "scenario": "v2-http-drained-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while an identical bounded output load is actively drained by a separate consumer.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 26.733815,
+        "mean_ms": 44.12969974999999,
+        "p50_ms": 42.706815,
+        "p95_ms": 71.8557889,
+        "p99_ms": 72.00937617999999,
+        "max_ms": 72.04777299999999
+      }
+    },
+    {
+      "scenario": "v2-http-drained-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while an identical bounded output load is actively drained by a separate consumer.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 28.754862,
+        "mean_ms": 44.19803725,
+        "p50_ms": 40.6853615,
+        "p95_ms": 67.84048949999999,
+        "p99_ms": 70.9360523,
+        "max_ms": 71.709943
+      }
+    },
+    {
+      "scenario": "v2-http-drained-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while an identical bounded output load is actively drained by a separate consumer.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 32.870822000000004,
+        "mean_ms": 47.92785958333332,
+        "p50_ms": 50.1195535,
+        "p95_ms": 64.24851865,
+        "p99_ms": 65.95546213,
+        "max_ms": 66.382198
+      }
+    },
+    {
+      "scenario": "v2-http-mixed-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while a separate unread output subscription is flooded through the bounded output lane.",
+      "metric": "latency_ms",
+      "sessions": 1,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 27.258468,
+        "mean_ms": 43.35691483333333,
+        "p50_ms": 41.688087,
+        "p95_ms": 65.69149265,
+        "p99_ms": 70.15201773000001,
+        "max_ms": 71.267149
+      }
+    },
+    {
+      "scenario": "v2-http-mixed-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while a separate unread output subscription is flooded through the bounded output lane.",
+      "metric": "latency_ms",
+      "sessions": 16,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 28.570038999999998,
+        "mean_ms": 40.25652041666667,
+        "p50_ms": 38.5751,
+        "p95_ms": 52.4224101,
+        "p99_ms": 53.819206820000005,
+        "max_ms": 54.168406000000004
+      }
+    },
+    {
+      "scenario": "v2-http-mixed-output-step",
+      "description": "Typed HTTP NEXT-to-stopped latency while a separate unread output subscription is flooded through the bounded output lane.",
+      "metric": "latency_ms",
+      "sessions": 64,
+      "dbt_depth": null,
+      "threads_per_session": 4,
+      "notification_subscribers": null,
+      "bulk_output_events": 512,
+      "bulk_output_event_bytes": 4096,
+      "bulk_output_total_bytes": 2097152,
+      "stats": {
+        "samples": 12,
+        "min_ms": 34.067004,
+        "mean_ms": 43.539985916666666,
+        "p50_ms": 41.336538,
+        "p95_ms": 55.41174184999999,
+        "p99_ms": 62.097318770000015,
+        "max_ms": 63.768713000000005
+      }
+    }
+  ]
+}

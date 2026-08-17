@@ -10,6 +10,20 @@ on:
       - 'ddb/**/*.py'
       - 'ddb/**/Cargo.toml'
       - 'ddb/**/Cargo.lock'
+      - 'ddb/**/*.sh'
+      - 'ddb/**/*.yml'
+      - 'ddb/**/*.yaml'
+      - 'ddb/docs/**'
+      - 'ddb/examples/**'
+      - 'ddb/completions/**'
+      - 'README.md'
+      - 'ddb/**/*.proto'
+      - 'ddb/sdk/**'
+      - 'ddb/buf.yaml'
+      - 'ddb/docs/api/**'
+      - 'ddb/docs/benchmark-suite.md'
+      - 'ddb/benchmarks/**'
+      - 'ddb-tui/**'
       - '.github/workflows/rust-check.yml'
   pull_request:
     paths:
@@ -17,6 +31,20 @@ on:
       - 'ddb/**/*.py'
       - 'ddb/**/Cargo.toml'
       - 'ddb/**/Cargo.lock'
+      - 'ddb/**/*.sh'
+      - 'ddb/**/*.yml'
+      - 'ddb/**/*.yaml'
+      - 'ddb/docs/**'
+      - 'ddb/examples/**'
+      - 'ddb/completions/**'
+      - 'README.md'
+      - 'ddb/**/*.proto'
+      - 'ddb/sdk/**'
+      - 'ddb/buf.yaml'
+      - 'ddb/docs/api/**'
+      - 'ddb/docs/benchmark-suite.md'
+      - 'ddb/benchmarks/**'
+      - 'ddb-tui/**'
       - '.github/workflows/rust-check.yml'
   workflow_dispatch:
 
@@ -28,21 +56,80 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install debugger test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gdb lldb libfaketime
+          sudo apt-get install -y gdb lldb libfaketime protobuf-compiler
       
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           rustflags: ""
+
+      - name: Setup Node.js for the TypeScript SDK
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ddb/sdk/typescript/package-lock.json
+
+      - name: Setup Buf
+        uses: bufbuild/buf-action@v1
+        with:
+          version: 1.72.0
+          setup_only: true
       
       - name: Check formatting
         working-directory: ddb
         run: cargo fmt --all -- --check
+
+      - name: Check API schema and generated contracts
+        working-directory: ddb
+        run: |
+          buf format --diff --exit-code
+          buf lint
+          cargo run -p ddb-api-codegen -- --check
+          cargo test -p ddb-api-types --all-targets
+
+      - name: Check and test the TypeScript SDK
+        working-directory: ddb/sdk/typescript
+        run: |
+          npm ci --ignore-scripts
+          npm run check
+          npm test
+          npm pack --dry-run
+
+      - name: Check, test, and package the Python SDK
+        working-directory: ddb/sdk/python
+        env:
+          PYTHONPATH: src
+          SOURCE_DATE_EPOCH: '1704067200'
+        run: |
+          python3 -m compileall -q src tests examples
+          python3 -m unittest discover -s tests -v
+          python3 -m pip wheel . --no-deps --wheel-dir /tmp/ddb-python-sdk-wheel
+
+      - name: Validate generated API specifications
+        working-directory: ddb
+        run: |
+          npx --yes @redocly/cli@2.46.1 lint docs/api/generated/openapi-v2.json
+          npx --yes @asyncapi/cli@6.0.2 validate docs/api/generated/asyncapi-v2.json --diagnostics-format json
+
+      - name: Check API schema compatibility
+        if: github.event_name == 'pull_request'
+        working-directory: ddb
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}:ddb/proto" 2>/dev/null; then
+            buf breaking --against "../.git#ref=${BASE_SHA},subdir=ddb"
+          else
+            echo "No v2 schema exists on the pull-request base; establishing the initial baseline."
+          fi
 
       - name: Check every target and feature
         working-directory: ddb
@@ -51,11 +138,91 @@ jobs:
       - name: Lint DDB targets
         working-directory: ddb
         run: cargo clippy -p ddb --all-targets --all-features --no-deps -- -D warnings
+
+      - name: Lint public API and extension crates
+        working-directory: ddb
+        run: |
+          cargo clippy -p ddb-api-types --all-targets --no-deps -- -D warnings
+          cargo clippy -p ddb-api-client --all-targets --all-features --no-deps -- -D warnings
+          cargo clippy -p ddb-api-grpc --all-targets --all-features --no-deps -- -D warnings
+          cargo clippy -p ddb-api-conformance --all-targets --no-deps -- -D warnings
+          cargo clippy -p ddb-api-extension --all-targets --no-deps -- -D warnings
+          cargo clippy -p ddb-sample-extension --all-targets --no-deps -- -D warnings
       
       - name: Run workspace tests
         working-directory: ddb
         run: cargo test --workspace --all-targets
 
+      - name: Verify optimized thread state transitions
+        working-directory: ddb
+        run: cargo test -p ddb --release thread_status_mutation_is_not_debug_only
+
+      - name: Run public API conformance against DDB Mock
+        working-directory: ddb
+        run: cargo test -p ddb --test api_v2_conformance
+
+      - name: Run API deployment security and graceful-shutdown tests
+        working-directory: ddb
+        run: cargo test -p ddb --test api_v2_security
+
+      - name: Test public extension authoring surface
+        working-directory: ddb
+        run: |
+          cargo test -p ddb-api-extension --all-targets
+          cargo test -p ddb-sample-extension --all-targets
+
+      - name: Run TypeScript and Python SDKs against DDB Mock
+        working-directory: ddb
+        run: cargo test -p ddb --test api_v2_language_sdks -- --ignored --nocapture
+
+      - name: Reproduce public API release artifacts
+        working-directory: ddb
+        run: ./tools/check-api-release.sh
+
       - name: Run DDB all-feature tests
         working-directory: ddb
         run: cargo test -p ddb --all-targets --all-features
+
+      - name: Run API lifecycle soak
+        working-directory: ddb
+        run: cargo test -p ddb --test api_v2_soak -- --ignored --nocapture
+
+      - name: Check, test, lint, and build ddb-tui
+        working-directory: ddb-tui
+        run: |
+          cargo fmt --all -- --check
+          cargo test --all-targets
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo build --release
+
+      - name: Build DDB and real debugger fixture for TUI PTY tests
+        run: |
+          cargo build -p ddb --manifest-path ddb/Cargo.toml
+          cargo build --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml
+
+      - name: Run ddb-tui Mock, GDB, and LLDB PTY workflows
+        working-directory: ddb-tui
+        run: cargo test --test e2e_mock -- --ignored --nocapture
+
+      - name: Run managed DDB process lifecycle tests
+        working-directory: ddb
+        run: cargo test -p ddb --test managed_serve -- --nocapture
+
+      - name: Build and smoke-test paired DDB/ddb-tui artifact
+        working-directory: ddb
+        run: |
+          paired_archive="$(./tools/package-ddb-tui-release.sh /tmp/ddb-paired-artifacts | tail -n 1)"
+          ./tools/test-ddb-tui-release.sh "${paired_archive}"
+
+      - name: Enforce ddb tui dispatcher p95 overhead
+        run: ddb/tools/measure-tui-dispatch.sh ddb/target/release/ddb /tmp/ddb-paired-artifacts/tui-dispatch.json 100
+
+      - name: Retain paired release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddb-paired-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            /tmp/ddb-paired-artifacts/*.tar.gz
+            /tmp/ddb-paired-artifacts/*.sha256
+            /tmp/ddb-paired-artifacts/tui-dispatch.json
+          if-no-files-found: error
