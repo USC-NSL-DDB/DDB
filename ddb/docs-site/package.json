@@ -1,0 +1,20 @@
+{
+  "name": "@ddb/api-docs-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic static OpenAPI and AsyncAPI references for DDB",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "check": "node scripts/check-contracts.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@asyncapi/cli": "6.0.2",
+    "@asyncapi/html-template": "3.5.6",
+    "@redocly/cli": "2.46.1"
+  }
+}
