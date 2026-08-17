@@ -363,7 +363,6 @@ message ListSignalsResponse {
   PageInfo page = 3;
 }
 
-
 // ReadMemoryRequest reads a bounded target-dependent address range.
 message ReadMemoryRequest {
   // Request controls; CONTROL permission is required.

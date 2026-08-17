@@ -1,5 +1,194 @@
 {
   "components": {
+    "responses": {
+      "DdbError400": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The request or its ProtoJSON representation is invalid.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_INVALID_ARGUMENT"
+        ]
+      },
+      "DdbError401": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "Authentication credentials are missing or invalid.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_UNAUTHENTICATED"
+        ]
+      },
+      "DdbError403": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The authenticated principal lacks the required scope.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_PERMISSION_DENIED"
+        ]
+      },
+      "DdbError404": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The addressed resource does not exist.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_NOT_FOUND"
+        ]
+      },
+      "DdbError409": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The request conflicts with current resource state. The addressed operation cannot currently be cancelled.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_CONFLICT",
+          "DDB_ERROR_CODE_NOT_CANCELLABLE"
+        ]
+      },
+      "DdbError410": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The requested stream cursor is no longer retained. The addressed ephemeral resource has expired.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_REPLAY_GAP",
+          "DDB_ERROR_CODE_EXPIRED"
+        ]
+      },
+      "DdbError412": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "A required debugger or DDB precondition is not satisfied.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_FAILED_PRECONDITION"
+        ]
+      },
+      "DdbError429": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "A documented resource or admission limit was exceeded.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_RESOURCE_EXHAUSTED"
+        ]
+      },
+      "DdbError499": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The operation was cancelled.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_CANCELLED"
+        ]
+      },
+      "DdbError500": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The server could not classify an internal failure. The server encountered an internal failure.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_UNSPECIFIED",
+          "DDB_ERROR_CODE_INTERNAL"
+        ]
+      },
+      "DdbError501": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The requested typed capability is not supported.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_UNSUPPORTED"
+        ]
+      },
+      "DdbError502": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The debugger backend failed the request. A fanout request completed with one or more target failures.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_BACKEND_FAILED",
+          "DDB_ERROR_CODE_PARTIAL_FAILURE"
+        ]
+      },
+      "DdbError503": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The addressed target or service is not ready. A required service or debugger backend is unavailable.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_NOT_READY",
+          "DDB_ERROR_CODE_UNAVAILABLE"
+        ]
+      },
+      "DdbError504": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DdbError"
+            }
+          }
+        },
+        "description": "The operation exceeded its deadline.",
+        "x-ddb-error-codes": [
+          "DDB_ERROR_CODE_DEADLINE_EXCEEDED"
+        ]
+      }
+    },
     "schemas": {
       "AddressBreakpointLocation": {
         "additionalProperties": true,
@@ -3707,7 +3896,7 @@
     }
   },
   "info": {
-    "description": "Backend-neutral debugger API. Protobuf is canonical; this document describes the HTTP/ProtoJSON binding.",
+    "description": "Backend-neutral debugger API. Protobuf plus the checked operation policy form the canonical registry; this document is its HTTP/ProtoJSON projection.",
     "license": {
       "identifier": "Apache-2.0",
       "name": "Apache-2.0"
@@ -3719,10 +3908,12 @@
   "paths": {
     "/api/v2/rpc/ddb.api.v2.DdbAdminService/GetHealth": {
       "post": {
+        "description": "Returns minimal liveness state.",
         "operationId": "DdbAdminService_GetHealth",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetHealthRequest"
               }
@@ -3742,40 +3933,65 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [],
-        "summary": "DdbAdminService.GetHealth",
+        "summary": "Returns minimal liveness state.",
         "tags": [
           "DdbAdminService"
         ],
-        "x-ddb-protobuf-method": "/ddb.api.v2.DdbAdminService/GetHealth"
+        "x-ddb-protobuf-method": "/ddb.api.v2.DdbAdminService/GetHealth",
+        "x-ddb-registry-key": "DdbAdminService.GetHealth"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DdbAdminService/GetReadiness": {
       "post": {
+        "description": "Returns minimal readiness state.",
         "operationId": "DdbAdminService_GetReadiness",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetReadinessRequest"
               }
@@ -3795,40 +4011,65 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [],
-        "summary": "DdbAdminService.GetReadiness",
+        "summary": "Returns minimal readiness state.",
         "tags": [
           "DdbAdminService"
         ],
-        "x-ddb-protobuf-method": "/ddb.api.v2.DdbAdminService/GetReadiness"
+        "x-ddb-protobuf-method": "/ddb.api.v2.DdbAdminService/GetReadiness",
+        "x-ddb-registry-key": "DdbAdminService.GetReadiness"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DdbAdminService/Shutdown": {
       "post": {
+        "description": "Admits graceful shutdown. Requires ADMIN permission.",
         "operationId": "DdbAdminService_Shutdown",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ShutdownRequest"
               }
@@ -3848,24 +4089,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -3873,20 +4136,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DdbAdminService.Shutdown",
+        "summary": "Admits graceful shutdown. Requires ADMIN permission.",
         "tags": [
           "DdbAdminService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DdbAdminService/Shutdown",
+        "x-ddb-registry-key": "DdbAdminService.Shutdown",
         "x-ddb-required-scope": "admin"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeOutput": {
       "post": {
+        "description": "Streams output with explicit loss reporting. Requires READ permission.",
         "operationId": "DdbEventService_SubscribeOutput",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/SubscribeOutputRequest"
               }
@@ -3901,34 +4167,56 @@
                 "schema": {
                   "description": "One canonical ProtoJSON message per non-empty line. Empty lines are transport heartbeats.",
                   "format": "ndjson",
-                  "type": "string"
-                },
-                "x-ddb-stream-message": {
-                  "$ref": "#/components/schemas/OutputEvent"
+                  "type": "string",
+                  "x-ddb-stream-message": {
+                    "$ref": "#/components/schemas/OutputEvent"
+                  }
                 }
               }
             },
             "description": "Streaming response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -3936,20 +4224,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DdbEventService.SubscribeOutput",
+        "summary": "Streams output with explicit loss reporting. Requires READ permission.",
         "tags": [
           "DdbEventService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DdbEventService/SubscribeOutput",
+        "x-ddb-registry-key": "DdbEventService.SubscribeOutput",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeStateEvents": {
       "post": {
+        "description": "Replays retained state after a cursor, then continues live without a gap. Requires READ permission and returns REPLAY_GAP for an unavailable cursor.",
         "operationId": "DdbEventService_SubscribeStateEvents",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/SubscribeStateEventsRequest"
               }
@@ -3964,34 +4255,56 @@
                 "schema": {
                   "description": "One canonical ProtoJSON message per non-empty line. Empty lines are transport heartbeats.",
                   "format": "ndjson",
-                  "type": "string"
-                },
-                "x-ddb-stream-message": {
-                  "$ref": "#/components/schemas/StateEvent"
+                  "type": "string",
+                  "x-ddb-stream-message": {
+                    "$ref": "#/components/schemas/StateEvent"
+                  }
                 }
               }
             },
             "description": "Streaming response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -3999,20 +4312,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DdbEventService.SubscribeStateEvents",
+        "summary": "Replays retained state after a cursor, then continues live without a gap. Requires READ permission and returns REPLAY_GAP for an unavailable cursor.",
         "tags": [
           "DdbEventService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DdbEventService/SubscribeStateEvents",
+        "x-ddb-registry-key": "DdbEventService.SubscribeStateEvents",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/CancelOperation": {
       "post": {
+        "description": "Requests cancellation only when currently supported.",
         "operationId": "DebuggerControlService_CancelOperation",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/CancelOperationRequest"
               }
@@ -4032,24 +4348,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4057,20 +4395,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.CancelOperation",
+        "summary": "Requests cancellation only when currently supported.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/CancelOperation",
+        "x-ddb-registry-key": "DebuggerControlService.CancelOperation",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/CreateBreakpoint": {
       "post": {
+        "description": "Admits logical/distributed breakpoint creation.",
         "operationId": "DebuggerControlService_CreateBreakpoint",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/CreateBreakpointRequest"
               }
@@ -4090,24 +4431,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4115,20 +4478,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.CreateBreakpoint",
+        "summary": "Admits logical/distributed breakpoint creation.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/CreateBreakpoint",
+        "x-ddb-registry-key": "DebuggerControlService.CreateBreakpoint",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/DeleteBreakpoint": {
       "post": {
+        "description": "Admits logical breakpoint deletion.",
         "operationId": "DebuggerControlService_DeleteBreakpoint",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/DeleteBreakpointRequest"
               }
@@ -4148,24 +4514,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4173,20 +4561,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.DeleteBreakpoint",
+        "summary": "Admits logical breakpoint deletion.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/DeleteBreakpoint",
+        "x-ddb-registry-key": "DebuggerControlService.DeleteBreakpoint",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate": {
       "post": {
+        "description": "Admits expression evaluation.",
         "operationId": "DebuggerControlService_Evaluate",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/EvaluateRequest"
               }
@@ -4206,24 +4597,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4231,20 +4644,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.Evaluate",
+        "summary": "Admits expression evaluation.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/Evaluate",
+        "x-ddb-registry-key": "DebuggerControlService.Evaluate",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Execute": {
       "post": {
+        "description": "Admits continue/interrupt/step/jump/signal control.",
         "operationId": "DebuggerControlService_Execute",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ExecuteRequest"
               }
@@ -4264,24 +4680,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4289,20 +4727,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.Execute",
+        "summary": "Admits continue/interrupt/step/jump/signal control.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/Execute",
+        "x-ddb-registry-key": "DebuggerControlService.Execute",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/ExecuteRawCommand": {
       "post": {
+        "description": "Admits a backend-specific raw command under explicit capability gating.",
         "operationId": "DebuggerControlService_ExecuteRawCommand",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ExecuteRawCommandRequest"
               }
@@ -4322,24 +4763,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4347,20 +4810,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.ExecuteRawCommand",
+        "summary": "Admits a backend-specific raw command under explicit capability gating.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/ExecuteRawCommand",
+        "x-ddb-registry-key": "DebuggerControlService.ExecuteRawCommand",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/InvokeExtensionAction": {
       "post": {
+        "description": "Admits a discoverable extension action.",
         "operationId": "DebuggerControlService_InvokeExtensionAction",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/InvokeExtensionActionRequest"
               }
@@ -4380,24 +4846,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4405,20 +4893,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.InvokeExtensionAction",
+        "summary": "Admits a discoverable extension action.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/InvokeExtensionAction",
+        "x-ddb-registry-key": "DebuggerControlService.InvokeExtensionAction",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/RunDistributedBacktrace": {
       "post": {
+        "description": "Admits DDB distributed-backtrace collection.",
         "operationId": "DebuggerControlService_RunDistributedBacktrace",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/RunDistributedBacktraceRequest"
               }
@@ -4438,24 +4929,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4463,20 +4976,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.RunDistributedBacktrace",
+        "summary": "Admits DDB distributed-backtrace collection.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/RunDistributedBacktrace",
+        "x-ddb-registry-key": "DebuggerControlService.RunDistributedBacktrace",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SelectThread": {
       "post": {
+        "description": "Admits thread selection.",
         "operationId": "DebuggerControlService_SelectThread",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/SelectThreadRequest"
               }
@@ -4496,24 +5012,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4521,20 +5059,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.SelectThread",
+        "summary": "Admits thread selection.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/SelectThread",
+        "x-ddb-registry-key": "DebuggerControlService.SelectThread",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/UpdateBreakpoint": {
       "post": {
+        "description": "Admits a field-masked breakpoint update.",
         "operationId": "DebuggerControlService_UpdateBreakpoint",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/UpdateBreakpointRequest"
               }
@@ -4554,24 +5095,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4579,20 +5142,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerControlService.UpdateBreakpoint",
+        "summary": "Admits a field-masked breakpoint update.",
         "tags": [
           "DebuggerControlService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/UpdateBreakpoint",
+        "x-ddb-registry-key": "DebuggerControlService.UpdateBreakpoint",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ExpandVariable": {
       "post": {
+        "description": "Expands one lazy variable. Requires READ permission.",
         "operationId": "DebuggerService_ExpandVariable",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ExpandVariableRequest"
               }
@@ -4612,24 +5178,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4637,20 +5225,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ExpandVariable",
+        "summary": "Expands one lazy variable. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ExpandVariable",
+        "x-ddb-registry-key": "DebuggerService.ExpandVariable",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetBreakpoint": {
       "post": {
+        "description": "Gets one logical breakpoint. Requires READ permission.",
         "operationId": "DebuggerService_GetBreakpoint",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetBreakpointRequest"
               }
@@ -4670,24 +5261,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4695,20 +5308,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetBreakpoint",
+        "summary": "Gets one logical breakpoint. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetBreakpoint",
+        "x-ddb-registry-key": "DebuggerService.GetBreakpoint",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetCapabilities": {
       "post": {
+        "description": "Returns truthful aggregate or target-scoped capabilities.",
         "operationId": "DebuggerService_GetCapabilities",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetCapabilitiesRequest"
               }
@@ -4728,24 +5344,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4753,20 +5391,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetCapabilities",
+        "summary": "Returns truthful aggregate or target-scoped capabilities.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetCapabilities",
+        "x-ddb-registry-key": "DebuggerService.GetCapabilities",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetExecutionState": {
       "post": {
+        "description": "Reads target execution state. Requires READ permission.",
         "operationId": "DebuggerService_GetExecutionState",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetExecutionStateRequest"
               }
@@ -4786,24 +5427,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4811,20 +5474,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetExecutionState",
+        "summary": "Reads target execution state. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetExecutionState",
+        "x-ddb-registry-key": "DebuggerService.GetExecutionState",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetExtensionSchema": {
       "post": {
+        "description": "Fetches a registered extension schema. Requires READ permission.",
         "operationId": "DebuggerService_GetExtensionSchema",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetExtensionSchemaRequest"
               }
@@ -4844,24 +5510,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4869,20 +5557,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetExtensionSchema",
+        "summary": "Fetches a registered extension schema. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetExtensionSchema",
+        "x-ddb-registry-key": "DebuggerService.GetExtensionSchema",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetGroup": {
       "post": {
+        "description": "Gets one logical group. Requires READ permission.",
         "operationId": "DebuggerService_GetGroup",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetGroupRequest"
               }
@@ -4902,24 +5593,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4927,20 +5640,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetGroup",
+        "summary": "Gets one logical group. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetGroup",
+        "x-ddb-registry-key": "DebuggerService.GetGroup",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetOperation": {
       "post": {
+        "description": "Gets one retained operation. Requires READ permission.",
         "operationId": "DebuggerService_GetOperation",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetOperationRequest"
               }
@@ -4960,24 +5676,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -4985,20 +5723,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetOperation",
+        "summary": "Gets one retained operation. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetOperation",
+        "x-ddb-registry-key": "DebuggerService.GetOperation",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetProcess": {
       "post": {
+        "description": "Gets one process projection. Requires READ permission.",
         "operationId": "DebuggerService_GetProcess",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetProcessRequest"
               }
@@ -5018,24 +5759,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5043,20 +5806,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetProcess",
+        "summary": "Gets one process projection. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetProcess",
+        "x-ddb-registry-key": "DebuggerService.GetProcess",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetServerInfo": {
       "post": {
+        "description": "Returns public identity. No debugger-data permission is required.",
         "operationId": "DebuggerService_GetServerInfo",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetServerInfoRequest"
               }
@@ -5076,40 +5842,65 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [],
-        "summary": "DebuggerService.GetServerInfo",
+        "summary": "Returns public identity. No debugger-data permission is required.",
         "tags": [
           "DebuggerService"
         ],
-        "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetServerInfo"
+        "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetServerInfo",
+        "x-ddb-registry-key": "DebuggerService.GetServerInfo"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetSession": {
       "post": {
+        "description": "Gets one session. Requires READ permission.",
         "operationId": "DebuggerService_GetSession",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetSessionRequest"
               }
@@ -5129,24 +5920,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5154,20 +5967,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetSession",
+        "summary": "Gets one session. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetSession",
+        "x-ddb-registry-key": "DebuggerService.GetSession",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetSnapshot": {
       "post": {
+        "description": "Returns a detached snapshot with cursor-before-collection semantics.",
         "operationId": "DebuggerService_GetSnapshot",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetSnapshotRequest"
               }
@@ -5187,24 +6003,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5212,20 +6050,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetSnapshot",
+        "summary": "Returns a detached snapshot with cursor-before-collection semantics.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetSnapshot",
+        "x-ddb-registry-key": "DebuggerService.GetSnapshot",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/GetThread": {
       "post": {
+        "description": "Gets one thread projection. Requires READ permission.",
         "operationId": "DebuggerService_GetThread",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/GetThreadRequest"
               }
@@ -5245,24 +6086,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5270,20 +6133,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.GetThread",
+        "summary": "Gets one thread projection. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/GetThread",
+        "x-ddb-registry-key": "DebuggerService.GetThread",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints": {
       "post": {
+        "description": "Lists logical breakpoints. Requires READ permission.",
         "operationId": "DebuggerService_ListBreakpoints",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListBreakpointsRequest"
               }
@@ -5303,24 +6169,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5328,20 +6216,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListBreakpoints",
+        "summary": "Lists logical breakpoints. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListBreakpoints",
+        "x-ddb-registry-key": "DebuggerService.ListBreakpoints",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListExtensionStates": {
       "post": {
+        "description": "Lists extension-owned state. Requires READ permission.",
         "operationId": "DebuggerService_ListExtensionStates",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListExtensionStatesRequest"
               }
@@ -5361,24 +6252,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5386,20 +6299,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListExtensionStates",
+        "summary": "Lists extension-owned state. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListExtensionStates",
+        "x-ddb-registry-key": "DebuggerService.ListExtensionStates",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListFrames": {
       "post": {
+        "description": "Lists stack frames for a stopped thread. Requires READ permission.",
         "operationId": "DebuggerService_ListFrames",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListFramesRequest"
               }
@@ -5419,24 +6335,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5444,20 +6382,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListFrames",
+        "summary": "Lists stack frames for a stopped thread. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListFrames",
+        "x-ddb-registry-key": "DebuggerService.ListFrames",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListGroups": {
       "post": {
+        "description": "Lists logical groups. Requires READ permission.",
         "operationId": "DebuggerService_ListGroups",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListGroupsRequest"
               }
@@ -5477,24 +6418,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5502,20 +6465,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListGroups",
+        "summary": "Lists logical groups. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListGroups",
+        "x-ddb-registry-key": "DebuggerService.ListGroups",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListOperations": {
       "post": {
+        "description": "Lists bounded operation history. Requires READ permission.",
         "operationId": "DebuggerService_ListOperations",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListOperationsRequest"
               }
@@ -5535,24 +6501,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5560,20 +6548,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListOperations",
+        "summary": "Lists bounded operation history. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListOperations",
+        "x-ddb-registry-key": "DebuggerService.ListOperations",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListPendingCommands": {
       "post": {
+        "description": "Lists safe pending-command projections. Requires READ permission.",
         "operationId": "DebuggerService_ListPendingCommands",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListPendingCommandsRequest"
               }
@@ -5593,24 +6584,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5618,20 +6631,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListPendingCommands",
+        "summary": "Lists safe pending-command projections. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListPendingCommands",
+        "x-ddb-registry-key": "DebuggerService.ListPendingCommands",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListProcesses": {
       "post": {
+        "description": "Lists process projections. Requires READ permission.",
         "operationId": "DebuggerService_ListProcesses",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListProcessesRequest"
               }
@@ -5651,24 +6667,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5676,20 +6714,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListProcesses",
+        "summary": "Lists process projections. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListProcesses",
+        "x-ddb-registry-key": "DebuggerService.ListProcesses",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListRegisters": {
       "post": {
+        "description": "Lists typed registers. Requires READ permission and backend capability.",
         "operationId": "DebuggerService_ListRegisters",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListRegistersRequest"
               }
@@ -5709,24 +6750,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5734,20 +6797,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListRegisters",
+        "summary": "Lists typed registers. Requires READ permission and backend capability.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListRegisters",
+        "x-ddb-registry-key": "DebuggerService.ListRegisters",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListScopes": {
       "post": {
+        "description": "Lists frame variable scopes. Requires READ permission.",
         "operationId": "DebuggerService_ListScopes",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListScopesRequest"
               }
@@ -5767,24 +6833,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5792,20 +6880,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListScopes",
+        "summary": "Lists frame variable scopes. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListScopes",
+        "x-ddb-registry-key": "DebuggerService.ListScopes",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSessions": {
       "post": {
+        "description": "Lists sessions. Requires READ permission.",
         "operationId": "DebuggerService_ListSessions",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListSessionsRequest"
               }
@@ -5825,24 +6916,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5850,20 +6963,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListSessions",
+        "summary": "Lists sessions. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListSessions",
+        "x-ddb-registry-key": "DebuggerService.ListSessions",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSignals": {
       "post": {
+        "description": "Lists signals for exactly one resolved session. Requires READ permission.",
         "operationId": "DebuggerService_ListSignals",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListSignalsRequest"
               }
@@ -5883,24 +6999,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5908,20 +7046,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListSignals",
+        "summary": "Lists signals for exactly one resolved session. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListSignals",
+        "x-ddb-registry-key": "DebuggerService.ListSignals",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListThreads": {
       "post": {
+        "description": "Lists threads for a canonical target. Requires READ permission.",
         "operationId": "DebuggerService_ListThreads",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListThreadsRequest"
               }
@@ -5941,24 +7082,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -5966,20 +7129,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListThreads",
+        "summary": "Lists threads for a canonical target. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListThreads",
+        "x-ddb-registry-key": "DebuggerService.ListThreads",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListVariables": {
       "post": {
+        "description": "Lists top-level scope variables. Requires READ permission.",
         "operationId": "DebuggerService_ListVariables",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ListVariablesRequest"
               }
@@ -5999,24 +7165,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -6024,20 +7212,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ListVariables",
+        "summary": "Lists top-level scope variables. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ListVariables",
+        "x-ddb-registry-key": "DebuggerService.ListVariables",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadMemory": {
       "post": {
+        "description": "Reads bounded memory. Requires CONTROL permission and backend capability.",
         "operationId": "DebuggerService_ReadMemory",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ReadMemoryRequest"
               }
@@ -6057,24 +7248,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -6082,20 +7295,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ReadMemory",
+        "summary": "Reads bounded memory. Requires CONTROL permission and backend capability.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ReadMemory",
+        "x-ddb-registry-key": "DebuggerService.ReadMemory",
         "x-ddb-required-scope": "control"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource": {
       "post": {
+        "description": "Reads a bounded source window. Requires READ permission.",
         "operationId": "DebuggerService_ReadSource",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ReadSourceRequest"
               }
@@ -6115,24 +7331,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -6140,20 +7378,23 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ReadSource",
+        "summary": "Reads a bounded source window. Requires READ permission.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ReadSource",
+        "x-ddb-registry-key": "DebuggerService.ReadSource",
         "x-ddb-required-scope": "read"
       }
     },
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource": {
       "post": {
+        "description": "Resolves a backend location to a stable source reference.",
         "operationId": "DebuggerService_ResolveSource",
         "requestBody": {
           "content": {
             "application/json": {
+              "example": {},
               "schema": {
                 "$ref": "#/components/schemas/ResolveSourceRequest"
               }
@@ -6173,24 +7414,46 @@
             "description": "Successful response"
           },
           "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Invalid request or malformed ProtoJSON"
+            "$ref": "#/components/responses/DdbError400"
           },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DdbError"
-                }
-              }
-            },
-            "description": "Stable DDB error"
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
           }
         },
         "security": [
@@ -6198,11 +7461,12 @@
             "bearerAuth": []
           }
         ],
-        "summary": "DebuggerService.ResolveSource",
+        "summary": "Resolves a backend location to a stable source reference.",
         "tags": [
           "DebuggerService"
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ResolveSource",
+        "x-ddb-registry-key": "DebuggerService.ResolveSource",
         "x-ddb-required-scope": "read"
       }
     }
@@ -6214,20 +7478,26 @@
   ],
   "tags": [
     {
-      "description": "Health, readiness, and privileged lifecycle operations.",
-      "name": "DdbAdminService"
+      "description": "DebuggerService exposes bounded metadata and debugger reads.",
+      "name": "DebuggerService",
+      "x-ddb-protobuf-service": "ddb.api.v2.DebuggerService"
     },
     {
-      "description": "Replayable state and independent debugger output streams.",
-      "name": "DdbEventService"
+      "description": "DebuggerControlService admits mutations and always returns operation records.",
+      "name": "DebuggerControlService",
+      "x-ddb-protobuf-service": "ddb.api.v2.DebuggerControlService"
     },
     {
-      "description": "Idempotently admitted debugger and DDB control operations.",
-      "name": "DebuggerControlService"
+      "description": "DdbAdminService isolates operational and privileged lifecycle methods.",
+      "name": "DdbAdminService",
+      "x-ddb-protobuf-service": "ddb.api.v2.DdbAdminService"
     },
     {
-      "description": "Debugger metadata, topology, inspection, source, and operation reads.",
-      "name": "DebuggerService"
+      "description": "DdbEventService exposes independent state and output lanes.",
+      "name": "DdbEventService",
+      "x-ddb-protobuf-service": "ddb.api.v2.DdbEventService"
     }
-  ]
+  ],
+  "x-ddb-max-request-bytes": 4194304,
+  "x-ddb-operation-registry": "./operation-registry-v2.json"
 }

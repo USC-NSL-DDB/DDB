@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "http": {
+    "basePath": "/api/v2/rpc",
+    "method": "post",
+    "requestContentType": "application/json",
+    "unaryResponseContentType": "application/json",
+    "streamResponseContentType": "application/x-ndjson",
+    "successStatus": 200,
+    "maxRequestBytes": 4194304
+  },
+  "services": {
+    "DebuggerService": {
+      "defaultScope": "read",
+      "methodScopes": {
+        "GetServerInfo": "public",
+        "ReadMemory": "control"
+      }
+    },
+    "DebuggerControlService": {
+      "defaultScope": "control",
+      "methodScopes": {}
+    },
+    "DdbAdminService": {
+      "defaultScope": "admin",
+      "methodScopes": {
+        "GetHealth": "public",
+        "GetReadiness": "public"
+      }
+    },
+    "DdbEventService": {
+      "defaultScope": "read",
+      "methodScopes": {}
+    }
+  },
+  "streams": {
+    "DdbEventService.SubscribeStateEvents": {
+      "channel": "subscribeStateEvents",
+      "lane": "state",
+      "heartbeatSeconds": 15,
+      "cursorReplay": "Replays retained events strictly after afterCursor, then continues live without a gap. An unavailable cursor returns DDB_ERROR_CODE_REPLAY_GAP with the retained bounds.",
+      "ordering": "Events are delivered in monotonically increasing cursor sequence within one server instance. Clients must reject a changed serverInstanceId and resnapshot.",
+      "replayLimits": "Replay is bounded by the resource limits advertised by GetCapabilities. STATE_EVENT_KIND_REQUIRED_RESYNC requires a fresh snapshot.",
+      "backpressure": "The state lane is independent of debugger output. Slow consumers are bounded and receive explicit resynchronization instead of silent loss.",
+      "lossSignaling": "Transport rejection uses DDB_ERROR_CODE_REPLAY_GAP; an established stream uses STATE_EVENT_KIND_REQUIRED_RESYNC when continuity cannot be preserved."
+    },
+    "DdbEventService.SubscribeOutput": {
+      "channel": "subscribeOutput",
+      "lane": "output",
+      "heartbeatSeconds": 15,
+      "cursorReplay": "Attempts replay strictly after afterCursor only when GetCapabilities advertises output replay. The stream otherwise begins from its documented live boundary.",
+      "ordering": "Output envelopes are ordered by the output-lane cursor within one server instance and are intentionally independent of state-event ordering.",
+      "replayLimits": "Replay and payload retention are bounded by the output limits advertised by GetCapabilities.",
+      "backpressure": "Output cannot delay state delivery. Slow consumers receive explicit OutputGap metadata and may observe bounded/truncated envelopes.",
+      "lossSignaling": "OutputEvent.gap identifies the lost cursor interval and reason; OutputEvent.truncated identifies a bounded payload."
+    }
+  },
+  "errors": [
+    {
+      "code": "DDB_ERROR_CODE_UNSPECIFIED",
+      "status": 500,
+      "description": "The server could not classify an internal failure."
+    },
+    {
+      "code": "DDB_ERROR_CODE_INVALID_ARGUMENT",
+      "status": 400,
+      "description": "The request or its ProtoJSON representation is invalid."
+    },
+    {
+      "code": "DDB_ERROR_CODE_NOT_FOUND",
+      "status": 404,
+      "description": "The addressed resource does not exist."
+    },
+    {
+      "code": "DDB_ERROR_CODE_CONFLICT",
+      "status": 409,
+      "description": "The request conflicts with current resource state."
+    },
+    {
+      "code": "DDB_ERROR_CODE_FAILED_PRECONDITION",
+      "status": 412,
+      "description": "A required debugger or DDB precondition is not satisfied."
+    },
+    {
+      "code": "DDB_ERROR_CODE_UNSUPPORTED",
+      "status": 501,
+      "description": "The requested typed capability is not supported."
+    },
+    {
+      "code": "DDB_ERROR_CODE_NOT_READY",
+      "status": 503,
+      "description": "The addressed target or service is not ready."
+    },
+    {
+      "code": "DDB_ERROR_CODE_UNAUTHENTICATED",
+      "status": 401,
+      "description": "Authentication credentials are missing or invalid."
+    },
+    {
+      "code": "DDB_ERROR_CODE_PERMISSION_DENIED",
+      "status": 403,
+      "description": "The authenticated principal lacks the required scope."
+    },
+    {
+      "code": "DDB_ERROR_CODE_RESOURCE_EXHAUSTED",
+      "status": 429,
+      "description": "A documented resource or admission limit was exceeded."
+    },
+    {
+      "code": "DDB_ERROR_CODE_DEADLINE_EXCEEDED",
+      "status": 504,
+      "description": "The operation exceeded its deadline."
+    },
+    {
+      "code": "DDB_ERROR_CODE_CANCELLED",
+      "status": 499,
+      "description": "The operation was cancelled."
+    },
+    {
+      "code": "DDB_ERROR_CODE_NOT_CANCELLABLE",
+      "status": 409,
+      "description": "The addressed operation cannot currently be cancelled."
+    },
+    {
+      "code": "DDB_ERROR_CODE_REPLAY_GAP",
+      "status": 410,
+      "description": "The requested stream cursor is no longer retained."
+    },
+    {
+      "code": "DDB_ERROR_CODE_BACKEND_FAILED",
+      "status": 502,
+      "description": "The debugger backend failed the request."
+    },
+    {
+      "code": "DDB_ERROR_CODE_PARTIAL_FAILURE",
+      "status": 502,
+      "description": "A fanout request completed with one or more target failures."
+    },
+    {
+      "code": "DDB_ERROR_CODE_UNAVAILABLE",
+      "status": 503,
+      "description": "A required service or debugger backend is unavailable."
+    },
+    {
+      "code": "DDB_ERROR_CODE_INTERNAL",
+      "status": 500,
+      "description": "The server encountered an internal failure."
+    },
+    {
+      "code": "DDB_ERROR_CODE_EXPIRED",
+      "status": 410,
+      "description": "The addressed ephemeral resource has expired."
+    }
+  ]
+}

@@ -3,26 +3,44 @@
   "channels": {
     "subscribeOutput": {
       "address": "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeOutput",
-      "description": "DdbEventService.SubscribeOutput NDJSON stream",
+      "description": "Streams output with explicit loss reporting. Requires READ permission.",
       "messages": {
         "OutputEvent": {
           "$ref": "#/components/messages/OutputEvent"
         }
       },
+      "x-ddb-backpressure": "Output cannot delay state delivery. Slow consumers receive explicit OutputGap metadata and may observe bounded/truncated envelopes.",
+      "x-ddb-cursor-replay": "Attempts replay strictly after afterCursor only when GetCapabilities advertises output replay. The stream otherwise begins from its documented live boundary.",
       "x-ddb-heartbeat": "An empty line is emitted after 15 seconds without an event.",
+      "x-ddb-heartbeat-seconds": 15,
+      "x-ddb-lane": "output",
+      "x-ddb-loss-signaling": "OutputEvent.gap identifies the lost cursor interval and reason; OutputEvent.truncated identifies a bounded payload.",
+      "x-ddb-ordering": "Output envelopes are ordered by the output-lane cursor within one server instance and are intentionally independent of state-event ordering.",
+      "x-ddb-protobuf-method": "/ddb.api.v2.DdbEventService/SubscribeOutput",
+      "x-ddb-registry-key": "DdbEventService.SubscribeOutput",
+      "x-ddb-replay-limits": "Replay and payload retention are bounded by the output limits advertised by GetCapabilities.",
       "x-ddb-request-schema": {
         "$ref": "#/components/schemas/SubscribeOutputRequest"
       }
     },
     "subscribeStateEvents": {
       "address": "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeStateEvents",
-      "description": "DdbEventService.SubscribeStateEvents NDJSON stream",
+      "description": "Replays retained state after a cursor, then continues live without a gap. Requires READ permission and returns REPLAY_GAP for an unavailable cursor.",
       "messages": {
         "StateEvent": {
           "$ref": "#/components/messages/StateEvent"
         }
       },
+      "x-ddb-backpressure": "The state lane is independent of debugger output. Slow consumers are bounded and receive explicit resynchronization instead of silent loss.",
+      "x-ddb-cursor-replay": "Replays retained events strictly after afterCursor, then continues live without a gap. An unavailable cursor returns DDB_ERROR_CODE_REPLAY_GAP with the retained bounds.",
       "x-ddb-heartbeat": "An empty line is emitted after 15 seconds without an event.",
+      "x-ddb-heartbeat-seconds": 15,
+      "x-ddb-lane": "state",
+      "x-ddb-loss-signaling": "Transport rejection uses DDB_ERROR_CODE_REPLAY_GAP; an established stream uses STATE_EVENT_KIND_REQUIRED_RESYNC when continuity cannot be preserved.",
+      "x-ddb-ordering": "Events are delivered in monotonically increasing cursor sequence within one server instance. Clients must reject a changed serverInstanceId and resnapshot.",
+      "x-ddb-protobuf-method": "/ddb.api.v2.DdbEventService/SubscribeStateEvents",
+      "x-ddb-registry-key": "DdbEventService.SubscribeStateEvents",
+      "x-ddb-replay-limits": "Replay is bounded by the resource limits advertised by GetCapabilities. STATE_EVENT_KIND_REQUIRED_RESYNC requires a fresh snapshot.",
       "x-ddb-request-schema": {
         "$ref": "#/components/schemas/SubscribeStateEventsRequest"
       }
@@ -32,6 +50,12 @@
     "messages": {
       "OutputEvent": {
         "contentType": "application/json",
+        "examples": [
+          {
+            "name": "protoJsonEnvelope",
+            "payload": {}
+          }
+        ],
         "name": "OutputEvent",
         "payload": {
           "$ref": "#/components/schemas/OutputEvent"
@@ -40,6 +64,12 @@
       },
       "StateEvent": {
         "contentType": "application/json",
+        "examples": [
+          {
+            "name": "protoJsonEnvelope",
+            "payload": {}
+          }
+        ],
         "name": "StateEvent",
         "payload": {
           "$ref": "#/components/schemas/StateEvent"
@@ -3755,7 +3785,7 @@
   },
   "defaultContentType": "application/json",
   "info": {
-    "description": "Replayable state and independent debugger output streams over HTTP NDJSON.",
+    "description": "Replayable state and independent debugger output streams generated from the canonical DDB operation registry.",
     "title": "DDB API v2 event streams",
     "version": "2.0.0-draft.3"
   },
@@ -3803,5 +3833,6 @@
       "host": "127.0.0.1:8080",
       "protocol": "http"
     }
-  }
+  },
+  "x-ddb-operation-registry": "./operation-registry-v2.json"
 }

@@ -145,6 +145,7 @@ impl FromRef<ApiState> for Arc<RuntimeStatus> {
         Arc::clone(&state.status)
     }
 }
+include!("generated/v2_contract.rs");
 
 pub struct ApiServer {
     addr: SocketAddr,
@@ -185,201 +186,8 @@ impl ApiServer {
     }
 
     fn router(&self) -> Router {
-        let v2_public = Router::new()
-            .route(
-                "/ddb.api.v2.DebuggerService/GetServerInfo",
-                post(v2_get_server_info),
-            )
-            .route("/ddb.api.v2.DdbAdminService/GetHealth", post(v2_get_health))
-            .route(
-                "/ddb.api.v2.DdbAdminService/GetReadiness",
-                post(v2_get_readiness),
-            );
-
-        let v2_read = Router::new()
-            .route(
-                "/ddb.api.v2.DebuggerService/GetCapabilities",
-                post(v2_get_capabilities),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetSnapshot",
-                post(v2_get_snapshot),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListSessions",
-                post(v2_list_sessions),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetSession",
-                post(v2_get_session),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListProcesses",
-                post(v2_list_processes),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetProcess",
-                post(v2_get_process),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListThreads",
-                post(v2_list_threads),
-            )
-            .route("/ddb.api.v2.DebuggerService/GetThread", post(v2_get_thread))
-            .route(
-                "/ddb.api.v2.DebuggerService/ListFrames",
-                post(v2_list_frames),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetExecutionState",
-                post(v2_get_execution_state),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListScopes",
-                post(v2_list_scopes),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListVariables",
-                post(v2_list_variables),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ExpandVariable",
-                post(v2_expand_variable),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListRegisters",
-                post(v2_list_registers),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListSignals",
-                post(v2_list_signals),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ResolveSource",
-                post(v2_resolve_source),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ReadSource",
-                post(v2_read_source),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListGroups",
-                post(v2_list_groups),
-            )
-            .route("/ddb.api.v2.DebuggerService/GetGroup", post(v2_get_group))
-            .route(
-                "/ddb.api.v2.DebuggerService/ListBreakpoints",
-                post(v2_list_breakpoints),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetBreakpoint",
-                post(v2_get_breakpoint),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListPendingCommands",
-                post(v2_list_pending_commands),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetOperation",
-                post(v2_get_operation),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListOperations",
-                post(v2_list_operations),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/ListExtensionStates",
-                post(v2_list_extension_states),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerService/GetExtensionSchema",
-                post(v2_get_extension_schema),
-            )
-            .route(
-                "/ddb.api.v2.DdbEventService/SubscribeStateEvents",
-                post(v2_subscribe_state_events),
-            )
-            .route(
-                "/ddb.api.v2.DdbEventService/SubscribeOutput",
-                post(v2_subscribe_output),
-            )
-            .route_layer(middleware::from_fn_with_state(
-                Arc::clone(&self.authorization),
-                require_read,
-            ));
-
-        // Memory can disclose arbitrary process contents. It remains a typed
-        // DebuggerService read on the wire, but requires CONTROL permission.
-        let v2_sensitive_reads = Router::new()
-            .route(
-                "/ddb.api.v2.DebuggerService/ReadMemory",
-                post(v2_read_memory),
-            )
-            .route_layer(middleware::from_fn_with_state(
-                Arc::clone(&self.authorization),
-                require_control,
-            ));
-
-        let v2_control = Router::new()
-            .route(
-                "/ddb.api.v2.DebuggerControlService/Execute",
-                post(v2_execute),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/SelectThread",
-                post(v2_select_thread),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/Evaluate",
-                post(v2_evaluate),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/CreateBreakpoint",
-                post(v2_create_breakpoint),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/UpdateBreakpoint",
-                post(v2_update_breakpoint),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/DeleteBreakpoint",
-                post(v2_delete_breakpoint),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/ExecuteRawCommand",
-                post(v2_execute_raw_command),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/RunDistributedBacktrace",
-                post(v2_run_distributed_backtrace),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/InvokeExtensionAction",
-                post(v2_invoke_extension_action),
-            )
-            .route(
-                "/ddb.api.v2.DebuggerControlService/CancelOperation",
-                post(v2_cancel_operation),
-            )
-            .route_layer(middleware::from_fn_with_state(
-                Arc::clone(&self.authorization),
-                require_control,
-            ));
-
-        let v2_admin = Router::new()
-            .route("/ddb.api.v2.DdbAdminService/Shutdown", post(v2_shutdown))
-            .route_layer(middleware::from_fn_with_state(
-                Arc::clone(&self.authorization),
-                require_admin,
-            ));
-
-        let v2 = Router::new()
-            .merge(v2_public)
-            .merge(v2_read)
-            .merge(v2_sensitive_reads)
-            .merge(v2_control)
-            .merge(v2_admin)
-            .layer(DefaultBodyLimit::max(4 * 1024 * 1024));
+        let v2 = v2_contract_router(&self.authorization)
+            .layer(DefaultBodyLimit::max(V2_MAX_REQUEST_BYTES));
 
         let v1 = Router::new()
             .route("/", get(service_info))
@@ -442,7 +250,7 @@ impl ApiServer {
         // Remote listeners deliberately expose only the authenticated v2
         // contract. The unauthenticated v1 and historical compatibility
         // surfaces predate remote deployment and remain loopback-only.
-        let mut router = Router::new().nest("/api/v2/rpc", v2);
+        let mut router = Router::new().merge(v2);
         if self.addr.ip().is_loopback() {
             router = router.merge(compatibility);
         }
@@ -500,31 +308,7 @@ impl From<ApplicationError> for V2ApiError {
 
 impl IntoResponse for V2ApiError {
     fn into_response(self) -> axum::response::Response {
-        let status = match self.0.code() {
-            v2::DdbErrorCode::InvalidArgument => StatusCode::BAD_REQUEST,
-            v2::DdbErrorCode::NotFound => StatusCode::NOT_FOUND,
-            v2::DdbErrorCode::Conflict => StatusCode::CONFLICT,
-            v2::DdbErrorCode::FailedPrecondition => StatusCode::PRECONDITION_FAILED,
-            v2::DdbErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
-            v2::DdbErrorCode::NotReady | v2::DdbErrorCode::Unavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-            v2::DdbErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
-            v2::DdbErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
-            v2::DdbErrorCode::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
-            v2::DdbErrorCode::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
-            v2::DdbErrorCode::Cancelled => {
-                StatusCode::from_u16(499).unwrap_or(StatusCode::BAD_REQUEST)
-            }
-            v2::DdbErrorCode::ReplayGap | v2::DdbErrorCode::Expired => StatusCode::GONE,
-            v2::DdbErrorCode::BackendFailed | v2::DdbErrorCode::PartialFailure => {
-                StatusCode::BAD_GATEWAY
-            }
-            v2::DdbErrorCode::NotCancellable => StatusCode::CONFLICT,
-            v2::DdbErrorCode::Internal | v2::DdbErrorCode::Unspecified => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        };
+        let status = v2_error_status(self.0.code());
         let request_id = uuid::Uuid::new_v4().to_string();
         (status, Json(self.0.to_contract(request_id))).into_response()
     }
@@ -614,7 +398,12 @@ async fn v2_subscribe_state_events(
     let request = v2_request(payload)?;
     let subscription = service.subscribe_state_events(request)?;
     let stream = stream::unfold(subscription, |mut subscription| async move {
-        match tokio::time::timeout(Duration::from_secs(15), subscription.recv()).await {
+        match tokio::time::timeout(
+            V2_DDB_EVENT_SERVICE_SUBSCRIBE_STATE_EVENTS_HEARTBEAT,
+            subscription.recv(),
+        )
+        .await
+        {
             Ok(Some(event)) => {
                 let mut encoded = serde_json::to_vec(&event)
                     .expect("generated state events must be ProtoJSON serializable");
@@ -631,7 +420,7 @@ async fn v2_subscribe_state_events(
     let mut response = Body::from_stream(stream).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson"),
+        HeaderValue::from_static(V2_STREAM_CONTENT_TYPE),
     );
     response
         .headers_mut()
@@ -650,7 +439,12 @@ async fn v2_subscribe_output(
     let request = v2_request(payload)?;
     let subscription = service.subscribe_output(request)?;
     let stream = stream::unfold(subscription, |mut subscription| async move {
-        match tokio::time::timeout(Duration::from_secs(15), subscription.recv()).await {
+        match tokio::time::timeout(
+            V2_DDB_EVENT_SERVICE_SUBSCRIBE_OUTPUT_HEARTBEAT,
+            subscription.recv(),
+        )
+        .await
+        {
             Ok(Some(event)) => {
                 let mut encoded = serde_json::to_vec(&event)
                     .expect("generated output events must be ProtoJSON serializable");
@@ -667,7 +461,7 @@ async fn v2_subscribe_output(
     let mut response = Body::from_stream(stream).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson"),
+        HeaderValue::from_static(V2_STREAM_CONTENT_TYPE),
     );
     response
         .headers_mut()

@@ -1,11 +1,16 @@
 //! Deterministic generator and drift checker for the public DDB API contract.
 
+mod registry;
+
+use registry::OperationRegistry;
+
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use anyhow::{bail, Context, Result};
@@ -56,6 +61,14 @@ fn main() -> Result<()> {
         (
             generated.path().join("asyncapi-v2.json"),
             workspace.join("docs/api/generated/asyncapi-v2.json"),
+        ),
+        (
+            generated.path().join("operation-registry-v2.json"),
+            workspace.join("docs/api/generated/operation-registry-v2.json"),
+        ),
+        (
+            generated.path().join("runtime/v2_contract.rs"),
+            workspace.join("core/src/api/generated/v2_contract.rs"),
         ),
         (
             generated.path().join("grpc/ddb.api.v2.rs"),
@@ -216,8 +229,21 @@ fn generate_into_temp(workspace: &Path) -> Result<tempfile::TempDir> {
         bail!("generator did not produce gRPC service stubs");
     }
 
-    generate_public_specs(&descriptor_set, output.path())?;
-    generate_language_contracts(&descriptor_set, output.path())?;
+    let operation_registry = OperationRegistry::load(workspace, &descriptor_set)?;
+    generate_public_specs(&descriptor_set, &operation_registry, output.path())?;
+    generate_language_contracts(&descriptor_set, &operation_registry, output.path())?;
+    write_json(
+        &output.path().join("operation-registry-v2.json"),
+        &operation_registry.document(),
+    )?;
+    let runtime_output = output.path().join("runtime");
+    fs::create_dir_all(&runtime_output).context("create runtime contract output directory")?;
+    fs::write(
+        runtime_output.join("v2_contract.rs"),
+        operation_registry.runtime_source()?,
+    )
+    .context("write generated v2 runtime contract")?;
+    rustfmt_generated(&runtime_output.join("v2_contract.rs"))?;
 
     for relative in [
         "ddb.api.v2.rs",
@@ -225,6 +251,8 @@ fn generate_into_temp(workspace: &Path) -> Result<tempfile::TempDir> {
         "grpc/ddb.api.v2.rs",
         "openapi-v2.json",
         "asyncapi-v2.json",
+        "operation-registry-v2.json",
+        "runtime/v2_contract.rs",
         "typescript/types.ts",
         "typescript/contract.ts",
         "python/types.py",
@@ -246,6 +274,19 @@ fn normalize_generated_text(path: &Path) -> Result<()> {
     let normalized = lines.join("\n");
     fs::write(path, format!("{normalized}\n"))
         .with_context(|| format!("normalize generated text {}", path.display()))
+}
+fn rustfmt_generated(path: &Path) -> Result<()> {
+    let rustfmt = env::var_os("RUSTFMT").unwrap_or_else(|| "rustfmt".into());
+    let status = Command::new(&rustfmt)
+        .arg("--edition")
+        .arg("2021")
+        .arg(path)
+        .status()
+        .with_context(|| format!("run {:?} for {}", rustfmt, path.display()))?;
+    if !status.success() {
+        bail!("rustfmt failed for {}", path.display());
+    }
+    Ok(())
 }
 
 struct SchemaIndex<'a> {
@@ -295,15 +336,19 @@ fn index_messages<'a>(
     }
 }
 
-fn generate_public_specs(descriptor_set: &FileDescriptorSet, output: &Path) -> Result<()> {
+fn generate_public_specs(
+    descriptor_set: &FileDescriptorSet,
+    registry: &OperationRegistry,
+    output: &Path,
+) -> Result<()> {
     let index = SchemaIndex::from_descriptor_set(descriptor_set);
     let schemas = generate_json_schemas(&index)?;
-    let openapi = build_openapi(descriptor_set, &schemas)?;
-    let asyncapi = build_asyncapi(descriptor_set, &schemas)?;
+    let openapi = build_openapi(registry, &schemas)?;
+    let asyncapi = build_asyncapi(registry, &schemas)?;
 
     validate_local_references(&openapi, "OpenAPI")?;
     validate_local_references(&asyncapi, "AsyncAPI")?;
-    validate_spec_coverage(descriptor_set, &openapi, &asyncapi)?;
+    validate_spec_coverage(registry, &openapi, &asyncapi)?;
     write_json(&output.join("openapi-v2.json"), &openapi)?;
     write_json(&output.join("asyncapi-v2.json"), &asyncapi)
 }
@@ -466,7 +511,11 @@ fn field_json_name(field: &FieldDescriptorProto) -> String {
         .to_string()
 }
 
-fn generate_language_contracts(descriptors: &FileDescriptorSet, output: &Path) -> Result<()> {
+fn generate_language_contracts(
+    descriptors: &FileDescriptorSet,
+    registry: &OperationRegistry,
+    output: &Path,
+) -> Result<()> {
     let index = SchemaIndex::from_descriptor_set(descriptors);
     let typescript = output.join("typescript");
     let python = output.join("python");
@@ -476,14 +525,14 @@ fn generate_language_contracts(descriptors: &FileDescriptorSet, output: &Path) -
         .context("write generated TypeScript types")?;
     fs::write(
         typescript.join("contract.ts"),
-        typescript_contract(descriptors, &index)?,
+        typescript_contract(registry, &index)?,
     )
     .context("write generated TypeScript contract")?;
     fs::write(python.join("types.py"), python_types(&index)?)
         .context("write generated Python types")?;
     fs::write(
         python.join("contract.py"),
-        python_contract(descriptors, &index)?,
+        python_contract(registry, &index)?,
     )
     .context("write generated Python contract")?;
     Ok(())
@@ -624,28 +673,22 @@ fn paginated_item<'a>(
     candidates.next().is_none().then_some(item)
 }
 
-fn typescript_contract(descriptors: &FileDescriptorSet, index: &SchemaIndex<'_>) -> Result<String> {
+fn typescript_contract(registry: &OperationRegistry, index: &SchemaIndex<'_>) -> Result<String> {
     let mut output = String::from(
-        "// @generated by ddb-api-codegen from the canonical Protobuf schema.\n\
+        "// @generated by ddb-api-codegen from the canonical operation registry.\n\
          // Do not edit.\n\nimport type * as t from \"./types.js\";\n\n\
          export interface MethodMap {\n",
     );
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            for method in &service.method {
-                let key = format!("{}.{}", service.name(), method.name());
-                let request = language_name(method.input_type());
-                let response = language_name(method.output_type());
-                let scope = required_scope(service.name(), method.name())?
-                    .map(|scope| format!("\"{scope}\""))
-                    .unwrap_or_else(|| "null".to_string());
-                writeln!(
-                    output,
-                    "  \"{key}\": {{ request: t.{request}; response: t.{response}; serverStreaming: {}; scope: {scope} }};",
-                    method.server_streaming()
-                )?;
-            }
-        }
+    for operation in &registry.operations {
+        let request = language_name(&operation.input_type);
+        let response = language_name(&operation.output_type);
+        let scope = sdk_scope(operation.permission.as_str())?;
+        writeln!(
+            output,
+            "  \"{}\": {{ request: t.{request}; response: t.{response}; serverStreaming: {}; scope: {scope} }};",
+            operation.key,
+            operation.server_streaming
+        )?;
     }
     output.push_str(
         "}\n\n\
@@ -657,48 +700,37 @@ fn typescript_contract(descriptors: &FileDescriptorSet, index: &SchemaIndex<'_>)
          export interface MethodSpec { readonly path: string; readonly serverStreaming: boolean; readonly scope: \"read\" | \"control\" | \"admin\" | null; }\n\n\
          export const METHODS = {\n",
     );
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            let full_service = format!("{}.{}", file.package(), service.name());
-            for method in &service.method {
-                let key = format!("{}.{}", service.name(), method.name());
-                let path = format!("/api/v2/rpc/{full_service}/{}", method.name());
-                let scope = required_scope(service.name(), method.name())?
-                    .map(|scope| format!("\"{scope}\""))
-                    .unwrap_or_else(|| "null".to_string());
-                writeln!(
-                    output,
-                    "  \"{key}\": {{ path: \"{path}\", serverStreaming: {}, scope: {scope} }},",
-                    method.server_streaming()
-                )?;
-            }
-        }
+    for operation in &registry.operations {
+        let scope = sdk_scope(operation.permission.as_str())?;
+        writeln!(
+            output,
+            "  \"{}\": {{ path: {}, serverStreaming: {}, scope: {scope} }},",
+            operation.key,
+            serde_json::to_string(&operation.path)?,
+            operation.server_streaming
+        )?;
     }
     output.push_str("} as const satisfies Record<MethodName, MethodSpec>;\n\n");
     output.push_str("export interface PaginatedMethodMap {\n");
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            for method in &service.method {
-                let input = index
-                    .messages
-                    .get(method.input_type())
-                    .context("public method input descriptor is missing")?;
-                let response = index
-                    .messages
-                    .get(method.output_type())
-                    .context("public method output descriptor is missing")?;
-                let Some(item) = paginated_item(input, response, index) else {
-                    continue;
-                };
-                let key = format!("{}.{}", service.name(), method.name());
-                writeln!(
-                    output,
-                    "  \"{key}\": {{ item: t.{}; itemsField: \"{}\" }};",
-                    typescript_scalar(item),
-                    field_json_name(item)
-                )?;
-            }
-        }
+    for operation in &registry.operations {
+        let input = index
+            .messages
+            .get(&operation.input_type)
+            .context("public method input descriptor is missing")?;
+        let response = index
+            .messages
+            .get(&operation.output_type)
+            .context("public method output descriptor is missing")?;
+        let Some(item) = paginated_item(input, response, index) else {
+            continue;
+        };
+        writeln!(
+            output,
+            "  \"{}\": {{ item: t.{}; itemsField: \"{}\" }};",
+            operation.key,
+            typescript_scalar(item),
+            field_json_name(item)
+        )?;
     }
     output.push_str(
         "}\n\n\
@@ -706,25 +738,35 @@ fn typescript_contract(descriptors: &FileDescriptorSet, index: &SchemaIndex<'_>)
          export type PaginatedItemOf<K extends PaginatedMethodName> = PaginatedMethodMap[K][\"item\"];\n\n\
          export const PAGINATED_METHODS = {\n",
     );
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            for method in &service.method {
-                let input = index.messages.get(method.input_type()).unwrap();
-                let response = index.messages.get(method.output_type()).unwrap();
-                let Some(item) = paginated_item(input, response, index) else {
-                    continue;
-                };
-                let key = format!("{}.{}", service.name(), method.name());
-                writeln!(
-                    output,
-                    "  \"{key}\": {{ itemsField: \"{}\" }},",
-                    field_json_name(item)
-                )?;
-            }
-        }
+    for operation in &registry.operations {
+        let input = index
+            .messages
+            .get(&operation.input_type)
+            .context("public method input descriptor is missing")?;
+        let response = index
+            .messages
+            .get(&operation.output_type)
+            .context("public method output descriptor is missing")?;
+        let Some(item) = paginated_item(input, response, index) else {
+            continue;
+        };
+        writeln!(
+            output,
+            "  \"{}\": {{ itemsField: \"{}\" }},",
+            operation.key,
+            field_json_name(item)
+        )?;
     }
     output.push_str("} as const;\n");
     Ok(output)
+}
+
+fn sdk_scope(permission: &str) -> Result<String> {
+    match permission {
+        "public" => Ok("null".to_string()),
+        "read" | "control" | "admin" => Ok(serde_json::to_string(permission)?),
+        other => bail!("unsupported SDK permission {other}"),
+    }
 }
 
 fn python_scalar(field: &FieldDescriptorProto) -> String {
@@ -805,9 +847,9 @@ fn python_types(index: &SchemaIndex<'_>) -> Result<String> {
     Ok(output)
 }
 
-fn python_contract(descriptors: &FileDescriptorSet, index: &SchemaIndex<'_>) -> Result<String> {
+fn python_contract(registry: &OperationRegistry, index: &SchemaIndex<'_>) -> Result<String> {
     let mut output = String::from(concat!(
-        "# @generated by ddb-api-codegen from the canonical Protobuf schema.\n",
+        "# @generated by ddb-api-codegen from the canonical operation registry.\n",
         "# Do not edit.\n\n",
         "from __future__ import annotations\n\n",
         "from dataclasses import dataclass\n\n\n",
@@ -818,137 +860,127 @@ fn python_contract(descriptors: &FileDescriptorSet, index: &SchemaIndex<'_>) -> 
         "    scope: str | None\n\n\n",
         "METHODS: dict[str, MethodSpec] = {\n",
     ));
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            let full_service = format!("{}.{}", file.package(), service.name());
-            for method in &service.method {
-                let key = format!("{}.{}", service.name(), method.name());
-                let path = format!("/api/v2/rpc/{full_service}/{}", method.name());
-                let scope = required_scope(service.name(), method.name())?
-                    .map(serde_json::to_string)
-                    .transpose()?
-                    .unwrap_or_else(|| "None".to_string());
-                writeln!(
-                    output,
-                    "    \"{key}\": MethodSpec(\"{path}\", {}, {scope}),",
-                    if method.server_streaming() {
-                        "True"
-                    } else {
-                        "False"
-                    }
-                )?;
+    for operation in &registry.operations {
+        let scope = match operation.permission.as_str() {
+            "public" => "None".to_string(),
+            permission => serde_json::to_string(permission)?,
+        };
+        writeln!(
+            output,
+            "    {}: MethodSpec({}, {}, {scope}),",
+            serde_json::to_string(&operation.key)?,
+            serde_json::to_string(&operation.path)?,
+            if operation.server_streaming {
+                "True"
+            } else {
+                "False"
             }
-        }
+        )?;
     }
     output.push_str("}\n\nPAGINATED_METHODS: dict[str, str] = {\n");
-    for file in api_files(descriptors) {
-        for service in &file.service {
-            for method in &service.method {
-                let input = index
-                    .messages
-                    .get(method.input_type())
-                    .context("public method input descriptor is missing")?;
-                let response = index
-                    .messages
-                    .get(method.output_type())
-                    .context("public method output descriptor is missing")?;
-                let Some(item) = paginated_item(input, response, index) else {
-                    continue;
-                };
-                writeln!(
-                    output,
-                    "    \"{}.{}\": \"{}\",",
-                    service.name(),
-                    method.name(),
-                    field_json_name(item)
-                )?;
-            }
-        }
+    for operation in &registry.operations {
+        let input = index
+            .messages
+            .get(&operation.input_type)
+            .context("public method input descriptor is missing")?;
+        let response = index
+            .messages
+            .get(&operation.output_type)
+            .context("public method output descriptor is missing")?;
+        let Some(item) = paginated_item(input, response, index) else {
+            continue;
+        };
+        writeln!(
+            output,
+            "    {}: {},",
+            serde_json::to_string(&operation.key)?,
+            serde_json::to_string(&field_json_name(item))?
+        )?;
     }
     output.push_str("}\n");
     Ok(output)
 }
 
-fn build_openapi(
-    descriptor_set: &FileDescriptorSet,
-    schemas: &BTreeMap<String, Value>,
-) -> Result<Value> {
+fn build_openapi(registry: &OperationRegistry, schemas: &BTreeMap<String, Value>) -> Result<Value> {
     let mut paths = Map::new();
-    let mut tags = BTreeMap::<String, Value>::new();
-    for file in api_files(descriptor_set) {
-        for service in &file.service {
-            let service_name = service.name();
-            let full_service = format!("{}.{}", file.package(), service_name);
-            tags.insert(
-                service_name.to_string(),
-                json!({
-                    "name": service_name,
-                    "description": service_description(service_name),
-                }),
-            );
-            for method in &service.method {
-                let method_name = method.name();
-                let path = format!("/api/v2/rpc/{full_service}/{method_name}");
-                let output_schema = schema_reference(method.output_type());
-                let success_content = if method.server_streaming() {
-                    json!({
-                        "application/x-ndjson": {
-                            "schema": {
-                                "type": "string",
-                                "format": "ndjson",
-                                "description": "One canonical ProtoJSON message per non-empty line. Empty lines are transport heartbeats."
-                            },
-                            "x-ddb-stream-message": output_schema,
-                        }
-                    })
+    let tags = registry
+        .services
+        .iter()
+        .map(|service| {
+            json!({
+                "name": service.name,
+                "description": service.description,
+                "x-ddb-protobuf-service": service.full_name,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for operation in &registry.operations {
+        let output_schema = schema_reference(&operation.output_type);
+        let response_content_type = if operation.server_streaming {
+            &registry.http.stream_response_content_type
+        } else {
+            &registry.http.unary_response_content_type
+        };
+        let response_schema = if operation.server_streaming {
+            json!({
+                "type": "string",
+                "format": "ndjson",
+                "description": "One canonical ProtoJSON message per non-empty line. Empty lines are transport heartbeats.",
+                "x-ddb-stream-message": output_schema,
+            })
+        } else {
+            output_schema
+        };
+        let mut success_content = Map::new();
+        success_content.insert(
+            response_content_type.clone(),
+            json!({"schema": response_schema}),
+        );
+        let mut responses = openapi_error_responses(registry);
+        responses.insert(
+            registry.http.success_status.to_string(),
+            json!({
+                "description": if operation.server_streaming {
+                    "Streaming response"
                 } else {
-                    json!({"application/json": {"schema": output_schema}})
-                };
-                let mut operation = json!({
-                    "operationId": format!("{service_name}_{method_name}"),
-                    "summary": format!("{service_name}.{method_name}"),
-                    "tags": [service_name],
-                    "x-ddb-protobuf-method": format!("/{full_service}/{method_name}"),
-                    "requestBody": {
-                        "required": true,
-                        "content": {
-                            "application/json": {
-                                "schema": schema_reference(method.input_type())
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": {
-                            "description": if method.server_streaming() { "Streaming response" } else { "Successful response" },
-                            "content": success_content
-                        },
-                        "400": {
-                            "description": "Invalid request or malformed ProtoJSON",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"$ref": "#/components/schemas/DdbError"}
-                                }
-                            }
-                        },
-                        "default": {
-                            "description": "Stable DDB error",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"$ref": "#/components/schemas/DdbError"}
-                                }
-                            }
-                        }
-                    }
-                });
-                if let Some(scope) = required_scope(service_name, method_name)? {
-                    operation["security"] = json!([{"bearerAuth": []}]);
-                    operation["x-ddb-required-scope"] = Value::String(scope.to_string());
-                } else {
-                    operation["security"] = json!([]);
-                }
-                paths.insert(path, json!({"post": operation}));
-            }
+                    "Successful response"
+                },
+                "content": Value::Object(success_content),
+            }),
+        );
+
+        let mut request_content = Map::new();
+        request_content.insert(
+            registry.http.request_content_type.clone(),
+            json!({
+                "schema": schema_reference(&operation.input_type),
+                "example": {},
+            }),
+        );
+        let mut contract_operation = json!({
+            "operationId": operation.operation_id,
+            "summary": operation.description,
+            "description": operation.description,
+            "tags": [operation.service],
+            "x-ddb-registry-key": operation.key,
+            "x-ddb-protobuf-method": operation.protobuf_method,
+            "requestBody": {
+                "required": true,
+                "content": Value::Object(request_content),
+            },
+            "responses": Value::Object(responses),
+        });
+        if operation.permission.as_str() == "public" {
+            contract_operation["security"] = json!([]);
+        } else {
+            contract_operation["security"] = json!([{"bearerAuth": []}]);
+            contract_operation["x-ddb-required-scope"] =
+                Value::String(operation.permission.as_str().to_string());
         }
+        let mut path_item = Map::new();
+        path_item.insert(registry.http.method.clone(), contract_operation);
+        paths.insert(operation.path.clone(), Value::Object(path_item));
     }
 
     let schemas = schemas
@@ -960,14 +992,17 @@ fn build_openapi(
         "info": {
             "title": "DDB API v2",
             "version": "2.0.0-draft.3",
-            "description": "Backend-neutral debugger API. Protobuf is canonical; this document describes the HTTP/ProtoJSON binding.",
+            "description": "Backend-neutral debugger API. Protobuf plus the checked operation policy form the canonical registry; this document is its HTTP/ProtoJSON projection.",
             "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"}
         },
         "servers": [{"url": "/"}],
         "paths": Value::Object(paths),
-        "tags": tags.into_values().collect::<Vec<_>>(),
+        "tags": tags,
+        "x-ddb-operation-registry": "./operation-registry-v2.json",
+        "x-ddb-max-request-bytes": registry.http.max_request_bytes,
         "components": {
             "schemas": Value::Object(schemas),
+            "responses": Value::Object(openapi_error_components(registry)),
             "securitySchemes": {
                 "bearerAuth": {
                     "type": "http",
@@ -979,62 +1014,127 @@ fn build_openapi(
     }))
 }
 
+fn openapi_error_responses(registry: &OperationRegistry) -> Map<String, Value> {
+    registry
+        .errors
+        .iter()
+        .map(|error| error.status)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|status| {
+            (
+                status.to_string(),
+                json!({"$ref": format!("#/components/responses/DdbError{status}")}),
+            )
+        })
+        .collect()
+}
+
+fn openapi_error_components(registry: &OperationRegistry) -> Map<String, Value> {
+    let mut grouped = BTreeMap::<u16, Vec<_>>::new();
+    for error in &registry.errors {
+        grouped.entry(error.status).or_default().push(error);
+    }
+    grouped
+        .into_iter()
+        .map(|(status, errors)| {
+            let codes = errors
+                .iter()
+                .map(|error| Value::String(error.code.clone()))
+                .collect::<Vec<_>>();
+            let description = errors
+                .iter()
+                .map(|error| error.description.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            (
+                format!("DdbError{status}"),
+                json!({
+                    "description": description,
+                    "x-ddb-error-codes": codes,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/DdbError"}
+                        }
+                    }
+                }),
+            )
+        })
+        .collect()
+}
 fn build_asyncapi(
-    descriptor_set: &FileDescriptorSet,
+    registry: &OperationRegistry,
     schemas: &BTreeMap<String, Value>,
 ) -> Result<Value> {
     let mut channels = Map::new();
     let mut operations = Map::new();
     let mut messages = Map::new();
-    for file in api_files(descriptor_set) {
-        for service in &file.service {
-            let service_name = service.name();
-            let full_service = format!("{}.{}", file.package(), service_name);
-            for method in &service.method {
-                if !method.server_streaming() {
-                    continue;
+
+    for operation_spec in registry
+        .operations
+        .iter()
+        .filter(|operation| operation.server_streaming)
+    {
+        let stream = operation_spec
+            .stream
+            .as_ref()
+            .context("validated streaming operation has no stream policy")?;
+        let message_name = component_name(&operation_spec.output_type)
+            .context("stream output must be an API component")?;
+        messages.entry(message_name.to_string()).or_insert_with(|| {
+            json!({
+                "name": message_name,
+                "title": message_name,
+                "contentType": "application/json",
+                "payload": schema_reference(&operation_spec.output_type),
+                "examples": [{"name": "protoJsonEnvelope", "payload": {}}]
+            })
+        });
+        channels.insert(
+            stream.channel.clone(),
+            json!({
+                "address": operation_spec.path,
+                "description": operation_spec.description,
+                "messages": {
+                    message_name: {"$ref": format!("#/components/messages/{message_name}")}
+                },
+                "x-ddb-registry-key": operation_spec.key,
+                "x-ddb-protobuf-method": operation_spec.protobuf_method,
+                "x-ddb-request-schema": schema_reference(&operation_spec.input_type),
+                "x-ddb-lane": stream.lane,
+                "x-ddb-heartbeat-seconds": stream.heartbeat_seconds,
+                "x-ddb-heartbeat": format!(
+                    "An empty line is emitted after {} seconds without an event.",
+                    stream.heartbeat_seconds
+                ),
+                "x-ddb-cursor-replay": stream.cursor_replay,
+                "x-ddb-ordering": stream.ordering,
+                "x-ddb-replay-limits": stream.replay_limits,
+                "x-ddb-backpressure": stream.backpressure,
+                "x-ddb-loss-signaling": stream.loss_signaling,
+            }),
+        );
+        let mut operation = json!({
+            "action": "send",
+            "channel": {"$ref": format!("#/channels/{}", stream.channel)},
+            "messages": [{
+                "$ref": format!(
+                    "#/channels/{}/messages/{message_name}",
+                    stream.channel
+                )
+            }],
+            "bindings": {
+                "http": {
+                    "method": registry.http.method.to_uppercase(),
+                    "bindingVersion": "0.3.0"
                 }
-                let method_name = method.name();
-                let channel_name = lower_camel(method_name);
-                let message_name = component_name(method.output_type())
-                    .context("stream output must be an API component")?;
-                messages.entry(message_name.to_string()).or_insert_with(|| {
-                    json!({
-                        "name": message_name,
-                        "title": message_name,
-                        "contentType": "application/json",
-                        "payload": schema_reference(method.output_type())
-                    })
-                });
-                channels.insert(
-                    channel_name.clone(),
-                    json!({
-                        "address": format!("/api/v2/rpc/{full_service}/{method_name}"),
-                        "description": format!("{service_name}.{method_name} NDJSON stream"),
-                        "messages": {
-                            message_name: {"$ref": format!("#/components/messages/{message_name}")}
-                        },
-                        "x-ddb-request-schema": schema_reference(method.input_type()),
-                        "x-ddb-heartbeat": "An empty line is emitted after 15 seconds without an event."
-                    }),
-                );
-                let mut operation = json!({
-                    "action": "send",
-                    "channel": {"$ref": format!("#/channels/{channel_name}")},
-                    "messages": [{"$ref": format!("#/channels/{channel_name}/messages/{message_name}")}],
-                    "bindings": {
-                        "http": {
-                            "method": "POST",
-                            "bindingVersion": "0.3.0"
-                        }
-                    }
-                });
-                if let Some(scope) = required_scope(service_name, method_name)? {
-                    operation["x-ddb-required-scope"] = Value::String(scope.to_string());
-                }
-                operations.insert(format!("send{method_name}"), operation);
-            }
+            },
+            "x-ddb-required-scope": operation_spec.permission.as_str(),
+        });
+        if operation_spec.permission.as_str() == "public" {
+            operation["security"] = json!([]);
         }
+        operations.insert(format!("send{}", operation_spec.method), operation);
     }
 
     let schemas = schemas
@@ -1046,7 +1146,7 @@ fn build_asyncapi(
         "info": {
             "title": "DDB API v2 event streams",
             "version": "2.0.0-draft.3",
-            "description": "Replayable state and independent debugger output streams over HTTP NDJSON."
+            "description": "Replayable state and independent debugger output streams generated from the canonical DDB operation registry."
         },
         "defaultContentType": "application/json",
         "servers": {
@@ -1058,6 +1158,7 @@ fn build_asyncapi(
         },
         "channels": Value::Object(channels),
         "operations": Value::Object(operations),
+        "x-ddb-operation-registry": "./operation-registry-v2.json",
         "components": {
             "schemas": Value::Object(schemas),
             "messages": Value::Object(messages),
@@ -1070,38 +1171,6 @@ fn build_asyncapi(
             }
         }
     }))
-}
-
-fn required_scope(service: &str, method: &str) -> Result<Option<&'static str>> {
-    Ok(match (service, method) {
-        ("DebuggerService", "GetServerInfo")
-        | ("DdbAdminService", "GetHealth" | "GetReadiness") => None,
-        ("DebuggerService", "ReadMemory") => Some("control"),
-        ("DebuggerService" | "DdbEventService", _) => Some("read"),
-        ("DebuggerControlService", _) => Some("control"),
-        ("DdbAdminService", _) => Some("admin"),
-        _ => bail!("public RPC {service}.{method} has no authorization classification"),
-    })
-}
-
-fn service_description(service: &str) -> &'static str {
-    match service {
-        "DebuggerService" => {
-            "Debugger metadata, topology, inspection, source, and operation reads."
-        }
-        "DebuggerControlService" => "Idempotently admitted debugger and DDB control operations.",
-        "DdbEventService" => "Replayable state and independent debugger output streams.",
-        "DdbAdminService" => "Health, readiness, and privileged lifecycle operations.",
-        _ => "DDB API service.",
-    }
-}
-
-fn lower_camel(value: &str) -> String {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .map(|first| first.to_lowercase().chain(chars).collect())
-        .unwrap_or_default()
 }
 
 fn api_files(
@@ -1141,29 +1210,247 @@ fn validate_local_references(document: &Value, label: &str) -> Result<()> {
 }
 
 fn validate_spec_coverage(
-    descriptor_set: &FileDescriptorSet,
+    registry: &OperationRegistry,
     openapi: &Value,
     asyncapi: &Value,
 ) -> Result<()> {
-    for file in api_files(descriptor_set) {
-        for service in &file.service {
-            let full_service = format!("{}.{}", file.package(), service.name());
-            for method in &service.method {
-                let path = format!("/api/v2/rpc/{full_service}/{}", method.name());
-                if openapi["paths"].get(&path).is_none() {
-                    bail!(
-                        "OpenAPI omitted public method {full_service}.{}",
-                        method.name()
-                    );
-                }
-                let channel = lower_camel(method.name());
-                if method.server_streaming() != asyncapi["channels"].get(&channel).is_some() {
-                    bail!(
-                        "AsyncAPI stream coverage disagrees for {full_service}.{}",
-                        method.name()
-                    );
-                }
+    if openapi["x-ddb-max-request-bytes"] != json!(registry.http.max_request_bytes) {
+        bail!("OpenAPI request limit disagrees with the operation registry");
+    }
+
+    let paths = openapi["paths"]
+        .as_object()
+        .context("OpenAPI paths must be an object")?;
+    let expected_paths = registry
+        .operations
+        .iter()
+        .map(|operation| operation.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let actual_paths = paths.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if expected_paths != actual_paths {
+        bail!(
+            "OpenAPI paths disagree with the operation registry: registry={expected_paths:?}, openapi={actual_paths:?}"
+        );
+    }
+
+    let error_statuses = registry
+        .errors
+        .iter()
+        .map(|error| error.status.to_string())
+        .collect::<BTreeSet<_>>();
+    for operation in &registry.operations {
+        let path_item = paths[&operation.path]
+            .as_object()
+            .context("OpenAPI path item must be an object")?;
+        if path_item.len() != 1 {
+            bail!(
+                "OpenAPI path {} has unexpected HTTP methods",
+                operation.path
+            );
+        }
+        let contract = path_item.get(&registry.http.method).with_context(|| {
+            format!(
+                "OpenAPI omitted {} {}",
+                registry.http.method, operation.path
+            )
+        })?;
+        if contract["operationId"] != operation.operation_id
+            || contract["x-ddb-registry-key"] != operation.key
+            || contract["x-ddb-protobuf-method"] != operation.protobuf_method
+        {
+            bail!("OpenAPI identity drift for {}", operation.key);
+        }
+
+        let expected_security = if operation.permission.as_str() == "public" {
+            json!([])
+        } else {
+            json!([{"bearerAuth": []}])
+        };
+        let expected_scope = if operation.permission.as_str() == "public" {
+            Value::Null
+        } else {
+            Value::String(operation.permission.as_str().to_string())
+        };
+        if contract["security"] != expected_security
+            || contract
+                .get("x-ddb-required-scope")
+                .cloned()
+                .unwrap_or(Value::Null)
+                != expected_scope
+        {
+            bail!("OpenAPI permission drift for {}", operation.key);
+        }
+
+        let request_content = contract["requestBody"]["content"]
+            .as_object()
+            .context("OpenAPI request content must be an object")?;
+        if request_content.len() != 1
+            || request_content[&registry.http.request_content_type]["schema"]
+                != schema_reference(&operation.input_type)
+        {
+            bail!("OpenAPI request schema/content drift for {}", operation.key);
+        }
+
+        let responses = contract["responses"]
+            .as_object()
+            .context("OpenAPI responses must be an object")?;
+        let actual_errors = responses
+            .keys()
+            .filter(|status| status.as_str() != registry.http.success_status.to_string())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if error_statuses != actual_errors {
+            bail!("OpenAPI error-status coverage drift for {}", operation.key);
+        }
+        for status in &error_statuses {
+            if responses[status]["$ref"] != format!("#/components/responses/DdbError{status}") {
+                bail!("OpenAPI error response drift for {}", operation.key);
             }
+        }
+
+        let success = &responses[&registry.http.success_status.to_string()];
+        let success_content = success["content"]
+            .as_object()
+            .context("OpenAPI success content must be an object")?;
+        let expected_content_type = if operation.server_streaming {
+            &registry.http.stream_response_content_type
+        } else {
+            &registry.http.unary_response_content_type
+        };
+        if success_content.len() != 1 {
+            bail!("OpenAPI success content drift for {}", operation.key);
+        }
+        let success_schema = &success_content[expected_content_type]["schema"];
+        if operation.server_streaming {
+            if success_schema["type"] != "string"
+                || success_schema["format"] != "ndjson"
+                || success_schema["x-ddb-stream-message"]
+                    != schema_reference(&operation.output_type)
+            {
+                bail!("OpenAPI stream response drift for {}", operation.key);
+            }
+        } else if *success_schema != schema_reference(&operation.output_type) {
+            bail!("OpenAPI response schema drift for {}", operation.key);
+        }
+    }
+
+    let stream_operations = registry
+        .operations
+        .iter()
+        .filter(|operation| operation.server_streaming)
+        .collect::<Vec<_>>();
+    let expected_channels = stream_operations
+        .iter()
+        .map(|operation| {
+            operation
+                .stream
+                .as_ref()
+                .expect("validated stream policy")
+                .channel
+                .as_str()
+        })
+        .collect::<BTreeSet<_>>();
+    let channels = asyncapi["channels"]
+        .as_object()
+        .context("AsyncAPI channels must be an object")?;
+    let actual_channels = channels.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if expected_channels != actual_channels {
+        bail!(
+            "AsyncAPI channels disagree with the stream registry: registry={expected_channels:?}, asyncapi={actual_channels:?}"
+        );
+    }
+
+    let expected_operations = stream_operations
+        .iter()
+        .map(|operation| format!("send{}", operation.method))
+        .collect::<BTreeSet<_>>();
+    let operations = asyncapi["operations"]
+        .as_object()
+        .context("AsyncAPI operations must be an object")?;
+    let actual_operations = operations.keys().cloned().collect::<BTreeSet<_>>();
+    if expected_operations != actual_operations {
+        bail!(
+            "AsyncAPI operations disagree with the stream registry: registry={expected_operations:?}, asyncapi={actual_operations:?}"
+        );
+    }
+
+    let messages = asyncapi["components"]["messages"]
+        .as_object()
+        .context("AsyncAPI message catalog must be an object")?;
+    let expected_messages = stream_operations
+        .iter()
+        .map(|operation| {
+            component_name(&operation.output_type).context("stream output must be an API component")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let actual_messages = messages.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if expected_messages != actual_messages {
+        bail!(
+            "AsyncAPI messages disagree with streaming response types: registry={expected_messages:?}, asyncapi={actual_messages:?}"
+        );
+    }
+
+    for operation in stream_operations {
+        let stream = operation
+            .stream
+            .as_ref()
+            .context("validated streaming operation has no stream policy")?;
+        let message_name = component_name(&operation.output_type)
+            .context("stream output must be an API component")?;
+        let channel = &channels[&stream.channel];
+        let expected_channel = json!({
+            "address": operation.path,
+            "x-ddb-registry-key": operation.key,
+            "x-ddb-protobuf-method": operation.protobuf_method,
+            "x-ddb-request-schema": schema_reference(&operation.input_type),
+            "x-ddb-lane": stream.lane,
+            "x-ddb-heartbeat-seconds": stream.heartbeat_seconds,
+            "x-ddb-cursor-replay": stream.cursor_replay,
+            "x-ddb-ordering": stream.ordering,
+            "x-ddb-replay-limits": stream.replay_limits,
+            "x-ddb-backpressure": stream.backpressure,
+            "x-ddb-loss-signaling": stream.loss_signaling,
+        });
+        for key in [
+            "address",
+            "x-ddb-registry-key",
+            "x-ddb-protobuf-method",
+            "x-ddb-request-schema",
+            "x-ddb-lane",
+            "x-ddb-heartbeat-seconds",
+            "x-ddb-cursor-replay",
+            "x-ddb-ordering",
+            "x-ddb-replay-limits",
+            "x-ddb-backpressure",
+            "x-ddb-loss-signaling",
+        ] {
+            if channel[key] != expected_channel[key] {
+                bail!("AsyncAPI channel {} {key} drift", stream.channel);
+            }
+        }
+        if channel["messages"][message_name]["$ref"]
+            != format!("#/components/messages/{message_name}")
+        {
+            bail!("AsyncAPI channel {} message drift", stream.channel);
+        }
+
+        let operation_name = format!("send{}", operation.method);
+        let async_operation = &operations[&operation_name];
+        if async_operation["action"] != "send"
+            || async_operation["channel"]["$ref"] != format!("#/channels/{}", stream.channel)
+            || async_operation["messages"][0]["$ref"]
+                != format!("#/channels/{}/messages/{message_name}", stream.channel)
+            || async_operation["bindings"]["http"]["method"] != registry.http.method.to_uppercase()
+            || async_operation["x-ddb-required-scope"] != operation.permission.as_str()
+        {
+            bail!("AsyncAPI operation {operation_name} drift");
+        }
+
+        let message = &messages[message_name];
+        if message["contentType"] != registry.http.unary_response_content_type
+            || message["payload"] != schema_reference(&operation.output_type)
+        {
+            bail!("AsyncAPI message {message_name} payload drift");
         }
     }
     Ok(())
