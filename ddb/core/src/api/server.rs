@@ -330,9 +330,11 @@ fn v2_json_response<T: Serialize>(
     service.validate_response_bytes(encoded.len())?;
 
     let mut response = Response::new(Body::from(encoded));
+    *response.status_mut() =
+        StatusCode::from_u16(V2_SUCCESS_STATUS).expect("generated v2 success status is valid");
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
+        HeaderValue::from_static(V2_UNARY_CONTENT_TYPE),
     );
     Ok(response)
 }
@@ -418,6 +420,8 @@ async fn v2_subscribe_state_events(
         }
     });
     let mut response = Body::from_stream(stream).into_response();
+    *response.status_mut() =
+        StatusCode::from_u16(V2_SUCCESS_STATUS).expect("generated v2 success status is valid");
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(V2_STREAM_CONTENT_TYPE),
@@ -459,6 +463,8 @@ async fn v2_subscribe_output(
         }
     });
     let mut response = Body::from_stream(stream).into_response();
+    *response.status_mut() =
+        StatusCode::from_u16(V2_SUCCESS_STATUS).expect("generated v2 success status is valid");
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(V2_STREAM_CONTENT_TYPE),

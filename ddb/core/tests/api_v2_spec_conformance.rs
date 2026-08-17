@@ -139,6 +139,13 @@ fn captured_runtime_payloads_match_generated_openapi_and_asyncapi_schemas() {
     let (status, capabilities) =
         ddb.api_post_json_with_bearer(&capabilities_path, &json!({}), V2_TEST_READ_TOKEN);
     assert_eq!(status, StatusCode::OK, "{capabilities:?}");
+    assert_eq!(
+        capabilities["capabilities"]["limits"]["maxRequestBytes"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok()),
+        openapi["x-ddb-max-request-bytes"].as_u64(),
+        "GetCapabilities must advertise the generated HTTP request limit"
+    );
     assert_openapi_response(
         &openapi,
         &capabilities_path,

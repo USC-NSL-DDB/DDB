@@ -315,8 +315,18 @@ impl OperationRegistry {
         );
         writeln!(
             output,
-            "const V2_MAX_REQUEST_BYTES: usize = {};",
+            "pub(crate) const V2_MAX_REQUEST_BYTES: usize = {};",
             self.http.max_request_bytes
+        )?;
+        writeln!(
+            output,
+            "const V2_SUCCESS_STATUS: u16 = {};",
+            self.http.success_status
+        )?;
+        writeln!(
+            output,
+            "const V2_UNARY_CONTENT_TYPE: &str = {};",
+            rust_string(&self.http.unary_response_content_type)?
         )?;
         writeln!(
             output,
@@ -342,19 +352,6 @@ impl OperationRegistry {
             }
         }
 
-        output.push_str("\npub(crate) const V2_ROUTE_PATHS: &[(&str, &str, &str, bool)] = &[\n");
-        for operation in &self.operations {
-            writeln!(
-                output,
-                "    ({}, {}, {}, {}),",
-                rust_string(&operation.key)?,
-                path_constant(operation),
-                rust_string(operation.permission.as_str())?,
-                operation.server_streaming
-            )?;
-        }
-        output.push_str("];\n\n");
-
         output.push_str(
             "fn v2_error_status(code: v2::DdbErrorCode) -> StatusCode {\n    match code {\n",
         );
@@ -371,11 +368,6 @@ impl OperationRegistry {
         output.push_str(
             "fn v2_contract_router(authorization: &Arc<ApiAuthorization>) -> Router<ApiState> {\n",
         );
-        writeln!(
-            output,
-            "    debug_assert_eq!(V2_ROUTE_PATHS.len(), {});",
-            self.operations.len()
-        )?;
         for permission in [
             Permission::Public,
             Permission::Read,

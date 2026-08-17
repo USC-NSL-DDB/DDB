@@ -320,12 +320,14 @@ impl DdbApplicationConfig {
         endpoint_uri: impl Into<String>,
         tls_required: bool,
         authentication_mode: impl Into<String>,
+        max_request_bytes: usize,
         resource_limits: &ApiResourceLimits,
     ) -> Self {
         let limits = ApiLimits {
             max_page_size: MAX_PAGE_SIZE as u32,
             preferred_page_size: DEFAULT_PAGE_SIZE as u32,
-            max_request_bytes: 4 * 1024 * 1024,
+            max_request_bytes: u64::try_from(max_request_bytes)
+                .expect("the generated HTTP request limit must fit in uint64"),
             max_response_bytes: 16 * 1024 * 1024,
             max_memory_read_bytes: 1024 * 1024,
             max_source_lines: 2_000,
@@ -2861,6 +2863,7 @@ mod tests {
                 "/api/v2",
                 false,
                 "none-insecure-development",
+                crate::api::server::V2_MAX_REQUEST_BYTES,
                 &resource_limits,
             ),
         )

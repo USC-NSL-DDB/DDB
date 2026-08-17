@@ -6,6 +6,7 @@ use crate::{
     api::{
         application::{DdbApplicationConfig, DdbApplicationService},
         read_model::ApiQueries,
+        server::V2_MAX_REQUEST_BYTES,
     },
     cmd_flow::{
         api::CommandExecutor,
@@ -144,6 +145,7 @@ impl ApplicationServices {
             "/api/v2",
             config.conf.api_tls_terminated_by_trusted_proxy,
             authentication_mode,
+            V2_MAX_REQUEST_BYTES,
             &config.conf.api_limits,
         );
         #[cfg(feature = "grpc-preview")]

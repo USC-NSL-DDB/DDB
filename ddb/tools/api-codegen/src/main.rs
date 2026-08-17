@@ -1053,7 +1053,7 @@ fn openapi_error_components(registry: &OperationRegistry) -> Map<String, Value> 
                     "description": description,
                     "x-ddb-error-codes": codes,
                     "content": {
-                        "application/json": {
+                        registry.http.unary_response_content_type.clone(): {
                             "schema": {"$ref": "#/components/schemas/DdbError"}
                         }
                     }
@@ -1085,7 +1085,7 @@ fn build_asyncapi(
             json!({
                 "name": message_name,
                 "title": message_name,
-                "contentType": "application/json",
+                "contentType": registry.http.unary_response_content_type,
                 "payload": schema_reference(&operation_spec.output_type),
                 "examples": [{"name": "protoJsonEnvelope", "payload": {}}]
             })
@@ -1148,7 +1148,7 @@ fn build_asyncapi(
             "version": "2.0.0-draft.3",
             "description": "Replayable state and independent debugger output streams generated from the canonical DDB operation registry."
         },
-        "defaultContentType": "application/json",
+        "defaultContentType": registry.http.unary_response_content_type,
         "servers": {
             "local": {
                 "host": "127.0.0.1:8080",
