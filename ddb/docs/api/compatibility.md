@@ -3,8 +3,10 @@
 Status: normative for `ddb.api.v2` beginning with its first published preview.
 
 This policy protects community frontends from accidental wire and semantic
-breakage. The canonical source is `proto/ddb/api/v2`; checked-in descriptors
-and generated types are derived artifacts.
+breakage. Protobuf under `proto/ddb/api/v2` is canonical for services and wire
+types. `operation_policy.json` is canonical only for transport, permission,
+error, and stream metadata that Protobuf cannot express. Checked-in runtime
+bindings, descriptors, specifications, and SDK contracts are derived artifacts.
 
 ## Compatibility promises
 
@@ -103,6 +105,13 @@ Run the local gates from `ddb/`:
     buf breaking --against '../.git#tag=<last-api-release>,subdir=ddb'
     cargo run -p ddb-api-codegen -- --check
     cargo test -p ddb-api-types --all-targets
+    oasdiff breaking <released-openapi-v2.json> docs/api/generated/openapi-v2.json
+    ./tools/check-asyncapi-compatibility.sh <last-api-release>
+
+CI pins oasdiff and the AsyncAPI CLI. Buf owns recursive Protobuf payload
+compatibility; the AsyncAPI comparison owns operation, channel, binding, and
+DDB stream-policy compatibility. See ADR 0007 for why the latter uses a
+payload-free projection with explicit extension severity overrides.
 
 Regenerate only after an intentional schema edit:
 

@@ -32,6 +32,10 @@ public API belong in the project release notes.
   deterministic Mock profiles, plus real-process Rust/TypeScript/Python gates.
 - Reproducible Rust crate, npm package, and Python wheel release dry runs and an
   explicit SDK/server compatibility table.
+- A descriptor-plus-policy operation registry that generates the runtime Axum
+  route/authorization/error/stream binding together with OpenAPI, AsyncAPI, and
+  SDK method tables, backed by standards, live-payload, route-identity, and
+  three-surface compatibility gates.
 
 ### Fixed
 

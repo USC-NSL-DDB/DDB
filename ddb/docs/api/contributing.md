@@ -22,6 +22,8 @@ adapt transports and SDKs to that same behavior.
 2. Edit `proto/ddb/api/v2`. Document units, presence, bounds, idempotency,
    permission scope, errors, and capability behavior. Use opaque string IDs,
    an `UNSPECIFIED = 0` enum value, and pagination/bounded windows.
+   Change `operation_policy.json` only for authorization, HTTP/error mapping, or
+   DDB stream semantics that Protobuf cannot express.
 3. Never reuse a released field or enum number. Reserve removed names and
    numbers. Do not add `Any`, `Struct`, or arbitrary JSON to stable resources.
 4. Add the application behavior under `core/src/api/application`. Target
@@ -37,11 +39,12 @@ adapt transports and SDKs to that same behavior.
    cargo run -p ddb-api-codegen -- --check
    ```
 
-   The generator owns Rust/TypeScript/Python types, the descriptor set,
-   OpenAPI, AsyncAPI, and method registries. Do not edit generated files.
+   The generator owns Rust/TypeScript/Python types, the descriptor set, the
+   Axum route/authorization and transport constants, OpenAPI, AsyncAPI, and the
+   resolved operation registry. Do not edit generated files.
 7. Ensure HTTP and optional gRPC call the same application method and use the
-   same typed error. Add the method to the generated scope classifier; unknown
-   methods deliberately fail code generation.
+   same typed error. The descriptor/policy registry rejects unknown methods,
+   missing stream policies, and incomplete error mappings during generation.
 8. Expose the high-level operation in the Rust SDK and generated-plus-thin
    TypeScript/Python SDKs without importing DDB core. Add or update an example
    when this is a new frontend workflow.
@@ -88,6 +91,7 @@ cargo check --workspace --all-targets --all-features
 cargo clippy -p ddb --all-targets --all-features --no-deps -- -D warnings
 cargo test --workspace --all-targets
 cargo test -p ddb --all-targets --all-features
+cargo test -p ddb --test api_v2_spec_conformance
 ./tools/check-api-release.sh
 ```
 
