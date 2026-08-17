@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ddb:extension:ddb.proclet_migration:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "panels"],
+  "properties": {
+    "id": { "const": "ddb.proclet_migration" },
+    "panels": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "rows"],
+        "properties": {
+          "id": { "const": "proclet_owners" },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [{ "type": "string" }, { "type": "string" }],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      }
+    }
+  }
+}

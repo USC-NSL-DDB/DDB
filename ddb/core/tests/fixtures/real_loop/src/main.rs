@@ -21,9 +21,20 @@ fn allow_debugger_attach() {
 #[cfg(not(target_os = "linux"))]
 fn allow_debugger_attach() {}
 
+#[derive(Debug)]
+struct DebugRequest {
+    headers: [u64; 2],
+    flags: u64,
+}
+
 #[inline(never)]
 fn breakpoint_target(counter: u64) -> u64 {
-    std::hint::black_box(counter.wrapping_add(1)) // BREAKPOINT_MARKER
+    let request = DebugRequest {
+        headers: [counter, counter.wrapping_add(10)],
+        flags: 3,
+    };
+    std::hint::black_box(request.headers[1]);
+    std::hint::black_box(counter.wrapping_add(request.flags - 2)) // BREAKPOINT_MARKER
 }
 
 fn parse_arg(args: &[String], flag: &str) -> Option<String> {
@@ -61,6 +72,10 @@ fn main() {
     let max_iterations = parse_arg(&args, "--max-iterations")
         .and_then(|value| value.parse::<u64>().ok());
     let clock_report = parse_arg(&args, "--clock-report").map(std::path::PathBuf::from);
+    if let Some(pid_file) = parse_arg(&args, "--pid-file") {
+        std::fs::write(pid_file, std::process::id().to_string())
+            .expect("fixture PID file should be written");
+    }
 
     let mut counter = 0u64;
     loop {

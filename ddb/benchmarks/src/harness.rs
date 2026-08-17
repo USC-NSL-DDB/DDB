@@ -19,6 +19,7 @@ const HTTP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const STDOUT_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const DBT_IP: &str = "127.0.0.1";
 const DBT_GROUP: &str = "bench-dbt";
+pub const BENCH_API_TOKEN: &str = "ddb-benchmark-token-0000000000000001";
 
 #[derive(Default)]
 struct OutputBuffer {
@@ -62,6 +63,7 @@ impl OutputBuffer {
 pub struct HarnessSpec {
     pub sessions: usize,
     pub threads_per_session: usize,
+    pub variables_per_frame: usize,
     pub exit_on_continue: bool,
 }
 
@@ -98,6 +100,9 @@ impl HarnessSpec {
         if self.threads_per_session == 0 {
             bail!("benchmark harness requires at least one thread per session");
         }
+        if self.variables_per_frame > 10_000 {
+            bail!("benchmark harness supports at most 10000 variables per frame");
+        }
         Ok(())
     }
 }
@@ -110,20 +115,62 @@ pub struct DdbHarness {
     stderr: Arc<OutputBuffer>,
     client: Client,
     port: u16,
+    grpc_port: Option<u16>,
+    api_token: Option<String>,
     dbt_context_dir: Option<PathBuf>,
     stopped: bool,
 }
 
 impl DdbHarness {
     pub fn spawn(binary: &Path, workspace_root: &Path, spec: HarnessSpec) -> Result<Self> {
+        Self::spawn_mock(binary, workspace_root, spec, false)
+    }
+
+    pub fn spawn_v2_transports(
+        binary: &Path,
+        workspace_root: &Path,
+        spec: HarnessSpec,
+    ) -> Result<Self> {
+        Self::spawn_mock(binary, workspace_root, spec, true)
+    }
+
+    fn spawn_mock(
+        binary: &Path,
+        workspace_root: &Path,
+        spec: HarnessSpec,
+        enable_v2_transports: bool,
+    ) -> Result<Self> {
         spec.validate()?;
 
         let port = reserve_port()?;
+        let grpc_port = enable_v2_transports.then(reserve_port).transpose()?;
         let tempdir = tempfile::tempdir().context("failed to create temporary benchmark dir")?;
         let config_path = tempdir.path().join("ddb-bench.yaml");
         let state_dir = tempdir.path().join("state");
         let log_dir = tempdir.path().join("logs");
-        let config_contents = render_mock_config(spec, port, &state_dir, &log_dir);
+        let token_path = tempdir.path().join("api-tokens.json");
+        if enable_v2_transports {
+            std::fs::write(
+                &token_path,
+                serde_json::to_vec(&json!({
+                    "tokens": [{"token": BENCH_API_TOKEN, "scope": "control"}]
+                }))?,
+            )
+            .context("failed to write benchmark API token file")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))
+                    .context("failed to restrict benchmark API token permissions")?;
+            }
+        }
+        let config_contents = render_mock_config(
+            spec,
+            port,
+            &state_dir,
+            &log_dir,
+            grpc_port.map(|grpc_port| (grpc_port, token_path.as_path())),
+        );
         std::fs::write(&config_path, config_contents)
             .context("failed to write benchmark config")?;
 
@@ -168,6 +215,8 @@ impl DdbHarness {
             stderr,
             client,
             port,
+            grpc_port,
+            api_token: enable_v2_transports.then(|| BENCH_API_TOKEN.to_string()),
             dbt_context_dir: None,
             stopped: false,
         })
@@ -254,9 +303,27 @@ impl DdbHarness {
             stderr,
             client,
             port,
+            grpc_port: None,
+            api_token: None,
             dbt_context_dir: Some(ctx_dir),
             stopped: false,
         })
+    }
+
+    pub fn http_endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub fn grpc_endpoint(&self) -> Result<String> {
+        self.grpc_port
+            .map(|port| format!("http://127.0.0.1:{port}"))
+            .context("benchmark harness was not started with the native preview")
+    }
+
+    pub fn api_token(&self) -> Result<&str> {
+        self.api_token
+            .as_deref()
+            .context("benchmark harness was not started with API authentication")
     }
 
     pub fn wait_for_status_up(&mut self, timeout: Duration) -> Result<()> {
@@ -729,17 +796,33 @@ impl NotificationSubscribers {
     }
 }
 
-fn render_mock_config(spec: HarnessSpec, port: u16, state_dir: &Path, log_dir: &Path) -> String {
+fn render_mock_config(
+    spec: HarnessSpec,
+    port: u16,
+    state_dir: &Path,
+    log_dir: &Path,
+    v2_transport: Option<(u16, &Path)>,
+) -> String {
     let sessions_yaml = (0..spec.sessions)
         .map(|index| render_mock_session(spec, index))
         .collect::<Vec<_>>()
         .join("\n");
+
+    let v2_config = v2_transport
+        .map(|(grpc_port, token_path)| {
+            format!(
+                "  api_grpc_preview_port: {grpc_port}\n  api_auth_token_file: \"{}\"\n",
+                token_path.display()
+            )
+        })
+        .unwrap_or_default();
 
     format!(
         r#"Framework: unspecified
 Conf:
   auto_shutdown: false
   api_server_port: {port}
+{v2_config}
   base_dir: "{base_dir}"
   log_dir: "{log_dir}"
   Debugger:
@@ -748,6 +831,7 @@ StaticSessions:
 {sessions_yaml}
 "#,
         port = port,
+        v2_config = v2_config,
         base_dir = state_dir.display(),
         log_dir = log_dir.display(),
         sessions_yaml = sessions_yaml,
@@ -820,12 +904,14 @@ fn render_mock_session(spec: HarnessSpec, index: usize) -> String {
       source_file: "/bench/source_{index}.rs"
       source_line: {line}
       function: "bench_target_{index}"
+      variables_per_frame: {variables_per_frame}
       exit_on_continue: {exit_on_continue}"#,
         index = index,
         pid = 10_000 + index as u64,
         group_id = index + 1,
         threads_yaml = threads_yaml,
         line = 100 + index as u64,
+        variables_per_frame = spec.variables_per_frame,
         exit_on_continue = spec.exit_on_continue,
     )
 }

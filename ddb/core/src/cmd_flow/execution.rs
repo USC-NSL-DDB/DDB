@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use futures::future::join_all;
 use tracing::debug;
 
@@ -8,13 +8,19 @@ use crate::{
     common::Config,
     debugger::DebuggerBackend,
     feature::proclet_restore::ProcletRestorationMgr,
-    state::{RuntimeModel, ThreadContext, ThreadStatus},
+    state::{LocalThreadId, RuntimeModel, ThreadContext, ThreadStatus},
 };
 
 use super::{
-    api::CommandExecutor, decoder::Payload, input::ParsedInputCmd, router::Target,
-    transaction::TransactionCoordinator, CommandOutcome, FinishedCmd, ParsedSessionResponse,
-    Presentation,
+    api::CommandExecutor,
+    decoder::Payload,
+    input::ParsedInputCmd,
+    router::{
+        CommandFanoutError, CommandFanoutReport, SessionCommandFailure, SessionCommandFailureKind,
+        Target,
+    },
+    transaction::TransactionCoordinator,
+    CommandOutcome, FinishedCmd, ParsedSessionResponse, Presentation,
 };
 
 pub(crate) struct ExecutionService {
@@ -51,49 +57,39 @@ impl ExecutionService {
         }
 
         let external_token = command.external_token;
-        let sessions = match &command.target {
-            Target::Session(session_id) if self.model.has_session(*session_id) => {
-                vec![*session_id]
-            }
-            Target::Session(_) => Vec::new(),
-            _ => self.model.session_ids(),
-        };
-        let continuations = sessions
-            .into_iter()
-            .map(|session_id| self.continue_session(command.clone(), session_id));
+        let sessions = self.executor.resolve_session_ids(&command.target)?;
+        let continuations = sessions.into_iter().map(|session_id| {
+            let command = command.clone();
+            async move { (session_id, self.continue_session(command, session_id).await) }
+        });
         let mut responses = Vec::<ParsedSessionResponse>::new();
-        for result in join_all(continuations).await {
-            let response = result.context("Failed to continue")?;
-            responses.extend(response.get_responses().iter().cloned());
+        let mut failures = Vec::<SessionCommandFailure>::new();
+        for (session_id, result) in join_all(continuations).await {
+            match result {
+                Ok(response) => responses.extend(response.get_responses().iter().cloned()),
+                Err(error) => {
+                    if let Some(fanout) = error.downcast_ref::<CommandFanoutError>() {
+                        responses
+                            .extend(fanout.report().completion().get_responses().iter().cloned());
+                        failures.extend_from_slice(fanout.report().failures());
+                    } else {
+                        failures.push(SessionCommandFailure::new(
+                            session_id,
+                            SessionCommandFailureKind::ExecutionFailed,
+                        ));
+                    }
+                }
+            }
         }
-
-        Ok(CommandOutcome::response(
-            FinishedCmd::new(external_token, 0, responses),
-            Presentation::Unit,
-        ))
+        let response =
+            CommandFanoutReport::new(external_token, responses, failures).into_result()?;
+        Ok(CommandOutcome::response(response, Presentation::Unit))
     }
 
     pub(crate) async fn interrupt(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
         let command = command.with_prefix("-exec-interrupt-if-running");
-        match command.target {
-            Target::Session(session_id) => {
-                if !self.model.has_session(session_id) {
-                    return Ok(CommandOutcome::empty());
-                }
-                let response = self
-                    .executor
-                    .execute_parsed(command.with_target(Target::Session(session_id)))
-                    .await?;
-                Ok(CommandOutcome::response(response, Presentation::Plain))
-            }
-            _ => {
-                let response = self
-                    .executor
-                    .execute_parsed(command.with_target(Target::Broadcast))
-                    .await?;
-                Ok(CommandOutcome::response(response, Presentation::Plain))
-            }
-        }
+        let response = self.executor.execute_parsed(command).await?;
+        Ok(CommandOutcome::response(response, Presentation::Plain))
     }
 
     pub(crate) async fn next(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
@@ -109,8 +105,8 @@ impl ExecutionService {
     }
 
     pub(crate) async fn jump(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
-        if !matches!(command.target, Target::Session(_)) {
-            bail!("exec-jump command should specify a session");
+        if !matches!(command.target, Target::Thread(_) | Target::Session(_)) {
+            bail!("exec-jump command should specify a thread or session");
         }
         let response = self.executor.execute_parsed(command).await?;
         Ok(CommandOutcome::response(response, Presentation::Plain))
@@ -121,8 +117,16 @@ impl ExecutionService {
         if signal.is_empty() {
             bail!("-send-signal command requires a signal argument");
         }
-        let Target::Session(session_id) = command.target else {
-            bail!("-send-signal command should specify a session");
+        let session_id = match command.target {
+            Target::Session(session_id) => session_id,
+            Target::Thread(global_thread_id) => {
+                let LocalThreadId(session_id, _) = self
+                    .model
+                    .local_thread_id(global_thread_id)
+                    .ok_or_else(|| anyhow!("Unknown global thread {}", global_thread_id))?;
+                session_id
+            }
+            _ => bail!("-send-signal command should specify a thread or session"),
         };
 
         self.executor
@@ -211,11 +215,21 @@ impl ExecutionService {
             }
         }
 
+        let execution_target = match command.target {
+            Target::Thread(thread_id) => Target::Thread(thread_id),
+            _ => Target::Session(session_id),
+        };
         let response = self
             .executor
-            .execute_parsed_exclusive(command, Target::Session(session_id), transaction.lease())
+            .execute_parsed_exclusive(command, execution_target, transaction.lease())
             .await?;
-        transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
+        if response
+            .get_responses()
+            .iter()
+            .all(|response| response.get_message() != "error")
+        {
+            transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
+        }
         Ok(response)
     }
 

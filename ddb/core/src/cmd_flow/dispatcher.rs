@@ -40,6 +40,10 @@ enum QueryAction {
 enum CommandKind {
     BreakInsert,
     BreakDelete,
+    BreakEnable,
+    BreakDisable,
+    BreakCondition,
+    BreakUpdate,
     DistributedBacktrace,
     Execution(ExecutionAction),
     Query(QueryAction),
@@ -51,6 +55,10 @@ impl CommandKind {
         match prefix {
             "-break-insert" => Self::BreakInsert,
             "-break-delete" => Self::BreakDelete,
+            "-break-enable" => Self::BreakEnable,
+            "-break-disable" => Self::BreakDisable,
+            "-break-condition" => Self::BreakCondition,
+            "-break-update" => Self::BreakUpdate,
             "-bt-remote" => Self::DistributedBacktrace,
             "-exec-continue" | "-record-time-and-continue" => {
                 Self::Execution(ExecutionAction::Continue)
@@ -102,6 +110,10 @@ impl CommandDispatcher {
         match CommandKind::classify(&cmd.prefix) {
             CommandKind::BreakInsert => self.breakpoints.insert(cmd).await,
             CommandKind::BreakDelete => self.breakpoints.delete(cmd).await,
+            CommandKind::BreakEnable => self.breakpoints.set_enabled(cmd, true).await,
+            CommandKind::BreakDisable => self.breakpoints.set_enabled(cmd, false).await,
+            CommandKind::BreakCondition => self.breakpoints.set_condition(cmd).await,
+            CommandKind::BreakUpdate => self.breakpoints.update(cmd).await,
             CommandKind::DistributedBacktrace => self.backtrace.execute(cmd).await,
             CommandKind::Execution(action) => self.execute(action, cmd).await,
             CommandKind::Query(action) => self.query(action, cmd).await,
@@ -156,6 +168,10 @@ mod tests {
         let cases = [
             ("-break-insert", CommandKind::BreakInsert),
             ("-break-delete", CommandKind::BreakDelete),
+            ("-break-enable", CommandKind::BreakEnable),
+            ("-break-disable", CommandKind::BreakDisable),
+            ("-break-condition", CommandKind::BreakCondition),
+            ("-break-update", CommandKind::BreakUpdate),
             ("-bt-remote", CommandKind::DistributedBacktrace),
             (
                 "-exec-continue",

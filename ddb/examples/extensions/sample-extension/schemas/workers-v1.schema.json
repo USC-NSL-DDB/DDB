@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ddb:example:workers:v1",
+  "type": "object",
+  "required": ["presentations"],
+  "properties": {
+    "presentations": {
+      "type": "object",
+      "required": ["placement", "summary", "topology", "status", "move"],
+      "properties": {
+        "placement": { "type": "object", "required": ["rows"] },
+        "summary": { "type": "object", "required": ["entries"] },
+        "topology": { "type": "object", "required": ["nodes"] },
+        "status": { "type": "object", "required": ["text"] },
+        "move": { "type": "object", "required": ["enabled"] }
+      }
+    }
+  }
+}

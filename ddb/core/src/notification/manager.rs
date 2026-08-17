@@ -13,18 +13,18 @@ pub(super) const MAX_SUBSCRIBERS: usize = 20;
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-pub(super) struct Subscription {
+pub(crate) struct Subscription {
     id: Uuid,
     receiver: mpsc::Receiver<Message>,
     manager: Weak<NotificationManager>,
 }
 
 impl Subscription {
-    pub(super) fn id(&self) -> Uuid {
+    pub(crate) fn id(&self) -> Uuid {
         self.id
     }
 
-    pub(super) async fn recv(&mut self) -> Option<Message> {
+    pub(crate) async fn recv(&mut self) -> Option<Message> {
         self.receiver.recv().await
     }
 }
@@ -71,7 +71,7 @@ impl NotificationManager {
         *task = Some(self.spawn_heartbeat_task());
     }
 
-    pub(super) fn subscribe(self: &Arc<Self>) -> Result<Subscription, SubscribeError> {
+    pub(crate) fn subscribe(self: &Arc<Self>) -> Result<Subscription, SubscribeError> {
         let capacity_permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| SubscribeError::MaxSubscribersReached)?;
@@ -215,7 +215,7 @@ impl NotificationManager {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum SubscribeError {
+pub(crate) enum SubscribeError {
     MaxSubscribersReached,
 }
 

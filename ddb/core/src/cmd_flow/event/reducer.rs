@@ -13,6 +13,7 @@ use tracing::trace;
 
 use crate::{
     cmd_flow::breakpoint::BreakpointEventPublisher,
+    debugger::protocol::StreamKind,
     state::{GlobalThreadId, RuntimeModel, ThreadStatus},
 };
 
@@ -45,7 +46,28 @@ impl DebuggerEventReducer {
 
     pub(crate) async fn project(&self, event: DebuggerEvent, sid: u64) -> Result<EventProjection> {
         let effect = self.apply(&event, sid).await?;
-        Ok(render::render(effect, event, sid))
+        let projection = render::render(effect, event, sid);
+        if let Some(output) = projection.output.as_ref() {
+            self.breakpoint_events
+                .broadcast_debugger_output(sid, output)
+                .await;
+        }
+        Ok(projection)
+    }
+
+    pub(crate) async fn project_stream(
+        &self,
+        sid: u64,
+        kind: StreamKind,
+        message: String,
+    ) -> EventProjection {
+        let projection = EventProjection::debugger_stream(kind, message);
+        if let Some(output) = projection.output.as_ref() {
+            self.breakpoint_events
+                .broadcast_debugger_output(sid, output)
+                .await;
+        }
+        projection
     }
 
     /// Applies the event's state transitions and captures the identities its
@@ -97,7 +119,7 @@ impl DebuggerEventReducer {
                 Ok(EventEffect::ThreadExited { identity })
             }
             DebuggerEventKind::Running { threads } => {
-                self.update_thread_statuses(sid, threads, ThreadStatus::RUNNING)
+                self.update_thread_statuses(sid, threads, ThreadStatus::RUNNING, None)
                     .await?;
                 Ok(EventEffect::Running {
                     global_threads: self.global_threads(sid, threads)?,
@@ -108,6 +130,7 @@ impl DebuggerEventReducer {
                 thread,
                 stopped_threads,
                 local_breakpoint_id,
+                location,
             } => {
                 let is_exit = reasons.iter().any(|reason| reason.contains("exit"));
                 let is_breakpoint = reasons.iter().any(|reason| reason == "breakpoint-hit");
@@ -120,7 +143,7 @@ impl DebuggerEventReducer {
                 let Some(thread) = thread else {
                     return Ok(EventEffect::Passthrough);
                 };
-                self.update_thread_statuses(sid, thread, ThreadStatus::STOPPED)
+                self.update_thread_statuses(sid, thread, ThreadStatus::STOPPED, location.as_ref())
                     .await?;
                 if is_breakpoint {
                     if let ThreadSet::One(local_thread_id) = thread {
@@ -130,20 +153,26 @@ impl DebuggerEventReducer {
                     }
                 }
 
-                let Some(stopped_threads) = stopped_threads else {
-                    return Ok(EventEffect::Ignored);
-                };
-                self.update_thread_statuses(sid, stopped_threads, ThreadStatus::STOPPED)
-                    .await?;
-
                 let breakpoint = if is_breakpoint {
-                    local_breakpoint_id.and_then(|local_breakpoint_id| {
-                        self.model
-                            .breakpoint_ids_by_local_id(sid, local_breakpoint_id)
-                    })
+                    match local_breakpoint_id.and_then(|local_breakpoint_id| {
+                        self.model.record_breakpoint_hit(sid, local_breakpoint_id)
+                    }) {
+                        Some((breakpoint_id, sub_breakpoint_id, breakpoint)) => {
+                            self.breakpoint_events.publish_update(breakpoint).await;
+                            Some((breakpoint_id, sub_breakpoint_id))
+                        }
+                        None => None,
+                    }
                 } else {
                     None
                 };
+
+                let Some(stopped_threads) = stopped_threads else {
+                    return Ok(EventEffect::Ignored);
+                };
+                self.update_thread_statuses(sid, stopped_threads, ThreadStatus::STOPPED, None)
+                    .await?;
+
                 let thread = match thread {
                     ThreadSet::All => StoppedThreadField::All,
                     ThreadSet::One(_) => {
@@ -194,17 +223,25 @@ impl DebuggerEventReducer {
         sid: u64,
         threads: &ThreadSet,
         status: ThreadStatus,
+        location: Option<&crate::state::ThreadLocation>,
     ) -> Result<()> {
         match threads {
             ThreadSet::All => self.model.mark_all_threads(sid, status).await?,
             ThreadSet::One(local_thread_id) => {
                 self.model
-                    .update_thread_statuses(sid, &[*local_thread_id], status)
+                    .update_thread_statuses_with_location(
+                        sid,
+                        &[*local_thread_id],
+                        status,
+                        location
+                            .cloned()
+                            .map(|location| (*local_thread_id, location)),
+                    )
                     .await?
             }
             ThreadSet::Many(local_thread_ids) => {
                 self.model
-                    .update_thread_statuses(sid, local_thread_ids, status)
+                    .update_thread_statuses_with_location(sid, local_thread_ids, status, None)
                     .await?
             }
         }
@@ -266,6 +303,7 @@ mod tests {
             BreakpointEventPublisher::new(
                 Arc::new(NotificationManager::new()),
                 crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+                crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
             ),
         )
     }

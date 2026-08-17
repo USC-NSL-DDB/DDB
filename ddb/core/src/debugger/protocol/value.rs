@@ -36,6 +36,7 @@ pub enum ValueError {
 }
 
 impl Dict {
+    #[cfg(test)]
     #[must_use]
     pub fn new(map: HashMap<String, Value>) -> Self {
         Self(map)
@@ -45,16 +46,6 @@ impl Dict {
     pub fn as_map(&self) -> &HashMap<String, Value> {
         &self.0
     }
-
-    pub fn as_map_mut(&mut self) -> &mut HashMap<String, Value> {
-        &mut self.0
-    }
-
-    pub fn remove_expect(&mut self, key: &str) -> Result<Value, ValueError> {
-        self.0
-            .remove(key)
-            .ok_or_else(|| ValueError::MissingField(key.to_string()))
-    }
 }
 
 impl Value {
@@ -62,13 +53,6 @@ impl Value {
         self.expect_dict_ref()?
             .get(key)
             .ok_or_else(|| ValueError::MissingField(key.to_string()))
-    }
-
-    pub fn expect_string(self) -> Result<String, ValueError> {
-        match self {
-            Self::String(value) => Ok(value),
-            _ => Err(ValueError::UnexpectedShape { expected: "string" }),
-        }
     }
 
     pub fn expect_string_ref(&self) -> Result<&str, ValueError> {
@@ -90,15 +74,6 @@ impl Value {
                 value: value.to_string(),
                 reason: error.to_string(),
             })
-    }
-
-    pub fn expect_dict(self) -> Result<Dict, ValueError> {
-        match self {
-            Self::Dict(value) => Ok(value),
-            _ => Err(ValueError::UnexpectedShape {
-                expected: "dictionary",
-            }),
-        }
     }
 
     pub fn expect_dict_ref(&self) -> Result<&Dict, ValueError> {

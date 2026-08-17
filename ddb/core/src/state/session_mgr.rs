@@ -9,6 +9,25 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::state::{GlobalThreadId, ServiceIdentity};
 
+/// Backend-neutral frame-zero location retained only for the current stopped
+/// execution generation. Running a thread clears this value.
+#[derive(Debug, Eq, PartialEq, Clone, Default, serde::Serialize)]
+pub(crate) struct ThreadLocation {
+    pub(crate) path: Option<String>,
+    pub(crate) line: Option<u64>,
+    pub(crate) column: Option<u64>,
+    pub(crate) address: Option<String>,
+    pub(crate) function_name: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub(crate) struct LocalThreadStateSnapshot {
+    pub(crate) local_id: u64,
+    pub(crate) status: ThreadStatus,
+    pub(crate) execution_revision: u64,
+    pub(crate) location: Option<ThreadLocation>,
+}
+
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum ThreadStatus {
@@ -34,6 +53,7 @@ pub struct ThreadContext {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum SessionStatus {
+    STARTING,
     ON,
     OFF,
 }
@@ -42,6 +62,7 @@ impl SessionStatus {
     #[inline]
     pub fn as_str(self) -> &'static str {
         match self {
+            SessionStatus::STARTING => "OFF",
             SessionStatus::ON => "ON",
             SessionStatus::OFF => "OFF",
         }
@@ -215,6 +236,10 @@ pub struct SessionMeta {
     sid: u64,
     curr_tid: Option<u64>,
     t_status: HashMap<u64, ThreadStatus>,
+    // Monotonic execution generation for each thread. Frontend resources such
+    // as frames and variables are valid only while this value is unchanged.
+    t_revisions: HashMap<u64, u64>,
+    t_locations: HashMap<u64, ThreadLocation>,
     curr_ctx: Option<ThreadContext>,
     in_custom_ctx: bool,
 
@@ -237,17 +262,23 @@ impl SessionMeta {
             sid,
             curr_tid: None,
             t_status: HashMap::new(),
+            t_revisions: HashMap::new(),
+            t_locations: HashMap::new(),
             curr_ctx: None,
             in_custom_ctx: false,
             service_identity,
-            status: SessionStatus::OFF,
+            status: SessionStatus::STARTING,
             threads: SessionThreadRegistry::default(),
         }
     }
 
     #[inline]
     pub fn create_thread(&mut self, tid: u64, tgid: &str) -> bool {
-        self.threads.create_thread(tid, tgid, &mut self.t_status)
+        let created = self.threads.create_thread(tid, tgid, &mut self.t_status);
+        if created {
+            self.t_revisions.insert(tid, 1);
+        }
+        created
     }
 
     #[inline]
@@ -262,7 +293,12 @@ impl SessionMeta {
 
     #[inline]
     pub fn remove_thread(&mut self, tid: u64) -> Option<String> {
-        self.threads.remove_thread(tid, &mut self.t_status)
+        let removed = self.threads.remove_thread(tid, &mut self.t_status);
+        if removed.is_some() {
+            self.t_revisions.remove(&tid);
+            self.t_locations.remove(&tid);
+        }
+        removed
     }
 
     #[inline]
@@ -272,7 +308,12 @@ impl SessionMeta {
 
     #[inline]
     pub fn remove_thread_group(&mut self, tgid: &str) -> HashSet<u64> {
-        self.threads.remove_thread_group(tgid, &mut self.t_status)
+        let removed = self.threads.remove_thread_group(tgid, &mut self.t_status);
+        for tid in &removed {
+            self.t_revisions.remove(tid);
+            self.t_locations.remove(tid);
+        }
+        removed
     }
 
     #[inline]
@@ -282,7 +323,12 @@ impl SessionMeta {
 
     #[inline]
     pub fn exit_thread_group(&mut self, tgid: &str) -> HashSet<u64> {
-        self.threads.exit_thread_group(tgid, &mut self.t_status)
+        let removed = self.threads.exit_thread_group(tgid, &mut self.t_status);
+        for tid in &removed {
+            self.t_revisions.remove(tid);
+            self.t_locations.remove(tid);
+        }
+        removed
     }
 
     #[inline]
@@ -337,6 +383,36 @@ impl SessionMeta {
             .all(|status| *status == ThreadStatus::STOPPED)
     }
 
+    /// Returns detached local thread status for read-only public projections.
+    pub(crate) fn thread_status_snapshot(&self) -> (Option<u64>, Vec<LocalThreadStateSnapshot>) {
+        let mut threads = self
+            .t_status
+            .iter()
+            .map(|(local_id, status)| LocalThreadStateSnapshot {
+                local_id: *local_id,
+                status: *status,
+                execution_revision: self.t_revisions.get(local_id).copied().unwrap_or(1),
+                location: self.t_locations.get(local_id).cloned(),
+            })
+            .collect::<Vec<_>>();
+        threads.sort_unstable_by_key(|thread| thread.local_id);
+        (self.curr_tid, threads)
+    }
+
+    /// Returns detached inferior identities and operating-system PIDs for
+    /// public process projections. Backend-local group IDs remain inside the
+    /// runtime boundary and are used only to resolve DDB's global identity.
+    pub(crate) fn thread_group_snapshot(&self) -> Vec<(String, Option<u64>)> {
+        let mut groups = self
+            .threads
+            .groups
+            .iter()
+            .map(|(local_id, group)| (local_id.clone(), group.pid))
+            .collect::<Vec<_>>();
+        groups.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        groups
+    }
+
     #[inline]
     pub fn set_curr_tid(&mut self, tid: u64) {
         self.curr_tid = Some(tid);
@@ -348,15 +424,42 @@ impl SessionMeta {
             return false;
         }
         for tid in tids {
-            self.t_status.insert(*tid, status);
+            if status != ThreadStatus::STOPPED {
+                self.t_locations.remove(tid);
+            }
+            let previous = self.t_status.insert(*tid, status);
+            if previous != Some(status) {
+                let revision = self.t_revisions.entry(*tid).or_insert(1);
+                *revision = revision.saturating_add(1);
+            }
         }
+        true
+    }
+
+    pub(crate) fn set_thread_location(&mut self, tid: u64, location: ThreadLocation) -> bool {
+        if self.t_status.get(&tid) != Some(&ThreadStatus::STOPPED) {
+            return false;
+        }
+        if self.t_locations.get(&tid) == Some(&location) {
+            return true;
+        }
+        self.t_locations.insert(tid, location);
+        let revision = self.t_revisions.entry(tid).or_insert(1);
+        *revision = revision.saturating_add(1);
         true
     }
 
     #[inline]
     pub fn update_all_status(&mut self, new_status: ThreadStatus) {
-        for (_, status) in self.t_status.iter_mut() {
-            *status = new_status;
+        if new_status != ThreadStatus::STOPPED {
+            self.t_locations.clear();
+        }
+        for (tid, status) in self.t_status.iter_mut() {
+            if *status != new_status {
+                *status = new_status;
+                let revision = self.t_revisions.entry(*tid).or_insert(1);
+                *revision = revision.saturating_add(1);
+            }
         }
     }
 
@@ -588,6 +691,36 @@ mod tests {
         assert!(!meta.t_status.contains_key(&10));
         assert!(meta.thread_group_for(11).is_none());
         assert!(!meta.t_status.contains_key(&11));
+    }
+
+    #[test]
+    fn stopped_location_is_revisioned_and_cleared_when_execution_resumes() {
+        let mut meta = SessionMeta::new(1, "svc-a".to_string(), None);
+        meta.add_thread_group("i1");
+        meta.create_thread(10, "i1");
+        assert!(meta.update_thread_statuses(&[10], ThreadStatus::STOPPED));
+        assert!(meta.set_thread_location(
+            10,
+            ThreadLocation {
+                path: Some("src/main.rs".to_string()),
+                line: Some(42),
+                ..ThreadLocation::default()
+            }
+        ));
+        let (_, stopped) = meta.thread_status_snapshot();
+        let stopped_revision = stopped[0].execution_revision;
+        assert_eq!(
+            stopped[0]
+                .location
+                .as_ref()
+                .and_then(|location| location.line),
+            Some(42)
+        );
+
+        assert!(meta.update_thread_statuses(&[10], ThreadStatus::RUNNING));
+        let (_, running) = meta.thread_status_snapshot();
+        assert!(running[0].execution_revision > stopped_revision);
+        assert!(running[0].location.is_none());
     }
 
     #[tokio::test]

@@ -11,13 +11,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub const V2_TEST_READ_TOKEN: &str = "ddb-integration-read-token-0000000001";
+pub const V2_TEST_CONTROL_TOKEN: &str = "ddb-integration-control-token-000001";
+pub const V2_TEST_ADMIN_TOKEN: &str = "ddb-integration-admin-token-00000001";
 
 #[derive(Default)]
 struct OutputBuffer {
@@ -90,6 +93,7 @@ pub struct DdbProcess {
     stderr: Arc<OutputBuffer>,
     client: Client,
     port: u16,
+    grpc_port: Option<u16>,
     stopped: bool,
 }
 
@@ -97,6 +101,44 @@ impl DdbProcess {
     pub fn spawn(sessions: &[SessionSpec<'_>]) -> Self {
         let config_contents = render_mock_config(sessions, false);
         Self::spawn_with_config("ddb-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_with_v2_auth(sessions: &[SessionSpec<'_>]) -> Self {
+        let config_contents = with_v2_auth(render_mock_config(sessions, false));
+        Self::spawn_with_config("ddb-v2-integration.yaml", config_contents)
+    }
+
+    /// Starts an authenticated v2 server with additional `Conf` entries.
+    ///
+    /// This is intentionally limited to integration tests so deployment-policy
+    /// behavior is exercised at the process boundary rather than inferred from
+    /// configuration-unit tests.
+    pub fn spawn_with_v2_conf(sessions: &[SessionSpec<'_>], conf_entries: &str) -> Self {
+        let config_contents = with_conf_entries(
+            with_v2_auth(render_mock_config(sessions, false)),
+            conf_entries,
+        );
+        Self::spawn_with_config("ddb-v2-policy-integration.yaml", config_contents)
+    }
+
+    #[cfg(feature = "grpc-preview")]
+    pub fn spawn_with_v2_auth_and_grpc(sessions: &[SessionSpec<'_>]) -> Self {
+        let config_contents = with_grpc_preview(with_v2_auth(render_mock_config(sessions, false)));
+        Self::spawn_with_config("ddb-v2-grpc-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_with_v2_auth_rejection(
+        sessions: &[SessionSpec<'_>],
+        rejected_tag: &str,
+        rejected_command: &str,
+    ) -> Self {
+        let config_contents = with_v2_auth(render_mock_config_with_rejection(
+            sessions,
+            false,
+            rejected_tag,
+            rejected_command,
+        ));
+        Self::spawn_with_config("ddb-v2-rejection-integration.yaml", config_contents)
     }
 
     pub fn spawn_with_bootstrap_exit(sessions: &[SessionSpec<'_>]) -> Self {
@@ -107,6 +149,24 @@ impl DdbProcess {
     pub fn spawn_real_binary_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
         let config_contents = render_real_binary_config(sessions, "gdb");
         Self::spawn_with_config("ddb-real-integration.yaml", config_contents)
+    }
+
+    pub fn spawn_real_binary_sessions_with_v2_auth(
+        backend: &str,
+        sessions: &[BinarySessionSpec<'_>],
+    ) -> Self {
+        ensure_debugger_environment(backend);
+        let config_contents = with_v2_auth(render_real_binary_config(sessions, backend));
+        let environment = if backend == "lldb" {
+            vec![("FAKETIME", "-00000000000000000000.000000000")]
+        } else {
+            Vec::new()
+        };
+        Self::spawn_with_config_and_env(
+            "ddb-real-v2-integration.yaml",
+            config_contents,
+            &environment,
+        )
     }
     pub fn spawn_faketime_binary_sessions(
         backend: &str,
@@ -171,12 +231,38 @@ impl DdbProcess {
         environment: &[(&str, &str)],
     ) -> Self {
         let port = reserve_port();
+        let grpc_port = config_contents.contains("__GRPC_PORT__").then(reserve_port);
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
         let config_path = tempdir.path().join(config_name);
         let state_dir = tempdir.path().join("state");
         let log_dir = tempdir.path().join("logs");
+        let token_path = tempdir.path().join("api-tokens.json");
+        std::fs::write(
+            &token_path,
+            serde_json::to_vec(&json!({
+                "tokens": [
+                    {"token": V2_TEST_READ_TOKEN, "scope": "read"},
+                    {"token": V2_TEST_CONTROL_TOKEN, "scope": "control"},
+                    {"token": V2_TEST_ADMIN_TOKEN, "scope": "admin"}
+                ]
+            }))
+            .expect("token document should serialize"),
+        )
+        .expect("token file should be written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))
+                .expect("token file permissions should be restricted");
+        }
         let config_contents = config_contents
             .replace("__API_PORT__", &port.to_string())
+            .replace(
+                "__API_TOKEN_FILE__",
+                token_path
+                    .to_str()
+                    .expect("token path should be valid utf-8"),
+            )
             .replace(
                 "__BASE_DIR__",
                 state_dir.to_str().expect("state dir should be valid utf-8"),
@@ -185,6 +271,10 @@ impl DdbProcess {
                 "__LOG_DIR__",
                 log_dir.to_str().expect("log dir should be valid utf-8"),
             );
+        let config_contents = match grpc_port {
+            Some(grpc_port) => config_contents.replace("__GRPC_PORT__", &grpc_port.to_string()),
+            None => config_contents,
+        };
         std::fs::write(&config_path, config_contents).expect("config file should be written");
 
         let stdout = Arc::new(OutputBuffer::default());
@@ -226,6 +316,7 @@ impl DdbProcess {
             stderr,
             client,
             port,
+            grpc_port,
             stopped: false,
         };
         process.wait_for_status_up();
@@ -234,6 +325,19 @@ impl DdbProcess {
 
     fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub fn api_endpoint(&self) -> String {
+        self.base_url()
+    }
+
+    #[cfg(feature = "grpc-preview")]
+    pub fn grpc_endpoint(&self) -> String {
+        format!(
+            "http://127.0.0.1:{}",
+            self.grpc_port
+                .expect("process should have a configured gRPC preview port")
+        )
     }
 
     pub fn send_cmd(&mut self, cmd: &str) {
@@ -266,20 +370,97 @@ impl DdbProcess {
         (status, body)
     }
 
+    pub fn api_post_json_with_bearer(
+        &self,
+        path: &str,
+        body: &Value,
+        token: &str,
+    ) -> (StatusCode, Value) {
+        let response = self
+            .client
+            .post(format!("{}{}", self.base_url(), path))
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .expect("request should succeed");
+        let status = response.status();
+        let body = response.json().expect("response body should be json");
+        (status, body)
+    }
+
+    pub fn api_post_stream_with_bearer(&self, path: &str, body: &Value, token: &str) -> Response {
+        self.client
+            .post(format!("{}{}", self.base_url(), path))
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .expect("stream request should succeed")
+    }
+
+    pub fn api_patch_json(&self, path: &str, body: &Value) -> (StatusCode, Value) {
+        let response = self
+            .client
+            .patch(format!("{}{}", self.base_url(), path))
+            .json(body)
+            .send()
+            .expect("request should succeed");
+        let status = response.status();
+        let body = response.json().expect("response body should be json");
+        (status, body)
+    }
+
     pub fn wait_for_status_up(&mut self) {
         let deadline = Instant::now() + DEFAULT_TIMEOUT;
         loop {
             self.assert_running();
-            match self
+            let legacy_ready = self
                 .client
                 .get(format!("{}/status", self.base_url()))
                 .send()
-            {
-                Ok(response) if response.status().is_success() => return,
-                Ok(_) | Err(_) => {}
+                .is_ok_and(|response| response.status().is_success());
+            if legacy_ready {
+                return;
+            }
+            // Remote listeners intentionally omit the legacy surface. Health
+            // is public, payload-free v2 metadata and therefore a safe probe.
+            let v2_ready = self
+                .client
+                .post(format!(
+                    "{}/api/v2/rpc/ddb.api.v2.DdbAdminService/GetHealth",
+                    self.base_url()
+                ))
+                .json(&json!({}))
+                .send()
+                .is_ok_and(|response| response.status().is_success());
+            if v2_ready {
+                return;
             }
             if Instant::now() >= deadline {
-                panic!("timed out waiting for /status\n{}", self.debug_dump());
+                panic!(
+                    "timed out waiting for DDB API health\n{}",
+                    self.debug_dump()
+                );
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    pub fn wait_for_exit(&mut self) -> std::process::ExitStatus {
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .expect("child status should be readable")
+            {
+                self.stopped = true;
+                return status;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for DDB process exit\n{}",
+                    self.debug_dump()
+                );
             }
             thread::sleep(POLL_INTERVAL);
         }
@@ -290,13 +471,49 @@ impl DdbProcess {
         loop {
             self.assert_running();
             let sessions = self.api_get("/sessions");
-            if sessions.as_array().map(|items| items.len()) == Some(expected) {
+            let ready = sessions.as_array().is_some_and(|items| {
+                items.len() == expected
+                    && items
+                        .iter()
+                        .all(|session| session["status"].as_str() == Some("ON"))
+            });
+            if ready {
                 return sessions;
             }
             if Instant::now() >= deadline {
                 panic!(
                     "timed out waiting for {} session(s)\n{}",
                     expected,
+                    self.debug_dump()
+                );
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    pub fn wait_for_session_stopped(&mut self, sid: u64) {
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            self.assert_running();
+            let stopped = self
+                .api_get("/sessions")
+                .as_array()
+                .and_then(|sessions| {
+                    sessions
+                        .iter()
+                        .find(|session| session["sid"].as_u64() == Some(sid))
+                })
+                .is_some_and(|session| {
+                    session["status"].as_str() == Some("ON")
+                        && session["all_threads_stopped"].as_bool() == Some(true)
+                });
+            if stopped {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for session {} to become currently stopped\n{}",
+                    sid,
                     self.debug_dump()
                 );
             }
@@ -341,6 +558,29 @@ impl DdbProcess {
         }
     }
 
+    pub fn wait_for_group_id_by_hash(&mut self, hash: &str) -> u64 {
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            self.assert_running();
+            let groups = self.api_get("/groups");
+            if let Some(group_id) = groups.as_array().and_then(|items| {
+                items
+                    .iter()
+                    .find(|group| group["hash"] == hash)
+                    .and_then(|group| group["id"].as_u64())
+            }) {
+                return group_id;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for group hash {hash:?}\n{}",
+                    self.debug_dump()
+                );
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
     pub fn wait_for_stdout_count(&mut self, needle: &str, expected: usize) -> Vec<String> {
         let deadline = Instant::now() + DEFAULT_TIMEOUT;
         loop {
@@ -374,6 +614,18 @@ impl DdbProcess {
     }
 
     pub fn wait_for_stdout_line_with_all(&mut self, needles: &[&str]) -> String {
+        self.wait_for_stdout_line_with_all_after(0, needles)
+    }
+
+    pub fn stdout_checkpoint(&self) -> usize {
+        self.stdout.snapshot().len()
+    }
+
+    pub fn wait_for_stdout_line_with_all_after(
+        &mut self,
+        checkpoint: usize,
+        needles: &[&str],
+    ) -> String {
         let deadline = Instant::now() + DEFAULT_TIMEOUT;
         loop {
             self.assert_running();
@@ -381,6 +633,7 @@ impl DdbProcess {
                 .stdout
                 .snapshot()
                 .into_iter()
+                .skip(checkpoint)
                 .find(|line| needles.iter().all(|needle| line.contains(needle)))
             {
                 return line;
@@ -494,9 +747,23 @@ fn reserve_port() -> u16 {
 }
 
 fn render_mock_config(sessions: &[SessionSpec<'_>], exit_on_bootstrap: bool) -> String {
+    render_mock_config_with_rejection(sessions, exit_on_bootstrap, "", "")
+}
+
+fn render_mock_config_with_rejection(
+    sessions: &[SessionSpec<'_>],
+    exit_on_bootstrap: bool,
+    rejected_tag: &str,
+    rejected_command: &str,
+) -> String {
     let sessions_yaml = sessions
         .iter()
         .map(|session| {
+            let rejection = if session.tag == rejected_tag && !rejected_command.is_empty() {
+                format!("\n      reject_commands: [\"{rejected_command}\"]")
+            } else {
+                String::new()
+            };
             format!(
                 r#"  - tag: "{tag}"
     alias: "{alias}"
@@ -508,7 +775,7 @@ fn render_mock_config(sessions: &[SessionSpec<'_>], exit_on_bootstrap: bool) -> 
       source_line: {source_line}
       function: "{function}"
       exit_on_continue: {exit_on_continue}
-      exit_on_bootstrap: {exit_on_bootstrap}"#,
+      exit_on_bootstrap: {exit_on_bootstrap}{rejection}"#,
                 tag = session.tag,
                 alias = session.alias,
                 hash = session.hash,
@@ -519,6 +786,7 @@ fn render_mock_config(sessions: &[SessionSpec<'_>], exit_on_bootstrap: bool) -> 
                 function = session.function,
                 exit_on_continue = session.exit_on_continue,
                 exit_on_bootstrap = exit_on_bootstrap,
+                rejection = rejection,
             )
         })
         .collect::<Vec<_>>()
@@ -537,6 +805,35 @@ StaticSessions:
 {sessions_yaml}
 "#,
         sessions_yaml = sessions_yaml,
+    )
+}
+
+fn with_v2_auth(config: String) -> String {
+    config.replace(
+        "  api_server_port: __API_PORT__",
+        "  api_server_port: __API_PORT__\n  api_auth_token_file: \"__API_TOKEN_FILE__\"",
+    )
+}
+
+fn with_conf_entries(config: String, conf_entries: &str) -> String {
+    assert!(
+        conf_entries
+            .lines()
+            .all(|line| line.is_empty() || line.starts_with("  ")),
+        "test Conf entries must use two-space YAML indentation"
+    );
+    config.replacen(
+        "  api_server_port: __API_PORT__",
+        &format!("  api_server_port: __API_PORT__\n{conf_entries}"),
+        1,
+    )
+}
+
+#[cfg(feature = "grpc-preview")]
+fn with_grpc_preview(config: String) -> String {
+    config.replace(
+        "  api_server_port: __API_PORT__",
+        "  api_server_port: __API_PORT__\n  api_grpc_preview_port: __GRPC_PORT__",
     )
 }
 
@@ -837,7 +1134,10 @@ pub fn real_test_guard() -> std::sync::MutexGuard<'static, ()> {
     REAL_TEST_MUTEX
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("real test mutex should not be poisoned")
+        // A failed real-debugger assertion must not turn every later backend test into a
+        // misleading lock-poison failure. DDB processes are owned by the test value and are
+        // synchronously shut down during unwinding before this lock is released.
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub fn session_id_by_tag(sessions: &Value, tag: &str) -> u64 {
@@ -846,14 +1146,6 @@ pub fn session_id_by_tag(sessions: &Value, tag: &str) -> u64 {
         .and_then(|items| items.iter().find(|session| session["tag"] == tag))
         .and_then(|session| session["sid"].as_u64())
         .expect("session should exist")
-}
-
-pub fn group_id_by_hash(groups: &Value, hash: &str) -> u64 {
-    groups
-        .as_array()
-        .and_then(|items| items.iter().find(|group| group["hash"] == hash))
-        .and_then(|group| group["id"].as_u64())
-        .expect("group should exist")
 }
 
 pub fn bkpt_id(bkpts: &Value) -> u64 {

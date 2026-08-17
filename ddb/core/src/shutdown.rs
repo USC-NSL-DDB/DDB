@@ -14,6 +14,7 @@ pub enum ShutdownCause {
     SigTerm,
     UserExit,
     StdinEof,
+    ApiRequest,
     StdinError,
     NoSessions,
     DbgMgrInitFailure,

@@ -1,2 +1,10 @@
+pub(crate) mod application;
+pub(crate) mod auth;
+pub(crate) mod compatibility;
+pub(crate) mod contract;
+#[cfg(feature = "grpc-preview")]
+pub(crate) mod grpc;
 pub(crate) mod read_model;
+pub(crate) mod security;
 pub mod server;
+pub(crate) mod telemetry;

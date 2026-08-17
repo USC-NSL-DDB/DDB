@@ -1,0 +1,22 @@
+version: v2
+
+modules:
+  - path: proto
+
+lint:
+  use:
+    - STANDARD
+  disallow_comment_ignores: true
+  # Mutations intentionally share one operation-admission envelope so clients
+  # can implement admission, idempotency, and polling once. Event streams yield
+  # their event envelopes directly to avoid a redundant wrapper per event.
+  ignore_only:
+    RPC_REQUEST_RESPONSE_UNIQUE:
+      - proto/ddb/api/v2/debugger_service.proto
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/ddb/api/v2/debugger_service.proto
+      - proto/ddb/api/v2/event_service.proto
+
+breaking:
+  use:
+    - FILE

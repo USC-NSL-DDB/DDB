@@ -1,8 +1,8 @@
 mod support;
 
 use support::{
-    bkpt_id, build_real_loop_example, group_id_by_hash, real_test_guard, session_id_by_tag,
-    BinarySessionSpec, DdbProcess,
+    bkpt_id, build_real_loop_example, real_test_guard, session_id_by_tag, BinarySessionSpec,
+    DdbProcess,
 };
 
 #[test]
@@ -56,8 +56,7 @@ fn real_binary_session_late_join_inherits_group_breakpoints() {
     ddb.wait_for_sessions_len(1);
     ddb.wait_for_stdout_count("thread-created", 1);
 
-    let groups = ddb.api_get("/groups");
-    let group_id = group_id_by_hash(&groups, "grp-real");
+    let group_id = ddb.wait_for_group_id_by_hash("grp-real");
 
     ddb.send_cmd(&format!(
         "601-break-insert --group {} {}:{}",

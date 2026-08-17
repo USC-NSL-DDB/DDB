@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+package ddb.api.v2;
+
+import "ddb/api/v2/common.proto";
+
+// ExtensionPayload contains data whose schema is owned outside the core DDB
+// contract. payload_json must contain one complete UTF-8 JSON value.
+message ExtensionPayload {
+  // Registered extension descriptor identity.
+  string extension_id = 1;
+  // Extension-owned payload schema version.
+  string schema_version = 2;
+  // Resolvable or documented payload schema identifier.
+  string schema_uri = 3;
+  // Declared media type validated against the extension descriptor.
+  string media_type = 4;
+
+  // Exactly one bounded payload representation.
+  oneof payload {
+    // Opaque bytes interpreted only by the declared extension schema.
+    bytes payload_bytes = 5;
+    // One complete UTF-8 JSON value, validated to advertised size/depth limits.
+    string payload_json = 6;
+  }
+}
+
+// ExtensionPresentationKind is a generic frontend rendering primitive.
+enum ExtensionPresentationKind {
+  EXTENSION_PRESENTATION_KIND_UNSPECIFIED = 0;
+  EXTENSION_PRESENTATION_KIND_TABLE = 1;
+  EXTENSION_PRESENTATION_KIND_TREE = 2;
+  EXTENSION_PRESENTATION_KIND_KEY_VALUE = 3;
+  EXTENSION_PRESENTATION_KIND_TEXT = 4;
+  EXTENSION_PRESENTATION_KIND_ACTION = 5;
+}
+
+// ExtensionColumnDescriptor describes one generic table column.
+message ExtensionColumnDescriptor {
+  // Stable column identity within its presentation.
+  string id = 1;
+  // Human-readable heading.
+  string title = 2;
+  // Optional schema-owned scalar/presentation type hint.
+  optional string value_type = 3;
+}
+
+// ExtensionPresentationDescriptor lets generic frontends render extension data.
+message ExtensionPresentationDescriptor {
+  // Stable presentation identity within the extension.
+  string id = 1;
+  // Human-readable title.
+  string title = 2;
+  // Optional safe help text.
+  optional string description = 3;
+  // Generic presentation primitive.
+  ExtensionPresentationKind kind = 4;
+  // Bounded columns used only by table presentations.
+  repeated ExtensionColumnDescriptor columns = 5;
+  // Optional action invoked by an action presentation.
+  optional string action_id = 6;
+}
+
+// ExtensionActionDescriptor declares one discoverable extension mutation.
+message ExtensionActionDescriptor {
+  // Stable action identity within the extension.
+  string id = 1;
+  // Human-readable action label.
+  string title = 2;
+  // Optional safe help text.
+  optional string description = 3;
+  // Minimum authorization scope.
+  PermissionScope required_scope = 4;
+  // Schema identifier for the request payload.
+  string request_schema_uri = 5;
+  // Schema identifier for the successful result payload.
+  string response_schema_uri = 6;
+  // True when repeated identical invocation is semantically safe.
+  bool idempotent = 7;
+}
+
+// ExtensionEventDescriptor declares one extension-owned event type.
+message ExtensionEventDescriptor {
+  // Namespaced stable event identifier.
+  string event_type = 1;
+  // Event payload schema identifier.
+  string schema_uri = 2;
+  // True when the event participates in retained state replay.
+  bool replayable = 3;
+}
+
+// ExtensionDescriptor is the negotiated contract for one extension.
+message ExtensionDescriptor {
+  // Reverse-DNS or project-qualified stable identifier.
+  string extension_id = 1;
+  // Project or organization responsible for the extension.
+  string owner = 2;
+  // Extension implementation/contract version.
+  string version = 3;
+  // Human-readable title.
+  string title = 4;
+  // Safe human-readable summary.
+  string description = 5;
+  // Root extension schema identifier.
+  string schema_uri = 6;
+  // Integrity hash of the referenced schema using a documented algorithm.
+  string schema_hash = 7;
+  // Authorization scopes needed to access extension state.
+  repeated PermissionScope required_scopes = 8;
+  // Bounded discoverable actions.
+  repeated ExtensionActionDescriptor actions = 9;
+  // Bounded emitted event declarations.
+  repeated ExtensionEventDescriptor events = 10;
+  // Bounded generic frontend presentation hints.
+  repeated ExtensionPresentationDescriptor presentations = 11;
+  // Lowest compatible public API release.
+  optional string minimum_api_version = 12;
+  // Highest compatible public API release when constrained.
+  optional string maximum_api_version = 13;
+}
+
+// ExtensionSchemaDocument is one bounded schema registered by an extension.
+// Fetching schemas separately keeps ordinary capability discovery small.
+message ExtensionSchemaDocument {
+  // Registered extension identity that owns this schema.
+  string extension_id = 1;
+  // Exact registered schema identifier.
+  string schema_uri = 2;
+  // Schema document media type, for example application/schema+json.
+  string media_type = 3;
+  // Bounded schema document bytes. ProtoJSON represents this as base64.
+  bytes content = 4;
+  // Lowercase SHA-256 digest of content for cache and integrity checks.
+  string content_sha256 = 5;
+}
+
+// ExtensionState is one revisioned extension-owned projection.
+message ExtensionState {
+  // Opaque identity of this revisioned extension-state resource.
+  string extension_state_id = 4;
+  // Registered extension identity.
+  string extension_id = 1;
+  // Monotonic revision scoped to this extension and server instance.
+  uint64 revision = 2;
+  // Bounded payload set declared by the extension schema.
+  repeated ExtensionPayload payloads = 3;
+}
+
+// InvokeExtensionActionRequest admits a descriptor-declared action.
+message InvokeExtensionActionRequest {
+  // Mutation controls; idempotency_key and the declared scope are required.
+  RequestContext context = 1;
+  // Registered extension identity.
+  string extension_id = 2;
+  // Declared action identity.
+  string action_id = 3;
+  // Bounded request payload matching the action schema.
+  ExtensionPayload payload = 4;
+  // Canonical debugger routing target.
+  Target target = 5;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 6;
+}
+
+// InvokeExtensionActionResult contains the declared successful result.
+message InvokeExtensionActionResult {
+  // Bounded result payload matching the action response schema.
+  ExtensionPayload payload = 1;
+}

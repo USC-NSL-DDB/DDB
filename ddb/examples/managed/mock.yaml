@@ -1,0 +1,17 @@
+Framework: unspecified
+Conf:
+  auto_shutdown: false
+  on_exit: detach
+  Debugger:
+    backend: mock
+StaticSessions:
+  - tag: managed-example
+    alias: example-service
+    hash: example-group
+    pid: 4242
+    mock:
+      source_file: examples/managed/mock_source.rs
+      source_line: 9
+      function: handle_request
+      exit_on_continue: false
+      exit_on_bootstrap: false

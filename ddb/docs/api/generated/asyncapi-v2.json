@@ -1,0 +1,3807 @@
+{
+  "asyncapi": "3.1.0",
+  "channels": {
+    "subscribeOutput": {
+      "address": "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeOutput",
+      "description": "DdbEventService.SubscribeOutput NDJSON stream",
+      "messages": {
+        "OutputEvent": {
+          "$ref": "#/components/messages/OutputEvent"
+        }
+      },
+      "x-ddb-heartbeat": "An empty line is emitted after 15 seconds without an event.",
+      "x-ddb-request-schema": {
+        "$ref": "#/components/schemas/SubscribeOutputRequest"
+      }
+    },
+    "subscribeStateEvents": {
+      "address": "/api/v2/rpc/ddb.api.v2.DdbEventService/SubscribeStateEvents",
+      "description": "DdbEventService.SubscribeStateEvents NDJSON stream",
+      "messages": {
+        "StateEvent": {
+          "$ref": "#/components/messages/StateEvent"
+        }
+      },
+      "x-ddb-heartbeat": "An empty line is emitted after 15 seconds without an event.",
+      "x-ddb-request-schema": {
+        "$ref": "#/components/schemas/SubscribeStateEventsRequest"
+      }
+    }
+  },
+  "components": {
+    "messages": {
+      "OutputEvent": {
+        "contentType": "application/json",
+        "name": "OutputEvent",
+        "payload": {
+          "$ref": "#/components/schemas/OutputEvent"
+        },
+        "title": "OutputEvent"
+      },
+      "StateEvent": {
+        "contentType": "application/json",
+        "name": "StateEvent",
+        "payload": {
+          "$ref": "#/components/schemas/StateEvent"
+        },
+        "title": "StateEvent"
+      }
+    },
+    "schemas": {
+      "AddressBreakpointLocation": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ApiLimits": {
+        "additionalProperties": true,
+        "properties": {
+          "maxDynamicValueDepth": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxExtensionPayloadBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxMemoryReadBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxOperationBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxOperationRecordBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxOperationRecords": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxOutputEventBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxPageSize": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxRequestBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxResponseBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxSourceBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxSourceLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxStateReplayBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxStateReplayEvents": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "maxSubscribers": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxVariableChildren": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "operationRetentionMillis": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "outputSubscriberQueue": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preferredPageSize": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stateReplayRetentionMillis": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "stateSubscriberQueue": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "BackendDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "capabilityNamespace": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BackendKind"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BackendKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "BACKEND_KIND_UNSPECIFIED",
+          "BACKEND_KIND_MOCK",
+          "BACKEND_KIND_GDB",
+          "BACKEND_KIND_LLDB",
+          "BACKEND_KIND_OTHER"
+        ]
+      },
+      "Breakpoint": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpointId": {
+            "type": "string"
+          },
+          "hitCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/BreakpointSpec"
+          },
+          "subBreakpoints": {
+            "items": {
+              "$ref": "#/components/schemas/SubBreakpoint"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "BreakpointFeature": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "BREAKPOINT_FEATURE_UNSPECIFIED",
+          "BREAKPOINT_FEATURE_SOURCE",
+          "BREAKPOINT_FEATURE_FUNCTION",
+          "BREAKPOINT_FEATURE_ADDRESS",
+          "BREAKPOINT_FEATURE_CONDITION",
+          "BREAKPOINT_FEATURE_IGNORE_COUNT",
+          "BREAKPOINT_FEATURE_TEMPORARY",
+          "BREAKPOINT_FEATURE_HARDWARE",
+          "BREAKPOINT_FEATURE_ENABLE_DISABLE",
+          "BREAKPOINT_FEATURE_DISTRIBUTED",
+          "BREAKPOINT_FEATURE_GROUP_INHERITANCE"
+        ]
+      },
+      "BreakpointSpec": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/AddressBreakpointLocation"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "function": {
+            "$ref": "#/components/schemas/FunctionBreakpointLocation"
+          },
+          "hardware": {
+            "type": "boolean"
+          },
+          "ignoreCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceBreakpointLocation"
+          },
+          "temporary": {
+            "type": "boolean"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "location": [
+            "source",
+            "function",
+            "address"
+          ]
+        }
+      },
+      "BroadcastTarget": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "CancelOperationRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "Capabilities": {
+        "additionalProperties": true,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "authenticationMode": {
+            "type": "string"
+          },
+          "backends": {
+            "items": {
+              "$ref": "#/components/schemas/BackendDescriptor"
+            },
+            "type": "array"
+          },
+          "breakpointFeatures": {
+            "items": {
+              "$ref": "#/components/schemas/BreakpointFeature"
+            },
+            "type": "array"
+          },
+          "cancellableOperationKinds": {
+            "items": {
+              "$ref": "#/components/schemas/OperationKind"
+            },
+            "type": "array"
+          },
+          "capabilitiesId": {
+            "type": "string"
+          },
+          "ddbFeatures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "deprecations": {
+            "items": {
+              "$ref": "#/components/schemas/DeprecationNotice"
+            },
+            "type": "array"
+          },
+          "executionActionCapabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionActionCapability"
+            },
+            "type": "array"
+          },
+          "executionActions": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionAction"
+            },
+            "type": "array"
+          },
+          "extensions": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionDescriptor"
+            },
+            "type": "array"
+          },
+          "frameworks": {
+            "items": {
+              "$ref": "#/components/schemas/FrameworkDescriptor"
+            },
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ApiLimits"
+          },
+          "outputStreamKinds": {
+            "items": {
+              "$ref": "#/components/schemas/OutputStreamKind"
+            },
+            "type": "array"
+          },
+          "permissionScopes": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionScope"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          },
+          "stateEventKinds": {
+            "items": {
+              "$ref": "#/components/schemas/StateEventKind"
+            },
+            "type": "array"
+          },
+          "supportedOperations": {
+            "items": {
+              "$ref": "#/components/schemas/OperationKind"
+            },
+            "type": "array"
+          },
+          "supportedResources": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceKind"
+            },
+            "type": "array"
+          },
+          "transports": {
+            "items": {
+              "$ref": "#/components/schemas/TransportEndpoint"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ChangeKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "CHANGE_KIND_UNSPECIFIED",
+          "CHANGE_KIND_UPSERT",
+          "CHANGE_KIND_DELETE"
+        ]
+      },
+      "ComponentHealth": {
+        "additionalProperties": true,
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus"
+          }
+        },
+        "type": "object"
+      },
+      "CreateBreakpointRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoint": {
+            "$ref": "#/components/schemas/BreakpointSpec"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "CurrentSessionTarget": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "CurrentThreadTarget": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "Cursor": {
+        "additionalProperties": true,
+        "properties": {
+          "sequence": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DdbError": {
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/DdbErrorCode"
+          },
+          "currentCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "details": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "type": "array"
+          },
+          "earliestCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "fieldViolations": {
+            "items": {
+              "$ref": "#/components/schemas/FieldViolation"
+            },
+            "type": "array"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "requiredCapability": {
+            "type": "string"
+          },
+          "retryAfter": {
+            "pattern": "^-?[0-9]+(?:\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "targetFailures": {
+            "items": {
+              "$ref": "#/components/schemas/TargetFailure"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "DdbErrorCode": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "DDB_ERROR_CODE_UNSPECIFIED",
+          "DDB_ERROR_CODE_INVALID_ARGUMENT",
+          "DDB_ERROR_CODE_NOT_FOUND",
+          "DDB_ERROR_CODE_CONFLICT",
+          "DDB_ERROR_CODE_FAILED_PRECONDITION",
+          "DDB_ERROR_CODE_UNSUPPORTED",
+          "DDB_ERROR_CODE_NOT_READY",
+          "DDB_ERROR_CODE_UNAUTHENTICATED",
+          "DDB_ERROR_CODE_PERMISSION_DENIED",
+          "DDB_ERROR_CODE_RESOURCE_EXHAUSTED",
+          "DDB_ERROR_CODE_DEADLINE_EXCEEDED",
+          "DDB_ERROR_CODE_CANCELLED",
+          "DDB_ERROR_CODE_NOT_CANCELLABLE",
+          "DDB_ERROR_CODE_REPLAY_GAP",
+          "DDB_ERROR_CODE_BACKEND_FAILED",
+          "DDB_ERROR_CODE_PARTIAL_FAILURE",
+          "DDB_ERROR_CODE_UNAVAILABLE",
+          "DDB_ERROR_CODE_INTERNAL",
+          "DDB_ERROR_CODE_EXPIRED"
+        ]
+      },
+      "DebuggerSignal": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "print": {
+            "type": "boolean"
+          },
+          "stop": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "DeleteBreakpointRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpointId": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "DeprecationNotice": {
+        "additionalProperties": true,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "removalNotBeforeRelease": {
+            "type": "string"
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DistributedBacktraceResult": {
+        "additionalProperties": true,
+        "properties": {
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/DistributedFrame"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "truncationReason": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DistributedBoundaryKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "DISTRIBUTED_BOUNDARY_KIND_UNSPECIFIED",
+          "DISTRIBUTED_BOUNDARY_KIND_CALL",
+          "DISTRIBUTED_BOUNDARY_KIND_RETURN",
+          "DISTRIBUTED_BOUNDARY_KIND_SPAWN",
+          "DISTRIBUTED_BOUNDARY_KIND_MESSAGE",
+          "DISTRIBUTED_BOUNDARY_KIND_FRAMEWORK",
+          "DISTRIBUTED_BOUNDARY_KIND_OTHER"
+        ]
+      },
+      "DistributedFrame": {
+        "additionalProperties": true,
+        "properties": {
+          "boundary": {
+            "$ref": "#/components/schemas/DistributedBoundaryKind"
+          },
+          "boundaryLabel": {
+            "type": "string"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/Frame"
+          },
+          "index": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DynamicList": {
+        "additionalProperties": true,
+        "properties": {
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/DynamicValue"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "DynamicNull": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "DynamicObject": {
+        "additionalProperties": true,
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DynamicValue"
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "DynamicValue": {
+        "additionalProperties": true,
+        "properties": {
+          "boolValue": {
+            "type": "boolean"
+          },
+          "bytesValue": {
+            "format": "byte",
+            "type": "string"
+          },
+          "doubleValue": {
+            "format": "double",
+            "type": "number"
+          },
+          "listValue": {
+            "$ref": "#/components/schemas/DynamicList"
+          },
+          "nullValue": {
+            "$ref": "#/components/schemas/DynamicNull"
+          },
+          "objectValue": {
+            "$ref": "#/components/schemas/DynamicObject"
+          },
+          "signedValue": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "stringValue": {
+            "type": "string"
+          },
+          "unsignedValue": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "kind": [
+            "stringValue",
+            "signedValue",
+            "unsignedValue",
+            "doubleValue",
+            "boolValue",
+            "bytesValue",
+            "listValue",
+            "objectValue",
+            "nullValue"
+          ]
+        }
+      },
+      "Empty": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "additionalProperties": true,
+        "properties": {
+          "typeUrl": {
+            "type": "string"
+          },
+          "value": {
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EvaluateRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "evaluationContext": {
+            "$ref": "#/components/schemas/EvaluationContext"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "EvaluationContext": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "EVALUATION_CONTEXT_UNSPECIFIED",
+          "EVALUATION_CONTEXT_WATCH",
+          "EVALUATION_CONTEXT_REPL",
+          "EVALUATION_CONTEXT_HOVER",
+          "EVALUATION_CONTEXT_CONDITION"
+        ]
+      },
+      "EvaluationResult": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "typeName": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "variableId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExecuteRawCommandRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "dialect": {
+            "$ref": "#/components/schemas/RawCommandDialect"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ExecuteRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ExecutionAction"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "jumpLocation": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "signalName": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ExecutionAction": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "EXECUTION_ACTION_UNSPECIFIED",
+          "EXECUTION_ACTION_CONTINUE",
+          "EXECUTION_ACTION_INTERRUPT",
+          "EXECUTION_ACTION_NEXT",
+          "EXECUTION_ACTION_STEP_IN",
+          "EXECUTION_ACTION_STEP_OUT",
+          "EXECUTION_ACTION_JUMP",
+          "EXECUTION_ACTION_SIGNAL",
+          "EXECUTION_ACTION_REVERSE_CONTINUE",
+          "EXECUTION_ACTION_REVERSE_NEXT",
+          "EXECUTION_ACTION_REVERSE_STEP_IN"
+        ]
+      },
+      "ExecutionActionCapability": {
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ExecutionAction"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionScopeKind"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExecutionScopeKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "EXECUTION_SCOPE_KIND_UNSPECIFIED",
+          "EXECUTION_SCOPE_KIND_THREAD",
+          "EXECUTION_SCOPE_KIND_SESSION",
+          "EXECUTION_SCOPE_KIND_GROUP",
+          "EXECUTION_SCOPE_KIND_FANOUT"
+        ]
+      },
+      "ExecutionState": {
+        "additionalProperties": true,
+        "properties": {
+          "executionStateId": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "stopReason": {
+            "$ref": "#/components/schemas/StopReason"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ExpandVariableRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "variableId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExpandVariableResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionActionDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "requestSchemaUri": {
+            "type": "string"
+          },
+          "requiredScope": {
+            "$ref": "#/components/schemas/PermissionScope"
+          },
+          "responseSchemaUri": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionColumnDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "valueType": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionActionDescriptor"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionEventDescriptor"
+            },
+            "type": "array"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "maximumApiVersion": {
+            "type": "string"
+          },
+          "minimumApiVersion": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "presentations": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionPresentationDescriptor"
+            },
+            "type": "array"
+          },
+          "requiredScopes": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionScope"
+            },
+            "type": "array"
+          },
+          "schemaHash": {
+            "type": "string"
+          },
+          "schemaUri": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionEventDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "eventType": {
+            "type": "string"
+          },
+          "replayable": {
+            "type": "boolean"
+          },
+          "schemaUri": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionPayload": {
+        "additionalProperties": true,
+        "properties": {
+          "extensionId": {
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "payloadBytes": {
+            "format": "byte",
+            "type": "string"
+          },
+          "payloadJson": {
+            "type": "string"
+          },
+          "schemaUri": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "payload": [
+            "payloadBytes",
+            "payloadJson"
+          ]
+        }
+      },
+      "ExtensionPresentationDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "actionId": {
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionColumnDescriptor"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExtensionPresentationKind"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionPresentationKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "EXTENSION_PRESENTATION_KIND_UNSPECIFIED",
+          "EXTENSION_PRESENTATION_KIND_TABLE",
+          "EXTENSION_PRESENTATION_KIND_TREE",
+          "EXTENSION_PRESENTATION_KIND_KEY_VALUE",
+          "EXTENSION_PRESENTATION_KIND_TEXT",
+          "EXTENSION_PRESENTATION_KIND_ACTION"
+        ]
+      },
+      "ExtensionSchemaDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "content": {
+            "format": "byte",
+            "type": "string"
+          },
+          "contentSha256": {
+            "type": "string"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "schemaUri": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ExtensionState": {
+        "additionalProperties": true,
+        "properties": {
+          "extensionId": {
+            "type": "string"
+          },
+          "extensionStateId": {
+            "type": "string"
+          },
+          "payloads": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionPayload"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FieldViolation": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FirstTarget": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "Frame": {
+        "additionalProperties": true,
+        "properties": {
+          "frameId": {
+            "type": "string"
+          },
+          "functionName": {
+            "type": "string"
+          },
+          "level": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "location": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "module": {
+            "type": "string"
+          },
+          "synthetic": {
+            "type": "boolean"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FrameworkDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "frameworkId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FunctionBreakpointLocation": {
+        "additionalProperties": true,
+        "properties": {
+          "functionName": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetBreakpointRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpointId": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetBreakpointResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoint": {
+            "$ref": "#/components/schemas/Breakpoint"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetCapabilitiesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "GetCapabilitiesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetExecutionStateRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "GetExecutionStateResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "executionState": {
+            "$ref": "#/components/schemas/ExecutionState"
+          }
+        },
+        "type": "object"
+      },
+      "GetExtensionSchemaRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "schemaUri": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetExtensionSchemaResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/ExtensionSchemaDocument"
+          }
+        },
+        "type": "object"
+      },
+      "GetGroupRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "groupId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetGroupResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "group": {
+            "$ref": "#/components/schemas/Group"
+          }
+        },
+        "type": "object"
+      },
+      "GetHealthRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetHealthResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "health": {
+            "$ref": "#/components/schemas/HealthReport"
+          }
+        },
+        "type": "object"
+      },
+      "GetOperationRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "operationId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetOperationResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "type": "object"
+      },
+      "GetProcessRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "processId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetProcessResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "process": {
+            "$ref": "#/components/schemas/Process"
+          }
+        },
+        "type": "object"
+      },
+      "GetReadinessRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetReadinessResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/HealthReport"
+          }
+        },
+        "type": "object"
+      },
+      "GetServerInfoRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          }
+        },
+        "type": "object"
+      },
+      "GetServerInfoResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "serverInfo": {
+            "$ref": "#/components/schemas/ServerInfo"
+          }
+        },
+        "type": "object"
+      },
+      "GetSessionRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetSessionResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          }
+        },
+        "type": "object"
+      },
+      "GetSnapshotRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/SnapshotSection"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "GetSnapshotResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/Snapshot"
+          }
+        },
+        "type": "object"
+      },
+      "GetThreadRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetThreadResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "thread": {
+            "$ref": "#/components/schemas/Thread"
+          }
+        },
+        "type": "object"
+      },
+      "Group": {
+        "additionalProperties": true,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "sessionIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GroupTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "groupId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "HealthReport": {
+        "additionalProperties": true,
+        "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/ComponentHealth"
+            },
+            "type": "array"
+          },
+          "observedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus"
+          }
+        },
+        "type": "object"
+      },
+      "HealthStatus": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "HEALTH_STATUS_UNSPECIFIED",
+          "HEALTH_STATUS_UP",
+          "HEALTH_STATUS_DEGRADED",
+          "HEALTH_STATUS_DOWN"
+        ]
+      },
+      "InvokeExtensionActionRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "actionId": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ExtensionPayload"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "InvokeExtensionActionResult": {
+        "additionalProperties": true,
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/ExtensionPayload"
+          }
+        },
+        "type": "object"
+      },
+      "ListBreakpointsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListBreakpointsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoints": {
+            "items": {
+              "$ref": "#/components/schemas/Breakpoint"
+            },
+            "type": "array"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "type": "object"
+      },
+      "ListExtensionStatesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        },
+        "type": "object"
+      },
+      "ListExtensionStatesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "extensionStates": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionState"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "type": "object"
+      },
+      "ListFramesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListFramesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/Frame"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "type": "object"
+      },
+      "ListGroupsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListGroupsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "type": "object"
+      },
+      "ListOperationsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/OperationKind"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/OperationState"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListOperationsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "type": "object"
+      },
+      "ListPendingCommandsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListPendingCommandsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "pendingCommands": {
+            "items": {
+              "$ref": "#/components/schemas/PendingCommand"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListProcessesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListProcessesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/Process"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListRegistersRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "format": {
+            "$ref": "#/components/schemas/RegisterFormat"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        },
+        "type": "object"
+      },
+      "ListRegistersResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "registers": {
+            "items": {
+              "$ref": "#/components/schemas/Register"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListScopesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        },
+        "type": "object"
+      },
+      "ListScopesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListSessionsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        },
+        "type": "object"
+      },
+      "ListSessionsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListSignalsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListSignalsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/DebuggerSignal"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListThreadsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListThreadsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/Thread"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListVariablesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "scopeId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListVariablesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MemoryBlock": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "data": {
+            "format": "byte",
+            "type": "string"
+          },
+          "unreadableBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MultipleTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Operation": {
+        "additionalProperties": true,
+        "properties": {
+          "acceptedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cancellable": {
+            "type": "boolean"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/components/schemas/DdbError"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "idempotencyKeyReference": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OperationKind"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/OperationResult"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperationState"
+          },
+          "stateEventCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "stateRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetSummary"
+          },
+          "targetOutcomes": {
+            "items": {
+              "$ref": "#/components/schemas/TargetOutcome"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "OperationAdmissionResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "type": "object"
+      },
+      "OperationKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "OPERATION_KIND_UNSPECIFIED",
+          "OPERATION_KIND_EXECUTE",
+          "OPERATION_KIND_SELECT_THREAD",
+          "OPERATION_KIND_EVALUATE",
+          "OPERATION_KIND_CREATE_BREAKPOINT",
+          "OPERATION_KIND_UPDATE_BREAKPOINT",
+          "OPERATION_KIND_DELETE_BREAKPOINT",
+          "OPERATION_KIND_RAW_COMMAND",
+          "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
+          "OPERATION_KIND_EXTENSION_ACTION",
+          "OPERATION_KIND_SHUTDOWN"
+        ]
+      },
+      "OperationResult": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoint": {
+            "$ref": "#/components/schemas/Breakpoint"
+          },
+          "distributedBacktrace": {
+            "$ref": "#/components/schemas/DistributedBacktraceResult"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/EvaluationResult"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionState"
+          },
+          "extensionAction": {
+            "$ref": "#/components/schemas/InvokeExtensionActionResult"
+          },
+          "noContent": {
+            "$ref": "#/components/schemas/Empty"
+          },
+          "rawCommand": {
+            "$ref": "#/components/schemas/RawCommandResult"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "value": [
+            "execution",
+            "selection",
+            "evaluation",
+            "breakpoint",
+            "rawCommand",
+            "distributedBacktrace",
+            "extensionAction",
+            "noContent"
+          ]
+        }
+      },
+      "OperationState": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "OPERATION_STATE_UNSPECIFIED",
+          "OPERATION_STATE_ACCEPTED",
+          "OPERATION_STATE_RUNNING",
+          "OPERATION_STATE_COMPLETED",
+          "OPERATION_STATE_FAILED",
+          "OPERATION_STATE_CANCELLED"
+        ]
+      },
+      "OperationTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "operationId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OutputEvent": {
+        "additionalProperties": true,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "data": {
+            "format": "byte",
+            "type": "string"
+          },
+          "gap": {
+            "$ref": "#/components/schemas/OutputGap"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "stream": {
+            "$ref": "#/components/schemas/OutputStreamKind"
+          },
+          "text": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "content": [
+            "text",
+            "data"
+          ]
+        }
+      },
+      "OutputFilter": {
+        "additionalProperties": true,
+        "properties": {
+          "sessionIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "streams": {
+            "items": {
+              "$ref": "#/components/schemas/OutputStreamKind"
+            },
+            "type": "array"
+          },
+          "threadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "OutputGap": {
+        "additionalProperties": true,
+        "properties": {
+          "droppedBytes": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "droppedEvents": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "firstMissingSequence": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "lastMissingSequence": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OutputStreamKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "OUTPUT_STREAM_KIND_UNSPECIFIED",
+          "OUTPUT_STREAM_KIND_CONSOLE",
+          "OUTPUT_STREAM_KIND_LOG",
+          "OUTPUT_STREAM_KIND_TARGET",
+          "OUTPUT_STREAM_KIND_INFERIOR_STDOUT",
+          "OUTPUT_STREAM_KIND_INFERIOR_STDERR",
+          "OUTPUT_STREAM_KIND_PROMPT"
+        ]
+      },
+      "PageInfo": {
+        "additionalProperties": true,
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PageRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "pageSize": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PendingCommand": {
+        "additionalProperties": true,
+        "properties": {
+          "enqueuedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OperationKind"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "pendingCommandId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PermissionScope": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "PERMISSION_SCOPE_UNSPECIFIED",
+          "PERMISSION_SCOPE_READ",
+          "PERMISSION_SCOPE_CONTROL",
+          "PERMISSION_SCOPE_ADMIN"
+        ]
+      },
+      "Preconditions": {
+        "additionalProperties": true,
+        "properties": {
+          "resourceVersion": {
+            "$ref": "#/components/schemas/ResourceVersion"
+          },
+          "stateRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Process": {
+        "additionalProperties": true,
+        "properties": {
+          "executable": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "processId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "systemProcessId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RawCommandDialect": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "RAW_COMMAND_DIALECT_UNSPECIFIED",
+          "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+          "RAW_COMMAND_DIALECT_GDB_MI",
+          "RAW_COMMAND_DIALECT_GDB_CLI",
+          "RAW_COMMAND_DIALECT_LLDB_CLI"
+        ]
+      },
+      "RawCommandResult": {
+        "additionalProperties": true,
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DynamicValue"
+          }
+        },
+        "type": "object"
+      },
+      "ReadMemoryRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "byteCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ReadMemoryResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryBlock"
+          }
+        },
+        "type": "object"
+      },
+      "ReadSourceRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "maxLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sourceReference": {
+            "type": "string"
+          },
+          "startLine": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ReadSourceResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceContent"
+          }
+        },
+        "type": "object"
+      },
+      "Register": {
+        "additionalProperties": true,
+        "properties": {
+          "formattedValue": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unavailable": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterFormat": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "REGISTER_FORMAT_UNSPECIFIED",
+          "REGISTER_FORMAT_NATURAL",
+          "REGISTER_FORMAT_HEXADECIMAL",
+          "REGISTER_FORMAT_DECIMAL",
+          "REGISTER_FORMAT_BINARY"
+        ]
+      },
+      "RequestContext": {
+        "additionalProperties": true,
+        "properties": {
+          "clientRequestId": {
+            "type": "string"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RequiredResync": {
+        "additionalProperties": true,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/DdbError"
+          }
+        },
+        "type": "object"
+      },
+      "ResolveSourceRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "location": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ResolveSourceResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceFile"
+          }
+        },
+        "type": "object"
+      },
+      "ResourceDeleted": {
+        "additionalProperties": true,
+        "properties": {
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceKind": {
+            "$ref": "#/components/schemas/ResourceKind"
+          },
+          "resourceRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResourceKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "RESOURCE_KIND_UNSPECIFIED",
+          "RESOURCE_KIND_SESSION",
+          "RESOURCE_KIND_GROUP",
+          "RESOURCE_KIND_PROCESS",
+          "RESOURCE_KIND_THREAD",
+          "RESOURCE_KIND_SELECTION",
+          "RESOURCE_KIND_EXECUTION_STATE",
+          "RESOURCE_KIND_BREAKPOINT",
+          "RESOURCE_KIND_OPERATION",
+          "RESOURCE_KIND_CAPABILITIES",
+          "RESOURCE_KIND_EXTENSION_STATE",
+          "RESOURCE_KIND_PENDING_COMMAND"
+        ]
+      },
+      "ResourceUpsert": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoint": {
+            "$ref": "#/components/schemas/Breakpoint"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "executionState": {
+            "$ref": "#/components/schemas/ExecutionState"
+          },
+          "extensionState": {
+            "$ref": "#/components/schemas/ExtensionState"
+          },
+          "group": {
+            "$ref": "#/components/schemas/Group"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          },
+          "pendingCommand": {
+            "$ref": "#/components/schemas/PendingCommand"
+          },
+          "process": {
+            "$ref": "#/components/schemas/Process"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
+          },
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "thread": {
+            "$ref": "#/components/schemas/Thread"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "resource": [
+            "session",
+            "group",
+            "process",
+            "thread",
+            "selection",
+            "executionState",
+            "breakpoint",
+            "operation",
+            "capabilities",
+            "extensionState",
+            "pendingCommand"
+          ]
+        }
+      },
+      "ResourceVersion": {
+        "additionalProperties": true,
+        "properties": {
+          "resourceId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResponseContext": {
+        "additionalProperties": true,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RunDistributedBacktraceRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "maxFrames": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "Scope": {
+        "additionalProperties": true,
+        "properties": {
+          "expensive": {
+            "type": "boolean"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScopeKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopeId": {
+            "type": "string"
+          },
+          "variableCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ScopeKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SCOPE_KIND_UNSPECIFIED",
+          "SCOPE_KIND_LOCALS",
+          "SCOPE_KIND_ARGUMENTS",
+          "SCOPE_KIND_REGISTERS",
+          "SCOPE_KIND_STATICS",
+          "SCOPE_KIND_GLOBALS",
+          "SCOPE_KIND_OTHER"
+        ]
+      },
+      "SelectThreadRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "Selection": {
+        "additionalProperties": true,
+        "properties": {
+          "frameId": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "selectionId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ServerInfo": {
+        "additionalProperties": true,
+        "properties": {
+          "apiVersions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "buildRevision": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Session": {
+        "additionalProperties": true,
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/BackendDescriptor"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "processId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "selectedThreadId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "statusDetail": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SessionSetTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "sessionIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SessionStatus": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SESSION_STATUS_UNSPECIFIED",
+          "SESSION_STATUS_STARTING",
+          "SESSION_STATUS_READY",
+          "SESSION_STATUS_RUNNING",
+          "SESSION_STATUS_STOPPED",
+          "SESSION_STATUS_EXITED",
+          "SESSION_STATUS_FAILED"
+        ]
+      },
+      "SessionTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ShutdownRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "gracePeriod": {
+            "pattern": "^-?[0-9]+(?:\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "Snapshot": {
+        "additionalProperties": true,
+        "properties": {
+          "baseStateRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "breakpoints": {
+            "items": {
+              "$ref": "#/components/schemas/Breakpoint"
+            },
+            "type": "array"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "executionStates": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionState"
+            },
+            "type": "array"
+          },
+          "extensionStates": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionState"
+            },
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "array"
+          },
+          "includedSections": {
+            "items": {
+              "$ref": "#/components/schemas/SnapshotSection"
+            },
+            "type": "array"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "type": "array"
+          },
+          "pendingCommands": {
+            "items": {
+              "$ref": "#/components/schemas/PendingCommand"
+            },
+            "type": "array"
+          },
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/Process"
+            },
+            "type": "array"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
+          },
+          "serverInstanceId": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array"
+          },
+          "stateEventCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/Thread"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SnapshotSection": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SNAPSHOT_SECTION_UNSPECIFIED",
+          "SNAPSHOT_SECTION_TOPOLOGY",
+          "SNAPSHOT_SECTION_SELECTION",
+          "SNAPSHOT_SECTION_EXECUTION",
+          "SNAPSHOT_SECTION_BREAKPOINTS",
+          "SNAPSHOT_SECTION_PENDING_OPERATIONS",
+          "SNAPSHOT_SECTION_EXTENSIONS",
+          "SNAPSHOT_SECTION_CAPABILITIES"
+        ]
+      },
+      "SortDirection": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SORT_DIRECTION_UNSPECIFIED",
+          "SORT_DIRECTION_ASCENDING",
+          "SORT_DIRECTION_DESCENDING"
+        ]
+      },
+      "SourceBreakpointLocation": {
+        "additionalProperties": true,
+        "properties": {
+          "column": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceContent": {
+        "additionalProperties": true,
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "lineCount": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceFile"
+          },
+          "startLine": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SourceFile": {
+        "additionalProperties": true,
+        "properties": {
+          "contentHash": {
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sourceReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceLocation": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "column": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "functionName": {
+            "type": "string"
+          },
+          "line": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sourceReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateEvent": {
+        "additionalProperties": true,
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "deleted": {
+            "$ref": "#/components/schemas/ResourceDeleted"
+          },
+          "extensionDetails": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionPayload"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/StateEventKind"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "requiredResync": {
+            "$ref": "#/components/schemas/RequiredResync"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceKind": {
+            "$ref": "#/components/schemas/ResourceKind"
+          },
+          "resourceRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "string"
+          },
+          "stateRevision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "upsert": {
+            "$ref": "#/components/schemas/ResourceUpsert"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "payload": [
+            "upsert",
+            "deleted",
+            "requiredResync"
+          ]
+        }
+      },
+      "StateEventFilter": {
+        "additionalProperties": true,
+        "properties": {
+          "groupIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "includeExtensions": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/StateEventKind"
+            },
+            "type": "array"
+          },
+          "resourceKinds": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceKind"
+            },
+            "type": "array"
+          },
+          "sessionIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StateEventKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "STATE_EVENT_KIND_UNSPECIFIED",
+          "STATE_EVENT_KIND_RESOURCE_UPSERTED",
+          "STATE_EVENT_KIND_RESOURCE_DELETED",
+          "STATE_EVENT_KIND_SELECTION_CHANGED",
+          "STATE_EVENT_KIND_EXECUTION_CHANGED",
+          "STATE_EVENT_KIND_OPERATION_CHANGED",
+          "STATE_EVENT_KIND_CAPABILITIES_CHANGED",
+          "STATE_EVENT_KIND_EXTENSION_STATE_CHANGED",
+          "STATE_EVENT_KIND_REQUIRED_RESYNC"
+        ]
+      },
+      "StopReason": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpointId": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/StopReasonKind"
+          },
+          "signalName": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StopReasonKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "STOP_REASON_KIND_UNSPECIFIED",
+          "STOP_REASON_KIND_BREAKPOINT",
+          "STOP_REASON_KIND_WATCHPOINT",
+          "STOP_REASON_KIND_STEP",
+          "STOP_REASON_KIND_SIGNAL",
+          "STOP_REASON_KIND_EXCEPTION",
+          "STOP_REASON_KIND_PAUSE",
+          "STOP_REASON_KIND_ENTRY",
+          "STOP_REASON_KIND_EXIT",
+          "STOP_REASON_KIND_OTHER"
+        ]
+      },
+      "SubBreakpoint": {
+        "additionalProperties": true,
+        "properties": {
+          "hitCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "inheritedFromGroupId": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "message": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "subBreakpointId": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "SubscribeOutputRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "afterCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/OutputFilter"
+          }
+        },
+        "type": "object"
+      },
+      "SubscribeStateEventsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "afterCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/StateEventFilter"
+          }
+        },
+        "type": "object"
+      },
+      "Target": {
+        "additionalProperties": true,
+        "properties": {
+          "broadcast": {
+            "$ref": "#/components/schemas/BroadcastTarget"
+          },
+          "currentSession": {
+            "$ref": "#/components/schemas/CurrentSessionTarget"
+          },
+          "currentThread": {
+            "$ref": "#/components/schemas/CurrentThreadTarget"
+          },
+          "first": {
+            "$ref": "#/components/schemas/FirstTarget"
+          },
+          "group": {
+            "$ref": "#/components/schemas/GroupTarget"
+          },
+          "multiple": {
+            "$ref": "#/components/schemas/MultipleTarget"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationTarget"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionTarget"
+          },
+          "sessionSet": {
+            "$ref": "#/components/schemas/SessionSetTarget"
+          },
+          "thread": {
+            "$ref": "#/components/schemas/ThreadTarget"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "selector": [
+            "session",
+            "thread",
+            "group",
+            "currentThread",
+            "currentSession",
+            "sessionSet",
+            "broadcast",
+            "first",
+            "multiple",
+            "operation"
+          ]
+        }
+      },
+      "TargetFailure": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/DdbError"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "TargetOutcome": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/DdbError"
+          },
+          "succeeded": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "TargetSummary": {
+        "additionalProperties": true,
+        "properties": {
+          "resolvedTargetCount": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "Thread": {
+        "additionalProperties": true,
+        "properties": {
+          "backendThreadId": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/components/schemas/SourceLocation"
+          },
+          "name": {
+            "type": "string"
+          },
+          "processId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ThreadState"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ThreadState": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "THREAD_STATE_UNSPECIFIED",
+          "THREAD_STATE_RUNNING",
+          "THREAD_STATE_STOPPED",
+          "THREAD_STATE_EXITED",
+          "THREAD_STATE_UNAVAILABLE"
+        ]
+      },
+      "ThreadTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TransportEndpoint": {
+        "additionalProperties": true,
+        "properties": {
+          "encodings": {
+            "items": {
+              "$ref": "#/components/schemas/WireEncoding"
+            },
+            "type": "array"
+          },
+          "tlsRequired": {
+            "type": "boolean"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/TransportKind"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TransportKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "TRANSPORT_KIND_UNSPECIFIED",
+          "TRANSPORT_KIND_HTTP",
+          "TRANSPORT_KIND_GRPC",
+          "TRANSPORT_KIND_CONNECT",
+          "TRANSPORT_KIND_STDIN",
+          "TRANSPORT_KIND_DAP"
+        ]
+      },
+      "UpdateBreakpointRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "breakpoint": {
+            "$ref": "#/components/schemas/BreakpointSpec"
+          },
+          "breakpointId": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "updateMask": {
+            "format": "field-mask",
+            "pattern": "^(?:[A-Za-z0-9_.]+(?:,[A-Za-z0-9_.]+)*)?$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Variable": {
+        "additionalProperties": true,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "childCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "evaluateName": {
+            "type": "string"
+          },
+          "hasChildren": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "presentationHint": {
+            "type": "string"
+          },
+          "typeName": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "variableId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WireEncoding": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "WIRE_ENCODING_UNSPECIFIED",
+          "WIRE_ENCODING_PROTOBUF",
+          "WIRE_ENCODING_PROTOJSON",
+          "WIRE_ENCODING_JSON"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "Configured DDB bearer token.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "defaultContentType": "application/json",
+  "info": {
+    "description": "Replayable state and independent debugger output streams over HTTP NDJSON.",
+    "title": "DDB API v2 event streams",
+    "version": "2.0.0-draft.3"
+  },
+  "operations": {
+    "sendSubscribeOutput": {
+      "action": "send",
+      "bindings": {
+        "http": {
+          "bindingVersion": "0.3.0",
+          "method": "POST"
+        }
+      },
+      "channel": {
+        "$ref": "#/channels/subscribeOutput"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/subscribeOutput/messages/OutputEvent"
+        }
+      ],
+      "x-ddb-required-scope": "read"
+    },
+    "sendSubscribeStateEvents": {
+      "action": "send",
+      "bindings": {
+        "http": {
+          "bindingVersion": "0.3.0",
+          "method": "POST"
+        }
+      },
+      "channel": {
+        "$ref": "#/channels/subscribeStateEvents"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/subscribeStateEvents/messages/StateEvent"
+        }
+      ],
+      "x-ddb-required-scope": "read"
+    }
+  },
+  "servers": {
+    "local": {
+      "description": "Default local endpoint; use GetCapabilities for the effective endpoint.",
+      "host": "127.0.0.1:8080",
+      "protocol": "http"
+    }
+  }
+}

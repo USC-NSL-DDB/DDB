@@ -97,6 +97,7 @@ pub(super) fn render(effect: EventEffect, event: DebuggerEvent, sid: u64) -> Eve
                 .into_iter()
                 .map(|global_thread_id| ProjectedDebuggerRecord {
                     prefix: "*",
+                    stream: None,
                     message: message.clone(),
                     payload: Some(
                         HashMap::from([(

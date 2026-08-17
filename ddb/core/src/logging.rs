@@ -2,6 +2,7 @@ use anyhow::Result;
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter, WithExportConfig};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::{
     logs::SdkLoggerProvider, metrics::SdkMeterProvider, trace::SdkTracerProvider, Resource,
 };
@@ -187,6 +188,7 @@ pub fn setup_logging(
     log_dir: &str,
     log_settings: &LoggingSettings,
 ) -> Result<TracingGuards> {
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     let mut layers: Vec<Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>> = Vec::new();
 
     let file_filter = EnvFilter::from_default_env()

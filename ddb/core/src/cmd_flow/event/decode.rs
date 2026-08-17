@@ -4,6 +4,7 @@ use crate::debugger::protocol::{Dict, Value};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::{DebuggerEvent, DebuggerEventKind, ThreadSet};
+use crate::state::ThreadLocation;
 
 fn required_string(payload: &Dict, key: &str) -> Result<String> {
     payload
@@ -76,6 +77,32 @@ fn parse_reasons(payload: &Dict) -> Result<Vec<String>> {
     bail!("'reason' must be a string or list of strings")
 }
 
+fn optional_string(payload: &Dict, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|value| value.expect_string_ref().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn stopped_location(payload: &Dict) -> Option<ThreadLocation> {
+    let frame = payload.get("frame")?.expect_dict_ref().ok()?;
+    let path = optional_string(frame, "fullname").or_else(|| optional_string(frame, "file"));
+    let line = optional_string(frame, "line").and_then(|line| line.parse().ok());
+    let column = optional_string(frame, "column").and_then(|column| column.parse().ok());
+    let address = optional_string(frame, "addr");
+    let function_name = optional_string(frame, "func");
+    (path.is_some() || line.is_some() || address.is_some() || function_name.is_some()).then_some(
+        ThreadLocation {
+            path,
+            line,
+            column,
+            address,
+            function_name,
+        },
+    )
+}
+
 pub(crate) fn decode_event(
     token: Option<u64>,
     message: String,
@@ -113,6 +140,7 @@ pub(crate) fn decode_event(
                 .map(|value| parse_thread_set(value, "stopped-threads"))
                 .transpose()?,
             local_breakpoint_id: optional_lenient_u64(&payload, "bkptno"),
+            location: stopped_location(&payload),
         },
         "thread-group-added" => DebuggerEventKind::ThreadGroupAdded {
             local_group_id: required_string(&payload, "id")?,
@@ -213,6 +241,7 @@ mod tests {
                 thread: Some(ThreadSet::One(4)),
                 stopped_threads: Some(ThreadSet::Many(vec![4, 5])),
                 local_breakpoint_id: Some(2),
+                location: None,
             }
         );
     }
@@ -235,6 +264,44 @@ mod tests {
                 local_breakpoint_id: None,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn stopped_frame_is_decoded_into_a_backend_neutral_location() {
+        let frame = payload(&[
+            ("addr", "0x401020".into()),
+            ("func", "handle_request".into()),
+            ("file", "main.rs".into()),
+            ("fullname", "/workspace/src/main.rs".into()),
+            ("line", "42".into()),
+            ("column", "7".into()),
+        ]);
+        let stopped = decode_event(
+            None,
+            "stopped".into(),
+            payload(&[
+                ("thread-id", "4".into()),
+                ("stopped-threads", "all".into()),
+                ("frame", Value::Dict(frame)),
+            ]),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            stopped.kind,
+            DebuggerEventKind::Stopped {
+                location: Some(ThreadLocation {
+                    path: Some(path),
+                    line: Some(42),
+                    column: Some(7),
+                    address: Some(address),
+                    function_name: Some(function),
+                }),
+                ..
+            } if path == "/workspace/src/main.rs"
+                && address == "0x401020"
+                && function == "handle_request"
         ));
     }
 

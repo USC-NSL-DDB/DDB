@@ -1,6 +1,14 @@
 use super::{router::Target, session_runtime::CompletionConsistency};
 use anyhow::{anyhow, bail, Context, Result};
 
+/// Safe correlation metadata carried alongside a command. It is never encoded
+/// onto the debugger wire and intentionally contains no command arguments.
+#[derive(Debug, Clone, Default)]
+pub struct CommandMetadata {
+    pub operation_id: Option<String>,
+    pub operation_kind: Option<u32>,
+}
+
 /// Routing-layer envelope: what to run and how completion is judged. Wire
 /// correlation tokens are not part of the envelope — each session runtime
 /// mints its own when the command becomes wire traffic.
@@ -9,6 +17,7 @@ pub struct Command {
     pub external_token: Option<u64>,
     pub raw_cmd: String,
     pub consistency: CompletionConsistency,
+    pub metadata: CommandMetadata,
 }
 
 impl Command {
@@ -21,7 +30,13 @@ impl Command {
             external_token,
             raw_cmd,
             consistency,
+            metadata: CommandMetadata::default(),
         }
+    }
+
+    pub fn with_metadata(mut self, metadata: CommandMetadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
@@ -31,6 +46,7 @@ pub struct ParsedInputCmd {
     pub prefix: String,
     pub args: String,
     pub target: Target,
+    pub metadata: CommandMetadata,
 }
 
 impl ParsedInputCmd {
@@ -50,6 +66,11 @@ impl ParsedInputCmd {
             prefix: prefix.to_string(),
             ..self
         }
+    }
+
+    pub fn with_metadata(mut self, metadata: CommandMetadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
@@ -213,6 +234,7 @@ impl InputCmdParser {
             prefix,
             args,
             target,
+            metadata: CommandMetadata::default(),
         })
     }
 }

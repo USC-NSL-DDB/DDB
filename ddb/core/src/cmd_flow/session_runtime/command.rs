@@ -20,4 +20,5 @@ pub struct SessionCommand {
     pub command: String,
     pub thread_id: Option<u64>,
     pub consistency: CompletionConsistency,
+    pub metadata: crate::cmd_flow::input::CommandMetadata,
 }

@@ -1,0 +1,41 @@
+{
+  "name": "@ddb-debugger/api-client",
+  "version": "0.1.0",
+  "description": "Typed HTTP/ProtoJSON client for DDB API v2 frontends",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USC-NSL-DDB/DDB.git",
+    "directory": "ddb/sdk/typescript"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.examples.json",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "keywords": [
+    "debugger",
+    "distributed",
+    "ddb",
+    "api"
+  ]
+}

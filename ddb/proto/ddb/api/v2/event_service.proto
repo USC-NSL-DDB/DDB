@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package ddb.api.v2;
+
+import "ddb/api/v2/common.proto";
+import "ddb/api/v2/extension.proto";
+import "ddb/api/v2/resources.proto";
+import "google/protobuf/timestamp.proto";
+
+// ResourceUpsert carries a complete replacement projection. Clients apply it
+// only when its resource revision is newer than the locally stored revision.
+message ResourceUpsert {
+  // Strongly typed resource replacement.
+  oneof resource {
+    Session session = 1;
+    Group group = 2;
+    Process process = 3;
+    Thread thread = 4;
+    Selection selection = 5;
+    ExecutionState execution_state = 6;
+    Breakpoint breakpoint = 7;
+    Operation operation = 8;
+    Capabilities capabilities = 9;
+    ExtensionState extension_state = 10;
+    PendingCommand pending_command = 11;
+  }
+}
+
+// ResourceDeleted removes a resource only when resource_revision is not older
+// than the client's stored revision.
+message ResourceDeleted {
+  // Stable resource family.
+  ResourceKind resource_kind = 1;
+  // Opaque resource identity.
+  string resource_id = 2;
+  // Tombstone revision for idempotent application.
+  uint64 resource_revision = 3;
+}
+
+// RequiredResync tells a client to discard its projection and obtain a new
+// snapshot. It is a marker, not proof that preceding state is complete.
+message RequiredResync {
+  // Typed replay-gap or integrity reason.
+  DdbError reason = 1;
+}
+
+// StateEvent is the ordered, replayable state lane. Publication occurs only
+// after the corresponding domain mutation commits.
+message StateEvent {
+  // Serializable position in this server instance's state lane.
+  Cursor cursor = 1;
+  // Monotonically increasing committed state revision.
+  uint64 state_revision = 2;
+  // Event payload schema release.
+  string schema_version = 3;
+  // Time the committed transition was observed by the API layer.
+  google.protobuf.Timestamp occurred_at = 4;
+  // Causative request when known.
+  optional string request_id = 5;
+  // Causative operation when known.
+  optional string operation_id = 6;
+  // Stable event category.
+  StateEventKind kind = 7;
+  // Affected resource family, or UNSPECIFIED for a resync marker.
+  ResourceKind resource_kind = 8;
+  // Affected opaque resource identity, empty only for a resync marker.
+  string resource_id = 9;
+  // Affected resource/tombstone revision, or zero for a resync marker.
+  uint64 resource_revision = 10;
+  // Typed event body. kind and payload must agree.
+  oneof payload {
+    ResourceUpsert upsert = 11;
+    ResourceDeleted deleted = 12;
+    RequiredResync required_resync = 13;
+  }
+  // Optional namespaced details that do not alter core event semantics.
+  repeated ExtensionPayload extension_details = 14;
+}
+
+// StateEventFilter narrows delivery without changing journal order.
+message StateEventFilter {
+  // Event categories to include; empty means all supported categories.
+  repeated StateEventKind kinds = 1;
+  // Resource families to include; empty means all resource families.
+  repeated ResourceKind resource_kinds = 2;
+  // Session contexts to include; empty means all sessions.
+  repeated string session_ids = 3;
+  // Group contexts to include; empty means all groups.
+  repeated string group_ids = 4;
+  // Include extension-owned state and details.
+  bool include_extensions = 5;
+}
+
+// SubscribeStateEventsRequest begins replay immediately after after_cursor and
+// transitions atomically to live delivery. Omitting after_cursor requests only
+// events committed after subscription admission.
+message SubscribeStateEventsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Last state cursor successfully applied by the client.
+  optional Cursor after_cursor = 2;
+  // Optional server-side delivery filter.
+  optional StateEventFilter filter = 3;
+}
+
+// OutputGap reports explicitly that output was dropped or unavailable.
+message OutputGap {
+  // First unavailable sequence, inclusive.
+  uint64 first_missing_sequence = 1;
+  // Last unavailable sequence, inclusive.
+  uint64 last_missing_sequence = 2;
+  // Number of output envelopes dropped when known.
+  optional uint64 dropped_events = 3;
+  // Number of payload bytes dropped when known.
+  optional uint64 dropped_bytes = 4;
+  // Safe reason such as queue overflow or replay unavailable.
+  string reason = 5;
+}
+
+// OutputEvent is an independently backpressured, optionally replayable stream.
+message OutputEvent {
+  // Position in this server instance's output lane.
+  Cursor cursor = 1;
+  // Time the output record was observed.
+  google.protobuf.Timestamp occurred_at = 2;
+  // Session context when known.
+  optional string session_id = 3;
+  // Thread context when known.
+  optional string thread_id = 4;
+  // Output origin/presentation category.
+  OutputStreamKind stream = 5;
+  // Output body. Text is UTF-8; bytes preserves non-text target output.
+  oneof content {
+    string text = 6;
+    bytes data = 7;
+  }
+  // Explicit loss metadata, including gap-only envelopes.
+  optional OutputGap gap = 8;
+  // True when this envelope was truncated to an advertised payload bound.
+  bool truncated = 9;
+}
+
+// OutputFilter narrows output delivery independently of state events.
+message OutputFilter {
+  // Stream categories to include; empty means all supported categories.
+  repeated OutputStreamKind streams = 1;
+  // Session contexts to include; empty means all sessions.
+  repeated string session_ids = 2;
+  // Thread contexts to include; empty means all threads.
+  repeated string thread_ids = 3;
+}
+
+// SubscribeOutputRequest subscribes to the high-volume output lane. Replay is
+// attempted only when after_cursor is present and capabilities advertise it.
+message SubscribeOutputRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Last output cursor applied by the client.
+  optional Cursor after_cursor = 2;
+  // Optional server-side delivery filter.
+  optional OutputFilter filter = 3;
+}
+
+// DdbEventService exposes independent state and output lanes.
+service DdbEventService {
+  // Replays retained state after a cursor, then continues live without a gap.
+  // Requires READ permission and returns REPLAY_GAP for an unavailable cursor.
+  rpc SubscribeStateEvents(SubscribeStateEventsRequest) returns (stream StateEvent);
+
+  // Streams output with explicit loss reporting. Requires READ permission.
+  rpc SubscribeOutput(SubscribeOutputRequest) returns (stream OutputEvent);
+}

@@ -12,12 +12,13 @@ mod thread_mgr;
 #[cfg(test)]
 pub(crate) use bkpt_mgr::GroupSubBkpt;
 pub(crate) use bkpt_mgr::{
-    BkptLoc, BkptMeta, BreakpointStateChange, SubBkptMeta, SubBkptSpec, SubBkptType,
+    BkptLoc, BkptMeta, BreakpointProperties, BreakpointStateChange, SubBkptMeta, SubBkptSpec,
+    SubBkptType,
 };
 pub(crate) use bkpt_snapshot::{BreakpointSnapshot, SubBreakpointSnapshot};
 pub(crate) use group_mgr::GroupMeta;
 pub(crate) use ids::{GlobalThreadGroupId, GlobalThreadId, GroupId, ServiceIdentity};
-pub(crate) use runtime_model::{RuntimeModel, SessionSnapshot};
-pub(crate) use session_mgr::{ThreadContext, ThreadStatus};
+pub(crate) use runtime_model::{RuntimeChange, RuntimeModel, RuntimeResourceId, SessionSnapshot};
+pub(crate) use session_mgr::{SessionStatus, ThreadContext, ThreadLocation, ThreadStatus};
 pub(crate) use state_mgr::{GlobalThreadIdentity, StateTransitionResult};
 pub(crate) use thread_mgr::LocalThreadId;

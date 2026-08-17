@@ -16,6 +16,25 @@ pub struct BkptLoc {
     line: u64,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct BreakpointProperties {
+    pub enabled: bool,
+    pub condition: Option<String>,
+    pub temporary: bool,
+    pub hardware: bool,
+}
+
+impl Default for BreakpointProperties {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            condition: None,
+            temporary: false,
+            hardware: false,
+        }
+    }
+}
+
 impl BkptLoc {
     pub fn new(src: impl Into<String>, line: u64) -> Self {
         Self {
@@ -175,19 +194,22 @@ pub struct BkptMeta {
     id: u64,
     subbkpts: Vec<SubBkptMeta>,
     loc: BkptLoc,
+    properties: BreakpointProperties,
     enabled: Arc<AtomicBool>,
     times: Arc<AtomicU64>,
     sub_bkpt_counter: Arc<SimpleCounter>,
 }
 
 impl BkptMeta {
-    fn new(id: u64, loc: BkptLoc) -> Self {
+    fn new(id: u64, loc: BkptLoc, properties: BreakpointProperties) -> Self {
         let bkpt_id = id;
+        let enabled = properties.enabled;
         BkptMeta {
             id: bkpt_id,
             subbkpts: Vec::new(),
             loc,
-            enabled: Arc::new(AtomicBool::new(true)),
+            properties,
+            enabled: Arc::new(AtomicBool::new(enabled)),
             times: Arc::new(AtomicU64::new(0)),
             sub_bkpt_counter: Arc::new(SimpleCounter::new()),
         }
@@ -230,12 +252,24 @@ impl BkptMeta {
         self.times.store(times, std::sync::atomic::Ordering::SeqCst);
     }
 
+    fn record_hit(&self) {
+        let _ = self.times.fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |times| Some(times.saturating_add(1)),
+        );
+    }
+
     pub fn times(&self) -> u64 {
         self.times.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn location(&self) -> &BkptLoc {
         &self.loc
+    }
+
+    pub fn properties(&self) -> &BreakpointProperties {
+        &self.properties
     }
 
     pub fn id(&self) -> u64 {
@@ -363,12 +397,17 @@ impl BreakpointMgr {
     /// is ever observable and no rollback path exists. A group spec with no
     /// locals is a valid target — the empty group sub-breakpoint is retained
     /// so later-joining sessions can be attached.
-    pub fn insert_breakpoint(&self, loc: BkptLoc, specs: Vec<SubBkptSpec>) -> Option<BkptMeta> {
+    pub fn insert_breakpoint(
+        &self,
+        loc: BkptLoc,
+        properties: BreakpointProperties,
+        specs: Vec<SubBkptSpec>,
+    ) -> Option<BkptMeta> {
         if specs.is_empty() {
             return None;
         }
         let mut state = self.state.write().unwrap();
-        let mut bkpt = BkptMeta::new(self.ids.next(), loc);
+        let mut bkpt = BkptMeta::new(self.ids.next(), loc, properties);
         let bkpt_id = bkpt.id;
         let subbkpts = specs
             .into_iter()
@@ -398,7 +437,7 @@ impl BreakpointMgr {
 
     #[cfg(test)]
     pub fn add_breakpoint(&self, loc: BkptLoc) -> u64 {
-        let bkpt = BkptMeta::new(self.ids.next(), loc);
+        let bkpt = BkptMeta::new(self.ids.next(), loc, BreakpointProperties::default());
         let bkpt_id = bkpt.id;
         match self.state.write().unwrap().bkpts.insert(bkpt_id, bkpt) {
             Some(_) => panic!("Breakpoint ID collision on {}!", bkpt_id),
@@ -406,12 +445,15 @@ impl BreakpointMgr {
         }
     }
 
-    pub fn remove_breakpoint(&self, bkpt_id: u64) {
+    pub fn remove_breakpoint(&self, bkpt_id: u64) -> bool {
         let mut state = self.state.write().unwrap();
         if let Some(mut bkpt) = state.bkpts.remove(&bkpt_id) {
             for subbkpt in bkpt.remove_all_subbkpts() {
                 Self::unregister_subbkpt(&mut state, &subbkpt);
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -525,6 +567,29 @@ impl BreakpointMgr {
         self.state.read().unwrap().bkpts.get(&bkpt_id).cloned()
     }
 
+    /// Atomically replaces the mutable properties of a logical breakpoint.
+    ///
+    /// Callers serialize and, if necessary, roll back debugger-side changes
+    /// before invoking this method. A failed backend update therefore never
+    /// leaks a partial aggregate into public state.
+    pub fn update_breakpoint(
+        &self,
+        bkpt_id: u64,
+        enabled: bool,
+        condition: Option<String>,
+    ) -> Option<BkptMeta> {
+        let mut state = self.state.write().unwrap();
+        let breakpoint = state.bkpts.get_mut(&bkpt_id)?;
+        if enabled {
+            breakpoint.enable();
+        } else {
+            breakpoint.disable();
+        }
+        breakpoint.properties.enabled = enabled;
+        breakpoint.properties.condition = condition;
+        Some(breakpoint.clone())
+    }
+
     pub fn breakpoints(&self) -> Vec<BkptMeta> {
         self.state.read().unwrap().bkpts.values().cloned().collect()
     }
@@ -615,6 +680,7 @@ impl BreakpointMgr {
         }
     }
 
+    #[cfg(test)]
     pub fn breakpoint_ids_by_local_id(
         &self,
         sid: SessionId,
@@ -626,6 +692,21 @@ impl BreakpointMgr {
             .local_bkpt_to_global
             .get(&(sid, local_bkpt_id))
             .copied()
+    }
+
+    pub fn record_breakpoint_hit(
+        &self,
+        sid: SessionId,
+        local_bkpt_id: u64,
+    ) -> Option<(u64, u64, BkptMeta)> {
+        let state = self.state.read().unwrap();
+        let (bkpt_id, subbkpt_id) = state
+            .local_bkpt_to_global
+            .get(&(sid, local_bkpt_id))
+            .copied()?;
+        let breakpoint = state.bkpts.get(&bkpt_id)?.clone();
+        breakpoint.record_hit();
+        Some((bkpt_id, subbkpt_id, breakpoint))
     }
 
     pub fn record_local_bkpt_deletion(
@@ -708,6 +789,7 @@ mod tests {
         let breakpoint = mgr
             .insert_breakpoint(
                 BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
                 vec![
                     SubBkptSpec::Session {
                         sid: 4,
@@ -734,11 +816,79 @@ mod tests {
     }
 
     #[test]
+    fn breakpoint_hits_accumulate_across_distributed_local_targets() {
+        let mgr = BreakpointMgr::new();
+        let breakpoint = mgr
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
+                vec![SubBkptSpec::Group {
+                    group_id: GroupId::new(7),
+                    locals: vec![(4, 41), (5, 51)],
+                }],
+            )
+            .expect("group target should insert");
+
+        let first = mgr
+            .record_breakpoint_hit(4, 41)
+            .expect("first local target should resolve");
+        let second = mgr
+            .record_breakpoint_hit(5, 51)
+            .expect("second local target should resolve");
+
+        assert_eq!((first.0, second.0), (breakpoint.id(), breakpoint.id()));
+        assert_eq!(second.2.times(), 2);
+        assert_eq!(mgr.breakpoint(breakpoint.id()).unwrap().times(), 2);
+        assert!(mgr.record_breakpoint_hit(6, 61).is_none());
+    }
+
+    #[test]
+    fn property_updates_replace_the_stored_logical_breakpoint() {
+        let mgr = BreakpointMgr::new();
+        let breakpoint = mgr
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                BreakpointProperties {
+                    condition: Some("ready".to_string()),
+                    ..BreakpointProperties::default()
+                },
+                vec![SubBkptSpec::Session {
+                    sid: 4,
+                    local_id: 41,
+                }],
+            )
+            .unwrap();
+
+        let disabled = mgr
+            .update_breakpoint(breakpoint.id(), false, Some("counter > 0".to_string()))
+            .unwrap();
+        assert!(!disabled.is_enabled());
+        assert!(!mgr.breakpoint(breakpoint.id()).unwrap().is_enabled());
+        assert_eq!(
+            disabled.properties().condition.as_deref(),
+            Some("counter > 0")
+        );
+        assert_eq!(
+            mgr.breakpoint(breakpoint.id())
+                .unwrap()
+                .properties()
+                .condition
+                .as_deref(),
+            Some("counter > 0")
+        );
+        assert!(mgr.update_breakpoint(u64::MAX, true, None).is_none());
+    }
+
+    #[test]
     fn insert_transaction_rejects_empty_specs_without_writing() {
         let mgr = BreakpointMgr::new();
 
         assert!(mgr
-            .insert_breakpoint(BkptLoc::new("main.rs", 10), Vec::new())
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
+                Vec::new(),
+            )
             .is_none());
         assert!(mgr.breakpoints().is_empty());
     }
@@ -750,6 +900,7 @@ mod tests {
         let breakpoint = mgr
             .insert_breakpoint(
                 BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
                 vec![SubBkptSpec::Group {
                     group_id: GroupId::new(7),
                     locals: Vec::new(),

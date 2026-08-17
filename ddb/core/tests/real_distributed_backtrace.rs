@@ -147,9 +147,16 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
     let sessions = ddb.wait_for_sessions_len(depth);
     ddb.wait_for_stdout_count("thread-created", depth);
     for role_index in 1..=depth {
-        ddb.wait_for_stdout_count("*stopped", role_index);
         let sid = session_id_by_tag(&sessions, &session_tag(role_index));
+        let sid_needle = format!("session-id=\"{sid}\"");
+        ddb.wait_for_stdout_line_with_all(&["*stopped", sid_needle.as_str()]);
+        ddb.wait_for_session_stopped(sid);
         let context = capture_session_context(&ddb, sid);
+        assert!(
+            context.get("pc").is_some_and(|value| *value != 0)
+                && context.get("sp").is_some_and(|value| *value != 0),
+            "role {role_index} session {sid} produced an incomplete register context: {context:?}"
+        );
         write_context_file(ctx_dir.path(), role_index, &context);
     }
 

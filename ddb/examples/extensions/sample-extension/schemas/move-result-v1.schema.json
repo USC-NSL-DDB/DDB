@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ddb:example:workers:move-result:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["worker", "session"],
+  "properties": {
+    "worker": { "type": "string" },
+    "previousSession": { "type": ["string", "null"] },
+    "session": { "type": "string" }
+  }
+}

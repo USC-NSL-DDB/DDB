@@ -1,0 +1,23 @@
+[package]
+name = "ddb-api-types"
+version = "0.1.0"
+edition = "2021"
+description = "Versioned public API contract types for DDB frontends"
+license = "Apache-2.0"
+repository = "https://github.com/USC-NSL-DDB/DDB"
+homepage = "https://github.com/USC-NSL-DDB/DDB"
+documentation = "https://docs.rs/ddb-api-types"
+readme = "README.md"
+keywords = ["debugger", "distributed", "protobuf", "api"]
+categories = ["development-tools::debugging", "api-bindings"]
+
+[dependencies]
+pbjson = "=0.9.0"
+pbjson-types = "=0.9.0"
+prost-wkt-types = "=0.7.1"
+prost = "=0.14.3"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+prost-types = "=0.14.3"
+serde_json = "1.0"

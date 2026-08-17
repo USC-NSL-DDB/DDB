@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ddb:example:workers:move-request:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["worker", "session"],
+  "properties": {
+    "worker": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "session": { "type": "string", "minLength": 1, "maxLength": 128 }
+  }
+}

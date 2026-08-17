@@ -12,6 +12,10 @@ pub struct BreakpointSnapshot {
     pub location: BreakpointLocationSnapshot,
     pub enabled: bool,
     pub times: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    pub temporary: bool,
+    pub hardware: bool,
     pub subbkpts: Vec<SubBreakpointSnapshot>,
 }
 
@@ -45,6 +49,9 @@ impl From<&BkptMeta> for BreakpointSnapshot {
             location: breakpoint.location().into(),
             enabled: breakpoint.is_enabled(),
             times: breakpoint.times(),
+            condition: breakpoint.properties().condition.clone(),
+            temporary: breakpoint.properties().temporary,
+            hardware: breakpoint.properties().hardware,
             subbkpts: breakpoint
                 .sub_breakpoints()
                 .iter()

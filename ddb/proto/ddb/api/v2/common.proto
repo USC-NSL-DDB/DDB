@@ -1,0 +1,309 @@
+syntax = "proto3";
+
+package ddb.api.v2;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Empty is used when a method has no semantic request or response body.
+message Empty {}
+
+// Cursor identifies an ordered position in one server instance's event lane.
+// Cursors from another server instance must be rejected with REPLAY_GAP.
+message Cursor {
+  // Opaque server instance that owns this cursor.
+  string server_instance_id = 1;
+  // Monotonically increasing position within the selected event lane.
+  uint64 sequence = 2;
+}
+
+// RequestContext carries transport-independent request controls.
+message RequestContext {
+  // Optional caller-generated diagnostic identifier. It is not an
+  // idempotency key and may be repeated.
+  optional string client_request_id = 1;
+
+  // Required for mutations. Reusing the same key in its retention window
+  // returns the original operation instead of executing the mutation twice.
+  optional string idempotency_key = 2;
+
+  // Absolute deadline for waiting on this request. Expiry does not roll back
+  // an operation already admitted to a debugger backend.
+  optional google.protobuf.Timestamp deadline = 3;
+}
+
+// ResponseContext is present on every successful v2 response.
+message ResponseContext {
+  // Server-generated correlation identifier for this request.
+  string request_id = 1;
+  // Time response construction completed.
+  google.protobuf.Timestamp completed_at = 2;
+  // Server instance that produced the response.
+  string server_instance_id = 3;
+}
+
+// PageRequest bounds collection reads. Servers may lower page_size to their
+// advertised maximum and reject malformed/expired tokens.
+message PageRequest {
+  // Requested item count; zero selects the advertised default.
+  uint32 page_size = 1;
+  // Opaque continuation token returned by the same collection method.
+  optional string page_token = 2;
+}
+
+// PageInfo describes continuation for one bounded collection response.
+message PageInfo {
+  // Opaque token for the next page; absence means the collection is complete.
+  optional string next_page_token = 1;
+}
+
+// Target is the canonical routing selector. All identifiers are opaque.
+message Target {
+  // Exactly one routing strategy.
+  oneof selector {
+    // Route to one session.
+    SessionTarget session = 1;
+    // Route to one globally identified thread.
+    ThreadTarget thread = 2;
+    // Route to one logical DDB group.
+    GroupTarget group = 3;
+    // Resolve the currently selected thread at request admission.
+    CurrentThreadTarget current_thread = 4;
+    // Resolve the currently selected session at request admission.
+    CurrentSessionTarget current_session = 5;
+    // Route to an explicit session set.
+    SessionSetTarget session_set = 6;
+    // Route to every eligible session.
+    BroadcastTarget broadcast = 7;
+    // Route to the first eligible session in stable server order.
+    FirstTarget first = 8;
+    // Resolve and combine multiple selectors.
+    MultipleTarget multiple = 9;
+    // Address one admitted operation.
+    OperationTarget operation = 10;
+  }
+}
+
+// SessionTarget routes to one opaque session.
+message SessionTarget {
+  // Opaque public session identity.
+  string session_id = 1;
+}
+
+// ThreadTarget routes to one opaque thread.
+message ThreadTarget {
+  // Opaque public thread identity.
+  string thread_id = 1;
+}
+
+// GroupTarget routes to one opaque DDB group.
+message GroupTarget {
+  // Opaque public group identity.
+  string group_id = 1;
+}
+
+// CurrentThreadTarget resolves the selected thread when the request is admitted.
+message CurrentThreadTarget {}
+
+// CurrentSessionTarget resolves the selected session at request admission.
+message CurrentSessionTarget {}
+
+// BroadcastTarget selects every eligible session within server limits.
+message BroadcastTarget {}
+
+// FirstTarget selects the first eligible session in stable server order.
+message FirstTarget {}
+
+// SessionSetTarget routes to a non-empty explicit set.
+message SessionSetTarget {
+  // Opaque session identities; duplicates are rejected or deduplicated by policy.
+  repeated string session_ids = 1;
+}
+
+// MultipleTarget combines non-empty selectors using one fanout operation.
+message MultipleTarget {
+  // Nested selectors evaluated in request order.
+  repeated Target targets = 1;
+}
+
+// OperationTarget addresses one retained operation.
+message OperationTarget {
+  // Opaque operation identity.
+  string operation_id = 1;
+}
+
+// PermissionScope is the minimum authorization class for an action.
+enum PermissionScope {
+  PERMISSION_SCOPE_UNSPECIFIED = 0;
+  PERMISSION_SCOPE_READ = 1;
+  PERMISSION_SCOPE_CONTROL = 2;
+  PERMISSION_SCOPE_ADMIN = 3;
+}
+
+// DdbErrorCode is the stable transport-independent failure category.
+enum DdbErrorCode {
+  DDB_ERROR_CODE_UNSPECIFIED = 0;
+  DDB_ERROR_CODE_INVALID_ARGUMENT = 1;
+  DDB_ERROR_CODE_NOT_FOUND = 2;
+  DDB_ERROR_CODE_CONFLICT = 3;
+  DDB_ERROR_CODE_FAILED_PRECONDITION = 4;
+  DDB_ERROR_CODE_UNSUPPORTED = 5;
+  DDB_ERROR_CODE_NOT_READY = 6;
+  DDB_ERROR_CODE_UNAUTHENTICATED = 7;
+  DDB_ERROR_CODE_PERMISSION_DENIED = 8;
+  DDB_ERROR_CODE_RESOURCE_EXHAUSTED = 9;
+  DDB_ERROR_CODE_DEADLINE_EXCEEDED = 10;
+  DDB_ERROR_CODE_CANCELLED = 11;
+  DDB_ERROR_CODE_NOT_CANCELLABLE = 12;
+  DDB_ERROR_CODE_REPLAY_GAP = 13;
+  DDB_ERROR_CODE_BACKEND_FAILED = 14;
+  DDB_ERROR_CODE_PARTIAL_FAILURE = 15;
+  DDB_ERROR_CODE_UNAVAILABLE = 16;
+  DDB_ERROR_CODE_INTERNAL = 17;
+  DDB_ERROR_CODE_EXPIRED = 18;
+}
+
+// FieldViolation identifies one invalid request field.
+message FieldViolation {
+  // Protobuf field path using request message names.
+  string field = 1;
+  // Safe explanation suitable for a developer.
+  string description = 2;
+}
+
+// ErrorDetail is a bounded typed-detail envelope. type_url names the schema
+// for value; it is not google.protobuf.Any and has no implicit unpacking.
+message ErrorDetail {
+  // Namespaced schema identifier for value.
+  string type_url = 1;
+  // Bounded encoded detail payload.
+  bytes value = 2;
+}
+
+// TargetFailure preserves one concrete fanout failure.
+message TargetFailure {
+  // Concrete target that failed.
+  Target target = 1;
+  // Typed target-local error.
+  DdbError error = 2;
+}
+
+// DdbError is the single semantic error model used by all transports.
+message DdbError {
+  // Stable semantic error category.
+  DdbErrorCode code = 1;
+  // Safe human-readable message without secrets or backend command text.
+  string message = 2;
+  // Correlation identifier for the failed request.
+  string request_id = 3;
+  // Associated operation when admission already occurred.
+  optional string operation_id = 4;
+  // Whether retry may succeed without changing the request.
+  bool retryable = 5;
+  // Minimum suggested retry delay.
+  optional google.protobuf.Duration retry_after = 6;
+  // Invalid request fields.
+  repeated FieldViolation field_violations = 7;
+  // Per-target failures for partial or complete fanout failure.
+  repeated TargetFailure target_failures = 8;
+  // Earliest retained cursor for REPLAY_GAP.
+  optional Cursor earliest_cursor = 9;
+  // Current lane cursor for REPLAY_GAP.
+  optional Cursor current_cursor = 10;
+  // Capability identifier required by an unsupported request.
+  optional string required_capability = 11;
+  // Bounded namespaced diagnostic details.
+  repeated ErrorDetail details = 12;
+}
+
+// OperationState describes an admitted mutation lifecycle.
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_ACCEPTED = 1;
+  OPERATION_STATE_RUNNING = 2;
+  OPERATION_STATE_COMPLETED = 3;
+  // Terminal complete or partial failure. Inspect Operation.error,
+  // target_outcomes, and any retained bounded partial result.
+  OPERATION_STATE_FAILED = 4;
+  OPERATION_STATE_CANCELLED = 5;
+}
+
+// ChangeKind distinguishes a complete replacement from a tombstone.
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_UPSERT = 1;
+  CHANGE_KIND_DELETE = 2;
+}
+
+// HealthStatus is the small operational health vocabulary.
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_UP = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_DOWN = 3;
+}
+
+// SortDirection is used only where a method advertises stable sorting.
+enum SortDirection {
+  SORT_DIRECTION_UNSPECIFIED = 0;
+  SORT_DIRECTION_ASCENDING = 1;
+  SORT_DIRECTION_DESCENDING = 2;
+}
+
+// DynamicValue is confined to raw-command and extension compatibility paths.
+// Stable typed operations must use concrete resource messages instead.
+message DynamicValue {
+  // Exactly one bounded dynamic representation.
+  oneof kind {
+    // UTF-8 string.
+    string string_value = 1;
+    // Signed 64-bit integer.
+    sint64 signed_value = 2;
+    // Unsigned 64-bit integer.
+    uint64 unsigned_value = 3;
+    // IEEE-754 double.
+    double double_value = 4;
+    // Boolean.
+    bool bool_value = 5;
+    // Arbitrary bounded bytes.
+    bytes bytes_value = 6;
+    // Ordered bounded list.
+    DynamicList list_value = 7;
+    // Bounded string-keyed object.
+    DynamicObject object_value = 8;
+    // Explicit JSON-like null.
+    DynamicNull null_value = 9;
+  }
+}
+
+// DynamicList is bounded by advertised depth, item, and payload limits.
+message DynamicList {
+  // Ordered values.
+  repeated DynamicValue values = 1;
+}
+
+// DynamicObject is bounded by advertised depth, field, and payload limits.
+message DynamicObject {
+  // String-keyed fields.
+  map<string, DynamicValue> fields = 1;
+}
+
+// DynamicNull represents explicit null in a dynamic envelope.
+message DynamicNull {}
+
+// ResourceVersion supports idempotent event application and optimistic
+// mutation preconditions. revision is scoped to resource_id and server.
+message ResourceVersion {
+  // Opaque resource identity.
+  string resource_id = 1;
+  // Monotonic revision scoped to resource_id and server instance.
+  uint64 revision = 2;
+}
+
+// Preconditions are optimistic guards evaluated before mutation admission.
+message Preconditions {
+  // Require an exact current resource revision.
+  optional ResourceVersion resource_version = 1;
+  // Require the exact committed global state revision.
+  optional uint64 state_revision = 2;
+}

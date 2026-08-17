@@ -161,7 +161,7 @@ impl Default for LoggingSettings {
 }
 
 impl LoggingSettings {
-    pub fn from_args(args: &crate::arg::Args) -> Self {
+    pub fn from_args(args: &crate::arg::LoggingArgs) -> Self {
         LoggingSettings {
             console_log: args.console_log,
             console_level: args.console_level.clone(),

@@ -33,6 +33,12 @@ impl CommandError {
     pub fn external_token(&self) -> Option<u64> {
         self.external_token
     }
+
+    pub(crate) fn fanout_report(&self) -> Option<&super::router::CommandFanoutReport> {
+        self.source
+            .downcast_ref::<super::router::CommandFanoutError>()
+            .map(super::router::CommandFanoutError::report)
+    }
 }
 
 /// Single control-plane entry point for user-originated debugger commands.
@@ -89,8 +95,32 @@ impl CommandEngine {
         raw: &str,
         target: Option<Target>,
     ) -> Result<CommandOutcome, CommandError> {
+        if let Some(internal) = raw.trim().strip_prefix(':') {
+            return self
+                .diagnostics
+                .execute(internal)
+                .await
+                .map_err(|source| CommandError::new(None, source));
+        }
         let parsed = Self::prepare(raw, target, Target::Broadcast)
             .map_err(|source| CommandError::new(None, source))?;
+        self.dispatch(parsed).await
+    }
+
+    /// Execute an API command with safe application-operation correlation.
+    /// Metadata remains out-of-band and is never included in debugger input.
+    pub(crate) async fn execute_api_with_metadata(
+        &self,
+        raw: &str,
+        target: Option<Target>,
+        metadata: super::input::CommandMetadata,
+    ) -> Result<CommandOutcome, CommandError> {
+        if raw.trim().starts_with(':') {
+            return self.execute_api(raw, target).await;
+        }
+        let parsed = Self::prepare(raw, target, Target::Broadcast)
+            .map_err(|source| CommandError::new(None, source))?
+            .with_metadata(metadata);
         self.dispatch(parsed).await
     }
 
@@ -102,6 +132,21 @@ impl CommandEngine {
         raw: &str,
         target: Option<Target>,
     ) -> Result<(), CommandError> {
+        if raw.trim().starts_with(':') {
+            let engine = Arc::clone(self);
+            let command = raw.to_string();
+            let permit = Arc::clone(&self.detached_slots)
+                .acquire_owned()
+                .await
+                .map_err(|error| CommandError::new(None, error.into()))?;
+            tokio::spawn(async move {
+                let _permit = permit;
+                if let Err(error) = engine.execute_api(&command, target).await {
+                    error!(?error, "detached diagnostic command failed");
+                }
+            });
+            return Ok(());
+        }
         let parsed = Self::prepare(raw, target, Target::Broadcast)
             .map_err(|source| CommandError::new(None, source))?;
         let external_token = parsed.external_token;

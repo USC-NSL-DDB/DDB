@@ -8,12 +8,12 @@ use tracing::{trace, warn};
 use crate::{
     cmd_flow::event::decode_event,
     cmd_flow::response::ParsedSessionResponse,
-    debugger::protocol::{DebuggerProtocol, ProtocolRecord},
+    debugger::protocol::{DebuggerProtocol, ProtocolRecord, StreamKind},
 };
 
 use super::{
     pending::{complete_after_events, PendingCommands},
-    projection::ProjectedEvent,
+    projection::{ProjectedEvent, ProjectionRecord},
 };
 
 /// Buffers stdout until complete records arrive, then routes notifications to
@@ -70,7 +70,7 @@ impl OutputDemux {
                     self.event_tx
                         .send(ProjectedEvent {
                             sequence: self.event_sequence,
-                            event,
+                            record: ProjectionRecord::Event(Box::new(event)),
                         })
                         .await
                         .map_err(|_| anyhow!("session {} event projector is closed", sid))?;
@@ -98,10 +98,21 @@ impl OutputDemux {
                     trace!(sid, "received tokenless result");
                 }
                 ProtocolRecord::Stream { kind, message } => {
-                    trace!(sid, ?kind, ?message, "received debugger stream output");
+                    self.forward_stream(kind, message).await?;
                 }
             }
         }
         Ok(())
+    }
+
+    pub(super) async fn forward_stream(&mut self, kind: StreamKind, message: String) -> Result<()> {
+        self.event_sequence += 1;
+        self.event_tx
+            .send(ProjectedEvent {
+                sequence: self.event_sequence,
+                record: ProjectionRecord::Stream { kind, message },
+            })
+            .await
+            .map_err(|_| anyhow!("session {} event projector is closed", self.sid))
     }
 }

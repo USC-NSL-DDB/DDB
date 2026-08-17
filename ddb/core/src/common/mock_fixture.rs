@@ -37,12 +37,17 @@ pub struct MockSessionConfig {
     pub source_line: u64,
     #[serde(default = "default_mock_function")]
     pub function: String,
+    /// Number of deterministic root variables returned for each frame.
+    #[serde(default = "default_mock_variables_per_frame")]
+    pub variables_per_frame: usize,
     #[serde(default)]
     pub executable: String,
     #[serde(default)]
     pub exit_on_continue: bool,
     #[serde(default)]
     pub exit_on_bootstrap: bool,
+    #[serde(default)]
+    pub reject_commands: Vec<String>,
     #[serde(default)]
     pub stack_frames: Vec<MockStackFrameConfig>,
     #[serde(default)]
@@ -59,9 +64,11 @@ impl Default for MockSessionConfig {
             source_file: default_mock_source_file(),
             source_line: default_mock_source_line(),
             function: default_mock_function(),
+            variables_per_frame: default_mock_variables_per_frame(),
             executable: String::new(),
             exit_on_continue: false,
             exit_on_bootstrap: false,
+            reject_commands: Vec::new(),
             stack_frames: Vec::new(),
             dbt_parent: None,
             context_regs: default_mock_context_regs(),
@@ -127,6 +134,10 @@ fn default_mock_source_line() -> u64 {
 
 fn default_mock_function() -> String {
     "main".to_string()
+}
+
+fn default_mock_variables_per_frame() -> usize {
+    2
 }
 
 fn default_mock_stack_frame_function() -> String {

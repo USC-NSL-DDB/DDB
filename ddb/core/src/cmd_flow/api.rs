@@ -42,6 +42,10 @@ impl CommandExecutor {
             .await
     }
 
+    pub(crate) fn resolve_session_ids(&self, target: &Target) -> Result<Vec<u64>> {
+        self.router.resolve_session_ids(target)
+    }
+
     pub(crate) async fn execute_parsed(&self, command: ParsedInputCmd) -> Result<FinishedCmd> {
         self.execute_plan(CommandPlan::from_parsed(command)?).await
     }
@@ -133,7 +137,8 @@ impl CommandPlan {
         let raw_cmd = self.parsed.full_cmd();
         (
             self.parsed.target,
-            Command::new(self.parsed.external_token, raw_cmd, self.consistency),
+            Command::new(self.parsed.external_token, raw_cmd, self.consistency)
+                .with_metadata(self.parsed.metadata),
         )
     }
 }
@@ -197,6 +202,7 @@ mod tests {
             prefix: String::new(),
             args: String::new(),
             target: Target::Broadcast,
+            metadata: Default::default(),
         };
         assert!(CommandPlan::from_parsed(parsed).is_err());
     }

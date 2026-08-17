@@ -145,6 +145,7 @@ impl SessionProcess {
                 command: command.clone(),
                 thread_id: None,
                 consistency: CompletionConsistency::StateConsistent,
+                metadata: Default::default(),
             })
             .await
             .with_context(|| format!("debugger bootstrap command failed: {}", command.trim()))?;
@@ -366,6 +367,7 @@ mod tests {
             BreakpointEventPublisher::new(
                 Arc::new(NotificationManager::new()),
                 crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+                crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
             ),
         )
     }

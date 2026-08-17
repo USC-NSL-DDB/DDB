@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 use crate::state::BreakpointSnapshot;
@@ -30,10 +31,28 @@ impl Notification {
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum NotificationPayload {
+    /// Backend-neutral debugger records after DDB has projected local ids into
+    /// global ids. API clients consume this instead of scraping MI stdout.
+    DebuggerOutput(DebuggerOutputEvent),
     BreakpointChanged(BreakpointChangeEvent),
     SessionStatusChanged(SessionStatusEvent),
     SessionListChanged,
     Custom(CustomEvent),
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DebuggerOutputEvent {
+    pub records: Vec<DebuggerOutputRecord>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DebuggerOutputRecord {
+    pub stream: String,
+    pub event: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]

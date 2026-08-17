@@ -18,9 +18,11 @@ mod tests;
 use std::time::Duration;
 
 pub use command::{CompletionConsistency, SessionCommand};
+pub(crate) use handle::{PendingCommandChange, SessionPendingCommand};
 pub use handle::{SessionHandle, SessionLease, SessionTicket};
 
 const COMMAND_MAILBOX_CAPACITY: usize = 256;
+const MAX_PENDING_COMMANDS: usize = 1_024;
 const EVENT_MAILBOX_CAPACITY: usize = 256;
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_SWEEP_INTERVAL: Duration = Duration::from_secs(1);

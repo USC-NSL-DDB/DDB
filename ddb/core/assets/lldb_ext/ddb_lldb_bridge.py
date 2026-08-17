@@ -535,6 +535,7 @@ class Bridge(object):
         self.running = True
         self.requests = queue.Queue()
         self.reader = None
+        self.variable_objects = {}
         self.accumulated_pause_seconds = 0.0
         self.debugger.SetAsync(True)
         self.monitor.start()
@@ -619,13 +620,22 @@ class Bridge(object):
             "-thread-info": self._thread_info,
             "-list-thread-groups": self._thread_groups,
             "-stack-list-frames": self._stack_frames,
+            "-stack-list-variables": self._stack_variables,
             "-data-list-register-names": self._register_names,
             "-data-list-register-values": self._register_values,
+            "-var-create": self._var_create,
+            "-var-list-children": self._var_list_children,
+            "-var-delete": self._var_delete,
             "-data-evaluate-expression": self._evaluate_expression,
+            "-data-read-memory-bytes": self._read_memory_bytes,
             "-file-list-exec-source-files": self._source_files,
             "-file-list-lines": self._source_lines,
             "-break-insert": self._break_insert,
+            "-break-list": self._break_list,
             "-break-delete": self._break_delete,
+            "-break-enable": self._break_enable,
+            "-break-disable": self._break_disable,
+            "-break-condition": self._break_condition,
             "-switch-context-custom": self._switch_context,
             "-get-remote-bt": self._get_remote_backtrace,
             "-serviceweaver-bt-remote": self._get_remote_backtrace,
@@ -665,6 +675,26 @@ class Bridge(object):
         if not thread or not thread.IsValid():
             raise RuntimeError("no LLDB thread is selected")
         return thread
+
+    def _frame_and_arguments(self, arguments):
+        arguments = list(arguments)
+        if "--thread" in arguments:
+            index = arguments.index("--thread")
+            if index + 1 >= len(arguments):
+                raise ValueError("--thread requires an index")
+            int(arguments[index + 1])
+            del arguments[index : index + 2]
+        frame_index = 0
+        if "--frame" in arguments:
+            index = arguments.index("--frame")
+            if index + 1 >= len(arguments):
+                raise ValueError("--frame requires an index")
+            frame_index = int(arguments[index + 1])
+            del arguments[index : index + 2]
+        frame = self._thread().GetFrameAtIndex(frame_index)
+        if not frame or not frame.IsValid():
+            raise ValueError("unknown stack frame {}".format(frame_index))
+        return frame, arguments
 
     def _select_thread(self, thread_id):
         if thread_id is None:
@@ -941,6 +971,13 @@ class Bridge(object):
         }
 
     def _stack_frames(self, arguments):
+        arguments = list(arguments)
+        if "--thread" in arguments:
+            index = arguments.index("--thread")
+            if index + 1 >= len(arguments):
+                raise ValueError("--thread requires an index")
+            self._select_thread(arguments[index + 1])
+            del arguments[index : index + 2]
         thread = self._thread()
         low = 0
         high = thread.GetNumFrames() - 1
@@ -970,8 +1007,29 @@ class Bridge(object):
                 output_level += 1
         return "done", {"stack": frames}
 
-    def _registers(self):
-        frame = self._thread().GetFrameAtIndex(0)
+    def _stack_variables(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
+
+        include_values = "--no-values" not in arguments
+        variables = []
+        values = frame.GetVariables(True, True, True, True)
+        for index in range(values.GetSize()):
+            value = values.GetValueAtIndex(index)
+            if not value or not value.IsValid():
+                continue
+            record = {
+                "name": _text(value.GetName()),
+                "type": _text(value.GetTypeName()),
+                "numchild": _text(value.GetNumChildren()),
+            }
+            if include_values:
+                record["value"] = _value_text(value)
+            variables.append(record)
+        return "done", {"variables": variables}
+
+    def _registers(self, frame=None):
+        if frame is None:
+            frame = self._thread().GetFrameAtIndex(0)
         register_sets = frame.GetRegisters()
         registers = []
         for set_index in range(register_sets.GetSize()):
@@ -989,26 +1047,193 @@ class Bridge(object):
             ]
         }
 
-    def _register_values(self, _arguments):
+    def _register_values(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
+        registers = self._registers(frame)
+        format_code = "N"
+        format_index = None
+        for index, argument in enumerate(arguments):
+            if argument in ("N", "x", "d", "t"):
+                format_code = argument
+                format_index = index
+                break
+        requested = []
+        if format_index is not None:
+            for argument in arguments[format_index + 1 :]:
+                try:
+                    requested.append(int(argument))
+                except ValueError:
+                    raise ValueError("invalid register number {}".format(argument))
+        if not requested:
+            requested = list(range(len(registers)))
+
+        def rendered(register):
+            if format_code == "N":
+                return _value_text(register)
+            value = _value_u64(register)
+            if format_code == "x":
+                return "0x{:x}".format(value)
+            if format_code == "d":
+                return _text(value)
+            if format_code == "t":
+                return "0b{:b}".format(value)
+            raise ValueError("unsupported register format {}".format(format_code))
+
         return "done", {
             "register-values": [
                 {
                     "number": _text(index),
-                    "value": _value_text(register),
+                    "value": rendered(registers[index]),
                 }
-                for index, register in enumerate(self._registers())
+                for index in requested
+                if 0 <= index < len(registers)
             ]
         }
 
+    def _var_create(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
+        if len(arguments) < 3 or arguments[1] not in ("*", "@"):
+            raise ValueError("-var-create requires a name, frame marker, and expression")
+        name = arguments[0]
+        if name in self.variable_objects:
+            raise ValueError("duplicate variable object {}".format(name))
+        expression = " ".join(arguments[2:])
+        value = frame.FindVariable(expression)
+        if not value or not value.IsValid():
+            value = frame.EvaluateExpression(expression)
+        if not value or not value.IsValid() or value.GetError().Fail():
+            error = value.GetError() if value and value.IsValid() else None
+            raise RuntimeError(_error_text(error) or "LLDB variable creation failed")
+        self.variable_objects[name] = value
+        return "done", {
+            "name": name,
+            "numchild": _text(value.GetNumChildren()),
+            "value": _value_text(value),
+            "type": _text(value.GetTypeName()),
+            "has_more": "0",
+        }
+
+    def _var_list_children(self, arguments):
+        include_values = "--no-values" not in arguments
+        positional = [
+            argument
+            for argument in arguments
+            if argument not in ("--no-values", "--all-values", "--simple-values")
+        ]
+        if not positional:
+            raise ValueError("-var-list-children requires a variable-object name")
+        name = positional[0]
+        value = self.variable_objects.get(name)
+        if value is None or not value.IsValid():
+            raise ValueError("unknown variable object {}".format(name))
+        count = value.GetNumChildren()
+        start = int(positional[1]) if len(positional) > 1 else 0
+        end = int(positional[2]) if len(positional) > 2 else count
+        if start < 0 or end < 0:
+            start = 0
+            end = count
+        start = min(start, count)
+        end = min(max(start, end), count)
+        children = []
+        for index in range(start, end):
+            child = value.GetChildAtIndex(index)
+            if not child or not child.IsValid():
+                continue
+            child_name = "{}.{}".format(name, index)
+            self.variable_objects[child_name] = child
+            record = {
+                "name": child_name,
+                "exp": _text(child.GetName() or "[{}]".format(index)),
+                "numchild": _text(child.GetNumChildren()),
+                "type": _text(child.GetTypeName()),
+            }
+            if include_values:
+                record["value"] = _value_text(child)
+            children.append(record)
+        return "done", {
+            "numchild": _text(count),
+            "children": children,
+            "has_more": "1" if end < count else "0",
+        }
+
+    def _var_delete(self, arguments):
+        if len(arguments) != 1:
+            raise ValueError("-var-delete requires one variable-object name")
+        name = arguments[0]
+        matches = [
+            key
+            for key in self.variable_objects
+            if key == name or key.startswith(name + ".")
+        ]
+        if not matches:
+            raise ValueError("unknown variable object {}".format(name))
+        for key in matches:
+            del self.variable_objects[key]
+        return "done", {"ndeleted": _text(len(matches))}
+
     def _evaluate_expression(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
         if not arguments:
             raise ValueError("-data-evaluate-expression requires an expression")
         expression = " ".join(arguments)
-        value = self._thread().GetFrameAtIndex(0).EvaluateExpression(expression)
+        value = frame.EvaluateExpression(expression)
         if not value or not value.IsValid() or value.GetError().Fail():
             error = value.GetError() if value and value.IsValid() else None
             raise RuntimeError(_error_text(error) or "LLDB expression evaluation failed")
         return "done", {"value": _value_text(value)}
+
+    def _read_memory_bytes(self, arguments):
+        positional = []
+        offset = 0
+        index = 0
+        while index < len(arguments):
+            argument = arguments[index]
+            if argument == "-o":
+                if index + 1 >= len(arguments):
+                    raise ValueError("-data-read-memory-bytes -o requires an offset")
+                offset = int(arguments[index + 1], 0)
+                index += 2
+                continue
+            if argument == "--":
+                positional.extend(arguments[index + 1 :])
+                break
+            positional.append(argument)
+            index += 1
+        if len(positional) < 2:
+            raise ValueError("-data-read-memory-bytes requires an address and count")
+        address_expression = positional[0]
+        try:
+            address = int(address_expression, 0)
+        except ValueError:
+            value = self._thread().GetFrameAtIndex(0).EvaluateExpression(
+                address_expression
+            )
+            if not value or not value.IsValid() or value.GetError().Fail():
+                error = value.GetError() if value and value.IsValid() else None
+                raise RuntimeError(
+                    _error_text(error) or "LLDB address expression evaluation failed"
+                )
+            address = value.GetValueAsUnsigned()
+        count = int(positional[1], 0)
+        if count <= 0:
+            raise ValueError("memory byte count must be positive")
+        begin = address + offset
+        error = lldb.SBError()
+        data = self._process().ReadMemory(begin, count, error)
+        if error.Fail():
+            raise RuntimeError(_error_text(error) or "LLDB memory read failed")
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        return "done", {
+            "memory": [
+                {
+                    "begin": hex(begin),
+                    "offset": _text(offset),
+                    "end": hex(begin + len(data)),
+                    "contents": data.hex(),
+                }
+            ]
+        }
 
     def _source_files(self, arguments):
         dirname = None
@@ -1081,7 +1306,45 @@ class Bridge(object):
     def _break_insert(self, arguments):
         if not arguments:
             raise ValueError("-break-insert requires a location")
-        location = arguments[-1]
+        condition = None
+        enabled = True
+        temporary = False
+        positional = []
+        index = 0
+        while index < len(arguments):
+            argument = arguments[index]
+            if argument in ("-d", "--disabled"):
+                enabled = False
+                index += 1
+                continue
+            if argument in ("-t", "--temporary"):
+                temporary = True
+                index += 1
+                continue
+            if argument in ("-h", "--hardware"):
+                raise ValueError("hardware breakpoints are unsupported by this LLDB bridge")
+            if argument in ("-c", "--condition"):
+                if index + 1 >= len(arguments):
+                    raise ValueError("-break-insert -c requires a condition")
+                condition = arguments[index + 1]
+                index += 2
+                continue
+            if argument == "--":
+                positional.extend(arguments[index + 1 :])
+                break
+            if argument == "-f":
+                # GDB's pending-breakpoint flag needs no LLDB equivalent.
+                index += 1
+                continue
+            if argument.startswith("-"):
+                raise ValueError(
+                    "unsupported -break-insert option: {}".format(argument)
+                )
+            positional.append(argument)
+            index += 1
+        if len(positional) != 1:
+            raise ValueError("-break-insert requires exactly one location")
+        location = positional[0]
         target = self._target()
         breakpoint = None
         if ":" in location:
@@ -1096,14 +1359,74 @@ class Bridge(object):
             if breakpoint and breakpoint.IsValid():
                 target.BreakpointDelete(breakpoint.GetID())
             raise RuntimeError("LLDB could not resolve breakpoint {}".format(location))
+        try:
+            if not enabled:
+                breakpoint.SetEnabled(False)
+                if breakpoint.IsEnabled():
+                    raise RuntimeError("LLDB did not retain the disabled breakpoint state")
+            if condition is not None:
+                breakpoint.SetCondition(condition)
+                if breakpoint.GetCondition() != condition:
+                    raise RuntimeError("LLDB did not retain the breakpoint condition")
+            if temporary:
+                breakpoint.SetOneShot(True)
+                if not breakpoint.IsOneShot():
+                    raise RuntimeError("LLDB did not retain the temporary breakpoint flag")
+        except Exception:
+            target.BreakpointDelete(breakpoint.GetID())
+            raise
         return "done", {
             "bkpt": {
                 "number": _text(breakpoint.GetID()),
                 "type": "breakpoint",
-                "disp": "keep",
+                "disp": "del" if breakpoint.IsOneShot() else "keep",
                 "enabled": "y" if breakpoint.IsEnabled() else "n",
                 "times": _text(breakpoint.GetHitCount()),
                 "original-location": location,
+                **({"cond": condition} if condition is not None else {}),
+            }
+        }
+
+    def _break_list(self, _arguments):
+        target = self._target()
+        body = []
+        for index in range(target.GetNumBreakpoints()):
+            breakpoint = target.GetBreakpointAtIndex(index)
+            if not breakpoint or not breakpoint.IsValid():
+                continue
+            details = {
+                "number": _text(breakpoint.GetID()),
+                "type": "breakpoint",
+                "disp": "del" if breakpoint.IsOneShot() else "keep",
+                "enabled": "y" if breakpoint.IsEnabled() else "n",
+                "times": _text(breakpoint.GetHitCount()),
+            }
+            condition = breakpoint.GetCondition() or ""
+            if condition:
+                details["cond"] = condition
+            if breakpoint.GetNumLocations() > 0:
+                location = breakpoint.GetLocationAtIndex(0)
+                address = location.GetAddress()
+                load_address = address.GetLoadAddress(target)
+                if load_address != INVALID_ADDRESS:
+                    details["addr"] = "0x{:x}".format(load_address)
+                line_entry = address.GetLineEntry()
+                if line_entry and line_entry.IsValid():
+                    path = _normalized_source_path(
+                        _file_path(line_entry.GetFileSpec())
+                    )
+                    line = int(line_entry.GetLine())
+                    details["file"] = os.path.basename(path)
+                    details["fullname"] = path
+                    details["line"] = _text(line)
+                    details["original-location"] = "{}:{}".format(path, line)
+            body.append({"bkpt": details})
+        return "done", {
+            "BreakpointTable": {
+                "nr_rows": _text(len(body)),
+                "nr_cols": "6",
+                "hdr": [],
+                "body": body,
             }
         }
 
@@ -1114,6 +1437,47 @@ class Bridge(object):
         for breakpoint_id in arguments:
             if not target.BreakpointDelete(int(breakpoint_id)):
                 raise ValueError("unknown LLDB breakpoint {}".format(breakpoint_id))
+        return "done", {}
+
+    def _breakpoint(self, breakpoint_id):
+        try:
+            parsed_id = int(breakpoint_id)
+        except (TypeError, ValueError):
+            raise ValueError("invalid LLDB breakpoint id {}".format(breakpoint_id))
+        breakpoint = self._target().FindBreakpointByID(parsed_id)
+        if not breakpoint or not breakpoint.IsValid():
+            raise ValueError("unknown LLDB breakpoint {}".format(breakpoint_id))
+        return breakpoint
+
+    def _set_breakpoints_enabled(self, arguments, enabled):
+        if not arguments:
+            raise ValueError("breakpoint enable/disable requires an id")
+        for breakpoint_id in arguments:
+            breakpoint = self._breakpoint(breakpoint_id)
+            breakpoint.SetEnabled(enabled)
+            if breakpoint.IsEnabled() != enabled:
+                raise RuntimeError(
+                    "LLDB did not {} breakpoint {}".format(
+                        "enable" if enabled else "disable", breakpoint_id
+                    )
+                )
+        return "done", {}
+
+    def _break_enable(self, arguments):
+        return self._set_breakpoints_enabled(arguments, True)
+
+    def _break_disable(self, arguments):
+        return self._set_breakpoints_enabled(arguments, False)
+
+    def _break_condition(self, arguments):
+        if not arguments:
+            raise ValueError("-break-condition requires an id")
+        breakpoint = self._breakpoint(arguments[0])
+        condition = " ".join(arguments[1:])
+        breakpoint.SetCondition(condition)
+        retained = breakpoint.GetCondition() or ""
+        if retained != condition:
+            raise RuntimeError("LLDB did not retain the breakpoint condition")
         return "done", {}
 
     def _switch_context(self, arguments):

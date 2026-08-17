@@ -5,8 +5,10 @@ use std::{net::Ipv4Addr, path::PathBuf, sync::Arc};
 use crate::{
     common::config::{Config, DebuggerCommand},
     debugger::protocol::Value,
+    state::RuntimeModel,
 };
 use anyhow::Result;
+use ddb_api_extension::ExtensionProvider;
 
 pub use builtin::resolve_framework_plugin;
 
@@ -101,6 +103,17 @@ pub trait FrameworkPlugin: Send + Sync + std::fmt::Debug {
                 .extend(plugin.debugger_scripts.iter().map(PathBuf::from));
         }
         bootstrap
+    }
+
+    /// Return independently validated API extension providers. Providers use
+    /// only the public extension contract; framework-specific wiring stays at
+    /// this adapter boundary.
+    fn api_extensions(
+        &self,
+        _config: &Config,
+        _model: Arc<RuntimeModel>,
+    ) -> Vec<Arc<dyn ExtensionProvider>> {
+        Vec::new()
     }
 }
 

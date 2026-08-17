@@ -3,7 +3,7 @@ use super::mock_fixture::MockSessionConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -141,6 +141,10 @@ pub struct StaticSessionConfig {
     pub binary_args: Vec<String>,
     #[serde(default)]
     pub stop_at_entry: bool,
+    /// Optional session-specific shutdown policy. When omitted, Conf.on_exit
+    /// remains the backward-compatible default for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_exit: Option<OnExit>,
     #[serde(default)]
     pub mock: MockSessionConfig,
 }
@@ -158,6 +162,7 @@ impl Default for StaticSessionConfig {
             binary_path: String::new(),
             binary_args: Vec::new(),
             stop_at_entry: false,
+            on_exit: None,
             mock: MockSessionConfig::default(),
         }
     }
@@ -217,6 +222,117 @@ fn default_auto_shutdown() -> bool {
     true
 }
 
+fn default_api_server_bind() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
+fn default_api_max_concurrent_requests() -> usize {
+    128
+}
+
+fn default_api_requests_per_second() -> u32 {
+    1_000
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ApiResourceLimits {
+    /// Replayable state events retained before the oldest event is evicted.
+    #[serde(default = "default_api_state_replay_events")]
+    pub state_replay_events: usize,
+    /// Total encoded bytes retained by the state-event journal.
+    #[serde(default = "default_api_state_replay_bytes")]
+    pub state_replay_bytes: usize,
+    /// Maximum age of replayable state events.
+    #[serde(default = "default_api_state_replay_retention_millis")]
+    pub state_replay_retention_millis: u64,
+    /// Per-client state-event queue capacity.
+    #[serde(default = "default_api_state_subscriber_queue")]
+    pub state_subscriber_queue: usize,
+    /// Per-client debugger-output queue capacity. Output is not replayed.
+    #[serde(default = "default_api_output_subscriber_queue")]
+    pub output_subscriber_queue: usize,
+    /// Maximum subscribers admitted independently by each stream lane.
+    #[serde(default = "default_api_max_subscribers")]
+    pub max_subscribers: usize,
+    /// Retained operation-record count.
+    #[serde(default = "default_api_operation_records")]
+    pub operation_records: usize,
+    /// Total reserved bytes for retained operation records.
+    #[serde(default = "default_api_operation_bytes")]
+    pub operation_bytes: usize,
+    /// Encoded byte bound for one retained operation record.
+    #[serde(default = "default_api_operation_record_bytes")]
+    pub operation_record_bytes: usize,
+    /// Maximum age of terminal operation and idempotency records.
+    #[serde(default = "default_api_operation_retention_millis")]
+    pub operation_retention_millis: u64,
+    /// UTF-8 byte bound for one debugger-output event before truncation.
+    #[serde(default = "default_api_output_event_bytes")]
+    pub output_event_bytes: usize,
+}
+
+impl Default for ApiResourceLimits {
+    fn default() -> Self {
+        Self {
+            state_replay_events: default_api_state_replay_events(),
+            state_replay_bytes: default_api_state_replay_bytes(),
+            state_replay_retention_millis: default_api_state_replay_retention_millis(),
+            state_subscriber_queue: default_api_state_subscriber_queue(),
+            output_subscriber_queue: default_api_output_subscriber_queue(),
+            max_subscribers: default_api_max_subscribers(),
+            operation_records: default_api_operation_records(),
+            operation_bytes: default_api_operation_bytes(),
+            operation_record_bytes: default_api_operation_record_bytes(),
+            operation_retention_millis: default_api_operation_retention_millis(),
+            output_event_bytes: default_api_output_event_bytes(),
+        }
+    }
+}
+
+fn default_api_state_replay_events() -> usize {
+    10_000
+}
+
+fn default_api_state_replay_bytes() -> usize {
+    32 * 1024 * 1024
+}
+
+fn default_api_state_replay_retention_millis() -> u64 {
+    5 * 60 * 1_000
+}
+
+fn default_api_state_subscriber_queue() -> usize {
+    1_024
+}
+
+fn default_api_output_subscriber_queue() -> usize {
+    2_048
+}
+
+fn default_api_max_subscribers() -> usize {
+    20
+}
+
+fn default_api_operation_records() -> usize {
+    1_024
+}
+
+fn default_api_operation_bytes() -> usize {
+    64 * 1024 * 1024
+}
+
+fn default_api_operation_record_bytes() -> usize {
+    64 * 1024
+}
+
+fn default_api_operation_retention_millis() -> u64 {
+    15 * 60 * 1_000
+}
+
+fn default_api_output_event_bytes() -> usize {
+    256 * 1024
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Conf {
     #[serde(default)]
@@ -227,6 +343,44 @@ pub struct Conf {
     pub auto_shutdown: bool, // whether to auto shutdown the DDB when all debuggee processes exit.
     #[serde(default = "default_api_svr_port")]
     pub api_server_port: u16,
+    /// Address for the HTTP API listener. Remote addresses are rejected by
+    /// deployment-policy validation unless their security prerequisites are
+    /// configured explicitly.
+    #[serde(default = "default_api_server_bind")]
+    pub api_server_bind: IpAddr,
+    /// Optional loopback-only native gRPC preview listener. The preview is
+    /// compiled only with the `grpc-preview` Cargo feature.
+    #[serde(default)]
+    pub api_grpc_preview_port: Option<u16>,
+    /// JSON bearer-token file for the v2 API. Tokens stay out of the main
+    /// configuration and are reduced to hashes when loaded.
+    #[serde(default)]
+    pub api_auth_token_file: Option<String>,
+    /// Explicit local-development escape hatch. Never enables remote binding.
+    #[serde(default)]
+    pub api_insecure_allow_unauthenticated_v2: bool,
+    /// Assert that the listener is reachable only through a trusted reverse
+    /// proxy that terminates TLS. DDB bearer authentication remains mandatory
+    /// for production remote binds.
+    #[serde(default)]
+    pub api_tls_terminated_by_trusted_proxy: bool,
+    /// Explicit development-only bypass for the remote transport-security
+    /// check. Authentication remains independently controlled.
+    #[serde(default)]
+    pub api_insecure_allow_remote: bool,
+    /// Exact browser origins allowed to call the API. An empty list rejects
+    /// every request carrying an Origin header.
+    #[serde(default)]
+    pub api_cors_allowed_origins: Vec<String>,
+    /// Listener-wide admission limits. Streaming subscriber limits are
+    /// enforced separately by the application service.
+    #[serde(default = "default_api_max_concurrent_requests")]
+    pub api_max_concurrent_requests: usize,
+    #[serde(default = "default_api_requests_per_second")]
+    pub api_requests_per_second: u32,
+    /// Bounded API-owned journals, queues, and retained operation state.
+    #[serde(rename = "ApiLimits", alias = "api_limits", default)]
+    pub api_limits: ApiResourceLimits,
     #[serde(default = "default_log_dir")]
     pub log_dir: String,
     #[serde(default = "default_base_dir")]
@@ -246,6 +400,16 @@ impl Default for Conf {
             on_exit: OnExit::default(),
             auto_shutdown: true,
             api_server_port: default_vals::DEFAULT_API_SVR_PORT,
+            api_server_bind: default_api_server_bind(),
+            api_grpc_preview_port: None,
+            api_auth_token_file: None,
+            api_insecure_allow_unauthenticated_v2: false,
+            api_tls_terminated_by_trusted_proxy: false,
+            api_insecure_allow_remote: false,
+            api_cors_allowed_origins: Vec::new(),
+            api_max_concurrent_requests: default_api_max_concurrent_requests(),
+            api_requests_per_second: default_api_requests_per_second(),
+            api_limits: ApiResourceLimits::default(),
             log_dir: default_vals::DEFAULT_LOG_DIR.to_string(),
             base_dir: default_vals::DEFAULT_BASE_DIR.to_string(),
             support_migration: false, // TODO: default to true when testing is done.
@@ -483,6 +647,32 @@ mod tests {
     }
 
     #[test]
+    fn api_resource_limits_have_safe_defaults_and_allow_partial_overrides() {
+        let defaults = Config::default().conf.api_limits;
+        assert_eq!(defaults.state_replay_events, 10_000);
+        assert_eq!(defaults.state_replay_retention_millis, 300_000);
+        assert_eq!(defaults.max_subscribers, 20);
+
+        let config = Config::from_str(
+            r#"
+Conf:
+  ApiLimits:
+    state_replay_events: 37
+    max_subscribers: 3
+    output_event_bytes: 4096
+"#,
+        )
+        .expect("partial API limit overrides should parse");
+        assert_eq!(config.conf.api_limits.state_replay_events, 37);
+        assert_eq!(config.conf.api_limits.max_subscribers, 3);
+        assert_eq!(config.conf.api_limits.output_event_bytes, 4_096);
+        assert_eq!(
+            config.conf.api_limits.state_replay_bytes,
+            defaults.state_replay_bytes
+        );
+    }
+
+    #[test]
     fn handle_migration_only_applies_to_supported_frameworks() {
         let mut config = Config::default();
         config.conf.support_migration = true;
@@ -616,5 +806,30 @@ Conf:
         assert_eq!(config.conf.debugger.backend, DebuggerBackendKind::Lldb);
         assert!(!config.conf.debugger.eager_stack_warmup);
         assert!(DebuggerConf::default().eager_stack_warmup);
+    }
+
+    #[test]
+    fn static_session_on_exit_is_optional_and_overrides_parse() {
+        let config = Config::from_str(
+            r#"
+Conf:
+  on_exit: detach
+  Debugger:
+    backend: mock
+StaticSessions:
+  - tag: inherits
+    pid: 1
+  - tag: owned
+    pid: 2
+    on_exit: kill
+"#,
+        )
+        .expect("per-session lifecycle configuration should parse");
+
+        assert_eq!(config.static_sessions[0].on_exit, None);
+        assert_eq!(config.static_sessions[1].on_exit, Some(OnExit::KILL));
+
+        let serialized = serde_yml::to_string(&config).expect("configuration should serialize");
+        assert_eq!(serialized.matches("on_exit: kill").count(), 1);
     }
 }

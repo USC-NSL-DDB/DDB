@@ -66,9 +66,13 @@ fn normalize_message(message: Message) -> ProtocolRecord {
         },
         Message::General(message) => {
             let (kind, message) = match message {
-                GeneralMessage::Console(message) => (StreamKind::Console, message),
-                GeneralMessage::Log(message) => (StreamKind::Log, message),
-                GeneralMessage::Target(message) => (StreamKind::Target, message),
+                GeneralMessage::Console(message) => {
+                    (StreamKind::Console, decode_mi_c_string(&message))
+                }
+                GeneralMessage::Log(message) => (StreamKind::Log, decode_mi_c_string(&message)),
+                GeneralMessage::Target(message) => {
+                    (StreamKind::Target, decode_mi_c_string(&message))
+                }
                 GeneralMessage::InferiorStdout(message) => (StreamKind::InferiorStdout, message),
                 GeneralMessage::InferiorStderr(message) => (StreamKind::InferiorStderr, message),
                 GeneralMessage::Done => (StreamKind::Prompt, String::new()),
@@ -76,6 +80,51 @@ fn normalize_message(message: Message) -> ProtocolRecord {
             ProtocolRecord::Stream { kind, message }
         }
     }
+}
+
+/// `gdbmi` deliberately preserves escapes in stream records. Normalize them
+/// at the backend-neutral protocol boundary so HTTP clients receive the text
+/// the debugger intended, while the compatibility publisher can escape it
+/// exactly once on the way back to MI.
+fn decode_mi_c_string(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' || index + 1 == bytes.len() {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        index += 1;
+        match bytes[index] {
+            b'a' => decoded.push(0x07),
+            b'b' => decoded.push(0x08),
+            b'f' => decoded.push(0x0c),
+            b'n' => decoded.push(b'\n'),
+            b'r' => decoded.push(b'\r'),
+            b't' => decoded.push(b'\t'),
+            b'v' => decoded.push(0x0b),
+            b'\\' => decoded.push(b'\\'),
+            b'"' => decoded.push(b'"'),
+            b'0'..=b'7' => {
+                let mut value = bytes[index] - b'0';
+                let mut digits = 1;
+                while digits < 3
+                    && index + 1 < bytes.len()
+                    && matches!(bytes[index + 1], b'0'..=b'7')
+                {
+                    index += 1;
+                    digits += 1;
+                    value = value.saturating_mul(8).saturating_add(bytes[index] - b'0');
+                }
+                decoded.push(value);
+            }
+            other => decoded.push(other),
+        }
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(test)]
@@ -138,5 +187,23 @@ mod tests {
             } if message == "thread-created"
                 && payload["group-id"].expect_string_ref().unwrap() == "i1"
         ));
+    }
+
+    #[test]
+    fn stream_records_decode_gdb_c_escapes_once() {
+        let mut protocol = GdbMiProtocol::default();
+        let records = protocol
+            .push_stdout(Bytes::from_static(
+                b"~\"line one\\n\\\"quoted\\\"\\\\path\\011end\"\n",
+            ))
+            .unwrap();
+
+        assert_eq!(
+            records,
+            vec![ProtocolRecord::Stream {
+                kind: StreamKind::Console,
+                message: "line one\n\"quoted\"\\path\tend".to_string(),
+            }]
+        );
     }
 }

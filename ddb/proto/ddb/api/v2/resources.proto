@@ -1,0 +1,913 @@
+syntax = "proto3";
+
+package ddb.api.v2;
+
+import "ddb/api/v2/common.proto";
+import "ddb/api/v2/extension.proto";
+import "google/protobuf/timestamp.proto";
+
+// ResourceKind identifies a stable public resource family.
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_SESSION = 1;
+  RESOURCE_KIND_GROUP = 2;
+  RESOURCE_KIND_PROCESS = 3;
+  RESOURCE_KIND_THREAD = 4;
+  RESOURCE_KIND_SELECTION = 5;
+  RESOURCE_KIND_EXECUTION_STATE = 6;
+  RESOURCE_KIND_BREAKPOINT = 7;
+  RESOURCE_KIND_OPERATION = 8;
+  RESOURCE_KIND_CAPABILITIES = 9;
+  RESOURCE_KIND_EXTENSION_STATE = 10;
+  RESOURCE_KIND_PENDING_COMMAND = 11;
+}
+
+// BackendKind identifies the debugger implementation serving a session.
+enum BackendKind {
+  BACKEND_KIND_UNSPECIFIED = 0;
+  BACKEND_KIND_MOCK = 1;
+  BACKEND_KIND_GDB = 2;
+  BACKEND_KIND_LLDB = 3;
+  BACKEND_KIND_OTHER = 4;
+}
+
+// SessionStatus describes whether a debugger session can accept work.
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_STARTING = 1;
+  SESSION_STATUS_READY = 2;
+  SESSION_STATUS_RUNNING = 3;
+  SESSION_STATUS_STOPPED = 4;
+  SESSION_STATUS_EXITED = 5;
+  SESSION_STATUS_FAILED = 6;
+}
+
+// ThreadState describes the target-observed execution state of a thread.
+enum ThreadState {
+  THREAD_STATE_UNSPECIFIED = 0;
+  THREAD_STATE_RUNNING = 1;
+  THREAD_STATE_STOPPED = 2;
+  THREAD_STATE_EXITED = 3;
+  THREAD_STATE_UNAVAILABLE = 4;
+}
+
+// StopReasonKind is the transport-independent reason a target stopped.
+enum StopReasonKind {
+  STOP_REASON_KIND_UNSPECIFIED = 0;
+  STOP_REASON_KIND_BREAKPOINT = 1;
+  STOP_REASON_KIND_WATCHPOINT = 2;
+  STOP_REASON_KIND_STEP = 3;
+  STOP_REASON_KIND_SIGNAL = 4;
+  STOP_REASON_KIND_EXCEPTION = 5;
+  STOP_REASON_KIND_PAUSE = 6;
+  STOP_REASON_KIND_ENTRY = 7;
+  STOP_REASON_KIND_EXIT = 8;
+  STOP_REASON_KIND_OTHER = 9;
+}
+
+// ExecutionAction is a typed debugger execution control.
+enum ExecutionAction {
+  EXECUTION_ACTION_UNSPECIFIED = 0;
+  EXECUTION_ACTION_CONTINUE = 1;
+  EXECUTION_ACTION_INTERRUPT = 2;
+  EXECUTION_ACTION_NEXT = 3;
+  EXECUTION_ACTION_STEP_IN = 4;
+  EXECUTION_ACTION_STEP_OUT = 5;
+  EXECUTION_ACTION_JUMP = 6;
+  EXECUTION_ACTION_SIGNAL = 7;
+  EXECUTION_ACTION_REVERSE_CONTINUE = 8;
+  EXECUTION_ACTION_REVERSE_NEXT = 9;
+  EXECUTION_ACTION_REVERSE_STEP_IN = 10;
+}
+
+enum ExecutionScopeKind {
+  EXECUTION_SCOPE_KIND_UNSPECIFIED = 0;
+  EXECUTION_SCOPE_KIND_THREAD = 1;
+  EXECUTION_SCOPE_KIND_SESSION = 2;
+  EXECUTION_SCOPE_KIND_GROUP = 3;
+  EXECUTION_SCOPE_KIND_FANOUT = 4;
+}
+
+// ExecutionActionCapability declares the semantic target scopes accepted by one
+// execution control. Dynamic selectors such as CURRENT_THREAD resolve to one
+// of these scopes before validation.
+message ExecutionActionCapability {
+  // Typed execution control.
+  ExecutionAction action = 1;
+  // Accepted resolved target scopes.
+  repeated ExecutionScopeKind scopes = 2;
+}
+
+// BreakpointFeature identifies independently negotiable breakpoint behavior.
+enum BreakpointFeature {
+  BREAKPOINT_FEATURE_UNSPECIFIED = 0;
+  BREAKPOINT_FEATURE_SOURCE = 1;
+  BREAKPOINT_FEATURE_FUNCTION = 2;
+  BREAKPOINT_FEATURE_ADDRESS = 3;
+  BREAKPOINT_FEATURE_CONDITION = 4;
+  BREAKPOINT_FEATURE_IGNORE_COUNT = 5;
+  BREAKPOINT_FEATURE_TEMPORARY = 6;
+  BREAKPOINT_FEATURE_HARDWARE = 7;
+  BREAKPOINT_FEATURE_ENABLE_DISABLE = 8;
+  BREAKPOINT_FEATURE_DISTRIBUTED = 9;
+  BREAKPOINT_FEATURE_GROUP_INHERITANCE = 10;
+}
+
+// OperationKind identifies an admitted mutation without exposing backend syntax.
+enum OperationKind {
+  reserved 11;
+  reserved "OPERATION_KIND_RESTORE_DISTRIBUTED_CONTEXT";
+
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_KIND_EXECUTE = 1;
+  OPERATION_KIND_SELECT_THREAD = 2;
+  OPERATION_KIND_EVALUATE = 3;
+  OPERATION_KIND_CREATE_BREAKPOINT = 4;
+  OPERATION_KIND_UPDATE_BREAKPOINT = 5;
+  OPERATION_KIND_DELETE_BREAKPOINT = 6;
+  OPERATION_KIND_RAW_COMMAND = 7;
+  OPERATION_KIND_DISTRIBUTED_BACKTRACE = 8;
+  OPERATION_KIND_EXTENSION_ACTION = 9;
+  OPERATION_KIND_SHUTDOWN = 10;
+}
+
+// ScopeKind identifies a conventional variable namespace.
+enum ScopeKind {
+  SCOPE_KIND_UNSPECIFIED = 0;
+  SCOPE_KIND_LOCALS = 1;
+  SCOPE_KIND_ARGUMENTS = 2;
+  SCOPE_KIND_REGISTERS = 3;
+  SCOPE_KIND_STATICS = 4;
+  SCOPE_KIND_GLOBALS = 5;
+  SCOPE_KIND_OTHER = 6;
+}
+
+// OutputStreamKind preserves the source and intended presentation of output.
+enum OutputStreamKind {
+  OUTPUT_STREAM_KIND_UNSPECIFIED = 0;
+  OUTPUT_STREAM_KIND_CONSOLE = 1;
+  OUTPUT_STREAM_KIND_LOG = 2;
+  OUTPUT_STREAM_KIND_TARGET = 3;
+  OUTPUT_STREAM_KIND_INFERIOR_STDOUT = 4;
+  OUTPUT_STREAM_KIND_INFERIOR_STDERR = 5;
+  OUTPUT_STREAM_KIND_PROMPT = 6;
+}
+
+// TransportKind identifies a supported public API binding.
+enum TransportKind {
+  TRANSPORT_KIND_UNSPECIFIED = 0;
+  TRANSPORT_KIND_HTTP = 1;
+  TRANSPORT_KIND_GRPC = 2;
+  TRANSPORT_KIND_CONNECT = 3;
+  TRANSPORT_KIND_STDIN = 4;
+  TRANSPORT_KIND_DAP = 5;
+}
+
+// WireEncoding identifies a transport payload encoding.
+enum WireEncoding {
+  WIRE_ENCODING_UNSPECIFIED = 0;
+  WIRE_ENCODING_PROTOBUF = 1;
+  WIRE_ENCODING_PROTOJSON = 2;
+  WIRE_ENCODING_JSON = 3;
+}
+
+// StateEventKind identifies a replayable state transition.
+enum StateEventKind {
+  STATE_EVENT_KIND_UNSPECIFIED = 0;
+  STATE_EVENT_KIND_RESOURCE_UPSERTED = 1;
+  STATE_EVENT_KIND_RESOURCE_DELETED = 2;
+  STATE_EVENT_KIND_SELECTION_CHANGED = 3;
+  STATE_EVENT_KIND_EXECUTION_CHANGED = 4;
+  STATE_EVENT_KIND_OPERATION_CHANGED = 5;
+  STATE_EVENT_KIND_CAPABILITIES_CHANGED = 6;
+  STATE_EVENT_KIND_EXTENSION_STATE_CHANGED = 7;
+  STATE_EVENT_KIND_REQUIRED_RESYNC = 8;
+}
+
+// DistributedBoundaryKind identifies a DDB-specific cross-context transition.
+enum DistributedBoundaryKind {
+  DISTRIBUTED_BOUNDARY_KIND_UNSPECIFIED = 0;
+  DISTRIBUTED_BOUNDARY_KIND_CALL = 1;
+  DISTRIBUTED_BOUNDARY_KIND_RETURN = 2;
+  DISTRIBUTED_BOUNDARY_KIND_SPAWN = 3;
+  DISTRIBUTED_BOUNDARY_KIND_MESSAGE = 4;
+  DISTRIBUTED_BOUNDARY_KIND_FRAMEWORK = 5;
+  DISTRIBUTED_BOUNDARY_KIND_OTHER = 6;
+}
+
+// SourceLocation uses one-based line and column values. A zero column means the
+// backend did not provide a column.
+message SourceLocation {
+  // Stable source reference returned by ResolveSource, when one exists.
+  optional string source_reference = 1;
+  // Backend-reported path; clients must not assume it is locally accessible.
+  optional string path = 2;
+  // One-based source line.
+  uint32 line = 3;
+  // One-based source column, or zero when unknown.
+  uint32 column = 4;
+  // Target address represented without assuming address width or radix.
+  optional string address = 5;
+  // Symbol or function name when known.
+  optional string function_name = 6;
+}
+
+// TransportEndpoint advertises one concrete API binding.
+message TransportEndpoint {
+  // Transport implemented at uri.
+  TransportKind transport = 1;
+  // Absolute or deployment-relative endpoint URI.
+  string uri = 2;
+  // Payload encodings accepted by this endpoint.
+  repeated WireEncoding encodings = 3;
+  // True when TLS is required by this endpoint.
+  bool tls_required = 4;
+}
+
+// ApiLimits contains effective server bounds, not wire-level constants.
+message ApiLimits {
+  // Maximum accepted page size for collection reads.
+  uint32 max_page_size = 1;
+  // Preferred page size for interactive clients.
+  uint32 preferred_page_size = 2;
+  // Maximum decoded request payload in bytes.
+  uint64 max_request_bytes = 3;
+  // Maximum encoded response payload in bytes.
+  uint64 max_response_bytes = 4;
+  // Maximum bytes returned by one ReadMemory request.
+  uint64 max_memory_read_bytes = 5;
+  // Maximum source lines returned by one ReadSource request.
+  uint32 max_source_lines = 6;
+  // Maximum variable children returned by one expansion page.
+  uint32 max_variable_children = 7;
+  // Maximum retained replayable state-event count.
+  uint64 max_state_replay_events = 8;
+  // Maximum retained replayable state-event bytes.
+  uint64 max_state_replay_bytes = 9;
+  // State-event retention age in milliseconds.
+  uint64 state_replay_retention_millis = 10;
+  // Maximum queued state events per subscriber.
+  uint32 state_subscriber_queue = 11;
+  // Maximum queued output events per subscriber.
+  uint32 output_subscriber_queue = 12;
+  // Maximum concurrent subscribers.
+  uint32 max_subscribers = 13;
+  // Maximum retained operation records.
+  uint32 max_operation_records = 14;
+  // Operation-record retention age in milliseconds.
+  uint64 operation_retention_millis = 15;
+  // Maximum raw-command dynamic tree depth.
+  uint32 max_dynamic_value_depth = 16;
+  // Maximum extension payload size in bytes.
+  uint64 max_extension_payload_bytes = 17;
+  // Total reserved bytes for retained operation records.
+  uint64 max_operation_bytes = 18;
+  // Maximum encoded bytes retained for one operation record.
+  uint64 max_operation_record_bytes = 19;
+  // Maximum UTF-8 bytes in one output event before truncation.
+  uint64 max_output_event_bytes = 20;
+  // Maximum bytes in one debugger-known source file eligible for reading.
+  uint64 max_source_bytes = 21;
+}
+
+// DeprecationNotice announces an API behavior scheduled for removal.
+message DeprecationNotice {
+  // Stable deprecated capability, method, field, or event identifier.
+  string subject = 1;
+  // Safe human-readable migration guidance.
+  string message = 2;
+  // Replacement identifier, when one exists.
+  optional string replacement = 3;
+  // Earliest release in which removal may occur.
+  optional string removal_not_before_release = 4;
+}
+
+// BackendDescriptor identifies a backend without leaking its command protocol.
+message BackendDescriptor {
+  // Backend family.
+  BackendKind kind = 1;
+  // Backend implementation version, when available.
+  optional string version = 2;
+  // Stable backend capability namespace.
+  optional string capability_namespace = 3;
+}
+
+// FrameworkDescriptor identifies a detected DDB framework integration.
+message FrameworkDescriptor {
+  // Stable framework identifier.
+  string framework_id = 1;
+  // Human-readable framework name.
+  string display_name = 2;
+  // Detected framework version, when available.
+  optional string version = 3;
+}
+
+// Capabilities is the negotiated source of truth for frontend feature exposure.
+message Capabilities {
+  // Opaque identity of the singleton capability projection.
+  string capabilities_id = 21;
+  // Public API major-version identifier.
+  string api_version = 1;
+  // Exact schema version or descriptor release.
+  string schema_version = 2;
+  // Server instance to which dynamic capabilities apply.
+  string server_instance_id = 3;
+  // Available transport bindings.
+  repeated TransportEndpoint transports = 4;
+  // Backends currently represented by attached sessions.
+  repeated BackendDescriptor backends = 5;
+  // Detected DDB framework integrations.
+  repeated FrameworkDescriptor frameworks = 6;
+  // Stable resource families available for reads.
+  repeated ResourceKind supported_resources = 7;
+  // Typed mutations available for at least one valid target.
+  repeated OperationKind supported_operations = 8;
+  // Execution controls available for at least one valid target.
+  repeated ExecutionAction execution_actions = 9;
+  // Independently supported breakpoint behaviors.
+  repeated BreakpointFeature breakpoint_features = 10;
+  // Replayable state-event kinds the server may emit.
+  repeated StateEventKind state_event_kinds = 11;
+  // Output stream kinds the server may emit.
+  repeated OutputStreamKind output_stream_kinds = 12;
+  // Operation kinds the server can cancel after admission.
+  repeated OperationKind cancellable_operation_kinds = 13;
+  // Stable DDB-specific feature identifiers.
+  repeated string ddb_features = 14;
+  // Effective resource and payload bounds.
+  ApiLimits limits = 15;
+  // Authentication mechanism identifier, such as "none" or "bearer".
+  string authentication_mode = 16;
+  // Scopes recognized by this deployment.
+  repeated PermissionScope permission_scopes = 17;
+  // Discoverable extension contracts.
+  repeated ExtensionDescriptor extensions = 18;
+  // Active compatibility notices.
+  repeated DeprecationNotice deprecations = 19;
+  // Revision used to apply capability change events idempotently.
+  uint64 revision = 20;
+  // Target-scope constraints for each advertised execution control.
+  repeated ExecutionActionCapability execution_action_capabilities = 22;
+}
+
+// ServerInfo describes one running DDB API server.
+message ServerInfo {
+  // Server product name.
+  string name = 1;
+  // DDB build or release version.
+  string version = 2;
+  // Source revision when available.
+  optional string build_revision = 3;
+  // Opaque identity regenerated on server restart.
+  string server_instance_id = 4;
+  // Time this server instance started.
+  google.protobuf.Timestamp started_at = 5;
+  // Public API versions accepted by this process.
+  repeated string api_versions = 6;
+}
+
+// Process describes the debugged operating-system process when known.
+message Process {
+  // Opaque public process identity.
+  string process_id = 1;
+  // Owning session.
+  string session_id = 2;
+  // Owning group, when assigned.
+  optional string group_id = 3;
+  // Display name suitable for a frontend.
+  optional string name = 4;
+  // Backend-reported operating-system PID as text.
+  optional string system_process_id = 5;
+  // Executable path when it is safe and available.
+  optional string executable = 6;
+  // Resource revision for idempotent event application.
+  uint64 revision = 7;
+}
+
+// Session describes one debugger-backend connection.
+message Session {
+  // Opaque session identity.
+  string session_id = 1;
+  // Human-readable session label.
+  string display_name = 2;
+  // Backend implementation serving this session.
+  BackendDescriptor backend = 3;
+  // Current availability/execution status.
+  SessionStatus status = 4;
+  // Additional safe status text for diagnostics.
+  optional string status_detail = 5;
+  // Associated process when known.
+  optional string process_id = 6;
+  // Associated group when known.
+  optional string group_id = 7;
+  // Current selected thread when known.
+  optional string selected_thread_id = 8;
+  // Time this session became known to DDB.
+  google.protobuf.Timestamp created_at = 9;
+  // Resource revision for idempotent event application.
+  uint64 revision = 10;
+}
+
+// Group describes a DDB logical session group.
+message Group {
+  // Opaque group identity.
+  string group_id = 1;
+  // Human-readable group label.
+  string display_name = 2;
+  // Sessions currently assigned to the group.
+  repeated string session_ids = 3;
+  // Group selected by the framework or user, when applicable.
+  bool selected = 4;
+  // Resource revision for idempotent event application.
+  uint64 revision = 5;
+}
+
+// Thread describes one debugged execution thread.
+message Thread {
+  // Opaque public thread identity.
+  string thread_id = 1;
+  // Owning session.
+  string session_id = 2;
+  // Owning process when known.
+  optional string process_id = 3;
+  // Owning group when known.
+  optional string group_id = 4;
+  // Backend-provided thread display name.
+  optional string name = 5;
+  // Backend thread identifier retained as opaque text.
+  optional string backend_thread_id = 6;
+  // Current execution state.
+  ThreadState state = 7;
+  // True when this is the selected thread for its session.
+  bool selected = 8;
+  // Top-frame location when cheaply available.
+  optional SourceLocation location = 9;
+  // Resource revision for idempotent event application.
+  uint64 revision = 10;
+}
+
+// Selection represents the current frontend-relevant debugger selection.
+message Selection {
+  // Stable singleton resource identity.
+  string selection_id = 1;
+  // Current selected session when known.
+  optional string session_id = 2;
+  // Current selected group when known.
+  optional string group_id = 3;
+  // Current selected thread when known.
+  optional string thread_id = 4;
+  // Current selected frame when known.
+  optional string frame_id = 5;
+  // Resource revision for idempotent event application.
+  uint64 revision = 6;
+}
+
+// StopReason explains one stopped execution state.
+message StopReason {
+  // Stable reason category.
+  StopReasonKind kind = 1;
+  // Safe backend-neutral explanation.
+  optional string description = 2;
+  // Signal name when kind is SIGNAL.
+  optional string signal_name = 3;
+  // Breakpoint identity when kind is BREAKPOINT or WATCHPOINT.
+  optional string breakpoint_id = 4;
+  // Thread principally responsible for the stop.
+  optional string thread_id = 5;
+}
+
+// ExecutionState describes running/stopped state for a routed target.
+message ExecutionState {
+  // Stable resource identity for this execution-state projection.
+  string execution_state_id = 1;
+  // Target to which this state applies.
+  Target target = 2;
+  // True when the target is executing.
+  bool running = 3;
+  // Stop reason when the target is stopped.
+  optional StopReason stop_reason = 4;
+  // Source location associated with the stop.
+  optional SourceLocation location = 5;
+  // Resource revision for idempotent event application.
+  uint64 revision = 6;
+}
+
+// Frame describes one stack frame. level is zero for the innermost frame.
+message Frame {
+  // Opaque frame identity, valid for the current stop.
+  string frame_id = 1;
+  // Owning thread.
+  string thread_id = 2;
+  // Zero-based stack depth.
+  uint32 level = 3;
+  // Function or symbol name.
+  optional string function_name = 4;
+  // Source/address location.
+  SourceLocation location = 5;
+  // Architecture-specific module name when known.
+  optional string module = 6;
+  // True when DDB synthesized this frame.
+  bool synthetic = 7;
+}
+
+// Scope describes a bounded variable namespace attached to a frame.
+message Scope {
+  // Opaque scope identity, valid for the current stop.
+  string scope_id = 1;
+  // Owning frame.
+  string frame_id = 2;
+  // Conventional scope kind.
+  ScopeKind kind = 3;
+  // Human-readable scope label.
+  string name = 4;
+  // True when reading variables may execute target code or be expensive.
+  bool expensive = 5;
+  // Optional known number of variables.
+  optional uint64 variable_count = 6;
+}
+
+// Variable is a debugger-rendered value with optional lazy children.
+message Variable {
+  // Opaque variable identity, valid for the current stop.
+  string variable_id = 1;
+  // Display expression/name.
+  string name = 2;
+  // Backend-rendered value.
+  string value = 3;
+  // Backend-rendered type name.
+  optional string type_name = 4;
+  // True when ExpandVariable may return children.
+  bool has_children = 5;
+  // Optional known child count.
+  optional uint64 child_count = 6;
+  // Expression suitable for a later Evaluate call when available.
+  optional string evaluate_name = 7;
+  // Optional memory address represented as opaque text.
+  optional string address = 8;
+  // Backend presentation hint such as "string" or "pointer".
+  optional string presentation_hint = 9;
+}
+
+// Register is a typed register-list item rather than a raw backend tuple.
+message Register {
+  // Stable register name within the current architecture.
+  string name = 1;
+  // Backend-rendered value.
+  string value = 2;
+  // Optional alternate value encoding requested by the client.
+  optional string formatted_value = 3;
+  // True when the backend reported the register unavailable.
+  bool unavailable = 4;
+}
+
+// DebuggerSignal is a target-specific signal catalog entry.
+message DebuggerSignal {
+  // Backend-recognized signal name, such as SIGINT.
+  string name = 1;
+  // Whether receiving this signal stops the inferior.
+  bool stop = 2;
+  // Whether receiving this signal is printed.
+  bool print = 3;
+  // Whether the signal is passed to the inferior.
+  bool pass = 4;
+  // Backend-provided human-readable description.
+  optional string description = 5;
+}
+
+// SourceFile identifies resolved source independently of local filesystem access.
+message SourceFile {
+  // Stable source reference accepted by ReadSource.
+  string source_reference = 1;
+  // Backend-reported or mapped source path.
+  optional string path = 2;
+  // Display name.
+  string name = 3;
+  // Content media type, normally text/plain.
+  string media_type = 4;
+  // Optional content hash for frontend caching.
+  optional string content_hash = 5;
+}
+
+// SourceContent is one bounded source window.
+message SourceContent {
+  // Resolved source identity.
+  SourceFile source = 1;
+  // One-based first line in content.
+  uint32 start_line = 2;
+  // UTF-8 source text for the returned line window.
+  string content = 3;
+  // Number of complete source lines returned.
+  uint32 line_count = 4;
+  // True when more lines exist after this window.
+  bool has_more = 5;
+}
+
+// MemoryBlock is one bounded memory read.
+message MemoryBlock {
+  // Target address corresponding to the first returned byte.
+  string address = 1;
+  // Bytes successfully read.
+  bytes data = 2;
+  // Number of unreadable bytes following data, if any.
+  uint64 unreadable_bytes = 3;
+}
+
+// SourceBreakpointLocation identifies a one-based source line.
+message SourceBreakpointLocation {
+  // Backend path or stable source reference.
+  string source = 1;
+  // One-based source line.
+  uint32 line = 2;
+  // One-based column, or zero when unspecified.
+  uint32 column = 3;
+}
+
+// FunctionBreakpointLocation identifies a symbol or function pattern.
+message FunctionBreakpointLocation {
+  // Backend-supported function or symbol expression.
+  string function_name = 1;
+}
+
+// AddressBreakpointLocation identifies a target-dependent address expression.
+message AddressBreakpointLocation {
+  // Address string; clients must not assume a width or radix.
+  string address = 1;
+}
+
+// BreakpointSpec contains user-controlled breakpoint behavior.
+message BreakpointSpec {
+  // Breakpoint location form.
+  oneof location {
+    SourceBreakpointLocation source = 1;
+    FunctionBreakpointLocation function = 2;
+    AddressBreakpointLocation address = 3;
+  }
+  // Whether the breakpoint should stop execution. Create requests default an
+  // absent value to true; updates that mask this field require explicit
+  // presence. Resource representations always populate it.
+  optional bool enabled = 4;
+  // Optional backend-supported condition expression.
+  optional string condition = 5;
+  // Number of matching hits to ignore before stopping.
+  optional uint64 ignore_count = 6;
+  // Remove after the first effective hit.
+  bool temporary = 7;
+  // Request hardware breakpoint resources.
+  bool hardware = 8;
+}
+
+// SubBreakpoint describes one resolved member of a distributed breakpoint.
+message SubBreakpoint {
+  // Opaque sub-breakpoint identity.
+  string sub_breakpoint_id = 1;
+  // Session in which this location is installed.
+  string session_id = 2;
+  // Group inherited from, when applicable.
+  optional string inherited_from_group_id = 3;
+  // Resolved target location when known.
+  optional SourceLocation location = 4;
+  // Whether the backend verified installation.
+  bool verified = 5;
+  // Backend-safe verification or failure message.
+  optional string message = 6;
+  // Observed hit count.
+  uint64 hit_count = 7;
+  // Resource revision.
+  uint64 revision = 8;
+}
+
+// Breakpoint is a logical DDB breakpoint and its resolved members.
+message Breakpoint {
+  // Opaque logical breakpoint identity.
+  string breakpoint_id = 1;
+  // Target scope to which the breakpoint was applied.
+  Target target = 2;
+  // User-controlled specification.
+  BreakpointSpec spec = 3;
+  // Whether all required backend locations are verified.
+  bool verified = 4;
+  // True when at least one location is still pending.
+  bool pending = 5;
+  // Aggregate hit count across members.
+  uint64 hit_count = 6;
+  // Safe aggregate status message.
+  optional string message = 7;
+  // Resolved distributed members.
+  repeated SubBreakpoint sub_breakpoints = 8;
+  // Resource revision for idempotent event application.
+  uint64 revision = 9;
+}
+
+// PendingCommand is a read-only projection of backend work in flight.
+message PendingCommand {
+  // Opaque command projection identity.
+  string pending_command_id = 1;
+  // Owning session.
+  string session_id = 2;
+  // Associated operation when admitted through v2.
+  optional string operation_id = 3;
+  // Safe command kind; raw command text is intentionally excluded.
+  OperationKind kind = 4;
+  // Time the command entered the backend queue.
+  google.protobuf.Timestamp enqueued_at = 5;
+  // True once the backend began processing it.
+  bool running = 6;
+  // Resource revision for idempotent event application.
+  uint64 revision = 7;
+}
+
+// TargetSummary is a safe, bounded description retained with an operation.
+message TargetSummary {
+  // Canonical submitted target.
+  Target target = 1;
+  // Number of concrete backend targets resolved at admission.
+  uint32 resolved_target_count = 2;
+}
+
+// EvaluationResult contains a backend-rendered expression result.
+message EvaluationResult {
+  // Original expression, subject to server redaction policy.
+  string expression = 1;
+  // Backend-rendered result.
+  string value = 2;
+  // Backend-rendered type name.
+  optional string type_name = 3;
+  // Optional expandable value identity.
+  optional string variable_id = 4;
+  // Optional memory address represented as opaque text.
+  optional string address = 5;
+}
+
+// RawCommandResult is the bounded compatibility escape hatch result.
+message RawCommandResult {
+  // Backend-neutral decoded result tree.
+  optional DynamicValue value = 1;
+  // Safe textual result when no structured representation exists.
+  optional string text = 2;
+  // True when the result was truncated to advertised bounds.
+  bool truncated = 3;
+}
+
+// DistributedFrame is one frame plus DDB cross-context metadata.
+message DistributedFrame {
+  reserved 7;
+  reserved "context_token";
+
+  // Stable position in this result, starting at zero.
+  uint32 index = 1;
+  // Session that owns frame.
+  string session_id = 2;
+  // Thread that owns frame.
+  string thread_id = 3;
+  // Conventional frame data.
+  Frame frame = 4;
+  // Boundary crossed before this frame, when applicable.
+  optional DistributedBoundaryKind boundary = 5;
+  // Framework-provided safe boundary label.
+  optional string boundary_label = 6;
+}
+
+// DistributedBacktraceResult is a bounded multi-session backtrace.
+message DistributedBacktraceResult {
+  // Frames ordered from the selected leaf toward distributed ancestors.
+  repeated DistributedFrame frames = 1;
+  // True when an advertised limit truncated the result.
+  bool truncated = 2;
+  // Safe reason for truncation.
+  optional string truncation_reason = 3;
+}
+
+// TargetOutcome records success or failure for one concrete fanout target.
+message TargetOutcome {
+  // Concrete target represented by this outcome.
+  Target target = 1;
+  // True when this target completed successfully.
+  bool succeeded = 2;
+  // Typed failure when succeeded is false.
+  optional DdbError error = 3;
+}
+
+// OperationResult contains only typed stable results or documented escape hatches.
+// A failed fanout operation may retain the bounded successful portion when its
+// result kind can be represented without implying failed targets succeeded.
+message OperationResult {
+  // Result form selected by the operation kind.
+  oneof value {
+    ExecutionState execution = 1;
+    Selection selection = 2;
+    EvaluationResult evaluation = 3;
+    Breakpoint breakpoint = 4;
+    RawCommandResult raw_command = 5;
+    DistributedBacktraceResult distributed_backtrace = 6;
+    InvokeExtensionActionResult extension_action = 7;
+    Empty no_content = 8;
+  }
+}
+
+// Operation is a bounded, expiring record for one admitted mutation.
+message Operation {
+  // Opaque operation identity.
+  string operation_id = 1;
+  // Server request that admitted this operation.
+  string request_id = 2;
+  // Stable mutation kind.
+  OperationKind kind = 3;
+  // Safe target summary retained without request payloads.
+  TargetSummary target = 4;
+  // One-way hash/reference for the idempotency key; never the key itself.
+  optional string idempotency_key_reference = 5;
+  // Authenticated principal identifier when policy permits retention.
+  optional string principal = 6;
+  // Current operation lifecycle state.
+  OperationState state = 7;
+  // Admission time.
+  google.protobuf.Timestamp accepted_at = 8;
+  // Backend start time when processing began.
+  optional google.protobuf.Timestamp started_at = 9;
+  // Terminal time when known.
+  optional google.protobuf.Timestamp completed_at = 10;
+  // Typed successful result, or a bounded successful subset for partial failure.
+  optional OperationResult result = 11;
+  // Typed terminal failure.
+  optional DdbError error = 12;
+  // Per-target outcomes for fanout operations.
+  repeated TargetOutcome target_outcomes = 13;
+  // State revision published for this result, when applicable.
+  optional uint64 state_revision = 14;
+  // State-event cursor published for this result, when applicable.
+  optional Cursor state_event_cursor = 15;
+  // True only when cancellation can still be requested.
+  bool cancellable = 16;
+  // Resource revision for idempotent event application.
+  uint64 revision = 17;
+  // Time after which this bounded record may no longer be queryable.
+  google.protobuf.Timestamp expires_at = 18;
+}
+
+// SnapshotSection selects bounded optional material in a state snapshot.
+enum SnapshotSection {
+  SNAPSHOT_SECTION_UNSPECIFIED = 0;
+  SNAPSHOT_SECTION_TOPOLOGY = 1;
+  SNAPSHOT_SECTION_SELECTION = 2;
+  SNAPSHOT_SECTION_EXECUTION = 3;
+  SNAPSHOT_SECTION_BREAKPOINTS = 4;
+  SNAPSHOT_SECTION_PENDING_OPERATIONS = 5;
+  SNAPSHOT_SECTION_EXTENSIONS = 6;
+  SNAPSHOT_SECTION_CAPABILITIES = 7;
+}
+
+// Snapshot is a detached, bounded state projection captured at a journal cursor.
+message Snapshot {
+  // Server instance that owns cursor and revisions.
+  string server_instance_id = 1;
+  // Journal position captured before snapshot collection.
+  Cursor state_event_cursor = 2;
+  // Committed state revision captured with state_event_cursor.
+  uint64 base_state_revision = 3;
+  // Sections actually included, including server-added required sections.
+  repeated SnapshotSection included_sections = 4;
+  // Current sessions.
+  repeated Session sessions = 5;
+  // Current logical groups.
+  repeated Group groups = 6;
+  // Current process projections.
+  repeated Process processes = 7;
+  // Current threads when requested and within advertised bounds.
+  repeated Thread threads = 8;
+  // Current selection.
+  optional Selection selection = 9;
+  // Current execution-state projections.
+  repeated ExecutionState execution_states = 10;
+  // Current logical breakpoints.
+  repeated Breakpoint breakpoints = 11;
+  // Current pending backend commands.
+  repeated PendingCommand pending_commands = 12;
+  // Current nonterminal/recent operation summaries.
+  repeated Operation operations = 13;
+  // Current extension-owned state.
+  repeated ExtensionState extension_states = 14;
+  // Current dynamic capability document.
+  optional Capabilities capabilities = 15;
+}
+
+// ComponentHealth reports one safe operational dependency status.
+message ComponentHealth {
+  // Stable component identifier.
+  string component = 1;
+  // Current status.
+  HealthStatus status = 2;
+  // Safe operator-facing detail without secrets.
+  optional string detail = 3;
+}
+
+// HealthReport is intentionally small and excludes debugger data.
+message HealthReport {
+  // Aggregate health or readiness.
+  HealthStatus status = 1;
+  // Opaque server instance identity.
+  string server_instance_id = 2;
+  // Time this report was produced.
+  google.protobuf.Timestamp observed_at = 3;
+  // Bounded component diagnostics.
+  repeated ComponentHealth components = 4;
+}

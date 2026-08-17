@@ -178,6 +178,44 @@ pub fn resolve_debugger_backend(config: &Config) -> anyhow::Result<Arc<dyn Debug
     Ok(backend)
 }
 
+/// Verifies that a configured native debugger is executable before a headless
+/// service announces readiness. Legacy interactive startup keeps its historical
+/// lazy behavior.
+pub async fn preflight_debugger_backend(backend: &dyn DebuggerBackend) -> Result<()> {
+    let executable = backend.name();
+    if executable == "mock" {
+        return Ok(());
+    }
+
+    let mut child = tokio::process::Command::new(executable)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| {
+            format!(
+                "debugger executable {executable:?} is unavailable; install it or select another backend"
+            )
+        })?;
+
+    let status = match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+        Ok(result) => result.context("failed to wait for debugger preflight")?,
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            anyhow::bail!("debugger executable {executable:?} did not respond within 5 seconds");
+        }
+    };
+    if !status.success() {
+        anyhow::bail!(
+            "debugger executable {executable:?} failed its availability check with {status}"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

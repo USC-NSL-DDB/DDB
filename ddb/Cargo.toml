@@ -1,6 +1,18 @@
 [workspace]
-members = ["core", "gdbmi", "benchmarks"]
+members = [
+    "core",
+    "gdbmi",
+    "benchmarks",
+    "api-types",
+    "api-grpc",
+    "api-client",
+    "api-conformance",
+    "api-extension",
+    "examples/extensions/sample-extension",
+    "tools/api-codegen",
+]
 resolver = "2"
+exclude = ["fuzz"]
 
 [profile.release]
 lto = "thin"

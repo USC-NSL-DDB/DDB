@@ -21,6 +21,7 @@ pub mod input;
 pub(crate) mod mi;
 pub mod outcome;
 pub mod output;
+pub(crate) mod output_hub;
 pub(crate) mod query;
 pub mod response;
 pub mod router;

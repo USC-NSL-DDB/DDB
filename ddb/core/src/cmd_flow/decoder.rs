@@ -141,6 +141,7 @@ impl BreakpointCreated {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn decode_first(completion: &FinishedCmd) -> Result<Self, DecodeError> {
         let response = completion
             .get_responses()

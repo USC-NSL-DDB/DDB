@@ -1,0 +1,25 @@
+[package]
+name = "ddb-api-extension"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Validated provider and registry interfaces for DDB API extensions"
+repository = "https://github.com/USC-NSL-DDB/DDB"
+homepage = "https://github.com/USC-NSL-DDB/DDB"
+documentation = "https://docs.rs/ddb-api-extension"
+readme = "README.md"
+keywords = ["debugger", "distributed", "extension", "api"]
+categories = ["development-tools::debugging", "api-bindings"]
+
+[dependencies]
+async-trait = "0.1.85"
+ddb-api-types = { version = "0.1.0", path = "../api-types" }
+serde_json = "1.0"
+sha2 = "0.10.9"
+thiserror = "2.0.11"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[package.metadata.docs.rs]
+all-features = true

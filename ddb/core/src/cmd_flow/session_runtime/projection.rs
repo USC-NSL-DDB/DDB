@@ -8,12 +8,18 @@ use tracing::warn;
 use crate::{
     cmd_flow::event::{DebuggerEvent, DebuggerEventReducer},
     cmd_flow::event_publisher::EventPublisher,
+    debugger::protocol::StreamKind,
     session::lifecycle::SessionTerminationReporter,
 };
 
 pub(super) struct ProjectedEvent {
     pub sequence: u64,
-    pub event: DebuggerEvent,
+    pub record: ProjectionRecord,
+}
+
+pub(super) enum ProjectionRecord {
+    Event(Box<DebuggerEvent>),
+    Stream { kind: StreamKind, message: String },
 }
 
 /// Applies events in arrival order and advances the `applied` watermark that
@@ -32,7 +38,13 @@ pub(super) async fn run_projector(
         if !projection_delay.is_zero() {
             tokio::time::sleep(projection_delay).await;
         }
-        match reducer.project(event.event, sid).await {
+        let projection = match event.record {
+            ProjectionRecord::Event(debugger_event) => reducer.project(*debugger_event, sid).await,
+            ProjectionRecord::Stream { kind, message } => {
+                Ok(reducer.project_stream(sid, kind, message).await)
+            }
+        };
+        match projection {
             Ok(projection) => {
                 if let Some(output) = projection.output {
                     if let Err(error) = publisher.publish(output).await {

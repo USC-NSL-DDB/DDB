@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::{net::Ipv4Addr, sync::Arc};
 
 use super::{SessionMode, SessionProcess, SessionRequest, SessionRequestBuilder, SessionStart};
@@ -13,6 +13,37 @@ use crate::{
     plugin::FrameworkPlugin,
     state::ServiceIdentity,
 };
+
+pub(crate) fn validate_static_session_config(
+    config: &Config,
+    session: &StaticSessionConfig,
+) -> Result<()> {
+    match config.conf.debugger.backend {
+        DebuggerBackendKind::Mock => Ok(()),
+        DebuggerBackendKind::Gdb | DebuggerBackendKind::Lldb => match session.start_mode {
+            StaticSessionStartMode::Attach if session.pid == 0 => {
+                bail!("static attach sessions require a non-zero pid")
+            }
+            StaticSessionStartMode::Binary if session.binary_path.trim().is_empty() => {
+                bail!("static binary sessions require binary_path to be set")
+            }
+            StaticSessionStartMode::Binary => {
+                let metadata = std::fs::metadata(&session.binary_path).with_context(|| {
+                    format!("failed to inspect static binary {}", session.binary_path)
+                })?;
+                if !metadata.is_file() {
+                    bail!(
+                        "static binary {} is not a regular file",
+                        session.binary_path
+                    );
+                }
+                Ok(())
+            }
+            StaticSessionStartMode::Attach => Ok(()),
+        },
+        DebuggerBackendKind::Unknown => bail!("Unsupported debugger backend configured."),
+    }
+}
 
 /// How sessions reach services reported by the active discovery source.
 ///
@@ -132,13 +163,21 @@ impl SessionFactory {
             .build()
     }
 
-    fn build_static_request(&self, session: StaticSessionConfig) -> Result<SessionRequest> {
+    pub(crate) fn build_static_request(
+        &self,
+        session: StaticSessionConfig,
+    ) -> Result<SessionRequest> {
+        validate_static_session_config(self.config.as_ref(), &session)?;
         let service_identity = ServiceIdentity::new(session.hash.clone(), session.alias.clone());
+        let on_exit = session.on_exit.clone();
 
         let mut builder = SessionRequestBuilder::from_config(self.config.as_ref())
             .tag(session.tag)
             .stop_at_entry(session.stop_at_entry)
             .service_identity(service_identity);
+        if let Some(on_exit) = on_exit {
+            builder = builder.on_exit(on_exit);
+        }
 
         builder = match self.config.conf.debugger.backend {
             DebuggerBackendKind::Mock => builder
@@ -150,20 +189,12 @@ impl SessionFactory {
             DebuggerBackendKind::Gdb | DebuggerBackendKind::Lldb => {
                 let mode = match session.start_mode {
                     StaticSessionStartMode::Attach => {
-                        if session.pid == 0 {
-                            bail!("static attach sessions require a non-zero pid");
-                        }
                         SessionMode::Local(SessionStart::Attach(session.pid))
                     }
-                    StaticSessionStartMode::Binary => {
-                        if session.binary_path.trim().is_empty() {
-                            bail!("static binary sessions require binary_path to be set");
-                        }
-                        SessionMode::Local(SessionStart::Binary {
-                            path: session.binary_path,
-                            args: session.binary_args,
-                        })
-                    }
+                    StaticSessionStartMode::Binary => SessionMode::Local(SessionStart::Binary {
+                        path: session.binary_path,
+                        args: session.binary_args,
+                    }),
                 };
                 builder.mode(mode).transport(TransportSpec::Local)
             }
@@ -191,6 +222,7 @@ mod tests {
             BreakpointEventPublisher::new(
                 Arc::new(NotificationManager::new()),
                 crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+                crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
             ),
         );
         SessionFactory::new(
@@ -261,5 +293,25 @@ mod tests {
             request.service_identity,
             Some(ServiceIdentity::new("group", "api"))
         );
+    }
+
+    #[tokio::test]
+    async fn static_session_lifecycle_overrides_the_global_default() {
+        let mut config = Config::default();
+        config.conf.on_exit = crate::common::config::OnExit::DETACH;
+        let factory = test_factory(config);
+        let binary = tempfile::NamedTempFile::new().expect("fixture file should be created");
+        let session = StaticSessionConfig {
+            start_mode: StaticSessionStartMode::Binary,
+            binary_path: binary.path().to_string_lossy().into_owned(),
+            on_exit: Some(crate::common::config::OnExit::KILL),
+            ..StaticSessionConfig::default()
+        };
+
+        let request = factory
+            .build_static_request(session)
+            .expect("valid session should build");
+
+        assert_eq!(request.on_exit, crate::common::config::OnExit::KILL);
     }
 }

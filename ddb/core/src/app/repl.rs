@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use tokio::{
-    io::{self, AsyncBufReadExt},
-    task::JoinSet,
-};
+use std::io::BufRead;
+
+use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error};
 
 use crate::{
@@ -29,8 +28,7 @@ pub(super) async fn run(
         _ = status.wait_for_up() => {}
     }
 
-    let stdin = io::stdin();
-    let mut reader = io::BufReader::new(stdin).lines();
+    let mut lines = stdin_lines();
     let mut commands = JoinSet::new();
     println!("(ddb) ");
 
@@ -45,9 +43,9 @@ pub(super) async fn run(
                     error!("[Command]: task failed: {:?}", error);
                 }
             }
-            line = reader.next_line(), if commands.len() < command_workers => {
+            line = lines.recv(), if commands.len() < command_workers => {
                 match line {
-                    Ok(Some(line)) => {
+                    Some(Ok(line)) => {
                         let input = line.trim();
                         if input.is_empty() {
                             println!("(ddb) ");
@@ -78,12 +76,12 @@ pub(super) async fn run(
                         });
                         println!("(ddb) ");
                     }
-                    Ok(None) => {
+                    None => {
                         shutdown.trigger_once(ShutdownCause::StdinEof);
                         println!("EOF reached, exiting command loop...");
                         break;
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         shutdown.trigger_once(ShutdownCause::StdinError);
                         eprintln!("Error reading line: {}", error);
                         break;
@@ -94,4 +92,28 @@ pub(super) async fn run(
     }
     commands.abort_all();
     while commands.join_next().await.is_some() {}
+}
+
+/// Bridges blocking process stdin into the async command loop.
+///
+/// Tokio's stdin adapter delegates to the blocking pool, whose in-flight read
+/// cannot be cancelled. A remote shutdown would therefore finish every DDB
+/// component and then hang while the Tokio runtime waited for stdin EOF. A
+/// detached OS thread is intentional here: dropping the receiver stops it
+/// after the current read, and a blocked terminal read cannot delay process
+/// termination.
+fn stdin_lines() -> mpsc::Receiver<std::io::Result<String>> {
+    let (sender, receiver) = mpsc::channel(1);
+    std::thread::Builder::new()
+        .name("ddb-stdin".to_string())
+        .spawn(move || {
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                if sender.blocking_send(line).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("failed to spawn stdin reader");
+    receiver
 }

@@ -1,0 +1,18 @@
+[package]
+name = "ddb-api-grpc"
+version = "0.1.0"
+edition = "2021"
+description = "Generated gRPC client and server stubs for the DDB v2 API"
+license = "Apache-2.0"
+repository = "https://github.com/USC-NSL-DDB/DDB"
+homepage = "https://github.com/USC-NSL-DDB/DDB"
+documentation = "https://docs.rs/ddb-api-grpc"
+readme = "README.md"
+keywords = ["debugger", "distributed", "grpc", "protobuf"]
+categories = ["development-tools::debugging", "api-bindings"]
+
+[dependencies]
+ddb-api-types = { version = "0.1.0", path = "../api-types" }
+prost = "=0.14.3"
+tonic = { version = "=0.14.3", features = ["transport"] }
+tonic-prost = "=0.14.3"

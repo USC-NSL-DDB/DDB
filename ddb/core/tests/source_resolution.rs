@@ -1,6 +1,6 @@
 mod support;
 
-use support::{group_id_by_hash, DdbProcess, SessionSpec};
+use support::{DdbProcess, SessionSpec};
 
 #[test]
 fn source_endpoints_resolve_debugger_files_to_live_groups() {
@@ -31,10 +31,9 @@ fn source_endpoints_resolve_debugger_files_to_live_groups() {
     let mut ddb = DdbProcess::spawn(&sessions);
     ddb.wait_for_sessions_len(2);
 
-    let groups = ddb.api_get("/groups");
     let mut expected_ids = vec![
-        group_id_by_hash(&groups, "binary-api"),
-        group_id_by_hash(&groups, "binary-worker"),
+        ddb.wait_for_group_id_by_hash("binary-api"),
+        ddb.wait_for_group_id_by_hash("binary-worker"),
     ];
     expected_ids.sort_unstable();
 

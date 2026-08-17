@@ -1,6 +1,6 @@
 mod support;
 
-use support::{bkpt_id, group_id_by_hash, session_id_by_tag, DdbProcess, SessionSpec};
+use support::{bkpt_id, session_id_by_tag, DdbProcess, SessionSpec};
 
 #[test]
 fn group_breakpoints_hit_with_global_breakpoint_ids() {
@@ -32,8 +32,7 @@ fn group_breakpoints_hit_with_global_breakpoint_ids() {
     let sessions = ddb.wait_for_sessions_len(2);
     ddb.wait_for_stdout_count("thread-created", 2);
 
-    let groups = ddb.api_get("/groups");
-    let group_id = group_id_by_hash(&groups, "grp-a");
+    let group_id = ddb.wait_for_group_id_by_hash("grp-a");
     let sid_a = session_id_by_tag(&sessions, "svc-a");
     let sid_b = session_id_by_tag(&sessions, "svc-b");
 
@@ -61,15 +60,25 @@ fn group_breakpoints_hit_with_global_breakpoint_ids() {
         Some(2)
     );
 
+    let checkpoint = ddb.stdout_checkpoint();
     ddb.send_cmd(&format!("211-exec-continue --session {}", sid_a));
     let sid_a_needle = format!("session-id=\"{}\"", sid_a);
-    let stop_a = ddb.wait_for_stdout_line_with_all(&["*stopped", sid_a_needle.as_str()]);
-    assert!(stop_a.contains(&format!("bkptno=\"{}\"", global_bkpt_id)));
+    let stop_a =
+        ddb.wait_for_stdout_line_with_all_after(checkpoint, &["*stopped", sid_a_needle.as_str()]);
+    assert!(
+        stop_a.contains(&format!("bkptno=\"{}\"", global_bkpt_id)),
+        "matched stop record did not contain the global breakpoint ID: {stop_a}"
+    );
 
+    let checkpoint = ddb.stdout_checkpoint();
     ddb.send_cmd(&format!("212-exec-continue --session {}", sid_b));
     let sid_b_needle = format!("session-id=\"{}\"", sid_b);
-    let stop_b = ddb.wait_for_stdout_line_with_all(&["*stopped", sid_b_needle.as_str()]);
-    assert!(stop_b.contains(&format!("bkptno=\"{}\"", global_bkpt_id)));
+    let stop_b =
+        ddb.wait_for_stdout_line_with_all_after(checkpoint, &["*stopped", sid_b_needle.as_str()]);
+    assert!(
+        stop_b.contains(&format!("bkptno=\"{}\"", global_bkpt_id)),
+        "matched stop record did not contain the global breakpoint ID: {stop_b}"
+    );
 }
 
 #[test]
@@ -102,8 +111,7 @@ fn late_joining_session_inherits_group_breakpoints() {
     ddb.wait_for_sessions_len(1);
     ddb.wait_for_stdout_count("thread-created", 1);
 
-    let groups = ddb.api_get("/groups");
-    let group_id = group_id_by_hash(&groups, "grp-a");
+    let group_id = ddb.wait_for_group_id_by_hash("grp-a");
 
     ddb.send_cmd(&format!(
         "301-break-insert --group {} src/shared.rs:88",
@@ -119,10 +127,15 @@ fn late_joining_session_inherits_group_breakpoints() {
     ddb.wait_for_bkpt_active_sessions(global_bkpt_id, 2);
 
     let sid_b = session_id_by_tag(&sessions, "svc-b");
+    let checkpoint = ddb.stdout_checkpoint();
     ddb.send_cmd(&format!("302-exec-continue --session {}", sid_b));
     let sid_b_needle = format!("session-id=\"{}\"", sid_b);
-    let stop_b = ddb.wait_for_stdout_line_with_all(&["*stopped", sid_b_needle.as_str()]);
-    assert!(stop_b.contains(&format!("bkptno=\"{}\"", global_bkpt_id)));
+    let stop_b =
+        ddb.wait_for_stdout_line_with_all_after(checkpoint, &["*stopped", sid_b_needle.as_str()]);
+    assert!(
+        stop_b.contains(&format!("bkptno=\"{}\"", global_bkpt_id)),
+        "matched stop record did not contain the global breakpoint ID: {stop_b}"
+    );
 }
 
 #[test]
@@ -154,8 +167,7 @@ fn multiple_targets_are_deduplicated_and_group_breakpoint_deletion_is_complete()
 
     let sessions = ddb.wait_for_sessions_len(2);
     ddb.wait_for_stdout_count("thread-created", 2);
-    let groups = ddb.api_get("/groups");
-    let group_id = group_id_by_hash(&groups, "grp-a");
+    let group_id = ddb.wait_for_group_id_by_hash("grp-a");
     let session_id = session_id_by_tag(&sessions, "svc-a");
 
     ddb.send_cmd(&format!(

@@ -4,13 +4,14 @@ use anyhow::{anyhow, bail, Result};
 use dashmap::DashMap;
 use futures::future::join_all;
 use serde::Deserialize;
-use tokio::time::timeout;
+use tokio::{sync::broadcast, time::timeout};
 
 use super::{
     input::Command,
     response::{FinishedCmd, SessionRuntimeStatus},
     session_runtime::{
-        SessionCommand, SessionHandle, SessionLease, SessionTicket, COMMAND_TIMEOUT,
+        PendingCommandChange, SessionCommand, SessionHandle, SessionLease, SessionPendingCommand,
+        SessionTicket, COMMAND_TIMEOUT,
     },
 };
 use crate::{
@@ -19,6 +20,90 @@ use crate::{
 };
 
 const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
+const PENDING_CHANGE_CAPACITY: usize = 1_024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionCommandFailureKind {
+    AdmissionTimeout,
+    AdmissionRejected,
+    ResponseTimeout,
+    ResponseFailed,
+    DebuggerRejected,
+    ExecutionFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SessionCommandFailure {
+    sid: u64,
+    kind: SessionCommandFailureKind,
+}
+
+impl SessionCommandFailure {
+    pub(crate) fn new(sid: u64, kind: SessionCommandFailureKind) -> Self {
+        Self { sid, kind }
+    }
+
+    pub(crate) fn sid(&self) -> u64 {
+        self.sid
+    }
+
+    pub(crate) fn kind(&self) -> SessionCommandFailureKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CommandFanoutReport {
+    completion: FinishedCmd,
+    failures: Vec<SessionCommandFailure>,
+}
+
+impl CommandFanoutReport {
+    pub(crate) fn new(
+        external_token: Option<u64>,
+        mut responses: Vec<super::ParsedSessionResponse>,
+        mut failures: Vec<SessionCommandFailure>,
+    ) -> Self {
+        responses.sort_by_key(|response| response.get_sid());
+        failures.sort_unstable_by_key(SessionCommandFailure::sid);
+        let sid = responses
+            .first()
+            .map(|response| response.get_sid())
+            .unwrap_or(0);
+        Self {
+            completion: FinishedCmd::new(external_token, sid, responses),
+            failures,
+        }
+    }
+
+    pub(crate) fn completion(&self) -> &FinishedCmd {
+        &self.completion
+    }
+
+    pub(crate) fn failures(&self) -> &[SessionCommandFailure] {
+        &self.failures
+    }
+
+    pub(crate) fn into_result(self) -> Result<FinishedCmd> {
+        if self.failures.is_empty() {
+            Ok(self.completion)
+        } else {
+            Err(CommandFanoutError { report: self }.into())
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("debugger command failed for one or more session targets")]
+pub(crate) struct CommandFanoutError {
+    report: CommandFanoutReport,
+}
+
+impl CommandFanoutError {
+    pub(crate) fn report(&self) -> &CommandFanoutReport {
+        &self.report
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum Target {
@@ -58,6 +143,7 @@ impl SessionRoute {
             command: wire_command,
             thread_id: self.thread_id,
             consistency: command.consistency,
+            metadata: command.metadata.clone(),
         }
     }
 }
@@ -65,22 +151,36 @@ impl SessionRoute {
 pub struct Router {
     model: Arc<RuntimeModel>,
     sessions: DashMap<u64, SessionHandle>,
+    pending_changes: broadcast::Sender<PendingCommandChange>,
 }
 
 impl Router {
     pub fn new(model: Arc<RuntimeModel>) -> Self {
+        let (pending_changes, _) = broadcast::channel(PENDING_CHANGE_CAPACITY);
         Self {
             model,
             sessions: DashMap::new(),
+            pending_changes,
         }
     }
 
     pub fn add_session(&self, handle: SessionHandle) {
-        self.sessions.insert(handle.sid(), handle);
+        let sid = handle.sid();
+        if let Some(previous) = self.sessions.insert(sid, handle.clone()) {
+            previous.detach_pending_events();
+        }
+        handle.attach_pending_events(self.pending_changes.clone());
     }
 
     pub fn remove_session(&self, sid: u64) {
-        self.sessions.remove(&sid);
+        if let Some((_, handle)) = self.sessions.remove(&sid) {
+            handle.detach_pending_events();
+            let _ = self.pending_changes.send(PendingCommandChange::Reconcile);
+        }
+    }
+
+    pub(crate) fn subscribe_pending_changes(&self) -> broadcast::Receiver<PendingCommandChange> {
+        self.pending_changes.subscribe()
     }
 
     pub fn session_handle(&self, sid: u64) -> Result<SessionHandle> {
@@ -104,8 +204,8 @@ impl Router {
     ) -> Result<Vec<SessionRoute>> {
         let routes = sids
             .iter()
-            .filter_map(|sid| self.session_route(*sid, None).ok())
-            .collect::<Vec<_>>();
+            .map(|sid| self.session_route(*sid, None))
+            .collect::<Result<Vec<_>>>()?;
         if routes.is_empty() {
             return Err(empty_error());
         }
@@ -189,49 +289,83 @@ impl Router {
         }
     }
 
+    pub(crate) fn resolve_session_ids(&self, target: &Target) -> Result<Vec<u64>> {
+        let mut session_ids = self
+            .resolve_target(target)?
+            .into_iter()
+            .map(|route| route.handle.sid())
+            .collect::<Vec<_>>();
+        session_ids.sort_unstable();
+        session_ids.dedup();
+        Ok(session_ids)
+    }
+
     async fn submit_routes(
         &self,
         routes: Vec<SessionRoute>,
         command: &Command,
-    ) -> Result<Vec<SessionTicket>> {
+    ) -> (Vec<SessionTicket>, Vec<SessionCommandFailure>) {
         let submissions = routes.into_iter().map(|route| {
             let session_command = route.command(command);
             async move {
                 let sid = route.handle.sid();
-                timeout(COMMAND_SEND_TIMEOUT, route.handle.submit(session_command))
-                    .await
-                    .map_err(|_| anyhow!("Timed out admitting command for session {}", sid))?
-                    .map_err(|error| anyhow!("Session {} rejected command: {}", sid, error))
+                match timeout(COMMAND_SEND_TIMEOUT, route.handle.submit(session_command)).await {
+                    Ok(Ok(ticket)) => Ok(ticket),
+                    Ok(Err(_)) => Err(SessionCommandFailure::new(
+                        sid,
+                        SessionCommandFailureKind::AdmissionRejected,
+                    )),
+                    Err(_) => Err(SessionCommandFailure::new(
+                        sid,
+                        SessionCommandFailureKind::AdmissionTimeout,
+                    )),
+                }
             }
         });
-        join_all(submissions).await.into_iter().collect()
+        let mut tickets = Vec::new();
+        let mut failures = Vec::new();
+        for result in join_all(submissions).await {
+            match result {
+                Ok(ticket) => tickets.push(ticket),
+                Err(failure) => failures.push(failure),
+            }
+        }
+        (tickets, failures)
     }
 
     async fn collect(
         external_token: Option<u64>,
         tickets: Vec<SessionTicket>,
+        mut failures: Vec<SessionCommandFailure>,
     ) -> Result<FinishedCmd> {
-        let completions = tickets.into_iter().map(SessionTicket::complete);
-        let mut responses = timeout(COMMAND_TIMEOUT, async {
-            join_all(completions)
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>>>()
-        })
-        .await
-        .map_err(|_| anyhow!("Timed out waiting for command responses"))??;
-        responses.sort_by_key(|response| response.get_sid());
-        let sid = responses
-            .first()
-            .map(|response| response.get_sid())
-            .unwrap_or(0);
-        Ok(FinishedCmd::new(external_token, sid, responses))
+        let completions = tickets.into_iter().map(|ticket| async move {
+            let sid = ticket.sid();
+            match timeout(COMMAND_TIMEOUT, ticket.complete()).await {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(_)) => Err(SessionCommandFailure::new(
+                    sid,
+                    SessionCommandFailureKind::ResponseFailed,
+                )),
+                Err(_) => Err(SessionCommandFailure::new(
+                    sid,
+                    SessionCommandFailureKind::ResponseTimeout,
+                )),
+            }
+        });
+        let mut responses = Vec::new();
+        for result in join_all(completions).await {
+            match result {
+                Ok(response) => responses.push(response),
+                Err(failure) => failures.push(failure),
+            }
+        }
+        CommandFanoutReport::new(external_token, responses, failures).into_result()
     }
 
     pub async fn execute(&self, target: Target, command: Command) -> Result<FinishedCmd> {
         let routes = self.resolve_target(&target)?;
-        let tickets = self.submit_routes(routes, &command).await?;
-        Self::collect(command.external_token, tickets).await
+        let (tickets, failures) = self.submit_routes(routes, &command).await;
+        Self::collect(command.external_token, tickets, failures).await
     }
 
     pub async fn execute_exclusive(
@@ -251,14 +385,32 @@ impl Router {
             .pop()
             .expect("exclusive target has exactly one route");
         let session_command = route.command(&command);
-        let response = timeout(COMMAND_TIMEOUT, lease.execute(session_command))
-            .await
-            .map_err(|_| anyhow!("Timed out waiting for exclusive command"))??;
-        Ok(FinishedCmd::new(
-            command.external_token,
-            lease.sid(),
-            vec![response],
-        ))
+        let response = match timeout(COMMAND_TIMEOUT, lease.execute(session_command)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => {
+                return CommandFanoutReport::new(
+                    command.external_token,
+                    Vec::new(),
+                    vec![SessionCommandFailure::new(
+                        lease.sid(),
+                        SessionCommandFailureKind::ResponseFailed,
+                    )],
+                )
+                .into_result();
+            }
+            Err(_) => {
+                return CommandFanoutReport::new(
+                    command.external_token,
+                    Vec::new(),
+                    vec![SessionCommandFailure::new(
+                        lease.sid(),
+                        SessionCommandFailureKind::ResponseTimeout,
+                    )],
+                )
+                .into_result();
+            }
+        };
+        CommandFanoutReport::new(command.external_token, vec![response], Vec::new()).into_result()
     }
 
     pub fn runtime_statuses(&self) -> Vec<SessionRuntimeStatus> {
@@ -269,6 +421,16 @@ impl Router {
             .collect::<Vec<_>>();
         statuses.sort_by_key(|status| status.sid);
         statuses
+    }
+
+    pub(crate) fn pending_commands(&self) -> Vec<SessionPendingCommand> {
+        let mut commands = self
+            .sessions
+            .iter()
+            .flat_map(|entry| entry.value().pending_commands())
+            .collect::<Vec<_>>();
+        commands.sort_unstable_by_key(|command| (command.sid, command.token));
+        commands
     }
 }
 

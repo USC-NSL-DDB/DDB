@@ -370,12 +370,24 @@ impl StateMgr {
         })
     }
 
+    #[cfg(test)]
     #[inline]
     pub async fn update_thread_statuses(
         &self,
         sid: u64,
         tids: &[u64],
         status: session_mgr::ThreadStatus,
+    ) -> StateTransitionResult<()> {
+        self.update_thread_statuses_with_location(sid, tids, status, None)
+            .await
+    }
+
+    pub async fn update_thread_statuses_with_location(
+        &self,
+        sid: u64,
+        tids: &[u64],
+        status: session_mgr::ThreadStatus,
+        location: Option<(u64, session_mgr::ThreadLocation)>,
     ) -> StateTransitionResult<()> {
         let session = self
             .session_states
@@ -391,7 +403,20 @@ impl StateMgr {
                 thread_id: *tid,
             });
         }
-        debug_assert!(session.update_thread_statuses(tids, status));
+        if !session.update_thread_statuses(tids, status) {
+            return Err(StateTransitionError::ThreadNotFound {
+                session_id: sid,
+                thread_id: tids.first().copied().unwrap_or_default(),
+            });
+        }
+        if let Some((tid, location)) = location {
+            if !tids.contains(&tid) || !session.set_thread_location(tid, location) {
+                return Err(StateTransitionError::ThreadNotFound {
+                    session_id: sid,
+                    thread_id: tid,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -646,6 +671,25 @@ mod tests {
                 thread_id: 10,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn thread_status_mutation_is_not_debug_only() {
+        let mgr = StateMgr::new();
+        mgr.register_session(1, "svc-a", None).await;
+        mgr.register_thread_group(1, "i1").await.unwrap();
+        mgr.register_thread(1, 10, "i1").await.unwrap();
+
+        mgr.update_thread_statuses(1, &[10], session_mgr::ThreadStatus::RUNNING)
+            .await
+            .unwrap();
+
+        let (_, threads) = mgr
+            .with_session(1, |session| session.thread_status_snapshot())
+            .await
+            .unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].status, session_mgr::ThreadStatus::RUNNING);
     }
 
     #[tokio::test]

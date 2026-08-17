@@ -55,7 +55,9 @@ fn waited_multiple_target_command_returns_all_session_responses() {
         .collect::<Vec<_>>();
     response_sids.sort_unstable();
 
-    assert_eq!(response_sids, vec![sid_a, sid_b]);
+    let mut expected_sids = vec![sid_a, sid_b];
+    expected_sids.sort_unstable();
+    assert_eq!(response_sids, expected_sids);
 }
 
 #[test]

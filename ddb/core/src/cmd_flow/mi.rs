@@ -11,7 +11,17 @@ pub(crate) struct MiFormatter;
 impl MiFormatter {
     #[inline]
     fn escape_str(input: &str) -> String {
-        input.replace(r#"\"#, r#"\\"#).replace(r#"""#, r#"\""#)
+        input.chars().fold(String::new(), |mut output, character| {
+            match character {
+                '\\' => output.push_str("\\\\"),
+                '"' => output.push_str("\\\""),
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                '\t' => output.push_str("\\t"),
+                other => output.push(other),
+            }
+            output
+        })
     }
 
     #[inline]
@@ -59,6 +69,14 @@ impl MiFormatter {
             .unwrap_or_default();
 
         format!("{token}{record_prefix}{message}{payload}")
+    }
+
+    pub(crate) fn format_stream(record_prefix: &str, message: &str) -> String {
+        if record_prefix.is_empty() {
+            message.to_string()
+        } else {
+            format!("{record_prefix}\"{}\"", Self::escape_str(message))
+        }
     }
 }
 
@@ -117,5 +135,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn debugger_streams_are_rendered_as_escaped_mi_c_strings() {
+        assert_eq!(
+            MiFormatter::format_stream("~", "line one\n\"quoted\"\\path"),
+            "~\"line one\\n\\\"quoted\\\"\\\\path\""
+        );
+        assert_eq!(MiFormatter::format_stream("", "(gdb)"), "(gdb)");
     }
 }

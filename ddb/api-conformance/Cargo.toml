@@ -1,0 +1,24 @@
+[package]
+name = "ddb-api-conformance"
+version = "0.1.0"
+edition = "2021"
+description = "Black-box conformance runner for DDB API v2 servers"
+license = "Apache-2.0"
+repository = "https://github.com/USC-NSL-DDB/DDB"
+homepage = "https://github.com/USC-NSL-DDB/DDB"
+documentation = "https://docs.rs/ddb-api-conformance"
+readme = "README.md"
+keywords = ["debugger", "distributed", "conformance", "api"]
+categories = ["development-tools::testing", "development-tools::debugging"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+ddb-api-client = { version = "0.1.0", path = "../api-client" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+url = "2.5"
+
+[dev-dependencies]
+pretty_assertions = "1.4"

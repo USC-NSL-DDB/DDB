@@ -5,9 +5,10 @@ mod render;
 pub(crate) use decode::decode_event;
 pub(crate) use reducer::DebuggerEventReducer;
 
-use crate::debugger::protocol::Dict;
+use crate::debugger::protocol::{Dict, StreamKind};
 
 use crate::session::lifecycle::SessionTerminationCause;
+use crate::state::ThreadLocation;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum ThreadSet {
@@ -38,6 +39,7 @@ pub(crate) enum DebuggerEventKind {
         thread: Option<ThreadSet>,
         stopped_threads: Option<ThreadSet>,
         local_breakpoint_id: Option<u64>,
+        location: Option<ThreadLocation>,
     },
     ThreadGroupAdded {
         local_group_id: String,
@@ -66,6 +68,9 @@ pub(crate) struct DebuggerEvent {
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectedDebuggerRecord {
     pub prefix: &'static str,
+    /// Stable semantic stream name for raw debugger output. Async records use
+    /// `None` and derive their API stream from the MI-compatible prefix.
+    pub stream: Option<&'static str>,
     pub message: String,
     pub payload: Option<Dict>,
     pub token: Option<u64>,
@@ -88,6 +93,7 @@ impl EventProjection {
             output: Some(ProjectedDebuggerOutput {
                 records: vec![ProjectedDebuggerRecord {
                     prefix,
+                    stream: None,
                     message,
                     payload: Some(payload),
                     token,
@@ -108,6 +114,37 @@ impl EventProjection {
         Self {
             output: None,
             lifecycle: Some(SessionTerminationCause::ProtocolExit { reasons }),
+        }
+    }
+
+    pub(crate) fn debugger_stream(kind: StreamKind, message: String) -> Self {
+        let (prefix, stream, message) = match kind {
+            StreamKind::Console => ("~", "console", message),
+            StreamKind::Log => ("&", "log", message),
+            StreamKind::Target => ("@", "target", message),
+            StreamKind::InferiorStdout => ("@", "inferior_stdout", message),
+            StreamKind::InferiorStderr => ("&", "inferior_stderr", message),
+            StreamKind::Prompt => (
+                "",
+                "prompt",
+                if message.is_empty() {
+                    "(gdb)".to_string()
+                } else {
+                    message
+                },
+            ),
+        };
+        Self {
+            output: Some(ProjectedDebuggerOutput {
+                records: vec![ProjectedDebuggerRecord {
+                    prefix,
+                    stream: Some(stream),
+                    message,
+                    payload: None,
+                    token: None,
+                }],
+            }),
+            lifecycle: None,
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::OwnedMutexGuard;
+use tokio::sync::{broadcast, OwnedMutexGuard};
 
 use super::{
     bkpt_mgr::{BkptLoc, BkptMeta, BreakpointMgr, BreakpointStateChange, SubBkptMeta, SubBkptSpec},
@@ -9,13 +9,52 @@ use super::{
     group_operation::GroupOperationCoordinator,
     ids::{GlobalThreadGroupId, GlobalThreadId, GroupId, ServiceIdentity},
     proclet_mgr::ProcletMgr,
-    session_mgr::{SessionMeta, SessionStatus, ThreadContext, ThreadStatus},
+    session_mgr::{SessionMeta, SessionStatus, ThreadContext, ThreadLocation, ThreadStatus},
     state_mgr::{GlobalThreadIdentity, StateMgr, StateTransitionResult},
     thread_mgr::{LocalThreadId, ThreadIdView},
 };
 
 #[cfg(test)]
 use super::bkpt_mgr::SubBkptType;
+
+const RUNTIME_CHANGE_QUEUE: usize = 4_096;
+
+/// Backend-neutral hints emitted only after client-visible runtime state has
+/// committed. Consumers must resample detached state; the domain layer never
+/// owns public API payloads, identities, or revisions.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RuntimeResourceId {
+    Session(u64),
+    Group(u64),
+    Process(u64),
+    Thread(u64),
+    Breakpoint(u64),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeChange {
+    pub(crate) topology: bool,
+    pub(crate) breakpoints: bool,
+    pub(crate) removed: Vec<RuntimeResourceId>,
+}
+
+impl RuntimeChange {
+    fn topology() -> Self {
+        Self {
+            topology: true,
+            breakpoints: false,
+            removed: Vec::new(),
+        }
+    }
+
+    fn breakpoints() -> Self {
+        Self {
+            topology: false,
+            breakpoints: true,
+            removed: Vec::new(),
+        }
+    }
+}
 
 /// Immutable session state returned across the runtime-model boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +80,27 @@ impl SessionSnapshot {
             all_threads_stopped: meta.all_threads_stopped(),
         }
     }
+}
+
+/// Immutable thread state returned across the runtime-model boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ThreadSnapshot {
+    pub(crate) global_id: GlobalThreadId,
+    pub(crate) process_id: Option<GlobalThreadGroupId>,
+    pub(crate) session_id: u64,
+    pub(crate) local_id: u64,
+    pub(crate) status: ThreadStatus,
+    pub(crate) selected: bool,
+    pub(crate) execution_revision: u64,
+    pub(crate) location: Option<ThreadLocation>,
+}
+
+/// Immutable process state returned across the runtime-model boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProcessSnapshot {
+    pub(crate) global_id: GlobalThreadGroupId,
+    pub(crate) session_id: u64,
+    pub(crate) system_process_id: Option<u64>,
 }
 
 /// Holds a group operation gate across debugger I/O without exposing the
@@ -96,6 +156,7 @@ pub struct RuntimeModel {
     breakpoints: BreakpointMgr,
     proclets: ProcletMgr,
     group_operations: GroupOperationCoordinator,
+    changes: broadcast::Sender<RuntimeChange>,
 }
 
 impl std::fmt::Debug for RuntimeModel {
@@ -108,13 +169,25 @@ impl std::fmt::Debug for RuntimeModel {
 
 impl RuntimeModel {
     pub fn new() -> Arc<Self> {
+        let (changes, _) = broadcast::channel(RUNTIME_CHANGE_QUEUE);
         Arc::new(Self {
             state: StateMgr::new(),
             groups: GroupMgr::new(),
             breakpoints: BreakpointMgr::new(),
             proclets: ProcletMgr::new(),
             group_operations: GroupOperationCoordinator::new(),
+            changes,
         })
+    }
+
+    pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<RuntimeChange> {
+        self.changes.subscribe()
+    }
+
+    fn notify_change(&self, change: RuntimeChange) {
+        // No receiver is a normal startup/shutdown state. Once subscribed, a
+        // lagging consumer is explicitly detectable through broadcast::RecvError.
+        let _ = self.changes.send(change);
     }
 
     // Session lifecycle and snapshots.
@@ -128,6 +201,7 @@ impl RuntimeModel {
         self.state
             .register_session(sid, tag, service_identity)
             .await;
+        self.notify_change(RuntimeChange::topology());
     }
 
     /// Reserves the service group and publishes the session's membership only
@@ -157,6 +231,7 @@ impl RuntimeModel {
             {
                 self.groups
                     .register_session(&identity.hash, identity.alias.clone(), sid);
+                self.notify_change(RuntimeChange::topology());
                 return operation;
             }
         }
@@ -167,6 +242,7 @@ impl RuntimeModel {
             self.proclets.register_owner_session(caladan_ip, sid);
         }
         self.state.update_session_status_on(sid).await;
+        self.notify_change(RuntimeChange::topology());
     }
 
     pub(crate) async fn session_snapshot(&self, sid: u64) -> Option<SessionSnapshot> {
@@ -186,8 +262,77 @@ impl RuntimeModel {
         self.state.session_ids()
     }
 
-    pub(crate) fn has_session(&self, sid: u64) -> bool {
-        self.state.session(sid).is_some()
+    pub(crate) async fn thread_snapshots_for_sessions(
+        &self,
+        session_ids: &[u64],
+    ) -> Vec<ThreadSnapshot> {
+        let mut snapshots = Vec::new();
+        for session_id in session_ids {
+            let Some(session) = self.state.session(*session_id) else {
+                continue;
+            };
+            let (selected, threads) = session
+                .read_with(|session| {
+                    let (selected, threads) = session.thread_status_snapshot();
+                    let threads = threads
+                        .into_iter()
+                        .map(|thread| {
+                            let local_group_id = session
+                                .thread_group_for(thread.local_id)
+                                .map(str::to_string);
+                            (thread, local_group_id)
+                        })
+                        .collect::<Vec<_>>();
+                    (selected, threads)
+                })
+                .await;
+            for (thread, local_group_id) in threads {
+                if let Some(global_id) = self.state.global_thread_id(*session_id, thread.local_id) {
+                    snapshots.push(ThreadSnapshot {
+                        global_id,
+                        process_id: local_group_id.as_deref().and_then(|local_group_id| {
+                            self.state
+                                .global_thread_group_id(*session_id, local_group_id)
+                        }),
+                        session_id: *session_id,
+                        local_id: thread.local_id,
+                        status: thread.status,
+                        selected: selected == Some(thread.local_id),
+                        execution_revision: thread.execution_revision,
+                        location: thread.location,
+                    });
+                }
+            }
+        }
+        snapshots.sort_unstable_by_key(|thread| thread.global_id.value());
+        snapshots
+    }
+
+    pub(crate) async fn process_snapshots_for_sessions(
+        &self,
+        session_ids: &[u64],
+    ) -> Vec<ProcessSnapshot> {
+        let mut snapshots = Vec::new();
+        for session_id in session_ids {
+            let Some(session) = self.state.session(*session_id) else {
+                continue;
+            };
+            let groups = session.read_with(SessionMeta::thread_group_snapshot).await;
+            for (local_group_id, system_process_id) in groups {
+                if let Some(global_id) = self
+                    .state
+                    .global_thread_group_id(*session_id, &local_group_id)
+                {
+                    snapshots.push(ProcessSnapshot {
+                        global_id,
+                        session_id: *session_id,
+                        system_process_id,
+                    });
+                }
+            }
+        }
+        snapshots.sort_unstable_by_key(|process| process.global_id.value());
+        snapshots
     }
 
     #[cfg(test)]
@@ -234,6 +379,8 @@ impl RuntimeModel {
         sid: u64,
     ) -> (Vec<BreakpointStateChange>, Option<GroupId>) {
         let group_id = self.groups.group_id_by_session(sid);
+        let removed_threads = self.global_thread_ids_for_session(sid);
+        let removed_processes = self.process_snapshots_for_sessions(&[sid]).await;
         self.state.update_session_status_off(sid).await;
         let breakpoint_changes = self
             .breakpoints
@@ -243,23 +390,56 @@ impl RuntimeModel {
             group_id.filter(|group_id| self.groups.group_by_id(*group_id).is_none());
         self.proclets.remove_owner_session(sid);
         self.state.remove_session(sid).await;
+        let mut removed = vec![RuntimeResourceId::Session(sid)];
+        removed.extend(
+            removed_threads
+                .into_iter()
+                .map(|thread| RuntimeResourceId::Thread(thread.value())),
+        );
+        removed.extend(
+            removed_processes
+                .into_iter()
+                .map(|process| RuntimeResourceId::Process(process.global_id.value())),
+        );
+        if let Some(group_id) = emptied_group {
+            removed.push(RuntimeResourceId::Group(group_id.value()));
+        }
+        removed.extend(breakpoint_changes.iter().filter_map(|change| match change {
+            BreakpointStateChange::Removed(id) => Some(RuntimeResourceId::Breakpoint(*id)),
+            _ => None,
+        }));
+        self.notify_change(RuntimeChange {
+            topology: true,
+            breakpoints: !breakpoint_changes.is_empty(),
+            removed,
+        });
         (breakpoint_changes, emptied_group)
     }
 
     // Session operation state.
 
     pub(crate) async fn enter_custom_context(&self, sid: u64, context: ThreadContext) -> bool {
-        self.state
+        let changed = self
+            .state
             .with_session_mut(sid, |session| session.enter_custom_context(context))
             .await
-            .is_some()
+            .is_some();
+        if changed {
+            self.notify_change(RuntimeChange::topology());
+        }
+        changed
     }
 
     pub(crate) async fn finish_context_restore(&self, sid: u64, restored: bool) -> bool {
-        self.state
+        let changed = self
+            .state
             .with_session_mut(sid, |session| session.exit_custom_context(restored))
             .await
-            .is_some()
+            .is_some();
+        if changed {
+            self.notify_change(RuntimeChange::topology());
+        }
+        changed
     }
 
     pub(crate) async fn all_threads_stopped(&self, sid: u64) -> Option<bool> {
@@ -273,7 +453,11 @@ impl RuntimeModel {
         sid: u64,
         status: ThreadStatus,
     ) -> StateTransitionResult<()> {
-        self.state.update_all_thread_status(sid, status).await
+        let result = self.state.update_all_thread_status(sid, status).await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     // Thread topology and selection.
@@ -283,7 +467,11 @@ impl RuntimeModel {
         sid: u64,
         local_group_id: &str,
     ) -> StateTransitionResult<GlobalThreadGroupId> {
-        self.state.register_thread_group(sid, local_group_id).await
+        let result = self.state.register_thread_group(sid, local_group_id).await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     pub(crate) async fn remove_thread_group(
@@ -291,7 +479,29 @@ impl RuntimeModel {
         sid: u64,
         local_group_id: &str,
     ) -> StateTransitionResult<GlobalThreadGroupId> {
-        self.state.remove_thread_group(sid, local_group_id).await
+        let process_id = self.state.global_thread_group_id(sid, local_group_id);
+        let removed_threads = self
+            .thread_snapshots_for_sessions(&[sid])
+            .await
+            .into_iter()
+            .filter(|thread| thread.process_id == process_id)
+            .map(|thread| thread.global_id)
+            .collect::<Vec<_>>();
+        let result = self.state.remove_thread_group(sid, local_group_id).await;
+        if let Ok(process_id) = &result {
+            let mut removed = vec![RuntimeResourceId::Process(process_id.value())];
+            removed.extend(
+                removed_threads
+                    .into_iter()
+                    .map(|thread| RuntimeResourceId::Thread(thread.value())),
+            );
+            self.notify_change(RuntimeChange {
+                topology: true,
+                breakpoints: false,
+                removed,
+            });
+        }
+        result
     }
 
     pub(crate) async fn start_thread_group(
@@ -300,9 +510,14 @@ impl RuntimeModel {
         local_group_id: &str,
         pid: u64,
     ) -> StateTransitionResult<GlobalThreadGroupId> {
-        self.state
+        let result = self
+            .state
             .start_thread_group(sid, local_group_id, pid)
-            .await
+            .await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     pub(crate) async fn exit_thread_group(
@@ -310,7 +525,26 @@ impl RuntimeModel {
         sid: u64,
         local_group_id: &str,
     ) -> StateTransitionResult<GlobalThreadGroupId> {
-        self.state.exit_thread_group(sid, local_group_id).await
+        let process_id = self.state.global_thread_group_id(sid, local_group_id);
+        let removed_threads = self
+            .thread_snapshots_for_sessions(&[sid])
+            .await
+            .into_iter()
+            .filter(|thread| thread.process_id == process_id)
+            .map(|thread| thread.global_id)
+            .collect::<Vec<_>>();
+        let result = self.state.exit_thread_group(sid, local_group_id).await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange {
+                topology: true,
+                breakpoints: false,
+                removed: removed_threads
+                    .into_iter()
+                    .map(|thread| RuntimeResourceId::Thread(thread.value()))
+                    .collect(),
+            });
+        }
+        result
     }
 
     pub(crate) async fn register_thread(
@@ -319,9 +553,14 @@ impl RuntimeModel {
         local_thread_id: u64,
         local_group_id: &str,
     ) -> StateTransitionResult<GlobalThreadIdentity> {
-        self.state
+        let result = self
+            .state
             .register_thread(sid, local_thread_id, local_group_id)
-            .await
+            .await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     pub(crate) async fn remove_thread(
@@ -330,20 +569,52 @@ impl RuntimeModel {
         local_thread_id: u64,
         local_group_id: &str,
     ) -> StateTransitionResult<GlobalThreadIdentity> {
-        self.state
+        let result = self
+            .state
             .remove_thread(sid, local_thread_id, local_group_id)
-            .await
+            .await;
+        if let Ok(identity) = &result {
+            self.notify_change(RuntimeChange {
+                topology: true,
+                breakpoints: false,
+                removed: vec![RuntimeResourceId::Thread(identity.thread_id.value())],
+            });
+        }
+        result
     }
 
+    #[cfg(test)]
     pub(crate) async fn update_thread_statuses(
         &self,
         sid: u64,
         local_thread_ids: &[u64],
         status: ThreadStatus,
     ) -> StateTransitionResult<()> {
-        self.state
+        let result = self
+            .state
             .update_thread_statuses(sid, local_thread_ids, status)
-            .await
+            .await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
+    }
+
+    pub(crate) async fn update_thread_statuses_with_location(
+        &self,
+        sid: u64,
+        local_thread_ids: &[u64],
+        status: ThreadStatus,
+        location: Option<(u64, ThreadLocation)>,
+    ) -> StateTransitionResult<()> {
+        let result = self
+            .state
+            .update_thread_statuses_with_location(sid, local_thread_ids, status, location)
+            .await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     pub(crate) async fn select_local_thread(
@@ -351,7 +622,11 @@ impl RuntimeModel {
         sid: u64,
         local_thread_id: u64,
     ) -> StateTransitionResult<()> {
-        self.state.select_local_thread(sid, local_thread_id).await
+        let result = self.state.select_local_thread(sid, local_thread_id).await;
+        if result.is_ok() {
+            self.notify_change(RuntimeChange::topology());
+        }
+        result
     }
 
     pub(crate) fn current_thread_id(&self) -> Option<GlobalThreadId> {
@@ -394,6 +669,7 @@ impl RuntimeModel {
     #[cfg(test)]
     pub(crate) fn select_thread_context(&self, sid: u64, global_id: GlobalThreadId) {
         self.state.select_thread_context(sid, global_id);
+        self.notify_change(RuntimeChange::topology());
     }
 
     // Group queries and operation serialization.
@@ -462,13 +738,26 @@ impl RuntimeModel {
     pub(crate) fn insert_breakpoint(
         &self,
         location: BkptLoc,
+        properties: super::BreakpointProperties,
         specs: Vec<SubBkptSpec>,
     ) -> Option<BkptMeta> {
-        self.breakpoints.insert_breakpoint(location, specs)
+        let breakpoint = self
+            .breakpoints
+            .insert_breakpoint(location, properties, specs);
+        if breakpoint.is_some() {
+            self.notify_change(RuntimeChange::breakpoints());
+        }
+        breakpoint
     }
 
     pub(crate) fn remove_breakpoint(&self, breakpoint_id: u64) {
-        self.breakpoints.remove_breakpoint(breakpoint_id);
+        if self.breakpoints.remove_breakpoint(breakpoint_id) {
+            self.notify_change(RuntimeChange {
+                topology: false,
+                breakpoints: true,
+                removed: vec![RuntimeResourceId::Breakpoint(breakpoint_id)],
+            });
+        }
     }
 
     pub(crate) fn sub_breakpoint(
@@ -485,12 +774,41 @@ impl RuntimeModel {
         breakpoint_id: u64,
         sub_breakpoint_id: u64,
     ) -> BreakpointStateChange {
-        self.breakpoints
-            .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id)
+        let change = self
+            .breakpoints
+            .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id);
+        if !matches!(&change, BreakpointStateChange::None) {
+            self.notify_change(RuntimeChange {
+                topology: false,
+                breakpoints: true,
+                removed: match &change {
+                    BreakpointStateChange::Removed(id) => {
+                        vec![RuntimeResourceId::Breakpoint(*id)]
+                    }
+                    _ => Vec::new(),
+                },
+            });
+        }
+        change
     }
 
     pub(crate) fn local_breakpoint_ids(&self, breakpoint_id: u64) -> Vec<(u64, u64)> {
         self.breakpoints.local_breakpoint_ids(breakpoint_id)
+    }
+
+    pub(crate) fn update_breakpoint(
+        &self,
+        breakpoint_id: u64,
+        enabled: bool,
+        condition: Option<String>,
+    ) -> Option<BkptMeta> {
+        let breakpoint = self
+            .breakpoints
+            .update_breakpoint(breakpoint_id, enabled, condition);
+        if breakpoint.is_some() {
+            self.notify_change(RuntimeChange::breakpoints());
+        }
+        breakpoint
     }
 
     pub(crate) fn attach_group_breakpoint_session_target(
@@ -500,12 +818,16 @@ impl RuntimeModel {
         sid: u64,
         local_breakpoint_id: u64,
     ) -> BreakpointStateChange {
-        self.breakpoints.attach_group_breakpoint_session_target(
+        let change = self.breakpoints.attach_group_breakpoint_session_target(
             breakpoint_id,
             group_id,
             sid,
             local_breakpoint_id,
-        )
+        );
+        if !matches!(&change, BreakpointStateChange::None) {
+            self.notify_change(RuntimeChange::breakpoints());
+        }
+        change
     }
 
     pub(crate) fn record_local_breakpoint_deletion(
@@ -513,17 +835,36 @@ impl RuntimeModel {
         sid: u64,
         local_breakpoint_id: u64,
     ) -> BreakpointStateChange {
-        self.breakpoints
-            .record_local_bkpt_deletion(sid, local_breakpoint_id)
+        let change = self
+            .breakpoints
+            .record_local_bkpt_deletion(sid, local_breakpoint_id);
+        if !matches!(&change, BreakpointStateChange::None) {
+            self.notify_change(RuntimeChange {
+                topology: false,
+                breakpoints: true,
+                removed: match &change {
+                    BreakpointStateChange::Removed(id) => {
+                        vec![RuntimeResourceId::Breakpoint(*id)]
+                    }
+                    _ => Vec::new(),
+                },
+            });
+        }
+        change
     }
 
-    pub(crate) fn breakpoint_ids_by_local_id(
+    pub(crate) fn record_breakpoint_hit(
         &self,
         sid: u64,
         local_breakpoint_id: u64,
-    ) -> Option<(u64, u64)> {
-        self.breakpoints
-            .breakpoint_ids_by_local_id(sid, local_breakpoint_id)
+    ) -> Option<(u64, u64, BkptMeta)> {
+        let hit = self
+            .breakpoints
+            .record_breakpoint_hit(sid, local_breakpoint_id);
+        if hit.is_some() {
+            self.notify_change(RuntimeChange::breakpoints());
+        }
+        hit
     }
 
     // Proclet ownership.
@@ -538,12 +879,15 @@ impl RuntimeModel {
 
     #[cfg(test)]
     pub(crate) fn add_breakpoint(&self, location: BkptLoc) -> u64 {
-        self.breakpoints.add_breakpoint(location)
+        let breakpoint_id = self.breakpoints.add_breakpoint(location);
+        self.notify_change(RuntimeChange::breakpoints());
+        breakpoint_id
     }
 
     #[cfg(test)]
     pub(crate) fn add_sub_breakpoint(&self, breakpoint_id: u64, kind: SubBkptType) {
         self.breakpoints.add_sub_breakpoint(breakpoint_id, kind);
+        self.notify_change(RuntimeChange::breakpoints());
     }
 }
 
@@ -573,6 +917,45 @@ impl Drop for SessionRetirement {
 mod tests {
     use super::*;
     use crate::state::{GroupSubBkpt, SubBkptType};
+
+    #[tokio::test]
+    async fn change_feed_reports_only_successful_committed_mutations() {
+        let model = RuntimeModel::new();
+        let mut changes = model.subscribe_changes();
+
+        assert!(model.register_thread_group(7, "i1").await.is_err());
+        assert!(changes.try_recv().is_err());
+
+        model.register_session(7, "svc", None).await;
+        assert_eq!(changes.recv().await.unwrap(), RuntimeChange::topology());
+        assert!(model.register_thread_group(7, "i1").await.is_ok());
+        assert_eq!(changes.recv().await.unwrap(), RuntimeChange::topology());
+
+        let breakpoint = model
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 7),
+                super::super::BreakpointProperties::default(),
+                vec![SubBkptSpec::Session {
+                    sid: 7,
+                    local_id: 1,
+                }],
+            )
+            .unwrap();
+        assert_eq!(changes.recv().await.unwrap(), RuntimeChange::breakpoints());
+        model.remove_breakpoint(breakpoint.id());
+        assert_eq!(
+            changes.recv().await.unwrap(),
+            RuntimeChange {
+                topology: false,
+                breakpoints: true,
+                removed: vec![RuntimeResourceId::Breakpoint(breakpoint.id())],
+            }
+        );
+        model.remove_breakpoint(breakpoint.id());
+        assert!(changes.try_recv().is_err());
+        model.remove_breakpoint(u64::MAX);
+        assert!(changes.try_recv().is_err());
+    }
 
     async fn model_with_group_breakpoint(sid: u64) -> (Arc<RuntimeModel>, GroupId, u64) {
         let model = RuntimeModel::new();

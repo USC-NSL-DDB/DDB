@@ -19,7 +19,7 @@ use crate::{
     cmd_flow::event::DebuggerEventReducer,
     cmd_flow::event_publisher::EventPublisher,
     connection::{RunningTransport, TransportEvent},
-    debugger::protocol::{DebuggerProtocol, ProtocolCommand},
+    debugger::protocol::{DebuggerProtocol, ProtocolCommand, StreamKind},
     session::lifecycle::SessionTerminationCause,
 };
 
@@ -151,7 +151,7 @@ pub(super) async fn run_session(
             }
             request = requests.recv() => {
                 match request {
-                    Some(RuntimeRequest::Execute { token, command, permit, completion }) => {
+                    Some(RuntimeRequest::Execute { token, command, permit, completion, registration }) => {
                         if pending.contains(token) {
                             let _ = completion.send(Err(anyhow!(
                                 "session {} already has command token {} in flight",
@@ -160,11 +160,13 @@ pub(super) async fn run_session(
                             )));
                             continue;
                         }
+                        registration.mark_running();
                         pending.insert(token, PendingCommand {
                             completion,
                             permit,
                             consistency: command.consistency,
                             created_at: Instant::now(),
+                            _registration: registration,
                         });
                         let wire = match protocol.encode_command(ProtocolCommand {
                             token,
@@ -240,7 +242,17 @@ pub(super) async fn run_session(
                         }
                     }
                     Ok(TransportEvent::Stderr(bytes)) => {
-                        debug!(sid, stderr = %String::from_utf8_lossy(&bytes), "debugger stderr");
+                        let message = String::from_utf8_lossy(&bytes).into_owned();
+                        debug!(sid, stderr = %message, "debugger stderr");
+                        let result = guarded!(
+                            &mut control,
+                            demux.forward_stream(StreamKind::Log, message),
+                            shutdown_ack,
+                            'runtime
+                        );
+                        if let Err(error) = result {
+                            warn!(sid, ?error, "failed to publish debugger stderr");
+                        }
                     }
                     Ok(TransportEvent::Exited(status)) => {
                         pending.fail_all(&format!("transport exited with status {:?}", status));

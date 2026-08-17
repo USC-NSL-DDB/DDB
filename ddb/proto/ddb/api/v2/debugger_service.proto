@@ -1,0 +1,823 @@
+syntax = "proto3";
+
+package ddb.api.v2;
+
+import "ddb/api/v2/common.proto";
+import "ddb/api/v2/extension.proto";
+import "ddb/api/v2/resources.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+
+// EvaluationContext controls presentation and side-effect policy for Evaluate.
+enum EvaluationContext {
+  EVALUATION_CONTEXT_UNSPECIFIED = 0;
+  EVALUATION_CONTEXT_WATCH = 1;
+  EVALUATION_CONTEXT_REPL = 2;
+  EVALUATION_CONTEXT_HOVER = 3;
+  EVALUATION_CONTEXT_CONDITION = 4;
+}
+
+// RegisterFormat requests a conventional register rendering.
+enum RegisterFormat {
+  REGISTER_FORMAT_UNSPECIFIED = 0;
+  REGISTER_FORMAT_NATURAL = 1;
+  REGISTER_FORMAT_HEXADECIMAL = 2;
+  REGISTER_FORMAT_DECIMAL = 3;
+  REGISTER_FORMAT_BINARY = 4;
+}
+
+// RawCommandDialect declares the explicitly unstable command language.
+enum RawCommandDialect {
+  RAW_COMMAND_DIALECT_UNSPECIFIED = 0;
+  RAW_COMMAND_DIALECT_BACKEND_NATIVE = 1;
+  RAW_COMMAND_DIALECT_GDB_MI = 2;
+  RAW_COMMAND_DIALECT_GDB_CLI = 3;
+  RAW_COMMAND_DIALECT_LLDB_CLI = 4;
+}
+
+// GetServerInfoRequest requests public server identity.
+message GetServerInfoRequest {
+  // Request controls; no debugger-data access is implied.
+  RequestContext context = 1;
+}
+
+// GetServerInfoResponse returns public server identity.
+message GetServerInfoResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Current server information.
+  ServerInfo server_info = 2;
+}
+
+// GetCapabilitiesRequest may scope dynamic capabilities to one target.
+message GetCapabilitiesRequest {
+  // Request controls; READ permission is required for target-scoped details.
+  RequestContext context = 1;
+  // Optional target scope; absence requests aggregate capabilities.
+  optional Target target = 2;
+}
+
+// GetCapabilitiesResponse returns the negotiated feature and limit document.
+message GetCapabilitiesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Current capabilities.
+  Capabilities capabilities = 2;
+}
+
+// GetSnapshotRequest selects bounded sections of detached state.
+message GetSnapshotRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Requested sections; empty selects the documented default sections.
+  repeated SnapshotSection sections = 2;
+  // Optional target scope; absence selects the complete public topology.
+  optional Target target = 3;
+}
+
+// GetSnapshotResponse returns a state projection and replay cursor.
+message GetSnapshotResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Detached snapshot captured according to the cursor-before-collection rule.
+  Snapshot snapshot = 2;
+}
+
+// ListSessionsRequest pages sessions.
+message ListSessionsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional collection page.
+  optional PageRequest page = 2;
+}
+
+// ListSessionsResponse returns a bounded session page.
+message ListSessionsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Sessions in stable server-defined order.
+  repeated Session sessions = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetSessionRequest addresses one opaque session.
+message GetSessionRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque session identity.
+  string session_id = 2;
+}
+
+// GetSessionResponse returns one session.
+message GetSessionResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested session.
+  Session session = 2;
+}
+
+// ListGroupsRequest pages logical DDB groups.
+message ListGroupsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Restrict to groups containing this session.
+  optional string session_id = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListGroupsResponse returns a bounded group page.
+message ListGroupsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Logical groups.
+  repeated Group groups = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetGroupRequest addresses one opaque group.
+message GetGroupRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque group identity.
+  string group_id = 2;
+}
+
+// GetGroupResponse returns one logical group.
+message GetGroupResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested group.
+  Group group = 2;
+}
+
+// ListProcessesRequest pages process projections for a target.
+message ListProcessesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional target scope.
+  optional Target target = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListProcessesResponse returns a bounded process page.
+message ListProcessesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Process projections.
+  repeated Process processes = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetProcessRequest addresses one opaque process.
+message GetProcessRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque process identity.
+  string process_id = 2;
+}
+
+// GetProcessResponse returns one process projection.
+message GetProcessResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested process.
+  Process process = 2;
+}
+
+// ListThreadsRequest pages threads resolved by the canonical target router.
+message ListThreadsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Target whose threads should be returned.
+  Target target = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListThreadsResponse returns a bounded thread page.
+message ListThreadsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Threads in stable backend-neutral order.
+  repeated Thread threads = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetThreadRequest addresses one opaque thread.
+message GetThreadRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque thread identity.
+  string thread_id = 2;
+}
+
+// GetThreadResponse returns one thread projection.
+message GetThreadResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested thread.
+  Thread thread = 2;
+}
+
+// GetExecutionStateRequest reads current execution state for a routed target.
+message GetExecutionStateRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Target whose execution state should be read.
+  Target target = 2;
+}
+
+// GetExecutionStateResponse returns the current execution projection.
+message GetExecutionStateResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Current execution state.
+  ExecutionState execution_state = 2;
+}
+
+// ListFramesRequest pages stack frames for one stopped thread.
+message ListFramesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque stopped-thread identity.
+  string thread_id = 2;
+  // Optional collection page; tokens are invalid after execution resumes.
+  optional PageRequest page = 3;
+}
+
+// ListFramesResponse returns a bounded frame page.
+message ListFramesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Stack frames ordered from innermost to outermost.
+  repeated Frame frames = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListScopesRequest returns variable namespaces for one frame.
+message ListScopesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque frame identity.
+  string frame_id = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListScopesResponse returns a bounded scope page.
+message ListScopesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Variable scopes.
+  repeated Scope scopes = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListVariablesRequest pages top-level variables in a scope.
+message ListVariablesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque scope identity.
+  string scope_id = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListVariablesResponse returns a bounded variable page.
+message ListVariablesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Variables.
+  repeated Variable variables = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ExpandVariableRequest pages lazy children of one variable.
+message ExpandVariableRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque expandable variable identity.
+  string variable_id = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ExpandVariableResponse returns bounded child variables.
+message ExpandVariableResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Child variables.
+  repeated Variable variables = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListRegistersRequest reads typed registers for one stopped frame.
+message ListRegistersRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque frame identity.
+  string frame_id = 2;
+  // Requested rendering.
+  RegisterFormat format = 3;
+  // Optional collection page.
+  optional PageRequest page = 4;
+}
+
+// ListRegistersResponse returns a bounded register page.
+message ListRegistersResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Registers.
+  repeated Register registers = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListSignalsRequest reads the signal catalog for exactly one resolved session.
+message ListSignalsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Session or thread whose debugger signal catalog should be returned.
+  Target target = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListSignalsResponse returns a bounded signal catalog page.
+message ListSignalsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Backend-recognized signals.
+  repeated DebuggerSignal signals = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+
+// ReadMemoryRequest reads a bounded target-dependent address range.
+message ReadMemoryRequest {
+  // Request controls; CONTROL permission is required.
+  RequestContext context = 1;
+  // Target address space.
+  Target target = 2;
+  // Start address represented as opaque target syntax.
+  string address = 3;
+  // Requested byte count; must not exceed advertised max_memory_read_bytes.
+  uint64 byte_count = 4;
+}
+
+// ReadMemoryResponse returns bytes and explicit unreadable extent.
+message ReadMemoryResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Bounded memory block.
+  MemoryBlock memory = 2;
+}
+
+// ResolveSourceRequest maps a backend source location to a readable reference.
+message ResolveSourceRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional target used for backend/source-map disambiguation.
+  optional Target target = 2;
+  // Backend-reported source location.
+  SourceLocation location = 3;
+}
+
+// ResolveSourceResponse returns a stable source reference.
+message ResolveSourceResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Resolved source identity.
+  SourceFile source = 2;
+}
+
+// ReadSourceRequest reads one bounded source window.
+message ReadSourceRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Stable reference returned by ResolveSource.
+  string source_reference = 2;
+  // One-based first source line.
+  uint32 start_line = 3;
+  // Maximum lines to return; zero is invalid.
+  uint32 max_lines = 4;
+}
+
+// ReadSourceResponse returns bounded UTF-8 source content.
+message ReadSourceResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested source window.
+  SourceContent source = 2;
+}
+
+// ListBreakpointsRequest pages logical breakpoints.
+message ListBreakpointsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional target overlap filter.
+  optional Target target = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListBreakpointsResponse returns a bounded logical-breakpoint page.
+message ListBreakpointsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Logical breakpoints and their bounded resolved members.
+  repeated Breakpoint breakpoints = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetBreakpointRequest addresses one opaque logical breakpoint.
+message GetBreakpointRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque logical breakpoint identity.
+  string breakpoint_id = 2;
+}
+
+// GetBreakpointResponse returns one logical breakpoint.
+message GetBreakpointResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested breakpoint.
+  Breakpoint breakpoint = 2;
+}
+
+// ListPendingCommandsRequest pages safe pending-command projections.
+message ListPendingCommandsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional target filter.
+  optional Target target = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListPendingCommandsResponse returns bounded in-flight backend work.
+message ListPendingCommandsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Pending commands; raw command text is never included.
+  repeated PendingCommand pending_commands = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetOperationRequest addresses one retained operation.
+message GetOperationRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque operation identity.
+  string operation_id = 2;
+}
+
+// GetOperationResponse returns one non-expired operation.
+message GetOperationResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested operation record.
+  Operation operation = 2;
+}
+
+// ListOperationsRequest pages bounded operation history.
+message ListOperationsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional operation-kind filter.
+  repeated OperationKind kinds = 2;
+  // Optional lifecycle-state filter.
+  repeated OperationState states = 3;
+  // Optional target-overlap filter.
+  optional Target target = 4;
+  // Optional collection page.
+  optional PageRequest page = 5;
+}
+
+// ListOperationsResponse returns a bounded operation-history page.
+message ListOperationsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Retained operation records.
+  repeated Operation operations = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListExtensionStatesRequest pages extension-owned state.
+message ListExtensionStatesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Restrict to one extension identifier.
+  optional string extension_id = 2;
+  // Optional collection page.
+  optional PageRequest page = 3;
+}
+
+// ListExtensionStatesResponse returns bounded extension state.
+message ListExtensionStatesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Extension-owned state envelopes.
+  repeated ExtensionState extension_states = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// GetExtensionSchemaRequest fetches one descriptor-declared schema document.
+message GetExtensionSchemaRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Registered extension identity.
+  string extension_id = 2;
+  // Exact schema URI declared by the extension.
+  string schema_uri = 3;
+}
+
+// GetExtensionSchemaResponse returns one bounded registered schema.
+message GetExtensionSchemaResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Requested schema document.
+  ExtensionSchemaDocument schema = 2;
+}
+
+// ExecuteRequest admits one typed execution-control operation.
+message ExecuteRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Canonical routing target.
+  Target target = 2;
+  // Typed execution action.
+  ExecutionAction action = 3;
+  // Required only for JUMP.
+  optional SourceLocation jump_location = 4;
+  // Required only for SIGNAL.
+  optional string signal_name = 5;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 6;
+}
+
+// SelectThreadRequest admits a thread-selection operation.
+message SelectThreadRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Canonical thread target.
+  Target target = 2;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 3;
+}
+
+// EvaluateRequest admits a typed expression-evaluation operation.
+message EvaluateRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Session/thread/frame routing context.
+  Target target = 2;
+  // Backend expression. Servers must redact it from ordinary logs.
+  string expression = 3;
+  // Optional stopped-frame identity.
+  optional string frame_id = 4;
+  // Intended presentation and side-effect policy.
+  EvaluationContext evaluation_context = 5;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 6;
+}
+
+// CreateBreakpointRequest admits creation of a logical/distributed breakpoint.
+message CreateBreakpointRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Canonical installation scope.
+  Target target = 2;
+  // Desired breakpoint behavior.
+  BreakpointSpec breakpoint = 3;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 4;
+}
+
+// UpdateBreakpointRequest admits a partial breakpoint update.
+message UpdateBreakpointRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Existing logical breakpoint target.
+  string breakpoint_id = 2;
+  // Canonical routing scope.
+  Target target = 3;
+  // Desired field values.
+  BreakpointSpec breakpoint = 4;
+  // Fields of breakpoint to replace; location updates require backend support.
+  google.protobuf.FieldMask update_mask = 5;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 6;
+}
+
+// DeleteBreakpointRequest admits deletion of one logical breakpoint.
+message DeleteBreakpointRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Existing logical breakpoint target.
+  string breakpoint_id = 2;
+  // Canonical routing scope.
+  Target target = 3;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 4;
+}
+
+// ExecuteRawCommandRequest is an explicitly unstable parity escape hatch.
+message ExecuteRawCommandRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Canonical routing target.
+  Target target = 2;
+  // Declared backend command language.
+  RawCommandDialect dialect = 3;
+  // Raw command, excluded from logs and retained operation records.
+  string command = 4;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 5;
+}
+
+// RunDistributedBacktraceRequest admits one DDB-specific backtrace operation.
+message RunDistributedBacktraceRequest {
+  reserved 4;
+  reserved "restore_selection";
+
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // Starting thread target. Collection establishes inspectable caller contexts
+  // that DDB restores transparently before the next execution operation.
+  Target target = 2;
+  // Maximum distributed frames; zero selects the advertised default.
+  uint32 max_frames = 3;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 5;
+}
+
+// CancelOperationRequest requests cancellation only when capabilities and the
+// current operation record say cancellation is supported.
+message CancelOperationRequest {
+  // Mutation controls; idempotency_key is required and CONTROL is required.
+  RequestContext context = 1;
+  // OperationTarget containing the operation to cancel.
+  Target target = 2;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 3;
+}
+
+// OperationAdmissionResponse acknowledges one admitted mutation. Completion is
+// observed by polling or replayable operation events.
+message OperationAdmissionResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Accepted, running, or already-completed idempotent operation record.
+  Operation operation = 2;
+}
+
+// GetHealthRequest asks for minimal liveness state.
+message GetHealthRequest {
+  // Request controls; this method may be unauthenticated by deployment policy.
+  RequestContext context = 1;
+}
+
+// GetHealthResponse returns minimal liveness diagnostics.
+message GetHealthResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Liveness report.
+  HealthReport health = 2;
+}
+
+// GetReadinessRequest asks whether DDB can accept API work.
+message GetReadinessRequest {
+  // Request controls; this method may be unauthenticated by deployment policy.
+  RequestContext context = 1;
+}
+
+// GetReadinessResponse returns minimal readiness diagnostics.
+message GetReadinessResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Readiness report.
+  HealthReport readiness = 2;
+}
+
+// ShutdownRequest admits graceful process shutdown.
+message ShutdownRequest {
+  // Mutation controls; idempotency_key and ADMIN permission are required.
+  RequestContext context = 1;
+  // Broadcast target for the server process.
+  Target target = 2;
+  // Maximum graceful drain interval.
+  optional google.protobuf.Duration grace_period = 3;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 4;
+}
+
+// DebuggerService exposes bounded metadata and debugger reads.
+service DebuggerService {
+  // Returns public identity. No debugger-data permission is required.
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+  // Returns truthful aggregate or target-scoped capabilities.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  // Returns a detached snapshot with cursor-before-collection semantics.
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  // Lists sessions. Requires READ permission.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // Gets one session. Requires READ permission.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // Lists logical groups. Requires READ permission.
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse);
+  // Gets one logical group. Requires READ permission.
+  rpc GetGroup(GetGroupRequest) returns (GetGroupResponse);
+  // Lists process projections. Requires READ permission.
+  rpc ListProcesses(ListProcessesRequest) returns (ListProcessesResponse);
+  // Gets one process projection. Requires READ permission.
+  rpc GetProcess(GetProcessRequest) returns (GetProcessResponse);
+  // Lists threads for a canonical target. Requires READ permission.
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+  // Gets one thread projection. Requires READ permission.
+  rpc GetThread(GetThreadRequest) returns (GetThreadResponse);
+  // Reads target execution state. Requires READ permission.
+  rpc GetExecutionState(GetExecutionStateRequest) returns (GetExecutionStateResponse);
+  // Lists stack frames for a stopped thread. Requires READ permission.
+  rpc ListFrames(ListFramesRequest) returns (ListFramesResponse);
+  // Lists frame variable scopes. Requires READ permission.
+  rpc ListScopes(ListScopesRequest) returns (ListScopesResponse);
+  // Lists top-level scope variables. Requires READ permission.
+  rpc ListVariables(ListVariablesRequest) returns (ListVariablesResponse);
+  // Expands one lazy variable. Requires READ permission.
+  rpc ExpandVariable(ExpandVariableRequest) returns (ExpandVariableResponse);
+  // Lists typed registers. Requires READ permission and backend capability.
+  rpc ListRegisters(ListRegistersRequest) returns (ListRegistersResponse);
+  // Lists signals for exactly one resolved session. Requires READ permission.
+  rpc ListSignals(ListSignalsRequest) returns (ListSignalsResponse);
+  // Reads bounded memory. Requires CONTROL permission and backend capability.
+  rpc ReadMemory(ReadMemoryRequest) returns (ReadMemoryResponse);
+  // Resolves a backend location to a stable source reference.
+  rpc ResolveSource(ResolveSourceRequest) returns (ResolveSourceResponse);
+  // Reads a bounded source window. Requires READ permission.
+  rpc ReadSource(ReadSourceRequest) returns (ReadSourceResponse);
+  // Lists logical breakpoints. Requires READ permission.
+  rpc ListBreakpoints(ListBreakpointsRequest) returns (ListBreakpointsResponse);
+  // Gets one logical breakpoint. Requires READ permission.
+  rpc GetBreakpoint(GetBreakpointRequest) returns (GetBreakpointResponse);
+  // Lists safe pending-command projections. Requires READ permission.
+  rpc ListPendingCommands(ListPendingCommandsRequest) returns (ListPendingCommandsResponse);
+  // Gets one retained operation. Requires READ permission.
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  // Lists bounded operation history. Requires READ permission.
+  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+  // Lists extension-owned state. Requires READ permission.
+  rpc ListExtensionStates(ListExtensionStatesRequest) returns (ListExtensionStatesResponse);
+  // Fetches a registered extension schema. Requires READ permission.
+  rpc GetExtensionSchema(GetExtensionSchemaRequest) returns (GetExtensionSchemaResponse);
+}
+
+// DebuggerControlService admits mutations and always returns operation records.
+service DebuggerControlService {
+  // Admits continue/interrupt/step/jump/signal control.
+  rpc Execute(ExecuteRequest) returns (OperationAdmissionResponse);
+  // Admits thread selection.
+  rpc SelectThread(SelectThreadRequest) returns (OperationAdmissionResponse);
+  // Admits expression evaluation.
+  rpc Evaluate(EvaluateRequest) returns (OperationAdmissionResponse);
+  // Admits logical/distributed breakpoint creation.
+  rpc CreateBreakpoint(CreateBreakpointRequest) returns (OperationAdmissionResponse);
+  // Admits a field-masked breakpoint update.
+  rpc UpdateBreakpoint(UpdateBreakpointRequest) returns (OperationAdmissionResponse);
+  // Admits logical breakpoint deletion.
+  rpc DeleteBreakpoint(DeleteBreakpointRequest) returns (OperationAdmissionResponse);
+  // Admits a backend-specific raw command under explicit capability gating.
+  rpc ExecuteRawCommand(ExecuteRawCommandRequest) returns (OperationAdmissionResponse);
+  // Admits DDB distributed-backtrace collection.
+  rpc RunDistributedBacktrace(RunDistributedBacktraceRequest) returns (OperationAdmissionResponse);
+  // Admits a discoverable extension action.
+  rpc InvokeExtensionAction(InvokeExtensionActionRequest) returns (OperationAdmissionResponse);
+  // Requests cancellation only when currently supported.
+  rpc CancelOperation(CancelOperationRequest) returns (OperationAdmissionResponse);
+}
+
+// DdbAdminService isolates operational and privileged lifecycle methods.
+service DdbAdminService {
+  // Returns minimal liveness state.
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  // Returns minimal readiness state.
+  rpc GetReadiness(GetReadinessRequest) returns (GetReadinessResponse);
+  // Admits graceful shutdown. Requires ADMIN permission.
+  rpc Shutdown(ShutdownRequest) returns (OperationAdmissionResponse);
+}

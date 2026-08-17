@@ -54,12 +54,16 @@ async fn run_publisher(
             .records
             .iter()
             .map(|record| {
-                MiFormatter::format(
-                    record.prefix,
-                    &record.message,
-                    record.payload.as_ref(),
-                    record.token,
-                )
+                if record.stream.is_some() {
+                    MiFormatter::format_stream(record.prefix, &record.message)
+                } else {
+                    MiFormatter::format(
+                        record.prefix,
+                        &record.message,
+                        record.payload.as_ref(),
+                        record.token,
+                    )
+                }
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -83,6 +87,7 @@ mod tests {
         let output = ProjectedDebuggerOutput {
             records: vec![ProjectedDebuggerRecord {
                 prefix: "*",
+                stream: None,
                 message: "running".into(),
                 payload: Some(payload),
                 token: None,

@@ -1,13 +1,19 @@
 //! Client surface for one session runtime: tickets, leases, and control.
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
+    time::SystemTime,
 };
 
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use tokio::sync::{mpsc, oneshot, watch, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio::sync::{
+    broadcast, mpsc, oneshot, watch, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock,
+};
 
 use crate::{
     cmd_flow::event::DebuggerEventReducer,
@@ -20,8 +26,140 @@ use crate::{
 
 use super::{
     actor::{run_session, RuntimeShared, RuntimeWire},
-    RuntimeConfig, SessionCommand, COMMAND_MAILBOX_CAPACITY,
+    RuntimeConfig, SessionCommand, COMMAND_MAILBOX_CAPACITY, MAX_PENDING_COMMANDS,
 };
+
+/// Safe, detached view of a command admitted to one session runtime.
+#[derive(Clone, Debug)]
+pub(crate) struct SessionPendingCommand {
+    pub(crate) sid: u64,
+    pub(crate) token: u64,
+    pub(crate) operation_id: Option<String>,
+    pub(crate) operation_kind: Option<u32>,
+    pub(crate) enqueued_at: SystemTime,
+    pub(crate) running: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PendingCommandChange {
+    Upsert(SessionPendingCommand),
+    Removed { sid: u64, token: u64 },
+    Reconcile,
+}
+
+#[derive(Default)]
+struct PendingCommandRegistryState {
+    entries: HashMap<u64, SessionPendingCommand>,
+    events: Option<broadcast::Sender<PendingCommandChange>>,
+}
+
+struct PendingCommandRegistry {
+    sid: u64,
+    state: Mutex<PendingCommandRegistryState>,
+}
+
+impl PendingCommandRegistry {
+    fn new(sid: u64) -> Arc<Self> {
+        Arc::new(Self {
+            sid,
+            state: Mutex::new(PendingCommandRegistryState::default()),
+        })
+    }
+
+    fn state(&self) -> MutexGuard<'_, PendingCommandRegistryState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        token: u64,
+        metadata: &crate::cmd_flow::input::CommandMetadata,
+    ) -> Result<PendingRegistration> {
+        let mut state = self.state();
+        if state.entries.len() >= MAX_PENDING_COMMANDS {
+            return Err(anyhow!(
+                "session {} pending command capacity is exhausted",
+                self.sid
+            ));
+        }
+        let command = SessionPendingCommand {
+            sid: self.sid,
+            token,
+            operation_id: metadata.operation_id.clone(),
+            operation_kind: metadata.operation_kind,
+            enqueued_at: SystemTime::now(),
+            running: false,
+        };
+        state.entries.insert(token, command.clone());
+        if let Some(events) = &state.events {
+            let _ = events.send(PendingCommandChange::Upsert(command));
+        }
+        Ok(PendingRegistration {
+            token,
+            registry: Arc::clone(self),
+        })
+    }
+
+    fn snapshot(&self) -> Vec<SessionPendingCommand> {
+        let mut commands = self.state().entries.values().cloned().collect::<Vec<_>>();
+        commands.sort_unstable_by_key(|command| command.token);
+        commands
+    }
+
+    fn attach(&self, events: broadcast::Sender<PendingCommandChange>) {
+        let mut state = self.state();
+        state.events = Some(events.clone());
+        for command in state.entries.values() {
+            let _ = events.send(PendingCommandChange::Upsert(command.clone()));
+        }
+    }
+
+    fn detach(&self) {
+        self.state().events = None;
+    }
+}
+
+/// RAII registration: cancellation, send failure, timeout, and actor shutdown
+/// all remove the projection without a separate cleanup path.
+pub(super) struct PendingRegistration {
+    token: u64,
+    registry: Arc<PendingCommandRegistry>,
+}
+
+impl PendingRegistration {
+    pub(super) fn mark_running(&self) {
+        let mut state = self.registry.state();
+        let changed = if let Some(command) = state.entries.get_mut(&self.token) {
+            if command.running {
+                None
+            } else {
+                command.running = true;
+                Some(command.clone())
+            }
+        } else {
+            None
+        };
+        if let (Some(command), Some(events)) = (changed, state.events.as_ref()) {
+            let _ = events.send(PendingCommandChange::Upsert(command));
+        }
+    }
+}
+
+impl Drop for PendingRegistration {
+    fn drop(&mut self) {
+        let mut state = self.registry.state();
+        if state.entries.remove(&self.token).is_some() {
+            if let Some(events) = &state.events {
+                let _ = events.send(PendingCommandChange::Removed {
+                    sid: self.registry.sid,
+                    token: self.token,
+                });
+            }
+        }
+    }
+}
 
 pub(super) enum CommandPermit {
     Shared {
@@ -38,6 +176,7 @@ pub(super) enum RuntimeRequest {
         command: SessionCommand,
         permit: CommandPermit,
         completion: oneshot::Sender<Result<ParsedSessionResponse>>,
+        registration: PendingRegistration,
     },
     WriteRaw {
         data: Bytes,
@@ -56,8 +195,7 @@ pub struct SessionTicket {
 }
 
 impl SessionTicket {
-    #[cfg(test)]
-    pub fn sid(&self) -> u64 {
+    pub(crate) fn sid(&self) -> u64 {
         self.sid
     }
 
@@ -84,6 +222,7 @@ pub struct SessionHandle {
     tokens: Arc<SimpleCounter>,
     in_flight: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
+    pending: Arc<PendingCommandRegistry>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -129,6 +268,7 @@ impl SessionHandle {
         let (control, control_rx) = mpsc::unbounded_channel();
         let in_flight = Arc::new(AtomicUsize::new(0));
         let closed = Arc::new(AtomicBool::new(false));
+        let pending = PendingCommandRegistry::new(sid);
         let handle = Self {
             sid,
             requests,
@@ -137,6 +277,7 @@ impl SessionHandle {
             tokens: Arc::new(SimpleCounter::new()),
             in_flight: Arc::clone(&in_flight),
             closed: Arc::clone(&closed),
+            pending,
             ready,
         };
         let task = tokio::spawn(run_session(
@@ -198,6 +339,7 @@ impl SessionHandle {
             return Err(anyhow!("session {} is closed", self.sid));
         }
         let token = self.tokens.next();
+        let registration = self.pending.register(token, &command.metadata)?;
         let (completion, result) = oneshot::channel();
         self.requests
             .send(RuntimeRequest::Execute {
@@ -205,6 +347,7 @@ impl SessionHandle {
                 command,
                 permit,
                 completion,
+                registration,
             })
             .await
             .map_err(|_| anyhow!("session {} command mailbox is closed", self.sid))?;
@@ -258,6 +401,18 @@ impl SessionHandle {
             queued: self.requests.max_capacity() - self.requests.capacity(),
             closed: self.closed.load(Ordering::Acquire),
         }
+    }
+
+    pub(crate) fn pending_commands(&self) -> Vec<SessionPendingCommand> {
+        self.pending.snapshot()
+    }
+
+    pub(crate) fn attach_pending_events(&self, events: broadcast::Sender<PendingCommandChange>) {
+        self.pending.attach(events);
+    }
+
+    pub(crate) fn detach_pending_events(&self) {
+        self.pending.detach();
     }
 }
 

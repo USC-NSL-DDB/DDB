@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use flume::Receiver;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -148,23 +148,32 @@ impl DbgManager {
     }
 
     async fn init_static_sessions(self: &Arc<Self>) -> Result<()> {
-        let mut delayed_handles = self.static_session_handles.lock().await;
-        delayed_handles.clear();
+        for session in &self.config.static_sessions {
+            self.factory
+                .build_static_request(session.clone())
+                .with_context(|| {
+                    let label = if session.tag.is_empty() {
+                        "<unnamed>"
+                    } else {
+                        &session.tag
+                    };
+                    format!("invalid static session {label:?}")
+                })?;
+        }
+
+        let mut handles = self.static_session_handles.lock().await;
+        handles.clear();
 
         for session in self.config.static_sessions.clone() {
-            if session.start_delay_ms == 0 {
-                self.start_static_session(session).await?;
-            } else {
-                let manager = Arc::downgrade(self);
-                delayed_handles.push(tokio::spawn(async move {
-                    let Some(manager) = manager.upgrade() else {
-                        return;
-                    };
-                    if let Err(error) = manager.start_static_session(session).await {
-                        error!("Failed to start delayed static session: {:?}", error);
-                    }
-                }));
-            }
+            let manager = Arc::downgrade(self);
+            handles.push(tokio::spawn(async move {
+                let Some(manager) = manager.upgrade() else {
+                    return;
+                };
+                if let Err(error) = manager.start_static_session(session).await {
+                    error!("Failed to start static session: {:?}", error);
+                }
+            }));
         }
         Ok(())
     }

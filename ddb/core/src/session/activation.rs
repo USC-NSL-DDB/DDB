@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use super::{lifecycle::SessionTerminationReporter, SessionProcess};
 use crate::{
     cmd_flow::{
-        breakpoint::BreakpointEventPublisher,
+        breakpoint::{breakpoint_insert_command, BreakpointEventPublisher},
         decoder::BreakpointCreated,
         router::Router,
         session_runtime::{CompletionConsistency, SessionCommand, SessionHandle},
@@ -101,9 +101,13 @@ impl SessionActivation {
             let path = breakpoint.location().breakpoint_path();
             let response = handle
                 .execute(SessionCommand {
-                    command: format!("-break-insert {}", path),
+                    command: breakpoint_insert_command(
+                        breakpoint.location(),
+                        breakpoint.properties(),
+                    ),
                     thread_id: None,
                     consistency: CompletionConsistency::StateConsistent,
+                    metadata: Default::default(),
                 })
                 .await
                 .with_context(|| format!("Failed to insert existing breakpoint at {}", path))?;

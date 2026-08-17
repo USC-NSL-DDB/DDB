@@ -73,6 +73,11 @@ impl SessionRequestBuilder {
         self
     }
 
+    pub fn on_exit(mut self, on_exit: OnExit) -> Self {
+        self.on_exit = on_exit;
+        self
+    }
+
     pub fn stop_at_entry(mut self, stop_at_entry: bool) -> Self {
         self.stop_at_entry = stop_at_entry;
         self

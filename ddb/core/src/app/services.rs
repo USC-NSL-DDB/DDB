@@ -3,7 +3,10 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::{
-    api::read_model::ApiQueries,
+    api::{
+        application::{DdbApplicationConfig, DdbApplicationService},
+        read_model::ApiQueries,
+    },
     cmd_flow::{
         api::CommandExecutor,
         backtrace::DistributedBacktraceService,
@@ -14,6 +17,7 @@ use crate::{
         event::DebuggerEventReducer,
         event_publisher::EventPublisher,
         execution::ExecutionService,
+        output_hub::{OutputHub, OutputHubConfig},
         query::{QueryProjector, QueryService},
         router::Router,
         transaction::TransactionCoordinator,
@@ -31,6 +35,7 @@ use crate::{
         resolver::{SourceResolutionPolicy, SourceResolver},
     },
     state::RuntimeModel,
+    status::RuntimeStatus,
 };
 
 /// Immutable service graph owned by one application runtime.
@@ -39,6 +44,7 @@ pub(crate) struct ApplicationServices {
     command_engine: Arc<CommandEngine>,
     notification_manager: Arc<NotificationManager>,
     api_queries: Arc<ApiQueries>,
+    application_api: Arc<DdbApplicationService>,
     debugger_manager: Arc<DbgManager>,
 }
 
@@ -48,12 +54,21 @@ impl ApplicationServices {
         plugin: Arc<dyn FrameworkPlugin>,
         backend: Arc<dyn DebuggerBackend>,
         shutdown: Arc<ShutdownCtrl>,
+        runtime_status: Arc<RuntimeStatus>,
     ) -> Result<Arc<Self>> {
         let runtime_model = RuntimeModel::new();
         let notification_manager = Arc::new(NotificationManager::new());
+        let output_hub = OutputHub::new(OutputHubConfig {
+            subscriber_queue: config.conf.api_limits.output_subscriber_queue,
+            max_subscribers: config.conf.api_limits.max_subscribers,
+            max_text_bytes: config.conf.api_limits.output_event_bytes,
+        });
         let (breakpoint_records, _breakpoint_record_sink) = EventPublisher::spawn();
-        let breakpoint_events =
-            BreakpointEventPublisher::new(Arc::clone(&notification_manager), breakpoint_records);
+        let breakpoint_events = BreakpointEventPublisher::new(
+            Arc::clone(&notification_manager),
+            breakpoint_records,
+            Arc::clone(&output_hub),
+        );
         let event_reducer =
             DebuggerEventReducer::new(Arc::clone(&runtime_model), Arc::clone(&breakpoint_events));
         let command_router = Arc::new(Router::new(Arc::clone(&runtime_model)));
@@ -75,7 +90,9 @@ impl ApplicationServices {
             Arc::clone(&runtime_model),
             Arc::clone(&command_router),
             Arc::clone(&source_resolver),
-        );
+            Arc::clone(&config),
+            Arc::clone(&plugin),
+        )?;
         let transactions =
             TransactionCoordinator::new(Arc::clone(&runtime_model), Arc::clone(&command_router));
         let breakpoint_service = Arc::new(BreakpointService::new(
@@ -118,6 +135,31 @@ impl ApplicationServices {
         );
         let command_engine =
             CommandEngine::new(dispatcher, diagnostics, Arc::clone(&runtime_model));
+        let authentication_mode = if config.conf.api_insecure_allow_unauthenticated_v2 {
+            "none-insecure-development"
+        } else {
+            "bearer"
+        };
+        let api_config = DdbApplicationConfig::http(
+            "/api/v2",
+            config.conf.api_tls_terminated_by_trusted_proxy,
+            authentication_mode,
+            &config.conf.api_limits,
+        );
+        #[cfg(feature = "grpc-preview")]
+        let api_config = match config.conf.api_grpc_preview_port {
+            Some(port) => api_config.with_grpc_preview(format!("grpc://127.0.0.1:{port}"), false),
+            None => api_config,
+        };
+        let application_api = DdbApplicationService::new(
+            Arc::clone(&api_queries),
+            command_engine.clone(),
+            output_hub,
+            Arc::clone(&config),
+            runtime_status,
+            Arc::clone(&shutdown),
+            api_config,
+        );
         let session_supervisor = SessionSupervisor::new(
             Arc::clone(&config),
             Arc::clone(&plugin),
@@ -148,6 +190,7 @@ impl ApplicationServices {
             notification_manager,
             api_queries,
             debugger_manager,
+            application_api,
         }))
     }
 
@@ -167,6 +210,9 @@ impl ApplicationServices {
         &self.api_queries
     }
 
+    pub(crate) fn application_api(&self) -> &Arc<DdbApplicationService> {
+        &self.application_api
+    }
     pub(crate) fn debugger_manager(&self) -> &Arc<DbgManager> {
         &self.debugger_manager
     }

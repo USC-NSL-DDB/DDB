@@ -14,13 +14,17 @@ use tokio::sync::{oneshot, watch};
 
 use crate::cmd_flow::response::ParsedSessionResponse;
 
-use super::{handle::CommandPermit, CompletionConsistency};
+use super::{
+    handle::{CommandPermit, PendingRegistration},
+    CompletionConsistency,
+};
 
 pub(super) struct PendingCommand {
     pub completion: oneshot::Sender<Result<ParsedSessionResponse>>,
     pub permit: CommandPermit,
     pub consistency: CompletionConsistency,
     pub created_at: Instant,
+    pub _registration: PendingRegistration,
 }
 
 /// Commands awaiting their result, sharing the runtime's in-flight counter.

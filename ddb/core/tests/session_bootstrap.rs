@@ -66,10 +66,24 @@ fn boots_static_sessions_and_reports_thread_info() {
     assert!(session_id_by_tag(&sessions, "svc-b") > 0);
     assert!(session_id_by_tag(&sessions, "svc-c") > 0);
 
-    ddb.send_cmd("101-thread-info");
+    // CLI commands intentionally follow the selected thread by default. This
+    // assertion covers the aggregate projection, so request broadcast explicitly.
+    ddb.send_cmd("101-thread-info --all");
     let output = ddb.wait_for_stdout_line("101^done");
-    assert!(output.contains("threads=["));
-    assert!(output.contains("id=\"1\""));
-    assert!(output.contains("id=\"2\""));
-    assert!(output.contains("id=\"3\""));
+    assert!(
+        output.contains("threads=["),
+        "unexpected thread-info: {output}"
+    );
+    assert!(
+        output.contains("id=\"1\""),
+        "unexpected thread-info: {output}"
+    );
+    assert!(
+        output.contains("id=\"2\""),
+        "unexpected thread-info: {output}"
+    );
+    assert!(
+        output.contains("id=\"3\""),
+        "unexpected thread-info: {output}"
+    );
 }
