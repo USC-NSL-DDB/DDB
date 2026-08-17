@@ -18,6 +18,7 @@ on:
       - 'ddb/completions/**'
       - 'README.md'
       - 'ddb/**/*.proto'
+      - 'ddb/proto/ddb/api/v2/operation_policy.json'
       - 'ddb/sdk/**'
       - 'ddb/buf.yaml'
       - 'ddb/docs/api/**'
@@ -39,6 +40,7 @@ on:
       - 'ddb/completions/**'
       - 'README.md'
       - 'ddb/**/*.proto'
+      - 'ddb/proto/ddb/api/v2/operation_policy.json'
       - 'ddb/sdk/**'
       - 'ddb/buf.yaml'
       - 'ddb/docs/api/**'
@@ -119,7 +121,11 @@ jobs:
           npx --yes @redocly/cli@2.46.1 lint docs/api/generated/openapi-v2.json
           npx --yes @asyncapi/cli@6.0.2 validate docs/api/generated/asyncapi-v2.json --diagnostics-format json
 
-      - name: Check API schema compatibility
+      - name: Validate examples and captured runtime payloads against specifications
+        working-directory: ddb
+        run: cargo test -p ddb --test api_v2_spec_conformance
+
+      - name: Check Protobuf schema compatibility
         if: github.event_name == 'pull_request'
         working-directory: ddb
         env:
@@ -130,6 +136,22 @@ jobs:
           else
             echo "No v2 schema exists on the pull-request base; establishing the initial baseline."
           fi
+
+      - name: Check OpenAPI compatibility
+        if: github.event_name == 'pull_request'
+        uses: oasdiff/oasdiff-action/breaking@2649ebe137aeb72a95707671204e829f86e091fc # v0.1.13 / oasdiff v1.29.1
+        with:
+          base: '${{ github.event.pull_request.base.sha }}:ddb/docs/api/generated/openapi-v2.json'
+          revision: 'HEAD:ddb/docs/api/generated/openapi-v2.json'
+          fail-on: ERR
+          review: false
+
+      - name: Check AsyncAPI compatibility
+        if: github.event_name == 'pull_request'
+        working-directory: ddb
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./tools/check-asyncapi-compatibility.sh "${BASE_SHA}"
 
       - name: Check every target and feature
         working-directory: ddb

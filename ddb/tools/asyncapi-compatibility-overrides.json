@@ -1,0 +1,67 @@
+{
+  "/channels/*/address": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-backpressure": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-cursor-replay": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-heartbeat": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-heartbeat-seconds": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-lane": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-loss-signaling": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-ordering": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-protobuf-method": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-registry-key": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/channels/*/x-ddb-replay-limits": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/components/messages/*/contentType": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  },
+  "/operations/*/x-ddb-required-scope": {
+    "add": "non-breaking",
+    "remove": "breaking",
+    "edit": "breaking"
+  }
+}

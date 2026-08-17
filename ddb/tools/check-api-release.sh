@@ -5,12 +5,16 @@ api_release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${api_release_root}"
 
 cargo run -p ddb-api-codegen -- --check
+npx --yes @redocly/cli@2.46.1 lint docs/api/generated/openapi-v2.json
+npx --yes @asyncapi/cli@6.0.2 validate \
+  docs/api/generated/asyncapi-v2.json --diagnostics-format json
 cargo test -p ddb-api-types --all-targets
 cargo test -p ddb-api-client --all-targets
 cargo test -p ddb-api-grpc --all-targets
 cargo test -p ddb-api-conformance --all-targets
 cargo test -p ddb-api-extension --all-targets
 cargo test -p ddb-sample-extension --all-targets
+cargo test -p ddb --test api_v2_spec_conformance
 cargo clippy -p ddb-api-types --all-targets --no-deps -- -D warnings
 cargo clippy -p ddb-api-client --all-targets --all-features --no-deps -- -D warnings
 cargo clippy -p ddb-api-grpc --all-targets --all-features --no-deps -- -D warnings

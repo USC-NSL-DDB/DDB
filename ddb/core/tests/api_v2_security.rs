@@ -25,19 +25,44 @@ fn response_json(response: reqwest::blocking::Response) -> (StatusCode, Value) {
 fn every_generated_v2_method_enforces_its_advertised_scope() {
     let ddb = DdbProcess::spawn_with_v2_auth(&[]);
     let client = Client::new();
+    let registry: Value = serde_json::from_str(include_str!(
+        "../../docs/api/generated/operation-registry-v2.json"
+    ))
+    .expect("checked-in operation registry should be valid JSON");
     let openapi: Value =
         serde_json::from_str(include_str!("../../docs/api/generated/openapi-v2.json"))
             .expect("checked-in OpenAPI should be valid JSON");
+    let operations = registry["operations"]
+        .as_array()
+        .expect("registry operations should be an array");
     let paths = openapi["paths"]
         .as_object()
         .expect("OpenAPI paths should be an object");
-    assert_eq!(paths.len(), 43, "unexpected public RPC surface change");
+    assert_eq!(
+        paths.len(),
+        operations.len(),
+        "OpenAPI and runtime registry operation counts disagree"
+    );
 
-    for (path, item) in paths {
-        let operation = &item["post"];
-        let scope = operation["x-ddb-required-scope"].as_str();
+    for operation in operations {
+        let key = operation["key"].as_str().expect("operation key");
+        let path = operation["path"].as_str().expect("operation path");
+        let permission = operation["permission"]
+            .as_str()
+            .expect("operation permission");
+        let documented = paths
+            .get(path)
+            .unwrap_or_else(|| panic!("OpenAPI omitted registry path {path}"));
+        assert_eq!(documented["post"]["x-ddb-registry-key"], key);
+        match permission {
+            "public" => assert!(documented["post"].get("x-ddb-required-scope").is_none()),
+            "read" | "control" | "admin" => {
+                assert_eq!(documented["post"]["x-ddb-required-scope"], permission)
+            }
+            other => panic!("unknown registry permission {other} for {path}"),
+        }
+
         let endpoint = format!("{}{}", ddb.api_endpoint(), path);
-
         let unauthenticated = client
             .post(&endpoint)
             .json(&json!({}))
@@ -45,27 +70,26 @@ fn every_generated_v2_method_enforces_its_advertised_scope() {
             .unwrap_or_else(|error| {
                 panic!("{path} should answer without transport failure: {error}")
             });
-        match scope {
-            None => assert_eq!(
+        if permission == "public" {
+            assert_eq!(
                 unauthenticated.status(),
                 StatusCode::OK,
                 "public method {path} should be callable without credentials"
-            ),
-            Some(_) => assert_eq!(
-                unauthenticated.status(),
-                StatusCode::UNAUTHORIZED,
-                "protected method {path} should reject missing credentials"
-            ),
+            );
+            continue;
         }
+        assert_eq!(
+            unauthenticated.status(),
+            StatusCode::UNAUTHORIZED,
+            "protected method {path} should reject missing credentials"
+        );
 
-        let (token, denied_token) = match scope {
-            None => continue,
-            Some("read") => (V2_TEST_READ_TOKEN, None),
-            Some("control") => (V2_TEST_CONTROL_TOKEN, Some(V2_TEST_READ_TOKEN)),
-            Some("admin") => (V2_TEST_ADMIN_TOKEN, Some(V2_TEST_CONTROL_TOKEN)),
-            Some(other) => panic!("unknown generated scope {other} for {path}"),
+        let (token, denied_token) = match permission {
+            "read" => (V2_TEST_READ_TOKEN, None),
+            "control" => (V2_TEST_CONTROL_TOKEN, Some(V2_TEST_READ_TOKEN)),
+            "admin" => (V2_TEST_ADMIN_TOKEN, Some(V2_TEST_CONTROL_TOKEN)),
+            _ => unreachable!(),
         };
-
         if let Some(denied_token) = denied_token {
             let denied = client
                 .post(&endpoint)
@@ -76,7 +100,7 @@ fn every_generated_v2_method_enforces_its_advertised_scope() {
             assert_eq!(
                 denied.status(),
                 StatusCode::FORBIDDEN,
-                "method {path} accepted a credential below its advertised scope"
+                "method {path} accepted a credential below its registry scope"
             );
         }
 
@@ -89,16 +113,15 @@ fn every_generated_v2_method_enforces_its_advertised_scope() {
         assert_ne!(
             allowed.status(),
             StatusCode::UNAUTHORIZED,
-            "method {path} rejected its advertised scope"
+            "method {path} rejected its registry scope"
         );
         assert_ne!(
             allowed.status(),
             StatusCode::FORBIDDEN,
-            "method {path} rejected its advertised scope"
+            "method {path} rejected its registry scope"
         );
     }
 }
-
 #[test]
 fn remote_listener_exposes_only_v2_and_requires_the_configured_auth_scope() {
     let ddb = DdbProcess::spawn_with_v2_conf(
