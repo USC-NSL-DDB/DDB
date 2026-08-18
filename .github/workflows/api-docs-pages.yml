@@ -9,6 +9,11 @@ on:
       - 'ddb/docs-site/**'
       - 'ddb/docs/api/**'
       - 'ddb/proto/ddb/api/v2/**'
+      - 'ddb/api-types/descriptor/**'
+      - 'ddb/api-client/README.md'
+      - 'ddb/sdk/typescript/README.md'
+      - 'ddb/sdk/python/README.md'
+      - 'ddb/buf.yaml'
       - 'ddb/tools/api-codegen/**'
       - '.github/workflows/api-docs-pages.yml'
   pull_request:
@@ -16,6 +21,11 @@ on:
       - 'ddb/docs-site/**'
       - 'ddb/docs/api/**'
       - 'ddb/proto/ddb/api/v2/**'
+      - 'ddb/api-types/descriptor/**'
+      - 'ddb/api-client/README.md'
+      - 'ddb/sdk/typescript/README.md'
+      - 'ddb/sdk/python/README.md'
+      - 'ddb/buf.yaml'
       - 'ddb/tools/api-codegen/**'
       - '.github/workflows/api-docs-pages.yml'
   workflow_dispatch:
@@ -47,6 +57,7 @@ jobs:
           cache-dependency-path: |
             ddb/docs-site/package-lock.json
             ddb/docs-site/redoc-runtime/package-lock.json
+            ddb/docs-site/asyncapi-runtime/package-lock.json
 
       - name: Install locked documentation dependencies
         working-directory: ddb/docs-site
@@ -54,6 +65,10 @@ jobs:
 
       - name: Install isolated Redoc runtime
         working-directory: ddb/docs-site/redoc-runtime
+        run: npm ci --ignore-scripts
+
+      - name: Install isolated AsyncAPI renderer
+        working-directory: ddb/docs-site/asyncapi-runtime
         run: npm ci --ignore-scripts
 
       - name: Validate source contracts

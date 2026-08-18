@@ -1,49 +1,95 @@
-# DDB API reference site
+# DDB API reference portal
 
-This directory builds two public, read-only reference pages from DDB's
-checked-in generated contracts:
+This directory builds the public API-reference site for developers creating DDB
+frontends, SDKs, extensions, and integrations. It is deliberately narrower than
+DDB's general documentation: tutorials, concepts, deployment guides, and
+operator documentation remain in `ddb/docs` and the project's GitBook.
 
-- /openapi/: standalone Redoc CE reference for HTTP/ProtoJSON operations;
-- /asyncapi/: standalone AsyncAPI reference for state and output streams;
-- /specs/: raw OpenAPI, AsyncAPI, operation-registry, checksum, and provenance
-  files.
+## Published routes
 
-The root page only redirects to /openapi/. DDB's existing project landing page
-should link directly to /openapi/ and /asyncapi/.
+- `/`: Docusaurus API portal and reference chooser;
+- `/schema/`: descriptor-driven Protobuf messages, fields, enums, oneofs,
+  ProtoJSON representations, and operation cross-links;
+- `/openapi/`: standalone Redoc CE view of HTTP/ProtoJSON operations;
+- `/asyncapi/`: standalone AsyncAPI view of replayable event streams;
+- `/sdk/`: Rust, TypeScript, and Python SDK references sourced from each
+  package's canonical README;
+- `/specs/`: stable machine-readable contracts, Protobuf sources, descriptor
+  set, schema catalog, checksums, and build provenance.
 
-This site is a projection, not another source of API truth. It never rewrites
-files under docs/api/generated, and rendered HTML under dist is not committed.
+The deployed GitHub Pages base path is `/DDB/`. The build uses Docusaurus's
+`pathname://` escape hatch only for generated static references such as Redoc
+and AsyncAPI; tests still resolve those links against the final artifact.
 
-## Local verification
+## Sources of truth
 
-Node.js 24 LTS with npm 11.17 is required. CI and .node-version pin the exact
-current LTS release, 24.19.0, so tool behavior does not change between runs.
+This site is a projection, never a competing API definition:
+
+1. `ddb/proto/ddb/api/v2/*.proto` defines names, field numbers, types, comments,
+   enum symbols, and oneofs.
+2. `ddb/api-types/descriptor/ddb_api_v2_descriptor.bin` is the checked
+   descriptor set used for structural reflection.
+3. `ddb/docs/api/generated/operation-registry-v2.json` joins schema types to
+   HTTP paths, permissions, status codes, and streaming behavior.
+4. Generated OpenAPI and AsyncAPI contracts define their transport-specific
+   views.
+
+`scripts/generate-portal-content.mjs` decodes the descriptor, parses canonical
+source comments, joins the operation registry, and rejects undocumented public
+messages or fields, missing type references, and descriptor/source drift. It
+also emits `schema-reference-v2.json` for tools that need the same enriched
+model without scraping HTML.
+
+Generated files under `.generated/`, `.docusaurus/`, and `dist/` are
+ephemeral and must not be committed.
+
+## Install and verify
+
+Node.js 24 LTS with npm 11.17 is required. `.node-version` pins the CI release.
 
     npm ci --ignore-scripts
     npm ci --ignore-scripts --prefix redoc-runtime
+    npm ci --ignore-scripts --prefix asyncapi-runtime
     npm run check
     npm run build
     npm test
-    python3 -m http.server --directory dist 8080
 
-Open http://127.0.0.1:8080/openapi/ or
-http://127.0.0.1:8080/asyncapi/.
+`npm run check` validates the checked OpenAPI and AsyncAPI contracts.
+`npm run build` deterministically prepares every generated input, builds both
+standalone viewers, publishes the raw artifacts, and then creates the
+Docusaurus site. `npm test` verifies the portal routes, every generated schema
+page, SDK pages, byte-identical source artifacts, schema relationships,
+checksums, provenance, base-path-safe local links, and self-hosted executable
+assets.
 
-npm run check runs lockfile-pinned Redocly and AsyncAPI validators. The
-AsyncAPI CLI's optional Studio dependency is overridden to 1.3.0 because its
-newer 1.4.0 release currently references an unpublished package. npm test
-confirms that both self-hosted references exist, raw contracts are
-byte-identical to their sources, provenance and checksums are correct, and
-neither reference
-loads executable code from a third-party origin. The build replaces Redocly's
-CDN runtime tag with the matching pinned local Redoc bundle and rejects version
-drift between them. Redoc has an isolated lockfile so its React dependencies
-cannot affect the AsyncAPI generator.
+To inspect the production build:
 
-## Deployment behavior
+    npm run serve -- --host 127.0.0.1 --port 8080
 
-.github/workflows/api-docs-pages.yml validates builds on relevant pull requests
-and pushes. It uploads and deploys a Pages artifact only from the repository's
-current default branch. Feature branches cannot replace the public site. All
-URLs are relative, so the artifact works under the GitHub project path (/DDB/)
-and under a future custom domain.
+Open `http://127.0.0.1:8080/DDB/`.
+
+For theme or page development, run:
+
+    npm start
+
+This prepares schema and static references once, then starts Docusaurus's
+development server. Restart it after changing a Protobuf file, generated
+contract, or SDK README so those inputs are regenerated.
+
+## Dependency isolation
+
+The portal uses React 19 through Docusaurus. Redoc's browser runtime and the
+AsyncAPI renderer have separate lockfiles and installation roots because their
+React/tooling dependency trees are unrelated and must not influence the portal
+bundle. Redoc's generated CDN tag is replaced with the exactly pinned local
+bundle; the build rejects renderer/runtime version drift. AsyncAPI's optional
+Studio dependency is pinned independently to avoid registry instability in the
+renderer toolchain.
+
+## Deployment
+
+`.github/workflows/api-docs-pages.yml` validates relevant pull requests and
+pushes. It uploads and deploys `dist/` only from the repository's current
+default branch, so feature branches cannot replace the public site. The Pages
+artifact includes `.nojekyll`, uses the configured `/DDB/` base path, and
+contains no runtime dependency on a third-party script CDN.
