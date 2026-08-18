@@ -23,6 +23,7 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(50);
 
 static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
+static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
@@ -54,7 +55,9 @@ fn mock_backend_full_terminal_workflow() {
     });
 
     // Source -> Stack -> Variables -> Timeline -> Threads -> Breakpoints.
+    tui.clear_capture();
     tui.send(b"\t\t\t\t\t");
+    tui.wait_for("\u{25c6} DDB Breakpoints");
     tui.send(b"x");
     ddb.wait_for_json("/api/v1/state", |body| {
         body.pointer("/data/breakpoints/0/enabled")
@@ -351,13 +354,15 @@ fn managed_credentials_never_cross_process_or_diagnostic_boundaries() {
 #[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn reconnects_and_bootstraps_when_ddb_starts_late() {
+    let start_guard = ddb_start_guard();
     let port = reserve_port();
     let api = format!("http://127.0.0.1:{port}");
     let mut tui = Tui::spawn_with_refresh(&api, 250);
     tui.wait_for("DDB Debugger");
     tui.wait_for("reconnecting");
 
-    let mut ddb = Ddb::spawn_mock_on(port);
+    let mut ddb = Ddb::spawn_mock_on_reserved(port);
+    drop(start_guard);
     tui.wait_for("mock_session");
     tui.wait_for("counter");
     tui.wait_for("connected");
@@ -745,10 +750,11 @@ struct Ddb {
 
 impl Ddb {
     fn spawn_mock() -> Self {
-        Self::spawn_mock_on(reserve_port())
+        let _start_guard = ddb_start_guard();
+        Self::spawn_mock_on_reserved(reserve_port())
     }
 
-    fn spawn_mock_on(port: u16) -> Self {
+    fn spawn_mock_on_reserved(port: u16) -> Self {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let tempdir = tempfile::tempdir().expect("temporary DDB directory should be created");
         let config = format!(
@@ -806,6 +812,7 @@ StaticSessions:
             .map(|index| index + 1)
             .expect("real fixture breakpoint marker should exist");
 
+        let _start_guard = ddb_start_guard();
         let port = reserve_port();
         let tempdir = tempfile::tempdir().expect("temporary DDB directory should be created");
         let config = format!(
@@ -1715,6 +1722,12 @@ fn reserve_port() -> u16 {
         .local_addr()
         .expect("ephemeral address should be available")
         .port()
+}
+
+fn ddb_start_guard() -> std::sync::MutexGuard<'static, ()> {
+    DDB_START_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn drain(mut reader: impl Read + Send + 'static, output: Arc<Mutex<Vec<u8>>>) {
