@@ -69,6 +69,11 @@ pub fn build(name: &str) -> String {
             "--target-dir",
             target_dir.as_str()
         )
+        // These samples are debugger fixtures. Preserve their symbols even when
+        // the parent build strips workspace debug information for CI speed.
+        .env("CARGO_PROFILE_DEV_DEBUG", "2")
+        .env("CARGO_PROFILE_DEV_OPT_LEVEL", "0")
+        .env("CARGO_PROFILE_DEV_STRIP", "none")
         .dir(crate_root())
         .stdin_null()
         .stdout_null()
