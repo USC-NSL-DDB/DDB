@@ -16,8 +16,8 @@ files under docs/api/generated, and rendered HTML under dist is not committed.
 
 ## Local verification
 
-Node.js 24 LTS is required. CI and .node-version pin the exact current LTS
-release, 24.19.0, so tool behavior does not change between runs.
+Node.js 24 LTS with npm 11.17 is required. CI and .node-version pin the exact
+current LTS release, 24.19.0, so tool behavior does not change between runs.
 
     npm ci --ignore-scripts
     npm ci --ignore-scripts --prefix redoc-runtime

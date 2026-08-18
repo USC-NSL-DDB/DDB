@@ -4,6 +4,7 @@
   "private": true,
   "description": "Deterministic static OpenAPI and AsyncAPI references for DDB",
   "type": "module",
+  "packageManager": "npm@11.17.0",
   "engines": {
     "node": "^24.0.0"
   },
