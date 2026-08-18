@@ -1,0 +1,8 @@
+# DDB intentionally publishes the complete Protobuf component catalog in its
+# generated OpenAPI projection. Stream payloads are referenced through x-ddb-*
+# extensions that Redocly does not count as component usage.
+extends:
+  - recommended
+
+rules:
+  no-unused-components: off

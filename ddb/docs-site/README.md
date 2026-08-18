@@ -16,7 +16,8 @@ files under docs/api/generated, and rendered HTML under dist is not committed.
 
 ## Local verification
 
-Node.js 22.12 or newer is required.
+Node.js 24 LTS is required. CI and .node-version pin the exact current LTS
+release, 24.19.0, so tool behavior does not change between runs.
 
     npm ci --ignore-scripts
     npm ci --ignore-scripts --prefix redoc-runtime
@@ -28,9 +29,12 @@ Node.js 22.12 or newer is required.
 Open http://127.0.0.1:8080/openapi/ or
 http://127.0.0.1:8080/asyncapi/.
 
-npm run check runs pinned Redocly and AsyncAPI validators. npm test confirms
-that both self-hosted references exist, raw contracts are byte-identical to
-their sources, provenance and checksums are correct, and neither reference
+npm run check runs lockfile-pinned Redocly and AsyncAPI validators. The
+AsyncAPI CLI's optional Studio dependency is overridden to 1.3.0 because its
+newer 1.4.0 release currently references an unpublished package. npm test
+confirms that both self-hosted references exist, raw contracts are
+byte-identical to their sources, provenance and checksums are correct, and
+neither reference
 loads executable code from a third-party origin. The build replaces Redocly's
 CDN runtime tag with the matching pinned local Redoc bundle and rejects version
 drift between them. Redoc has an isolated lockfile so its React dependencies

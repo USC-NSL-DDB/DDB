@@ -5,9 +5,8 @@ api_release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${api_release_root}"
 
 cargo run -p ddb-api-codegen -- --check
-npx --yes @redocly/cli@2.46.1 lint docs/api/generated/openapi-v2.json
-npx --yes @asyncapi/cli@6.0.2 validate \
-  docs/api/generated/asyncapi-v2.json --diagnostics-format json
+"${api_release_root}/tools/ensure-api-docs-tools.sh"
+npm run --prefix docs-site check
 cargo test -p ddb-api-types --all-targets
 cargo test -p ddb-api-client --all-targets
 cargo test -p ddb-api-grpc --all-targets

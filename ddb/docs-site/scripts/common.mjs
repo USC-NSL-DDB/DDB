@@ -22,10 +22,18 @@ function executable(name) {
 }
 
 export function runTool(name, args) {
+  const asyncApiEnvironment =
+    name === 'asyncapi'
+      ? {
+          CI: 'true',
+          NODE_CONFIG_ENV: 'development',
+        }
+      : {}
   const result = spawnSync(executable(name), args, {
     cwd: docsSiteRoot,
     env: {
       ...process.env,
+      ...asyncApiEnvironment,
       REDOCLY_SUPPRESS_UPDATE_NOTICE: 'true',
       SUPPRESS_NO_CONFIG_WARNING: 'true',
     },

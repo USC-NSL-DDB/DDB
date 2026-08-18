@@ -22,10 +22,8 @@ command -v jq >/dev/null || {
   echo "jq is required for AsyncAPI compatibility checks" >&2
   exit 2
 }
-command -v npx >/dev/null || {
-  echo "npx is required for AsyncAPI compatibility checks" >&2
-  exit 2
-}
+"${asyncapi_root}/tools/ensure-api-docs-tools.sh"
+asyncapi_cli="${asyncapi_root}/docs-site/node_modules/.bin/asyncapi"
 
 asyncapi_tmp="$(mktemp -d)"
 trap 'rm -rf "${asyncapi_tmp}"' EXIT
@@ -49,7 +47,8 @@ normalize_asyncapi() {
 normalize_asyncapi "${asyncapi_tmp}/base.json" "${asyncapi_tmp}/base-normalized.json"
 normalize_asyncapi "${asyncapi_current}" "${asyncapi_tmp}/current-normalized.json"
 
-SUPPRESS_NO_CONFIG_WARNING=true npx --yes @asyncapi/cli@6.0.2 diff \
+CI=true NODE_CONFIG_ENV=development SUPPRESS_NO_CONFIG_WARNING=true \
+  "${asyncapi_cli}" diff \
   "${asyncapi_tmp}/base-normalized.json" \
   "${asyncapi_tmp}/current-normalized.json" \
   --type breaking \
