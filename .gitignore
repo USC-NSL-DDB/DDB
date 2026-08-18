@@ -119,6 +119,8 @@ Cargo.lock
 
 # Kernel Module Compile Results
 *.mod*
+# Docusaurus uses CSS Modules for component-scoped styles.
+!ddb/docs-site/src/**/*.module.css
 *.cmd
 .tmp_versions/
 modules.order
