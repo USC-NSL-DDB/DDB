@@ -68,7 +68,7 @@ StaticSessions:
             .spawn()
             .expect("managed DDB should spawn");
         let report = wait_for_report(&report_path, &mut child);
-        assert_eq!(report["status"], "ready");
+        assert_eq!(report["status"], "ready", "{report:#}");
         assert_eq!(report["pid"].as_u64(), Some(u64::from(child.id())));
         assert!(
             !token_path.exists(),
@@ -402,6 +402,11 @@ fn write_tokens(path: &Path) {
         .unwrap(),
     )
     .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 fn wait_for_report(path: &PathBuf, child: &mut Child) -> Value {
