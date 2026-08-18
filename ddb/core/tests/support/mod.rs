@@ -303,8 +303,11 @@ impl DdbProcess {
         spawn_reader(child_stdout, stdout.clone());
         spawn_reader(child_stderr, stderr.clone());
 
+        // Real debugger operations can need symbol evaluation and memory access.
+        // Keep the client bounded without imposing a sub-second latency budget on
+        // correctness tests, especially on shared CI runners.
         let client = Client::builder()
-            .timeout(Duration::from_millis(250))
+            .timeout(DEFAULT_TIMEOUT)
             .build()
             .expect("reqwest client should build");
 
