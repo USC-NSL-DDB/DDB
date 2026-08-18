@@ -1056,6 +1056,9 @@ pub fn build_real_loop_example() -> &'static BuiltRealExample {
         ensure_real_debugger_environment();
         let manifest_path = fixture_root().join("real_loop").join("Cargo.toml");
         let status = Command::new("cargo")
+            // Debugger integration tests require source/line tables even when
+            // the parent CI build disables dev-profile debug information.
+            .env("CARGO_PROFILE_DEV_DEBUG", "2")
             .arg("build")
             .arg("--manifest-path")
             .arg(&manifest_path)
@@ -1091,6 +1094,9 @@ pub fn build_real_dbt_example() -> &'static BuiltRealBinaryExample {
         ensure_real_debugger_environment();
         let manifest_path = fixture_root().join("real_dbt").join("Cargo.toml");
         let status = Command::new("cargo")
+            // Debugger integration tests require source/line tables even when
+            // the parent CI build disables dev-profile debug information.
+            .env("CARGO_PROFILE_DEV_DEBUG", "2")
             .arg("build")
             .arg("--manifest-path")
             .arg(&manifest_path)

@@ -224,10 +224,13 @@ jobs:
           cargo clippy --all-targets --all-features -- -D warnings
           cargo build --release
 
-      - name: Build DDB and real debugger fixture for TUI PTY tests
-        run: |
-          cargo build -p ddb --manifest-path ddb/Cargo.toml
-          cargo build --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml
+      - name: Build DDB for TUI PTY tests
+        run: cargo build -p ddb --manifest-path ddb/Cargo.toml
+
+      - name: Build debuggable real fixture for TUI PTY tests
+        env:
+          CARGO_PROFILE_DEV_DEBUG: '2'
+        run: cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml
 
       - name: Run ddb-tui Mock, GDB, and LLDB PTY workflows
         working-directory: ddb-tui
