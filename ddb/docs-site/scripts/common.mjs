@@ -17,8 +17,12 @@ export const contracts = Object.freeze({
 })
 
 function executable(name) {
+  const packageRoot =
+    name === 'asyncapi'
+      ? path.join(docsSiteRoot, 'asyncapi-runtime')
+      : docsSiteRoot
   const suffix = process.platform === 'win32' ? '.cmd' : ''
-  return path.join(docsSiteRoot, 'node_modules', '.bin', name + suffix)
+  return path.join(packageRoot, 'node_modules', '.bin', name + suffix)
 }
 
 export function runTool(name, args) {
@@ -63,7 +67,22 @@ export function contractSummary(openapi, asyncapi, registry) {
         asyncapiVersion,
     )
   }
-  const operationCount = Object.keys(openapi?.paths ?? {}).length
+  const httpMethods = new Set([
+    'get',
+    'put',
+    'post',
+    'delete',
+    'options',
+    'head',
+    'patch',
+    'trace',
+  ])
+  const operationCount = Object.values(openapi?.paths ?? {}).reduce(
+    (count, pathItem) =>
+      count +
+      Object.keys(pathItem ?? {}).filter((key) => httpMethods.has(key)).length,
+    0,
+  )
   const streamChannelCount = Object.keys(asyncapi?.channels ?? {}).length
   const registryOperationCount = Array.isArray(registry?.operations)
     ? registry.operations.length

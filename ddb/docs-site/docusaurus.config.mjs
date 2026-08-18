@@ -1,0 +1,127 @@
+import {themes as prismThemes} from 'prism-react-renderer'
+
+const repositoryUrl = 'https://github.com/USC-NSL-DDB/DDB'
+
+export default {
+  title: 'DDB API',
+  tagline: 'Contracts and SDKs for building debugger frontends',
+  favicon: 'img/favicon.svg',
+  url: 'https://usc-nsl-ddb.github.io',
+  baseUrl: '/DDB/',
+  organizationName: 'USC-NSL-DDB',
+  projectName: 'DDB',
+  trailingSlash: true,
+  onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
+  markdown: {
+    hooks: {
+      onBrokenMarkdownLinks: 'throw',
+    },
+  },
+  staticDirectories: ['static', '.generated/static'],
+
+  presets: [
+    [
+      'classic',
+      {
+        blog: false,
+        docs: {
+          path: '.generated/sdk',
+          routeBasePath: 'sdk',
+          sidebarPath: './sidebarsSdk.mjs',
+        },
+        sitemap: {
+          changefreq: 'weekly',
+          priority: 0.5,
+        },
+        theme: {
+          customCss: './src/css/custom.css',
+        },
+      },
+    ],
+  ],
+
+  plugins: [
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'schema',
+        path: '.generated/schema',
+        routeBasePath: 'schema',
+        sidebarPath: './sidebarsSchema.mjs',
+        showLastUpdateAuthor: false,
+        showLastUpdateTime: false,
+      },
+    ],
+  ],
+
+  themeConfig: {
+    colorMode: {
+      defaultMode: 'dark',
+      respectPrefersColorScheme: true,
+    },
+    navbar: {
+      title: 'DDB API',
+      logo: {
+        alt: 'DDB API',
+        src: 'img/logo.svg',
+      },
+      items: [
+        {to: '/schema/', label: 'Data schema', position: 'left'},
+        {to: 'pathname:///openapi/', label: 'HTTP API', position: 'left'},
+        {to: 'pathname:///asyncapi/', label: 'Event API', position: 'left'},
+        {to: '/sdk/', label: 'SDKs', position: 'left'},
+        {
+          href: `${repositoryUrl}/tree/dev/ddb/docs/api`,
+          label: 'API guides',
+          position: 'right',
+        },
+        {
+          href: repositoryUrl,
+          label: 'GitHub',
+          position: 'right',
+        },
+      ],
+    },
+    footer: {
+      style: 'dark',
+      links: [
+        {
+          title: 'References',
+          items: [
+            {label: 'Data schema', to: '/schema/'},
+            {label: 'HTTP / OpenAPI', to: 'pathname:///openapi/'},
+            {label: 'Events / AsyncAPI', to: 'pathname:///asyncapi/'},
+          ],
+        },
+        {
+          title: 'Build with DDB',
+          items: [
+            {label: 'SDKs', to: '/sdk/'},
+            {label: 'Raw contract artifacts', to: '/specs/'},
+            {
+              label: 'Contributing',
+              href: `${repositoryUrl}/blob/dev/ddb/docs/api/contributing.md`,
+            },
+          ],
+        },
+        {
+          title: 'Project',
+          items: [
+            {label: 'DDB repository', href: repositoryUrl},
+            {
+              label: 'General documentation',
+              href: `${repositoryUrl}/tree/dev/ddb/docs`,
+            },
+          ],
+        },
+      ],
+      copyright:
+        'DDB API reference · generated from the canonical public contract',
+    },
+    prism: {
+      theme: prismThemes.github,
+      darkTheme: prismThemes.dracula,
+    },
+  },
+}

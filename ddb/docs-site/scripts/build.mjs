@@ -1,23 +1,37 @@
-import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {createHash} from 'node:crypto'
+import {copyFile, mkdir, readFile, rm, writeFile} from 'node:fs/promises'
 import path from 'node:path'
 
 import {
   contractSummary,
   contracts,
+  ddbRoot,
   docsSiteRoot,
   runTool,
 } from './common.mjs'
+import {
+  generatePortalContent,
+  portalPaths,
+  protoSources,
+} from './generate-portal-content.mjs'
 
 const dist = path.join(docsSiteRoot, 'dist')
-const specs = path.join(dist, 'specs')
-const staticRoot = path.join(docsSiteRoot, 'static')
+const generatedStatic = portalPaths.staticRoot
+const specs = path.join(generatedStatic, 'specs')
 const redocPackageRoot = path.join(
   docsSiteRoot,
   'redoc-runtime',
   'node_modules',
   'redoc',
 )
+
+const args = process.argv.slice(2)
+const prepareOnly = args.length === 1 && args[0] === '--prepare-only'
+if (args.length > 0 && !prepareOnly) {
+  throw new Error(
+    `usage: node scripts/build.mjs [--prepare-only], received: ${args.join(' ')}`,
+  )
+}
 
 if (path.dirname(dist) !== docsSiteRoot || path.basename(dist) !== 'dist') {
   throw new Error('refusing to clean unexpected output directory ' + dist)
@@ -34,6 +48,16 @@ function sourceRevision() {
     : null
 }
 
+async function publishArtifact(artifact) {
+  const destination = path.join(specs, artifact.name)
+  await mkdir(path.dirname(destination), {recursive: true})
+  if (artifact.source) {
+    await copyFile(artifact.source, destination)
+  } else {
+    await writeFile(destination, artifact.bytes)
+  }
+}
+
 const [openapi, asyncapi, registry] = await Promise.all([
   readJson(contracts.openapi),
   readJson(contracts.asyncapi),
@@ -42,27 +66,26 @@ const [openapi, asyncapi, registry] = await Promise.all([
 const summary = contractSummary(openapi, asyncapi, registry)
 const revision = sourceRevision()
 
-await rm(dist, { recursive: true, force: true })
+if (!prepareOnly) {
+  await rm(dist, {recursive: true, force: true})
+}
+const portal = await generatePortalContent({apiVersion: summary.apiVersion})
 await Promise.all([
-  mkdir(path.join(dist, 'assets'), { recursive: true }),
-  mkdir(path.join(dist, 'openapi'), { recursive: true }),
-  mkdir(path.join(dist, 'asyncapi'), { recursive: true }),
-  mkdir(specs, { recursive: true }),
-])
-await Promise.all([
-  copyFile(path.join(staticRoot, 'index.html'), path.join(dist, 'index.html')),
-  writeFile(path.join(dist, '.nojekyll'), ''),
+  mkdir(path.join(generatedStatic, 'assets'), {recursive: true}),
+  mkdir(path.join(generatedStatic, 'openapi'), {recursive: true}),
+  mkdir(path.join(generatedStatic, 'asyncapi'), {recursive: true}),
+  mkdir(specs, {recursive: true}),
 ])
 
 runTool('redocly', [
   'build-docs',
   contracts.openapi,
   '--output',
-  path.join(dist, 'openapi', 'index.html'),
+  path.join(generatedStatic, 'openapi', 'index.html'),
   '--disableGoogleFont',
 ])
 
-const redocOutput = path.join(dist, 'openapi', 'index.html')
+const redocOutput = path.join(generatedStatic, 'openapi', 'index.html')
 const redocHtml = await readFile(redocOutput, 'utf8')
 const redocCdnPattern =
   /<script src="https:\/\/cdn\.redocly\.com\/redoc\/v([^/"?]+)\/bundles\/redoc\.standalone\.js"[^>]*><\/script>/g
@@ -92,8 +115,8 @@ await Promise.all([
     ),
   ),
   copyFile(
-    path.join(redocPackageRoot, 'bundles', 'redoc.standalone.js'),
-    path.join(dist, 'assets', 'redoc.standalone.js'),
+    path.join(redocPackageRoot, 'bundles/redoc.standalone.js'),
+    path.join(generatedStatic, 'assets/redoc.standalone.js'),
   ),
 ])
 
@@ -103,29 +126,59 @@ runTool('asyncapi', [
   contracts.asyncapi,
   '@asyncapi/html-template',
   '--output',
-  path.join(dist, 'asyncapi'),
+  path.join(generatedStatic, 'asyncapi'),
   '--force-write',
   '--no-interactive',
   '--param',
   'singleFile=true',
 ])
 
-const publishedContracts = [
-  ['openapi-v2.json', contracts.openapi],
-  ['asyncapi-v2.json', contracts.asyncapi],
-  ['operation-registry-v2.json', contracts.registry],
+const artifacts = [
+  {
+    name: 'openapi-v2.json',
+    source: contracts.openapi,
+  },
+  {
+    name: 'asyncapi-v2.json',
+    source: contracts.asyncapi,
+  },
+  {
+    name: 'operation-registry-v2.json',
+    source: contracts.registry,
+  },
+  {
+    name: 'operation-policy-v2.json',
+    source: path.join(
+      ddbRoot,
+      'proto/ddb/api/v2/operation_policy.json',
+    ),
+  },
+  {
+    name: 'ddb-api-v2-descriptor.binpb',
+    bytes: portal.descriptorBytes,
+  },
+  {
+    name: 'schema-reference-v2.json',
+    bytes: portal.catalogBytes,
+  },
+  {
+    name: 'buf.yaml',
+    source: path.join(ddbRoot, 'buf.yaml'),
+  },
+  ...protoSources.map((source) => ({
+    name: path.posix.join('proto', source),
+    source: path.join(ddbRoot, 'proto', source),
+  })),
 ]
-await Promise.all(
-  publishedContracts.map(([name, source]) =>
-    copyFile(source, path.join(specs, name)),
-  ),
-)
+await Promise.all(artifacts.map(publishArtifact))
 
 const checksums = []
-for (const [name] of publishedContracts) {
-  const bytes = await readFile(path.join(specs, name))
+for (const artifact of [...artifacts].sort((left, right) =>
+  left.name.localeCompare(right.name),
+)) {
+  const bytes = await readFile(path.join(specs, artifact.name))
   checksums.push(
-    createHash('sha256').update(bytes).digest('hex') + '  ' + name,
+    createHash('sha256').update(bytes).digest('hex') + '  ' + artifact.name,
   )
 }
 await writeFile(path.join(specs, 'checksums.txt'), checksums.join('\n') + '\n')
@@ -138,11 +191,21 @@ await writeFile(
       sourceRepository: 'https://github.com/USC-NSL-DDB/DDB',
       operationCount: summary.operationCount,
       streamChannelCount: summary.streamChannelCount,
+      schema: {
+        package: portal.catalog.package,
+        messageCount: portal.catalog.counts.messages,
+        enumCount: portal.catalog.counts.enums,
+      },
+      sdks: ['rust', 'typescript', 'python'],
       inputs: {
         openapi: 'ddb/docs/api/generated/openapi-v2.json',
         asyncapi: 'ddb/docs/api/generated/asyncapi-v2.json',
         operationRegistry:
           'ddb/docs/api/generated/operation-registry-v2.json',
+        operationPolicy: 'ddb/proto/ddb/api/v2/operation_policy.json',
+        descriptor:
+          'ddb/api-types/descriptor/ddb_api_v2_descriptor.bin',
+        protobufSources: protoSources.map((source) => `ddb/proto/${source}`),
       },
     },
     null,
@@ -150,11 +213,25 @@ await writeFile(
   ) + '\n',
 )
 
+if (!prepareOnly) {
+  runTool('docusaurus', ['build', '--out-dir', dist])
+  await writeFile(path.join(dist, '.nojekyll'), '')
+}
+
+const action = prepareOnly ? 'Prepared' : 'Built'
+const destination = prepareOnly ? generatedStatic : dist
 console.log(
   [
-    'Built DDB API ',
+    action,
+    ' DDB API ',
     summary.apiVersion,
-    ' OpenAPI and AsyncAPI references at ',
-    dist,
+    ' portal with ',
+    portal.catalog.counts.messages,
+    ' messages, ',
+    portal.catalog.counts.enums,
+    ' enums, and ',
+    summary.operationCount,
+    ' operations at ',
+    destination,
   ].join(''),
 )

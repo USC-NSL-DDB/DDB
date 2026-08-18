@@ -2089,6 +2089,8 @@ impl ExecutionAction {
         }
     }
 }
+/// ExecutionScopeKind identifies the resolved target scope accepted by an
+/// execution action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ExecutionScopeKind {

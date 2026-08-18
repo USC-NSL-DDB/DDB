@@ -80,6 +80,8 @@ enum ExecutionAction {
   EXECUTION_ACTION_REVERSE_STEP_IN = 10;
 }
 
+// ExecutionScopeKind identifies the resolved target scope accepted by an
+// execution action.
 enum ExecutionScopeKind {
   EXECUTION_SCOPE_KIND_UNSPECIFIED = 0;
   EXECUTION_SCOPE_KIND_THREAD = 1;

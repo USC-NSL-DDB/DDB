@@ -1,2 +1,4 @@
+/.docusaurus/
+/.generated/
 /dist/
 node_modules/
