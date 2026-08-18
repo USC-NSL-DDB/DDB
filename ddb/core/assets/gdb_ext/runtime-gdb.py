@@ -884,15 +884,21 @@ class InterruptIfRunningMICommand(gdb.MICommand):
 
 def find_environ_ptr():
     try:
-        # Try direct symbol access first
+        # Symbol lookup is independent of the selected frame's source
+        # language. In particular, GDB 15 parses expressions as Rust while
+        # stopped in Rust code, where the C cast "(char**)environ" is invalid.
         try:
-            environ_addr = gdb.parse_and_eval("(char**)environ")
-            if environ_addr != 0:
-                return environ_addr
+            environ_symbol = gdb.lookup_global_symbol("environ")
+            if environ_symbol is None:
+                environ_symbol = gdb.lookup_global_symbol("__environ")
+            if environ_symbol is not None:
+                environ_addr = environ_symbol.value()
+                if environ_addr is not None and int(environ_addr) != 0:
+                    return environ_addr
         except Exception as e:
             dbg(
                 LogLevel.DEBUG,
-                f"Direct access to 'environ' failed, trying alternative methods. Error: {e}",
+                f"Global lookup of 'environ' failed, trying alternative methods. Error: {e}",
             )
 
         # Fallback to parsing info variables
