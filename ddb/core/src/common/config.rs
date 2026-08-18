@@ -168,33 +168,23 @@ impl Default for StaticSessionConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum StaticSessionStartMode {
+    #[default]
     Attach,
     Binary,
 }
 
-impl Default for StaticSessionStartMode {
-    fn default() -> Self {
-        Self::Attach
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DebuggerBackendKind {
+    #[default]
     Gdb,
     Lldb,
     Mock,
     #[serde(other)]
     Unknown,
-}
-
-impl Default for DebuggerBackendKind {
-    fn default() -> Self {
-        Self::Gdb
-    }
 }
 
 fn default_eager_stack_warmup() -> bool {
@@ -419,18 +409,13 @@ impl Default for Conf {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
 #[serde(rename_all = "lowercase")]
 pub enum OnExit {
+    #[default]
     DETACH,
     KILL,
-}
-
-impl Default for OnExit {
-    fn default() -> Self {
-        Self::DETACH
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

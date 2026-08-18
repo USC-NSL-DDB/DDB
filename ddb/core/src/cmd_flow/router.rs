@@ -105,10 +105,11 @@ impl CommandFanoutError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub enum Target {
     /// No target was supplied by the command text or caller. Ingress adapters
     /// must resolve this explicitly before routing.
+    #[default]
     Unspecified,
     Session(u64),
     Thread(GlobalThreadId),
@@ -119,12 +120,6 @@ pub enum Target {
     Broadcast,
     First,
     Multiple(Vec<Target>),
-}
-
-impl Default for Target {
-    fn default() -> Self {
-        Self::Unspecified
-    }
 }
 
 #[derive(Clone)]

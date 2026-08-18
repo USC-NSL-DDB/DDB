@@ -16,7 +16,7 @@ use frame::Frame;
 use rand::Rng;
 use status::Status;
 use tokio::{io, process, sync::mpsc, time};
-use tracing::{error, info};
+use tracing::info;
 use variable::Variable;
 
 pub mod address;

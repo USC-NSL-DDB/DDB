@@ -1,15 +1,10 @@
 //! Wire encoding of session commands.
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub enum CompletionConsistency {
     ProtocolComplete,
+    #[default]
     StateConsistent,
-}
-
-impl Default for CompletionConsistency {
-    fn default() -> Self {
-        Self::StateConsistent
-    }
 }
 
 /// A command bound for one session's wire. The correlation token is not part

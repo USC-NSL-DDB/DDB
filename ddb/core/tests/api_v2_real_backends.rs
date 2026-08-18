@@ -641,6 +641,6 @@ fn gdb_raw_breakpoint_command_validates_scope_and_completes_on_a_session() {
     assert_eq!(breakpoints["breakpoints"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         breakpoints["breakpoints"][0]["spec"]["source"]["line"].as_u64(),
-        Some(example.breakpoint_line as u64)
+        Some(example.breakpoint_line)
     );
 }

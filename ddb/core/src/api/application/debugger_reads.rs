@@ -450,7 +450,7 @@ fn single_done_payload<'a>(
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, ApplicationError> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(malformed(
             "debugger memory contents contain an incomplete byte",
         ));
