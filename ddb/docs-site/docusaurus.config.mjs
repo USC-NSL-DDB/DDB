@@ -4,7 +4,7 @@ const repositoryUrl = 'https://github.com/USC-NSL-DDB/DDB'
 
 export default {
   title: 'DDB API',
-  tagline: 'Contracts and SDKs for building debugger frontends',
+  tagline: 'Schemas, transports, and SDKs for DDB API v2',
   favicon: 'img/favicon.svg',
   url: 'https://usc-nsl-ddb.github.io',
   baseUrl: '/DDB/',
@@ -95,10 +95,10 @@ export default {
           ],
         },
         {
-          title: 'Build with DDB',
+          title: 'Client resources',
           items: [
             {label: 'SDKs', to: '/sdk/'},
-            {label: 'Raw contract artifacts', to: '/specs/'},
+            {label: 'Machine-readable artifacts', to: '/specs/'},
             {
               label: 'Contributing',
               href: `${repositoryUrl}/blob/dev/ddb/docs/api/contributing.md`,
@@ -117,7 +117,7 @@ export default {
         },
       ],
       copyright:
-        'DDB API reference · generated from the canonical public contract',
+        'DDB API reference · generated from Protobuf and transport specifications',
     },
     prism: {
       theme: prismThemes.github,

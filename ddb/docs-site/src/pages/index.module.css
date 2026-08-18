@@ -1,149 +1,70 @@
-.hero {
-  position: relative;
-  overflow: hidden;
-  padding: 7rem 0 6rem;
-  background:
-    radial-gradient(circle at 78% 18%, rgb(103 232 249 / 18%), transparent 28rem),
-    radial-gradient(circle at 15% 90%, rgb(167 139 250 / 16%), transparent 25rem),
-    linear-gradient(145deg, #080d1a 0%, #111827 55%, #101626 100%);
+.page {
+  padding: 2.75rem 0 4.5rem;
 }
 
-.hero::after {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgb(255 255 255 / 3%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 3%) 1px, transparent 1px);
-  background-size: 42px 42px;
-  content: '';
-  mask-image: linear-gradient(to bottom, black, transparent 85%);
-  pointer-events: none;
+.document {
+  max-width: 76rem;
 }
 
-.heroCopy {
-  position: relative;
-  z-index: 1;
-  max-width: 54rem;
+.header {
+  max-width: 58rem;
+  margin-bottom: 2.75rem;
 }
 
-.hero h1 {
-  max-width: 50rem;
-  margin: 0.5rem 0 1.5rem;
-  color: #f8fafc;
-  font-size: clamp(2.8rem, 7vw, 5.4rem);
-  letter-spacing: -0.055em;
-  line-height: 0.98;
-}
-
-.hero p {
-  max-width: 46rem;
-  color: #cbd5e1;
-  font-size: 1.2rem;
-  line-height: 1.75;
-}
-
-.kicker,
-.eyebrow {
-  color: #67e8f9;
-  font-size: 0.78rem;
-  font-weight: 750;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.85rem;
-  margin-top: 2.25rem;
-}
-
-.references {
-  padding-block: 5rem;
-}
-
-.sectionHeading {
-  max-width: 48rem;
-  margin-bottom: 2.25rem;
-}
-
-.sectionHeading h2 {
-  margin-top: 0.55rem;
-  font-size: clamp(2rem, 4vw, 3rem);
+.header h1 {
+  margin-bottom: 1rem;
   letter-spacing: -0.035em;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1.1rem;
+.introduction {
+  color: var(--ifm-color-emphasis-800);
+  font-size: 1.08rem;
+  line-height: 1.75;
 }
 
-.card {
-  display: flex;
-  min-height: 19rem;
-  flex-direction: column;
-  padding: 1.8rem;
-  border: 1px solid var(--ddb-border);
-  border-radius: 1rem;
-  background: var(--ddb-surface);
-  box-shadow: 0 18px 55px rgb(2 6 23 / 8%);
-  transition: border-color 160ms ease, transform 160ms ease;
+.tableWrapper {
+  overflow-x: auto;
+  margin: 1.25rem 0 2.75rem;
 }
 
-.card:hover {
-  border-color: var(--ifm-color-primary);
-  transform: translateY(-3px);
+.referenceTable {
+  display: table;
+  width: 100%;
+  min-width: 54rem;
+  margin: 0;
 }
 
-.card h2 {
-  margin: 0.65rem 0 0.75rem;
+.referenceTable th:first-child {
+  width: 18%;
 }
 
-.card p {
-  color: var(--ifm-color-emphasis-700);
-  line-height: 1.7;
+.referenceTable th:nth-child(2),
+.referenceTable th:nth-child(3) {
+  width: 41%;
 }
 
-.cardLink {
-  margin-top: auto;
+.referenceName a {
+  display: block;
   font-weight: 700;
 }
 
-.contractStrip {
-  padding-block: 4rem;
-  border-block: 1px solid var(--ddb-border);
-  background: var(--ddb-surface-muted);
-}
-
-.contractGrid {
-  display: grid;
-  grid-template-columns: 1.2fr 1.4fr auto;
-  align-items: center;
-  gap: 2rem;
-}
-
-.contractGrid h2 {
-  margin: 0.5rem 0 0;
-}
-
-.contractGrid p {
-  margin: 0;
+.referenceName span {
+  display: block;
+  margin-top: 0.25rem;
   color: var(--ifm-color-emphasis-700);
-  line-height: 1.7;
+  font-size: 0.85rem;
+}
+
+.document section + section {
+  margin-top: 2.75rem;
+}
+
+.document li + li {
+  margin-top: 0.65rem;
 }
 
 @media (max-width: 996px) {
-  .hero {
-    padding: 5rem 0 4.5rem;
-  }
-
-  .grid,
-  .contractGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .card {
-    min-height: auto;
+  .page {
+    padding-top: 2rem;
   }
 }

@@ -115,9 +115,16 @@ test('build emits the complete API reference portal', async () => {
   }
 })
 
-test('root is an API portal rather than a redirect or general landing page', async () => {
+test('root is a technical API documentation index', async () => {
   const root = await readFile(path.join(dist, 'index.html'), 'utf8')
-  assert.match(root, /Build a debugger frontend on a stable contract\./)
+  for (const snippet of [
+    'DDB API reference',
+    'Reference coverage',
+    'How to use these references',
+    'Machine-readable API artifacts',
+  ]) {
+    assert.ok(root.includes(snippet), `root must include ${snippet}`)
+  }
   assert.doesNotMatch(root, /http-equiv=["']refresh/i)
   for (const route of ['schema', 'openapi', 'asyncapi', 'sdk', 'specs']) {
     assert.match(root, new RegExp(`href=["']${baseUrl}${route}/["']`))
@@ -163,7 +170,7 @@ test('schema catalog is complete, cross-linked, and fully rendered', async () =>
     assert.ok(message.description, message.fullName + ' needs a description')
     assert.ok(
       protoSources.includes(message.source),
-      message.fullName + ' needs a canonical source',
+      message.fullName + ' needs a Protobuf source',
     )
     assertUnique(message.fields, 'number', message.fullName + ' field numbers')
     assertUnique(
@@ -213,7 +220,7 @@ test('schema catalog is complete, cross-linked, and fully rendered', async () =>
     assert.ok(item.description, item.fullName + ' needs a description')
     assert.ok(
       protoSources.includes(item.source),
-      item.fullName + ' needs a canonical source',
+      item.fullName + ' needs a Protobuf source',
     )
     assert.ok(item.values.length > 0, item.fullName + ' needs values')
     assertUnique(item.values, 'name', item.fullName + ' value names')
@@ -250,7 +257,7 @@ test('SDK pages are sourced from all first-party client packages', async () => {
       snippets: [
         'Typed Rust client for DDB API v2 frontends.',
         'ClientConfig',
-        'HTTP/ProtoJSON is the stable baseline transport.',
+        'HTTP/ProtoJSON is the required baseline transport.',
       ],
     },
     {
@@ -275,7 +282,7 @@ test('SDK pages are sourced from all first-party client packages', async () => {
     for (const snippet of page.snippets) {
       assert.ok(html.includes(snippet), `${page.file} must include ${snippet}`)
     }
-    assert.match(html, /Canonical package source/)
+    assert.match(html, /Package source/)
   }
 })
 
@@ -308,7 +315,7 @@ test('published Redoc runtime is the pinned local bundle', async () => {
   )
 })
 
-test('metadata and checksums cover every published contract artifact', async () => {
+test('metadata and checksums cover every published API artifact', async () => {
   const metadata = await readJson(path.join(specs, 'build-metadata.json'))
   const openapi = await readJson(path.join(specs, 'openapi-v2.json'))
   const asyncapi = await readJson(path.join(specs, 'asyncapi-v2.json'))

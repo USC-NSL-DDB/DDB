@@ -1,8 +1,8 @@
 # `@ddb-debugger/api-client`
 
 Dependency-free TypeScript client for the public DDB API v2 HTTP/ProtoJSON
-binding. It works with Node.js 18+ and modern browser runtimes that provide
-`fetch`, `ReadableStream`, `AbortController`, and Web Crypto.
+binding. It works with Node.js 18+ and browsers that provide `fetch`,
+`ReadableStream`, `AbortController`, and Web Crypto.
 
 ```ts
 import { DdbClient, ExecutionActionValues } from "@ddb-debugger/api-client";
@@ -38,13 +38,13 @@ rehydrates after a typed replay gap. `subscribeStateEvents` and
 active calls and streams.
 
 Mutation request contexts receive a UUID idempotency key when omitted. Every
-request receives an RFC 3339 deadline unless the caller supplied one. Payload,
-collection, and NDJSON-line limits are enforced before unbounded allocation.
-Only an untyped HTTP 404 reports `isApiVersionUnavailable()`: authentication,
-typed resource-not-found errors, malformed responses, and connectivity errors
-never authorize a silent v1 downgrade.
+request receives an RFC 3339 deadline unless the caller supplied one. The
+client enforces payload, collection, and NDJSON line limits before buffers can
+grow without bounds. It reports `isApiVersionUnavailable()` only for an untyped
+HTTP 404. Authentication errors, typed resource-not-found errors, malformed
+responses, and connectivity errors do not trigger a v1 fallback.
 
-Generated files under `src/generated` come from the canonical Protobuf
+Generated files under `src/generated` come from the checked-in Protobuf
 descriptor. Regenerate them from the DDB Rust workspace with:
 
 ```bash

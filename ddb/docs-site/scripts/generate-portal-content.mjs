@@ -278,7 +278,7 @@ function buildSchemaCatalog({
       const fullName = normalizeTypeName(type.fullName)
       const sourceType = sourceRoot.lookup(fullName)
       if (!(sourceType instanceof protobuf.Type)) {
-        throw new Error(`canonical source is missing message ${fullName}`)
+        throw new Error(`Protobuf source is missing message ${fullName}`)
       }
       const description = cleanComment(sourceType.comment)
       if (!description) {
@@ -295,7 +295,7 @@ function buildSchemaCatalog({
           const sourceField = sourceType.fields[field.protoName]
           if (!sourceField) {
             throw new Error(
-              `canonical source is missing field ${fullName}.${field.protoName}`,
+              `Protobuf source is missing field ${fullName}.${field.protoName}`,
             )
           }
           const sourceOneof =
@@ -372,7 +372,7 @@ function buildSchemaCatalog({
       const fullName = normalizeTypeName(type.fullName)
       const sourceType = sourceRoot.lookup(fullName)
       if (!(sourceType instanceof protobuf.Enum)) {
-        throw new Error(`canonical source is missing enum ${fullName}`)
+        throw new Error(`Protobuf source is missing enum ${fullName}`)
       }
       const description = cleanComment(sourceType.comment)
       if (!description) {
@@ -516,7 +516,7 @@ function renderMessagePage(message, symbols) {
     message.deprecated ? '> **Deprecated.** Do not use in new integrations.\n' : '',
     markdownText(message.description),
     '',
-    `**Canonical source:** [\`${message.source}\`](${sourceLink(message.source)})`,
+    `**Protobuf source:** [\`${message.source}\`](${sourceLink(message.source)})`,
     '',
     '## Fields',
     '',
@@ -593,7 +593,7 @@ function renderEnumPage(item, symbols) {
     '',
     '> ProtoJSON emits enum symbols as strings. Clients must tolerate symbols added by newer compatible servers.',
     '',
-    `**Canonical source:** [\`${item.source}\`](${sourceLink(item.source)})`,
+    `**Protobuf source:** [\`${item.source}\`](${sourceLink(item.source)})`,
     '',
     '## Values',
     '',
@@ -626,13 +626,13 @@ function renderOperationsPage(catalog, symbols) {
     frontMatter({
       title: 'Operation type map',
       description:
-        'DDB operations cross-linked to their canonical request and response messages.',
+        'DDB operations linked to their request and response message definitions.',
       slug: '/operations',
       position: 3,
     }),
     '# Operation type map',
     '',
-    'This table joins the descriptor-defined data model with DDB’s generated operation registry. Use the OpenAPI reference for complete HTTP behavior.',
+    'This table maps each public operation to its HTTP endpoint, permission, request type, response type, and delivery mode. See OpenAPI for headers, status codes, and error responses.',
     '',
     '| Operation | HTTP | Scope | Request | Response | Delivery |',
     '|---|---|---|---|---|---|',
@@ -660,7 +660,7 @@ function renderSchemaIndex(catalog) {
     frontMatter({
       title: 'DDB data schema',
       description:
-        'Canonical Protobuf messages and enums used by every DDB API transport.',
+        'Protobuf messages and enums used by DDB API v2.',
       slug: '/',
       position: 1,
     }),
@@ -668,7 +668,7 @@ function renderSchemaIndex(catalog) {
     '',
     `DDB API **${catalog.schemaVersion}** defines **${catalog.counts.messages} messages**, **${catalog.counts.enums} enums**, and **${catalog.counts.operations} public operations** in \`${catalog.package}\`.`,
     '',
-    'The checked-in Protobuf descriptor defines structure and field identity. Canonical `.proto` comments supply semantics, and the operation registry supplies HTTP, authorization, and streaming usage. The build rejects drift between those inputs.',
+    'The checked-in Protobuf descriptor defines structure and field identifiers. `.proto` comments define field semantics. The operation registry defines HTTP, authorization, and streaming usage. The build fails if these inputs disagree.',
     '',
     '## Browse',
     '',
@@ -679,11 +679,11 @@ function renderSchemaIndex(catalog) {
     '- [HTTP / OpenAPI reference](pathname:///openapi/)',
     '- [Event / AsyncAPI reference](pathname:///asyncapi/)',
     '',
-    '## Canonical sources',
+    '## Protobuf source files',
     '',
     ...sourceLines,
     '',
-    'Machine consumers can download the [descriptor set](pathname:///specs/ddb-api-v2-descriptor.binpb), [schema catalog](pathname:///specs/schema-reference-v2.json), and [complete artifact manifest](/specs/).',
+    'Download the [descriptor set](pathname:///specs/ddb-api-v2-descriptor.binpb), [schema reference JSON](pathname:///specs/schema-reference-v2.json), or [artifact index](/specs/).',
     '',
   ].join('\n')
 }
@@ -693,15 +693,15 @@ function renderProtoJsonPage() {
     frontMatter({
       title: 'ProtoJSON mapping',
       description:
-        'The JSON representation used by the mandatory DDB HTTP transport.',
+        'ProtoJSON encoding rules for DDB HTTP bodies and NDJSON stream records.',
       slug: '/protojson',
       position: 2,
     }),
     '# ProtoJSON mapping',
     '',
-    'DDB HTTP bodies and NDJSON stream records use the canonical ProtoJSON field names shown on every message page.',
+    'DDB HTTP request and response bodies and NDJSON stream records use the ProtoJSON field names shown on each message page.',
     '',
-    '## Rules clients must implement',
+    '## Encoding rules',
     '',
     '- Field names are lower camel case in JSON; parsers should also accept the original Protobuf field name.',
     '- Signed and unsigned 64-bit integers are decimal JSON strings.',
@@ -709,7 +709,7 @@ function renderProtoJsonPage() {
     '- `bytes` values are base64 strings.',
     '- `google.protobuf.Timestamp` values are RFC 3339 strings.',
     '- `google.protobuf.Duration` values use the Protobuf duration string form.',
-    '- Absent fields and explicit `null` are not interchangeable with arbitrary application-level null values.',
+    '- Except for `google.protobuf.NullValue`, parsers treat `null` as an unset field; serializers omit unset fields.',
     '- Unknown JSON fields are ignored by the first-party decoders for forward compatibility, subject to DDB payload limits.',
     '',
     'See the [Protobuf JSON mapping](https://protobuf.dev/programming-guides/json/) for the language-neutral format and the [DDB compatibility policy](https://github.com/USC-NSL-DDB/DDB/blob/dev/ddb/docs/api/compatibility.md) for DDB’s evolution rules.',
@@ -726,7 +726,7 @@ async function generateSdkDocs() {
     {
       id: 'rust',
       title: 'Rust SDK',
-      description: 'Typed asynchronous Rust client for DDB API v2.',
+      description: 'Asynchronous Rust client for DDB API v2.',
       source: path.join(ddbRoot, 'api-client/README.md'),
       sourceUrl: `${repository}/blob/dev/ddb/api-client/README.md`,
       position: 2,
@@ -741,7 +741,7 @@ async function generateSdkDocs() {
       id: 'typescript',
       title: 'TypeScript SDK',
       description:
-        'Dependency-free HTTP/ProtoJSON client for Node.js and browsers.',
+        'HTTP/ProtoJSON client with no runtime dependencies for Node.js and browsers.',
       source: path.join(ddbRoot, 'sdk/typescript/README.md'),
       sourceUrl: `${repository}/blob/dev/ddb/sdk/typescript/README.md`,
       position: 3,
@@ -749,7 +749,7 @@ async function generateSdkDocs() {
     {
       id: 'python',
       title: 'Python SDK',
-      description: 'Typed standard-library HTTP/ProtoJSON client for Python.',
+      description: 'Python 3.11+ standard-library client for HTTP/ProtoJSON.',
       source: path.join(ddbRoot, 'sdk/python/README.md'),
       sourceUrl: `${repository}/blob/dev/ddb/sdk/python/README.md`,
       position: 4,
@@ -760,23 +760,23 @@ async function generateSdkDocs() {
     frontMatter({
       title: 'DDB SDKs',
       description:
-        'First-party clients for building DDB frontends and integrations.',
+        'First-party Rust, TypeScript, and Python clients for DDB API v2.',
       slug: '/',
       position: 1,
     }),
     '# DDB SDKs',
     '',
-    'The first-party SDKs share the same generated Protobuf model and mandatory HTTP/ProtoJSON contract. They add transport framing, typed errors, pagination, operation polling, and replay-aware streaming without importing DDB core internals.',
+    'All first-party SDKs use the generated Protobuf model and HTTP/ProtoJSON transport. They implement authentication, deadlines, typed errors, bounded pagination, operation polling, and reconnecting event streams.',
     '',
-    '| SDK | Runtime | Best for |',
+    '| SDK | Runtime requirements | Common uses |',
     '|---|---|---|',
-    '| [Rust](./rust.md) | Tokio / Reqwest | Native frontends and high-throughput tooling |',
-    '| [TypeScript](./typescript.md) | Node.js 18+ and modern browsers | Web UIs, extensions, and JavaScript tooling |',
+    '| [Rust](./rust.md) | Tokio and Reqwest | Rust applications and native frontends |',
+    '| [TypeScript](./typescript.md) | Node.js 18+ or browser Fetch APIs | Web applications, extensions, and Node.js tooling |',
     '| [Python](./python.md) | Python 3.11+, standard library runtime | Automation, notebooks, and IDE tooling |',
     '',
-    '> Package publication is release-dependent. Each page links to the canonical source package and its current compatibility behavior.',
+    'Package availability depends on the DDB release. Each page links to the package source and documents current compatibility behavior.',
     '',
-    'All frontends should perform the typed server/capability handshake before enabling features and should treat HTTP/ProtoJSON as the baseline transport.',
+    'Clients must complete the server and capability handshake before enabling optional features. HTTP/ProtoJSON is the required baseline transport.',
     '',
   ]
   await writeFile(path.join(sdkDocsRoot, 'index.md'), index.join('\n'))
@@ -795,7 +795,7 @@ async function generateSdkDocs() {
       }),
       `# ${sdk.title}`,
       '',
-      `[Canonical package source](${sdk.sourceUrl})`,
+      `[Package source](${sdk.sourceUrl})`,
       '',
       body.trim(),
       '',

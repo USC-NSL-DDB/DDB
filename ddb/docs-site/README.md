@@ -7,15 +7,15 @@ operator documentation remain in `ddb/docs` and the project's GitBook.
 
 ## Published routes
 
-- `/`: Docusaurus API portal and reference chooser;
+- `/`: API documentation landing page;
 - `/schema/`: descriptor-driven Protobuf messages, fields, enums, oneofs,
   ProtoJSON representations, and operation cross-links;
 - `/openapi/`: standalone Redoc CE view of HTTP/ProtoJSON operations;
 - `/asyncapi/`: standalone AsyncAPI view of replayable event streams;
 - `/sdk/`: Rust, TypeScript, and Python SDK references sourced from each
-  package's canonical README;
-- `/specs/`: stable machine-readable contracts, Protobuf sources, descriptor
-  set, schema catalog, checksums, and build provenance.
+  package README;
+- `/specs/`: versioned machine-readable API files, Protobuf sources, descriptor
+  set, schema reference, checksums, and build metadata.
 
 The deployed GitHub Pages base path is `/DDB/`. The build uses Docusaurus's
 `pathname://` escape hatch only for generated static references such as Redoc
@@ -23,7 +23,7 @@ and AsyncAPI; tests still resolve those links against the final artifact.
 
 ## Sources of truth
 
-This site is a projection, never a competing API definition:
+The site is generated from these API sources:
 
 1. `ddb/proto/ddb/api/v2/*.proto` defines names, field numbers, types, comments,
    enum symbols, and oneofs.
@@ -31,10 +31,10 @@ This site is a projection, never a competing API definition:
    descriptor set used for structural reflection.
 3. `ddb/docs/api/generated/operation-registry-v2.json` joins schema types to
    HTTP paths, permissions, status codes, and streaming behavior.
-4. Generated OpenAPI and AsyncAPI contracts define their transport-specific
+4. Generated OpenAPI and AsyncAPI documents define the HTTP and event-stream
    views.
 
-`scripts/generate-portal-content.mjs` decodes the descriptor, parses canonical
+`scripts/generate-portal-content.mjs` decodes the descriptor, parses Protobuf
 source comments, joins the operation registry, and rejects undocumented public
 messages or fields, missing type references, and descriptor/source drift. It
 also emits `schema-reference-v2.json` for tools that need the same enriched
@@ -54,7 +54,7 @@ Node.js 24 LTS with npm 11.17 is required. `.node-version` pins the CI release.
     npm run build
     npm test
 
-`npm run check` validates the checked OpenAPI and AsyncAPI contracts.
+`npm run check` validates the checked OpenAPI and AsyncAPI documents.
 `npm run build` deterministically prepares every generated input, builds both
 standalone viewers, publishes the raw artifacts, and then creates the
 Docusaurus site. `npm test` verifies the portal routes, every generated schema
@@ -72,19 +72,18 @@ For theme or page development, run:
 
     npm start
 
-This prepares schema and static references once, then starts Docusaurus's
-development server. Restart it after changing a Protobuf file, generated
-contract, or SDK README so those inputs are regenerated.
+This prepares schema and static references once, then starts the Docusaurus
+development server. Restart it after changing a Protobuf file, generated API
+specification, or SDK README so those inputs are regenerated.
 
 ## Dependency isolation
 
 The portal uses React 19 through Docusaurus. Redoc's browser runtime and the
-AsyncAPI renderer have separate lockfiles and installation roots because their
-React/tooling dependency trees are unrelated and must not influence the portal
-bundle. Redoc's generated CDN tag is replaced with the exactly pinned local
-bundle; the build rejects renderer/runtime version drift. AsyncAPI's optional
-Studio dependency is pinned independently to avoid registry instability in the
-renderer toolchain.
+AsyncAPI renderer use separate lockfiles and installation roots so their
+React/tooling dependencies do not affect the portal bundle. The build replaces
+Redoc's generated CDN tag with the pinned local bundle and rejects runtime
+version drift. The AsyncAPI renderer is also installed separately and pinned by
+its own lockfile.
 
 ## Deployment
 

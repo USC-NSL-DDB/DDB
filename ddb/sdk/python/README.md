@@ -23,19 +23,19 @@ with DdbClient(
 `call()` covers every generated public unary method. `collect()` follows
 bounded cursor pages; `stream()` parses bounded NDJSON; `state_sync()` performs
 snapshot-plus-replay and rehydrates after typed replay gaps. State and output
-subscriptions reconnect with bounded exponential backoff. Context-manager exit
-or `close()` closes active responses, interrupts retry waits, and prevents new
-requests.
+subscriptions reconnect with bounded exponential backoff. Exiting the context
+manager or calling `close()` closes active responses, interrupts retry waits,
+and rejects new requests.
 
 Mutation contexts receive a UUID idempotency key when omitted, and all requests
-receive an RFC 3339 deadline. Typed API errors retain the full safe `DdbError`
-dictionary. Only an untyped HTTP 404 reports `is_api_version_unavailable()`;
-typed not-found, authentication, malformed-response, and transport failures do
-not permit a silent downgrade.
+receive an RFC 3339 deadline. Typed API errors retain the complete `DdbError`
+response. The client reports `is_api_version_unavailable()` only for an untyped
+HTTP 404. Typed not-found, authentication, malformed-response, and transport
+failures do not trigger a v1 fallback.
 
 The `ddb_api.generated.types` module contains forward-compatible `TypedDict`
-contracts generated directly from Protobuf. Regenerate checked-in bindings from
-the Rust workspace with:
+definitions generated directly from Protobuf. Regenerate checked-in bindings
+from the Rust workspace with:
 
 ```bash
 cargo run -p ddb-api-codegen -- generate

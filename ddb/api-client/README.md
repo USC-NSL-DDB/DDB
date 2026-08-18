@@ -2,10 +2,10 @@
 
 Typed Rust client for DDB API v2 frontends.
 
-The client owns ProtoJSON framing, authentication, deadlines, idempotency,
+The client handles ProtoJSON framing, authentication, deadlines, idempotency,
 bounded pagination, operation polling, and reconnecting snapshot/event and
-output workflows. It depends only on the public `ddb-api-types` contract and
-transport libraries, never on DDB core internals.
+output workflows. It depends only on the public `ddb-api-types` crate and
+transport libraries, not on DDB core internals.
 
 ```no_run
 use ddb_api_client::{ClientConfig, DdbClient, ProjectedStateSyncItem, StateSyncOptions};
@@ -26,7 +26,7 @@ async fn main() -> ddb_api_client::Result<()> {
 }
 ```
 
-HTTP/ProtoJSON is the stable baseline transport. The separate native gRPC
-binding remains preview-only under the evidence-based decision in
-[`ADR 0005`](../docs/api/adr/0005-transport-policy.md). Frontends must select
+HTTP/ProtoJSON is the required baseline transport. The separate native gRPC
+binding remains preview-only under the transport policy in
+[`ADR 0005`](../docs/api/adr/0005-transport-policy.md). Clients must select
 from advertised endpoints and must not require gRPC.
