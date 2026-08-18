@@ -12,6 +12,11 @@ pub mod wkt;
 
 /// DDB API version 2 contracts.
 #[allow(clippy::large_enum_variant)]
+// `pbjson-build` 0.9.0 emits formatting borrows that are valid Rust and are
+// reproduced byte-for-byte by the API codegen check. Keep strict Clippy coverage
+// for handwritten code while isolating this generator-owned compatibility lint.
+#[allow(unknown_lints)]
+#[allow(clippy::useless_borrows_in_formatting)]
 pub mod v2 {
     include!("generated/ddb.api.v2.rs");
     include!("generated/ddb.api.v2.serde.rs");
