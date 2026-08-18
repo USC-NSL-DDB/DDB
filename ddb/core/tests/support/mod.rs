@@ -230,6 +230,11 @@ impl DdbProcess {
         config_contents: String,
         environment: &[(&str, &str)],
     ) -> Self {
+        // Keep the ephemeral-port reservation and server startup atomic across
+        // parallel tests. The listener used by reserve_port is released before
+        // DDB binds, so another test could otherwise select the same port and
+        // accidentally probe or shut down the wrong process.
+        let _spawn_guard = server_spawn_guard();
         let port = reserve_port();
         let grpc_port = config_contents.contains("__GRPC_PORT__").then(reserve_port);
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
@@ -747,6 +752,14 @@ fn reserve_port() -> u16 {
         .local_addr()
         .expect("local addr should be readable")
         .port()
+}
+
+fn server_spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+    static SERVER_SPAWN_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    SERVER_SPAWN_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn render_mock_config(sessions: &[SessionSpec<'_>], exit_on_bootstrap: bool) -> String {

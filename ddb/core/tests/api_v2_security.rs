@@ -104,10 +104,17 @@ fn every_generated_v2_method_enforces_its_advertised_scope() {
             );
         }
 
+        // Exercise authorization without performing the one operation whose
+        // successful empty request terminates the server under test.
+        let allowed_body = if path == SHUTDOWN {
+            json!({"context": "invalid"})
+        } else {
+            json!({})
+        };
         let allowed = client
             .post(&endpoint)
             .bearer_auth(token)
-            .json(&json!({}))
+            .json(&allowed_body)
             .send()
             .unwrap_or_else(|error| panic!("{path} authorized request should answer: {error}"));
         assert_ne!(
@@ -120,6 +127,13 @@ fn every_generated_v2_method_enforces_its_advertised_scope() {
             StatusCode::FORBIDDEN,
             "method {path} rejected its registry scope"
         );
+        if path == SHUTDOWN {
+            assert_eq!(
+                allowed.status(),
+                StatusCode::BAD_REQUEST,
+                "shutdown authorization probe should remain side-effect free"
+            );
+        }
     }
 }
 #[test]
