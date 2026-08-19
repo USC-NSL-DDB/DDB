@@ -1,0 +1,36 @@
+name: Setup cached Rust toolchain
+description: Install stable Rust and restore job-scoped build artifacts.
+
+inputs:
+  cache-scope:
+    description: Stable identifier for the calling CI job.
+    required: true
+  targets:
+    description: Newline-delimited Cargo target directories to cache.
+    required: false
+    default: ddb/target/
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Rust toolchain
+      id: rust-toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      with:
+        toolchain: stable
+        rustflags: ""
+        cache: false
+
+    - name: Cache Rust build artifacts
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          ${{ inputs.targets }}
+        key: >-
+          rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ inputs.cache-scope }}-${{ hashFiles('ddb/**/Cargo.toml', 'ddb/Cargo.lock', 'ddb-tui/Cargo.toml', 'ddb-tui/Cargo.lock') }}
+        restore-keys: |
+          rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ inputs.cache-scope }}-
+          rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-

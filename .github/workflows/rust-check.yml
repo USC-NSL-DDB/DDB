@@ -14,7 +14,6 @@ on:
       - 'ddb/**/*.yml'
       - 'ddb/**/*.yaml'
       - 'ddb/docs/**'
-      - 'ddb/docs-site/**'
       - 'ddb/examples/**'
       - 'ddb/completions/**'
       - 'README.md'
@@ -26,6 +25,7 @@ on:
       - 'ddb/docs/benchmark-suite.md'
       - 'ddb/benchmarks/**'
       - 'ddb-tui/**'
+      - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
   pull_request:
     paths:
@@ -37,7 +37,6 @@ on:
       - 'ddb/**/*.yml'
       - 'ddb/**/*.yaml'
       - 'ddb/docs/**'
-      - 'ddb/docs-site/**'
       - 'ddb/examples/**'
       - 'ddb/completions/**'
       - 'README.md'
@@ -49,45 +48,37 @@ on:
       - 'ddb/docs/benchmark-suite.md'
       - 'ddb/benchmarks/**'
       - 'ddb-tui/**'
+      - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ddb-core-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    name: DDB Core Compilation Check
+  api-contracts:
+    name: API contracts and SDKs
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 35
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Install debugger test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gdb lldb libfaketime protobuf-compiler
-      
-      - name: Setup Rust toolchain
-        id: rust-toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-        with:
-          toolchain: stable
-          rustflags: ""
-          cache: false
+      - name: Install Protobuf compiler
+        timeout-minutes: 5
+        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler
 
-      - name: Cache Rust build artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Setup cached Rust toolchain
+        uses: ./.github/actions/setup-rust-ci
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ddb/target/
-            ddb-tui/target/
-          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('ddb/**/Cargo.toml', 'ddb-tui/Cargo.lock') }}
-          restore-keys: |
-            rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+          cache-scope: api-contracts
 
       - name: Setup Node.js for JavaScript tooling
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -97,7 +88,6 @@ jobs:
           cache-dependency-path: |
             ddb/sdk/typescript/package-lock.json
             ddb/docs-site/package-lock.json
-            ddb/docs-site/redoc-runtime/package-lock.json
             ddb/docs-site/asyncapi-runtime/package-lock.json
 
       - name: Setup Buf
@@ -105,10 +95,6 @@ jobs:
         with:
           version: 1.72.0
           setup_only: true
-      
-      - name: Check formatting
-        working-directory: ddb
-        run: cargo fmt --all -- --check
 
       - name: Check API schema and generated contracts
         working-directory: ddb
@@ -176,6 +162,27 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: ./tools/check-asyncapi-compatibility.sh "${BASE_SHA}"
 
+  rust-quality:
+    name: Rust formatting and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check CI workflow policy
+        run: python3 ddb/tools/check-ci-workflow.py
+
+      - name: Setup cached Rust toolchain
+        uses: ./.github/actions/setup-rust-ci
+        with:
+          cache-scope: rust-quality
+
+      - name: Check formatting
+        working-directory: ddb
+        run: cargo fmt --all -- --check
+
       - name: Check every target and feature
         working-directory: ddb
         run: cargo check --workspace --all-targets --all-features
@@ -193,7 +200,25 @@ jobs:
           cargo clippy -p ddb-api-conformance --all-targets --no-deps -- -D warnings
           cargo clippy -p ddb-api-extension --all-targets --no-deps -- -D warnings
           cargo clippy -p ddb-sample-extension --all-targets --no-deps -- -D warnings
-      
+
+  rust-tests:
+    name: Rust test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install debugger test dependencies
+        timeout-minutes: 5
+        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime
+
+      - name: Setup cached Rust toolchain
+        uses: ./.github/actions/setup-rust-ci
+        with:
+          cache-scope: rust-tests
+
       - name: Run workspace tests
         working-directory: ddb
         run: cargo test --workspace --all-targets
@@ -201,6 +226,38 @@ jobs:
       - name: Verify optimized thread state transitions
         working-directory: ddb
         run: cargo test -p ddb --release thread_status_mutation_is_not_debug_only
+
+      - name: Run DDB all-feature tests
+        working-directory: ddb
+        run: cargo test -p ddb --all-targets --all-features
+
+  api-integration:
+    name: API integration and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Protobuf compiler
+        timeout-minutes: 5
+        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler
+
+      - name: Setup cached Rust toolchain
+        uses: ./.github/actions/setup-rust-ci
+        with:
+          cache-scope: api-integration
+
+      - name: Setup Node.js for JavaScript tooling
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'ddb/docs-site/.node-version'
+          cache: npm
+          cache-dependency-path: |
+            ddb/sdk/typescript/package-lock.json
+            ddb/docs-site/package-lock.json
+            ddb/docs-site/asyncapi-runtime/package-lock.json
 
       - name: Run public API conformance against DDB Mock
         working-directory: ddb
@@ -224,13 +281,34 @@ jobs:
         working-directory: ddb
         run: ./tools/check-api-release.sh
 
-      - name: Run DDB all-feature tests
-        working-directory: ddb
-        run: cargo test -p ddb --all-targets --all-features
-
       - name: Run API lifecycle soak
         working-directory: ddb
         run: cargo test -p ddb --test api_v2_soak -- --ignored --nocapture
+
+      - name: Run managed DDB process lifecycle tests
+        working-directory: ddb
+        run: cargo test -p ddb --test managed_serve -- --nocapture
+
+  tui-integration:
+    name: DDB TUI integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install debugger test dependencies
+        timeout-minutes: 5
+        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime
+
+      - name: Setup cached Rust toolchain
+        uses: ./.github/actions/setup-rust-ci
+        with:
+          cache-scope: tui-integration
+          targets: |
+            ddb/target/
+            ddb-tui/target/
 
       - name: Check, test, lint, and build ddb-tui
         working-directory: ddb-tui
@@ -252,10 +330,6 @@ jobs:
         working-directory: ddb-tui
         run: cargo test --test e2e_mock -- --ignored --nocapture
 
-      - name: Run managed DDB process lifecycle tests
-        working-directory: ddb
-        run: cargo test -p ddb --test managed_serve -- --nocapture
-
       - name: Build and smoke-test paired DDB/ddb-tui artifact
         working-directory: ddb
         run: |
@@ -274,3 +348,24 @@ jobs:
             /tmp/ddb-paired-artifacts/*.sha256
             /tmp/ddb-paired-artifacts/tui-dispatch.json
           if-no-files-found: error
+
+  required:
+    name: DDB Core Compilation Check
+    if: ${{ always() }}
+    needs:
+      - api-contracts
+      - rust-quality
+      - rust-tests
+      - api-integration
+      - tui-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify all core CI jobs passed
+        run: |
+          test "${{ needs['api-contracts'].result }}" = success
+          test "${{ needs['rust-quality'].result }}" = success
+          test "${{ needs['rust-tests'].result }}" = success
+          test "${{ needs['api-integration'].result }}" = success
+          test "${{ needs['tui-integration'].result }}" = success
