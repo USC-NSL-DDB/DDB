@@ -11,6 +11,8 @@ const dist = path.join(docsSiteRoot, 'dist')
 const specs = path.join(dist, 'specs')
 const siteOrigin = 'https://usc-nsl-ddb.github.io'
 const baseUrl = '/DDB/'
+const landingPageLogoSha256 =
+  '5c34f641730d0aad5f0dd7cfd405a2e1dfc0f9d83549214122bc7995a755bb2f'
 
 const publishedSources = [
   {name: 'openapi-v2.json', source: contracts.openapi},
@@ -91,6 +93,7 @@ test('build emits the complete API reference portal', async () => {
     '.nojekyll',
     '404.html',
     'index.html',
+    'img/ddb-logo.png',
     'sitemap.xml',
     'assets/redoc.standalone.js',
     'openapi/index.html',
@@ -113,6 +116,25 @@ test('build emits the complete API reference portal', async () => {
   for (const file of new Set(required)) {
     await assertRegularFile(path.join(dist, file))
   }
+})
+
+test('brand assets match the public landing page', async () => {
+  const sourceLogo = await readFile(
+    path.join(docsSiteRoot, 'static/img/ddb-logo.png'),
+  )
+  const publishedLogo = await readFile(path.join(dist, 'img/ddb-logo.png'))
+  assert.equal(sha256(sourceLogo), landingPageLogoSha256)
+  assert.deepEqual(publishedLogo, sourceLogo)
+
+  const root = await readFile(path.join(dist, 'index.html'), 'utf8')
+  assert.match(
+    root,
+    /<link\b(?=[^>]*\brel=["']icon["'])(?=[^>]*\bhref=["']\/DDB\/img\/ddb-logo\.png["'])[^>]*>/,
+  )
+  assert.match(
+    root,
+    /<img\b(?=[^>]*\bsrc=["']\/DDB\/img\/ddb-logo\.png["'])(?=[^>]*\balt=["']DDB["'])[^>]*>/,
+  )
 })
 
 test('root is a technical API documentation index', async () => {

@@ -21,6 +21,13 @@ The deployed GitHub Pages base path is `/DDB/`. The build uses Docusaurus's
 `pathname://` escape hatch only for generated static references such as Redoc
 and AsyncAPI; tests still resolve those links against the final artifact.
 
+## Brand asset
+
+`static/img/ddb-logo.png` is a byte-for-byte copy of the
+[public landing-page logo](https://usc-nsl-ddb.github.io/landing-page/ddb-logo.png).
+The portal uses this file for both the navbar logo and favicon. Update both
+deployments together when the DDB logo changes.
+
 ## Sources of truth
 
 The site is generated from these API sources:

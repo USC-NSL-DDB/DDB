@@ -5,7 +5,7 @@ const repositoryUrl = 'https://github.com/USC-NSL-DDB/DDB'
 export default {
   title: 'DDB API',
   tagline: 'Schemas, transports, and SDKs for DDB API v2',
-  favicon: 'img/favicon.svg',
+  favicon: 'img/ddb-logo.png',
   url: 'https://usc-nsl-ddb.github.io',
   baseUrl: '/DDB/',
   organizationName: 'USC-NSL-DDB',
@@ -63,8 +63,8 @@ export default {
     navbar: {
       title: 'DDB API',
       logo: {
-        alt: 'DDB API',
-        src: 'img/logo.svg',
+        alt: 'DDB',
+        src: 'img/ddb-logo.png',
       },
       items: [
         {to: '/schema/', label: 'Data schema', position: 'left'},
