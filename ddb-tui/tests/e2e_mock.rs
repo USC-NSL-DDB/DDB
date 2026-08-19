@@ -494,11 +494,10 @@ fn managed_real_launch_workflow(backend: &str) {
     tui.wait_for("managed DDB");
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
-    if backend == "gdb" {
-        tui.wait_for("ddb_real_loop::main");
-    } else {
-        tui.wait_for("_start");
-    }
+    // Startup symbol names vary across debugger and linker versions; assert the
+    // stable frame index and executable identity rendered by both backends.
+    tui.wait_for("#0");
+    tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
     // Source navigation is valid only after the toolbar has a thread target.
     tui.wait_for("◎ thread");
@@ -656,11 +655,10 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("connected");
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
-    if backend == "gdb" {
-        tui.wait_for("ddb_real_loop::main");
-    } else {
-        tui.wait_for("_start");
-    }
+    // Startup symbol names vary across debugger and linker versions; assert the
+    // stable frame index and executable identity rendered by both backends.
+    tui.wait_for("#0");
+    tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
     // Source navigation is valid only after the toolbar has a thread target.
     tui.wait_for("◎ thread");
