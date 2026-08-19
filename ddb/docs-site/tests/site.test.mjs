@@ -324,6 +324,28 @@ test('standalone references contain no third-party executable imports', async ()
   }
 })
 
+test('standalone references use the shared DDB branding', async () => {
+  const pages = [
+    await readFile(path.join(dist, 'openapi/index.html'), 'utf8'),
+    await readFile(path.join(dist, 'asyncapi/index.html'), 'utf8'),
+  ]
+  for (const page of pages) {
+    assert.match(
+      page,
+      /<link\b(?=[^>]*\brel=["']icon["'])(?=[^>]*\bhref=["']\.\.\/img\/ddb-logo\.png["'])[^>]*>/,
+    )
+    assert.match(
+      page,
+      /<header\b[^>]*\bclass=["']ddb-api-header["'][^>]*>/,
+    )
+    assert.match(
+      page,
+      /<img\b(?=[^>]*\bsrc=["']\.\.\/img\/ddb-logo\.png["'])(?=[^>]*\balt=["']DDB["'])[^>]*>/,
+    )
+    assert.doesNotMatch(page, /data:image\/x-icon/i)
+  }
+})
+
 test('published Redoc runtime is the pinned local bundle', async () => {
   assert.deepEqual(
     await readFile(path.join(dist, 'assets/redoc.standalone.js')),

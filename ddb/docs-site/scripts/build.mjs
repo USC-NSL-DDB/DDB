@@ -25,6 +25,70 @@ const redocPackageRoot = path.join(
   'redoc',
 )
 
+const standaloneHead = `
+  <link rel="icon" type="image/png" href="../img/ddb-logo.png">
+  <style>
+    .ddb-api-header {
+      align-items: center;
+      background: #fff;
+      border-bottom: 1px solid #dbe4ee;
+      box-sizing: border-box;
+      display: flex;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+      gap: 2rem;
+      height: 4.25rem;
+      padding: 0 1.5rem;
+    }
+    .ddb-api-header a {
+      align-items: center;
+      color: #1c1e21;
+      display: inline-flex;
+      text-decoration: none;
+    }
+    .ddb-api-header__brand {
+      flex: 0 0 auto;
+      font-weight: 600;
+      gap: 0.75rem;
+    }
+    .ddb-api-header__brand img {
+      height: 2.15rem;
+      width: 2.15rem;
+    }
+    .ddb-api-header nav {
+      display: flex;
+      gap: 1.5rem;
+    }
+    .ddb-api-header nav a {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    @media (max-width: 42rem) {
+      .ddb-api-header nav {
+        display: none;
+      }
+    }
+    @media print {
+      .ddb-api-header {
+        display: none;
+      }
+    }
+  </style>`
+
+const standaloneHeader = `
+  <header class="ddb-api-header">
+    <a class="ddb-api-header__brand" href="../">
+      <img src="../img/ddb-logo.png" alt="DDB">
+      <span>DDB API</span>
+    </a>
+    <nav aria-label="API reference sections">
+      <a href="../schema/">Data schema</a>
+      <a href="../openapi/">HTTP API</a>
+      <a href="../asyncapi/">Event API</a>
+      <a href="../sdk/">SDKs</a>
+    </nav>
+  </header>`
+
 const args = process.argv.slice(2)
 const prepareOnly = args.length === 1 && args[0] === '--prepare-only'
 if (args.length > 0 && !prepareOnly) {
@@ -39,6 +103,30 @@ if (path.dirname(dist) !== docsSiteRoot || path.basename(dist) !== 'dist') {
 
 async function readJson(file) {
   return JSON.parse(await readFile(file, 'utf8'))
+}
+
+function brandStandaloneReference(html, name) {
+  const headClose = html.indexOf('</head>')
+  if (headClose < 0) {
+    throw new Error(name + ' output has no closing head element')
+  }
+
+  const faviconPattern =
+    /<link\b(?=[^>]*\brel=["'](?:shortcut )?icon["'])[^>]*\/?>\s*/gi
+  const head = html.slice(0, headClose).replace(faviconPattern, '')
+  let branded = head + standaloneHead + '\n' + html.slice(headClose)
+
+  const bodyOpen = branded.match(/<body(?:\s[^>]*)?>/i)
+  if (!bodyOpen || bodyOpen.index === undefined) {
+    throw new Error(name + ' output has no opening body element')
+  }
+  const insertionPoint = bodyOpen.index + bodyOpen[0].length
+  branded =
+    branded.slice(0, insertionPoint) +
+    standaloneHeader +
+    branded.slice(insertionPoint)
+
+  return branded
 }
 
 function sourceRevision() {
@@ -106,13 +194,14 @@ if (redocCdnMatches[0][1] !== redocPackage.version) {
       redocPackage.version,
   )
 }
+const bundledRedocHtml = redocHtml.replace(
+  redocCdnPattern,
+  '<script src="../assets/redoc.standalone.js"></script>',
+)
 await Promise.all([
   writeFile(
     redocOutput,
-    redocHtml.replace(
-      redocCdnPattern,
-      '<script src="../assets/redoc.standalone.js"></script>',
-    ),
+    brandStandaloneReference(bundledRedocHtml, 'Redoc'),
   ),
   copyFile(
     path.join(redocPackageRoot, 'bundles/redoc.standalone.js'),
@@ -132,6 +221,15 @@ runTool('asyncapi', [
   '--param',
   'singleFile=true',
 ])
+
+const asyncapiOutput = path.join(generatedStatic, 'asyncapi', 'index.html')
+await writeFile(
+  asyncapiOutput,
+  brandStandaloneReference(
+    await readFile(asyncapiOutput, 'utf8'),
+    'AsyncAPI',
+  ),
+)
 
 const artifacts = [
   {
