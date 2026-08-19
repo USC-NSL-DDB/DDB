@@ -39,6 +39,7 @@ REQUIRED_GATES = {
     "Run public API conformance against DDB Mock",
     "Run API deployment security and graceful-shutdown tests",
     "Test public extension authoring surface",
+    "Build TypeScript SDK for live integration",
     "Run TypeScript and Python SDKs against DDB Mock",
     "Reproduce public API release artifacts",
     "Run DDB all-feature tests",

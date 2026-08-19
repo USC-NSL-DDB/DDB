@@ -277,6 +277,12 @@ jobs:
           cargo test -p ddb-api-extension --all-targets
           cargo test -p ddb-sample-extension --all-targets
 
+      - name: Build TypeScript SDK for live integration
+        working-directory: ddb/sdk/typescript
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
       - name: Run TypeScript and Python SDKs against DDB Mock
         working-directory: ddb
         run: cargo test -p ddb --test api_v2_language_sdks -- --ignored --nocapture
