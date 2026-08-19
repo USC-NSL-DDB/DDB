@@ -71,9 +71,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Protobuf compiler
+      - name: Install Protobuf build dependencies
         timeout-minutes: 5
-        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler
+        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler libprotobuf-dev
 
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci
@@ -174,6 +174,10 @@ jobs:
       - name: Check CI workflow policy
         run: python3 ddb/tools/check-ci-workflow.py
 
+      - name: Install Protobuf build dependencies
+        timeout-minutes: 5
+        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler libprotobuf-dev
+
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci
         with:
@@ -212,7 +216,7 @@ jobs:
 
       - name: Install debugger test dependencies
         timeout-minutes: 5
-        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime
+        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime protobuf-compiler libprotobuf-dev
 
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci
@@ -240,9 +244,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Protobuf compiler
+      - name: Install Protobuf build dependencies
         timeout-minutes: 5
-        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler
+        run: bash ddb/tools/install-ci-packages.sh protobuf-compiler libprotobuf-dev
 
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci
@@ -300,7 +304,7 @@ jobs:
 
       - name: Install debugger test dependencies
         timeout-minutes: 5
-        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime
+        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime protobuf-compiler libprotobuf-dev
 
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci

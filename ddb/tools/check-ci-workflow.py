@@ -97,6 +97,15 @@ def main() -> int:
         elif int(timeout.group(1)) > 60:
             errors.append(f"job {name} timeout exceeds 60 minutes")
 
+    for name in EXPECTED_JOBS - {"required"}:
+        block = blocks.get(name, "")
+        if installer not in block:
+            errors.append(f"job {name} must install its system dependencies")
+        if "protobuf-compiler" not in block or "libprotobuf-dev" not in block:
+            errors.append(
+                f"job {name} must install the Protobuf compiler and well-known schemas"
+            )
+
     install_steps = text.count(installer)
     bounded_steps = text.count("        timeout-minutes: 5")
     if install_steps != bounded_steps:
