@@ -64,9 +64,16 @@ try {
     { afterCursor: stateSnapshot?.stateEventCursor },
     { maxAttempts: 2 },
   );
-  const executionChanged = (async () => {
+  const executionStopped = (async () => {
     for await (const event of events) {
-      if (event.kind === "STATE_EVENT_KIND_EXECUTION_CHANGED") return event;
+      const execution = event.upsert?.executionState;
+      if (
+        event.kind === "STATE_EVENT_KIND_EXECUTION_CHANGED" &&
+        execution?.running !== true &&
+        execution.target?.thread?.threadId === thread.threadId
+      ) {
+        return event;
+      }
     }
     throw new Error("state stream ended");
   })();
@@ -76,7 +83,7 @@ try {
   });
   await client.waitOperation(nextAdmission.operation?.operationId ?? "");
   await Promise.race([
-    executionChanged,
+    executionStopped,
     new Promise((_, reject) => setTimeout(() => reject(new Error("execution event timeout")), 5_000)),
   ]);
   await events.return();
