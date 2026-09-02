@@ -1456,7 +1456,7 @@ fn memory_block(data: &Value) -> Result<v2::MemoryBlock> {
         if contents.len() % 2 != 0 {
             bail!("DDB v1 memory block contained an odd-length hexadecimal value");
         }
-        for pair in contents.as_bytes().chunks_exact(2) {
+        for pair in contents.as_bytes().as_chunks::<2>().0 {
             let pair = std::str::from_utf8(pair)
                 .context("DDB v1 memory block was not valid hexadecimal text")?;
             bytes.push(
