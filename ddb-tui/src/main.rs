@@ -1322,7 +1322,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             thread_id,
             error,
         } => {
-            if app.inspection_is_current(generation, &thread_id) {
+            if app.release_failed_inspection(generation, &thread_id) {
                 app.error(error);
             }
         }
@@ -1606,6 +1606,57 @@ mod tests {
         );
 
         assert_eq!(app.status, "active inspection");
+    }
+
+    #[tokio::test]
+    async fn failed_inspection_retries_on_next_stopped_projection() {
+        let mut app = App::new("http://127.0.0.1:5000".to_string());
+        app.threads.push(ThreadItem {
+            id: "thread/17".to_string(),
+            session_id: "session/1".to_string(),
+            name: "main".to_string(),
+            state: "stopped".to_string(),
+            function: "work".to_string(),
+            file: None,
+            line: None,
+        });
+        let generation = app.begin_inspection();
+        let (requests, mut receiver) = mpsc::channel(1);
+
+        apply_message(
+            &mut app,
+            UiMessage::InspectionError {
+                generation,
+                thread_id: "thread/17".to_string(),
+                error: "transient failure".to_string(),
+            },
+            &requests,
+        );
+
+        apply_message(
+            &mut app,
+            UiMessage::Threads(vec![v2::Thread {
+                thread_id: "thread/17".to_string(),
+                session_id: "session/1".to_string(),
+                state: v2::ThreadState::Stopped as i32,
+                selected: true,
+                ..Default::default()
+            }]),
+            &requests,
+        );
+
+        let request = receiver
+            .try_recv()
+            .expect("a stopped projection should retry the failed inspection");
+        let BackendRequest::InspectThread {
+            thread_id,
+            generation: retried_generation,
+        } = request
+        else {
+            panic!("a stopped projection should request thread inspection");
+        };
+        assert_eq!(thread_id, "thread/17");
+        assert!(retried_generation > generation);
     }
 
     #[tokio::test]

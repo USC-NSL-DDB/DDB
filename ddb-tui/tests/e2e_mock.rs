@@ -64,7 +64,7 @@ fn mock_backend_full_terminal_workflow() {
             .and_then(Value::as_bool)
             == Some(false)
     });
-    tui.wait_for("disable breakpoint");
+    tui.wait_for("○ ");
     tui.send(b"x");
     ddb.wait_for_json("/api/v1/state", |body| {
         body.pointer("/data/breakpoints/0/enabled")
@@ -1052,6 +1052,7 @@ struct Tui {
     stdin: ChildStdin,
     output: Arc<Mutex<Vec<u8>>>,
     frames: Arc<Mutex<VecDeque<String>>>,
+    drain_threads: Vec<thread::JoinHandle<()>>,
     stopped: bool,
 }
 
@@ -1174,20 +1175,23 @@ impl Tui {
         let stdin = child.stdin.take().expect("TUI stdin should be piped");
         let output = Arc::new(Mutex::new(Vec::new()));
         let frames = Arc::new(Mutex::new(VecDeque::new()));
-        drain_terminal(
-            child.stdout.take().expect("TUI stdout should be piped"),
-            output.clone(),
-            frames.clone(),
-        );
-        drain(
-            child.stderr.take().expect("TUI stderr should be piped"),
-            output.clone(),
-        );
+        let drain_threads = vec![
+            drain_terminal(
+                child.stdout.take().expect("TUI stdout should be piped"),
+                output.clone(),
+                frames.clone(),
+            ),
+            drain(
+                child.stderr.take().expect("TUI stderr should be piped"),
+                output.clone(),
+            ),
+        ];
         Self {
             child,
             stdin,
             output,
             frames,
+            drain_threads,
             stopped: false,
         }
     }
@@ -1338,6 +1342,7 @@ impl Tui {
             .kill()
             .expect("PTY wrapper should accept SIGKILL");
         self.child.wait().expect("PTY wrapper should be reaped");
+        self.finish_capture();
         self.stopped = true;
     }
 
@@ -1345,6 +1350,7 @@ impl Tui {
     fn finish_external_exit(&mut self) -> String {
         if !self.stopped {
             wait_or_kill(&mut self.child);
+            self.finish_capture();
             self.stopped = true;
         }
         self.output_text()
@@ -1354,9 +1360,18 @@ impl Tui {
         if !self.stopped {
             self.send(b"q");
             wait_or_kill(&mut self.child);
+            self.finish_capture();
             self.stopped = true;
         }
         self.output_text()
+    }
+
+    fn finish_capture(&mut self) {
+        for drain_thread in self.drain_threads.drain(..) {
+            drain_thread
+                .join()
+                .expect("TUI output drain thread should finish");
+        }
     }
 }
 
@@ -1366,6 +1381,7 @@ impl Drop for Tui {
             let _ = self.stdin.write_all(b"q");
             let _ = self.stdin.flush();
             wait_or_kill(&mut self.child);
+            self.finish_capture();
             self.stopped = true;
         }
     }
@@ -1728,7 +1744,10 @@ fn ddb_start_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn drain(mut reader: impl Read + Send + 'static, output: Arc<Mutex<Vec<u8>>>) {
+fn drain(
+    mut reader: impl Read + Send + 'static,
+    output: Arc<Mutex<Vec<u8>>>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         loop {
@@ -1737,14 +1756,14 @@ fn drain(mut reader: impl Read + Send + 'static, output: Arc<Mutex<Vec<u8>>>) {
                 Ok(read) => output.lock().unwrap().extend_from_slice(&buffer[..read]),
             }
         }
-    });
+    })
 }
 
 fn drain_terminal(
     mut reader: impl Read + Send + 'static,
     output: Arc<Mutex<Vec<u8>>>,
     frames: Arc<Mutex<VecDeque<String>>>,
-) {
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         let mut parser = vt100::Parser::new(40, 140, 0);
@@ -1770,7 +1789,7 @@ fn drain_terminal(
                 }
             }
         }
-    });
+    })
 }
 
 fn wait_or_kill(child: &mut Child) {

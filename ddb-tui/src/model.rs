@@ -1600,6 +1600,14 @@ impl App {
             && self.current_thread().map(|thread| thread.id.as_str()) == Some(thread_id)
     }
 
+    pub fn release_failed_inspection(&mut self, generation: u64, thread_id: &str) -> bool {
+        if !self.inspection_is_current(generation, thread_id) {
+            return false;
+        }
+        self.inspected_thread_id = None;
+        true
+    }
+
     pub fn thread_inspection_requested(&self, thread_id: &str) -> bool {
         self.inspected_thread_id.as_deref() == Some(thread_id)
     }
