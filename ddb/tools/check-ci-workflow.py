@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the reliability and coverage invariants of the core CI workflow."""
+"""Enforce reliability and coverage invariants across repository CI workflows."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/rust-check.yml"
 DOCS_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/api-docs-pages.yml"
+FUZZ_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/api-fuzz.yml"
 
 EXPECTED_JOBS = {
     "api-contracts",
@@ -69,6 +70,7 @@ def job_blocks(text: str) -> dict[str, str]:
 def main() -> int:
     text = WORKFLOW.read_text(encoding="utf-8")
     docs_text = DOCS_WORKFLOW.read_text(encoding="utf-8")
+    fuzz_text = FUZZ_WORKFLOW.read_text(encoding="utf-8")
     errors: list[str] = []
 
     if "'ddb/docs-site/**'" in text:
@@ -82,6 +84,37 @@ def main() -> int:
         errors.append("system packages must use the bounded CI installer")
     if "sudo apt-get" in text:
         errors.append("apt commands must be centralized in install-ci-packages.sh")
+    if text.count("'.github/workflows/api-fuzz.yml'") != 2:
+        errors.append(
+            "core CI must validate fuzz workflow changes on pushes and pull requests"
+        )
+
+    fuzz_blocks = job_blocks(fuzz_text)
+    if set(fuzz_blocks) != {"fuzz"}:
+        errors.append(
+            "fuzz workflow job set drifted: expected ['fuzz'], got "
+            + repr(sorted(fuzz_blocks))
+        )
+    fuzz_block = fuzz_blocks.get("fuzz", "")
+    fuzz_timeout = re.search(r"(?m)^    timeout-minutes: ([0-9]+)$", fuzz_block)
+    if not fuzz_timeout:
+        errors.append("fuzz job must define timeout-minutes")
+    elif int(fuzz_timeout.group(1)) > 60:
+        errors.append("fuzz job timeout exceeds 60 minutes")
+    if installer not in fuzz_block:
+        errors.append("fuzz job must use the bounded CI package installer")
+    if "protobuf-compiler" not in fuzz_block or "libprotobuf-dev" not in fuzz_block:
+        errors.append(
+            "fuzz job must install the Protobuf compiler and well-known schemas"
+        )
+    fuzz_install_step = (
+        "      - name: Install Protobuf build dependencies\n"
+        "        timeout-minutes: 5\n"
+        "        run: bash ddb/tools/install-ci-packages.sh "
+        "protobuf-compiler libprotobuf-dev"
+    )
+    if fuzz_install_step not in fuzz_text:
+        errors.append("fuzz system dependency install must have a five-minute timeout")
 
     blocks = job_blocks(text)
     if set(blocks) != EXPECTED_JOBS:

@@ -27,6 +27,7 @@ on:
       - 'ddb-tui/**'
       - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
+      - '.github/workflows/api-fuzz.yml'
   pull_request:
     paths:
       - 'ddb/**/*.rs'
@@ -50,6 +51,7 @@ on:
       - 'ddb-tui/**'
       - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
+      - '.github/workflows/api-fuzz.yml'
   workflow_dispatch:
 
 permissions:

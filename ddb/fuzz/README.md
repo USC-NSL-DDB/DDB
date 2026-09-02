@@ -5,8 +5,8 @@ ProtoJSON envelopes without adding fuzz-only dependencies to production crates.
 They decode and re-encode representative recursive, event, operation, extension,
 error, cursor, and snapshot messages.
 
-Prerequisites are a nightly Rust toolchain, a C++ compiler, and `cargo-fuzz`
-0.13.2. From `ddb/`:
+Prerequisites are a nightly Rust toolchain, a C++ compiler, the Protobuf
+compiler and development headers, and `cargo-fuzz` 0.13.2. From `ddb/`:
 
 ```bash
 cargo +nightly fuzz run --fuzz-dir fuzz protobuf_contract -- \
