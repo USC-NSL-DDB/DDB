@@ -24,6 +24,7 @@ rm -rf $TMP_FOLDER
 mkdir -p $TMP_FOLDER
 chmod 755 $TMP_FOLDER
 
+pushd $TMP_FOLDER
 set -e
 git clone https://github.com/eclipse/paho.mqtt.c.git
 cd paho.mqtt.c
@@ -31,3 +32,4 @@ make -j$(nproc)
 set +e
 sudo make uninstall # clean up first
 sudo make install   # install mosquitto c lib
+popd
