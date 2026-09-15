@@ -1012,6 +1012,10 @@ pub(crate) fn breakpoint_insert_command(
         arguments.push("-c".to_string());
         arguments.push(serde_json::to_string(condition).expect("serializing a string cannot fail"));
     }
+    if let Some(count) = properties.ignore_count {
+        arguments.push("-i".to_string());
+        arguments.push(count.to_string());
+    }
     if location.function_name().is_some() {
         arguments.push("--function".to_string());
     }
@@ -1039,6 +1043,14 @@ fn parse_breakpoint_definition(args: &str) -> Result<(BkptLoc, BreakpointPropert
     while index + 1 < arguments.len() {
         match arguments[index].as_str() {
             "--function" => function = true,
+            "-i" | "--ignore-count" if index + 1 < arguments.len() - 1 => {
+                index += 1;
+                properties.ignore_count = Some(
+                    arguments[index]
+                        .parse::<u64>()
+                        .map_err(|_| anyhow!("Invalid breakpoint ignore count"))?,
+                );
+            }
             "-d" | "--disabled" => properties.enabled = false,
             "-t" | "--temporary" => properties.temporary = true,
             "-h" | "--hardware" => properties.hardware = true,
@@ -1207,6 +1219,7 @@ mod tests {
             condition: Some("request.id == \"special\"".to_string()),
             temporary: true,
             hardware: false,
+            ignore_count: None,
         };
         let command = breakpoint_insert_command(
             &BkptLoc::new("C:/workspace/service main.rs", 42),
@@ -1223,6 +1236,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed, properties);
+    }
+
+    #[test]
+    fn breakpoint_ignore_count_round_trips_without_precision_loss() {
+        let properties = BreakpointProperties {
+            ignore_count: Some(9007199254740993),
+            ..Default::default()
+        };
+        let command = breakpoint_insert_command(&BkptLoc::function("tick"), &properties);
+        let (_, actual) =
+            parse_breakpoint_definition(command.strip_prefix("-break-insert ").unwrap()).unwrap();
+        assert_eq!(actual.ignore_count, properties.ignore_count);
+        assert!(parse_breakpoint_definition("-i -1 --function tick").is_err());
     }
 
     #[test]

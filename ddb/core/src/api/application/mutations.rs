@@ -1800,13 +1800,6 @@ fn jump_location(location: &SourceLocation) -> Result<String, ApplicationError> 
 fn breakpoint_definition(
     spec: &BreakpointSpec,
 ) -> Result<(BkptLoc, BreakpointProperties), ApplicationError> {
-    if spec.ignore_count.is_some() {
-        return Err(ApplicationError::new(
-            DdbErrorCode::Unsupported,
-            "breakpoint ignore counts are not currently supported",
-        )
-        .requiring("breakpoints.ignore_count"));
-    }
     if let Some(condition) = spec.condition.as_deref() {
         require_nonempty_bounded("breakpoint.condition", condition, MAX_COMMAND_BYTES)?;
     }
@@ -1861,6 +1854,7 @@ fn breakpoint_definition(
             condition: spec.condition.clone(),
             temporary: spec.temporary,
             hardware: spec.hardware,
+            ignore_count: spec.ignore_count,
         },
     ))
 }

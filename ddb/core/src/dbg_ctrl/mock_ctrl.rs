@@ -33,6 +33,7 @@ struct MockBreakpoint {
     location: String,
     enabled: bool,
     condition: Option<String>,
+    ignore_count: u64,
 }
 
 #[derive(Debug)]
@@ -257,6 +258,7 @@ impl MockDebuggerState {
             location,
             enabled,
             condition: None,
+            ignore_count: 0,
         };
         self.next_breakpoint_id += 1;
         self.breakpoints.insert(bkpt.id, bkpt.clone());
@@ -267,11 +269,17 @@ impl MockDebuggerState {
         self.breakpoints.remove(&id);
     }
 
-    fn current_breakpoint_id(&self) -> Option<u64> {
-        self.breakpoints
-            .values()
-            .find(|breakpoint| breakpoint.enabled)
-            .map(|breakpoint| breakpoint.id)
+    fn current_breakpoint_id(&mut self) -> Option<u64> {
+        let breakpoint = self
+            .breakpoints
+            .values_mut()
+            .find(|breakpoint| breakpoint.enabled)?;
+        if breakpoint.ignore_count > 0 {
+            breakpoint.ignore_count -= 1;
+            None
+        } else {
+            Some(breakpoint.id)
+        }
     }
 
     fn advance_source_line(&mut self) {
@@ -598,10 +606,11 @@ impl MockAttachController {
                     true,
                 )
             } else {
+                let breakpoint_id = state.current_breakpoint_id();
                 let mut payload: Dict = vec![
                     (
                         "reason".to_string(),
-                        if state.current_breakpoint_id().is_some() {
+                        if breakpoint_id.is_some() {
                             "breakpoint-hit"
                         } else {
                             "end-stepping-range"
@@ -616,7 +625,7 @@ impl MockAttachController {
                     ("frame".to_string(), Value::Dict(state.frame_payload())),
                 ]
                 .into();
-                if let Some(bkpt_id) = state.current_breakpoint_id() {
+                if let Some(bkpt_id) = breakpoint_id {
                     payload.insert("bkptno".to_string(), bkpt_id.to_string().into());
                 }
                 (payload, true)
@@ -996,7 +1005,19 @@ impl MockAttachController {
                     .to_string();
                 let bkpt = {
                     let mut state = state.lock().await;
-                    state.next_breakpoint(location, enabled)
+                    let mut breakpoint = state.next_breakpoint(location, enabled);
+                    let arguments = args.split_whitespace().collect::<Vec<_>>();
+                    if let Some(index) = arguments
+                        .iter()
+                        .position(|arg| matches!(*arg, "-i" | "--ignore-count"))
+                    {
+                        breakpoint.ignore_count = arguments
+                            .get(index + 1)
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(0);
+                        state.breakpoints.insert(breakpoint.id, breakpoint.clone());
+                    }
+                    breakpoint
                 };
                 Self::send_result(
                     &out_tx,

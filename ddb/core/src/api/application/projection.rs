@@ -462,7 +462,7 @@ impl<'a> ProjectionContext<'a> {
                 }),
                 enabled: Some(snapshot.enabled),
                 condition: snapshot.condition.clone(),
-                ignore_count: None,
+                ignore_count: snapshot.ignore_count,
                 temporary: snapshot.temporary,
                 hardware: snapshot.hardware,
             }),
@@ -564,6 +564,7 @@ impl<'a> ProjectionContext<'a> {
             BreakpointFeature::Source as i32,
             BreakpointFeature::Function as i32,
             BreakpointFeature::Condition as i32,
+            BreakpointFeature::IgnoreCount as i32,
             BreakpointFeature::Temporary as i32,
         ];
         if !matches!(self.config.conf.debugger.backend, DebuggerBackendKind::Lldb) {

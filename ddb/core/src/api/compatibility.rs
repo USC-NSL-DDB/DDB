@@ -242,6 +242,7 @@ impl CompatibilityCommandService {
             condition: request.condition,
             temporary: request.temporary,
             hardware: request.hardware,
+            ignore_count: None,
         };
         self.waited_command(
             breakpoint_insert_command(&location, &properties),

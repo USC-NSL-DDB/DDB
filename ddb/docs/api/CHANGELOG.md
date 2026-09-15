@@ -8,6 +8,11 @@ public API belong in the project release notes.
 
 ### Added
 
+- Typed breakpoint ignore counts are retained in logical breakpoint properties,
+  projected in BreakpointSpec and applied during debugger insertion and group
+  inheritance. GDB uses `-i`; the LLDB bridge verifies SetIgnoreCount and rolls
+  back a breakpoint if the requested value is not retained.
+
 - Typed function breakpoints retain their symbol names through insertion,
   resource projection and group inheritance. Function locations are explicit in
   GDB commands and the LLDB bridge; conditions and lifecycle operations use the

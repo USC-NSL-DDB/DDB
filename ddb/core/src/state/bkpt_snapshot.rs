@@ -16,6 +16,8 @@ pub struct BreakpointSnapshot {
     pub condition: Option<String>,
     pub temporary: bool,
     pub hardware: bool,
+    #[serde(skip)]
+    pub ignore_count: Option<u64>,
     pub subbkpts: Vec<SubBreakpointSnapshot>,
 }
 
@@ -56,6 +58,7 @@ impl From<&BkptMeta> for BreakpointSnapshot {
             condition: breakpoint.properties().condition.clone(),
             temporary: breakpoint.properties().temporary,
             hardware: breakpoint.properties().hardware,
+            ignore_count: breakpoint.properties().ignore_count,
             subbkpts: breakpoint
                 .sub_breakpoints()
                 .iter()

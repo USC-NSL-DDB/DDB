@@ -42,6 +42,17 @@ class BreakpointOptionsTest(unittest.TestCase):
         self.breakpoint.SetCondition.assert_called_once_with("counter > 0")
         self.assertEqual(payload["bkpt"]["original-location"], name)
 
+    def test_ignore_count_is_installed_before_the_breakpoint_is_returned(self):
+        self.breakpoint.GetIgnoreCount.return_value = 3
+        self.bridge._break_insert(["-i", "3", "--function", "tick"])
+        self.breakpoint.SetIgnoreCount.assert_called_once_with(3)
+
+    def test_ignore_count_failure_rolls_back_the_breakpoint(self):
+        self.breakpoint.GetIgnoreCount.return_value = 0
+        with self.assertRaisesRegex(RuntimeError, "ignore count"):
+            self.bridge._break_insert(["-i", "3", "--function", "tick"])
+        self.target.BreakpointDelete.assert_called_once_with(7)
+
     def test_explicit_function_does_not_become_a_source_location(self):
         self.bridge._break_insert(["--function", "file.c:12"])
         self.target.BreakpointCreateByName.assert_called_once_with("file.c:12")

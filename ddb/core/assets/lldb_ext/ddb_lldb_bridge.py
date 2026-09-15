@@ -1307,6 +1307,7 @@ class Bridge(object):
         if not arguments:
             raise ValueError("-break-insert requires a location")
         condition = None
+        ignore_count = None
         enabled = True
         temporary = False
         function = False
@@ -1328,6 +1329,12 @@ class Bridge(object):
                 if index + 1 >= len(arguments):
                     raise ValueError("-break-insert -c requires a condition")
                 condition = arguments[index + 1]
+                index += 2
+                continue
+            if argument in ("-i", "--ignore-count"):
+                if index + 1 >= len(arguments) or not arguments[index + 1].isdigit():
+                    raise ValueError("-break-insert -i requires a nonnegative count")
+                ignore_count = int(arguments[index + 1])
                 index += 2
                 continue
             if argument == "--function":
@@ -1365,6 +1372,10 @@ class Bridge(object):
                 target.BreakpointDelete(breakpoint.GetID())
             raise RuntimeError("LLDB could not resolve breakpoint {}".format(location))
         try:
+            if ignore_count is not None:
+                breakpoint.SetIgnoreCount(ignore_count)
+                if breakpoint.GetIgnoreCount() != ignore_count:
+                    raise RuntimeError("LLDB did not retain the breakpoint ignore count")
             if not enabled:
                 breakpoint.SetEnabled(False)
                 if breakpoint.IsEnabled():

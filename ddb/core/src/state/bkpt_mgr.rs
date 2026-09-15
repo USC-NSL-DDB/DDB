@@ -23,6 +23,7 @@ pub struct BreakpointProperties {
     pub condition: Option<String>,
     pub temporary: bool,
     pub hardware: bool,
+    pub ignore_count: Option<u64>,
 }
 
 impl Default for BreakpointProperties {
@@ -32,6 +33,7 @@ impl Default for BreakpointProperties {
             condition: None,
             temporary: false,
             hardware: false,
+            ignore_count: None,
         }
     }
 }
