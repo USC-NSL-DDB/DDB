@@ -391,49 +391,40 @@ impl<'a> ProjectionContext<'a> {
                             )),
                         });
                     }
-                    let internal_sub_id = format!("{}:{id}", snapshot.id);
-                    let sub_breakpoint_id = self
-                        .ids
-                        .encode(ResourceIdKind::SubBreakpoint, &internal_sub_id)?;
-                    let mut sub_breakpoint = SubBreakpoint {
-                        sub_breakpoint_id,
+                    sub_breakpoints.push(self.sub_breakpoint(
+                        snapshot,
+                        format!("{}:{id}", snapshot.id),
                         session_id,
-                        inherited_from_group_id: None,
-                        location: Some(SourceLocation {
-                            source_reference: None,
-                            path: Some(snapshot.location.src.clone()),
-                            line,
-                            column: 0,
-                            address: None,
-                            function_name: None,
-                        }),
-                        verified: true,
-                        message: None,
-                        hit_count: 0,
-                        revision: 0,
-                    };
-                    let sub_metadata = self.resources.observe_versioned(
-                        ResourceIdKind::SubBreakpoint,
-                        &internal_sub_id,
-                        &sub_breakpoint.encode_to_vec(),
-                    )?;
-                    sub_breakpoint.revision = sub_metadata.revision;
-                    sub_breakpoints.push(sub_breakpoint);
+                        None,
+                        line,
+                    )?);
                 }
                 SubBreakpointSnapshot::Group {
+                    id,
                     target_group,
                     active_sessions,
-                    ..
+                    installed_sessions,
                 } => {
                     let group_id = self.ids.encode(ResourceIdKind::Group, target_group)?;
                     if target_keys.insert(format!("group:{group_id}")) {
                         targets.push(Target {
                             selector: Some(target::Selector::Group(
-                                ddb_api_types::v2::GroupTarget { group_id },
+                                ddb_api_types::v2::GroupTarget {
+                                    group_id: group_id.clone(),
+                                },
                             )),
                         });
                     }
                     pending |= *active_sessions == 0;
+                    for sid in installed_sessions {
+                        sub_breakpoints.push(self.sub_breakpoint(
+                            snapshot,
+                            format!("{}:{id}:{sid}", snapshot.id),
+                            self.ids.encode(ResourceIdKind::Session, sid)?,
+                            Some(group_id.clone()),
+                            line,
+                        )?);
+                    }
                 }
             }
         }
@@ -482,6 +473,44 @@ impl<'a> ProjectionContext<'a> {
         )?;
         breakpoint.revision = metadata.revision;
         Ok(breakpoint)
+    }
+
+    fn sub_breakpoint(
+        &self,
+        snapshot: &BreakpointSnapshot,
+        internal_id: String,
+        session_id: String,
+        inherited_from_group_id: Option<String>,
+        line: u32,
+    ) -> Result<SubBreakpoint, ApplicationError> {
+        let mut resource = SubBreakpoint {
+            sub_breakpoint_id: self
+                .ids
+                .encode(ResourceIdKind::SubBreakpoint, &internal_id)?,
+            session_id,
+            inherited_from_group_id,
+            location: Some(SourceLocation {
+                source_reference: None,
+                path: Some(snapshot.location.src.clone()),
+                line,
+                column: 0,
+                address: None,
+                function_name: None,
+            }),
+            verified: true,
+            message: None,
+            hit_count: 0,
+            revision: 0,
+        };
+        resource.revision = self
+            .resources
+            .observe_versioned(
+                ResourceIdKind::SubBreakpoint,
+                &internal_id,
+                &resource.encode_to_vec(),
+            )?
+            .revision;
+        Ok(resource)
     }
 
     pub(crate) fn extension_state(

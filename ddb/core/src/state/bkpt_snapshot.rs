@@ -39,6 +39,8 @@ pub enum SubBreakpointSnapshot {
         id: u64,
         target_group: u64,
         active_sessions: usize,
+        #[serde(skip)]
+        installed_sessions: Vec<u64>,
     },
 }
 
@@ -78,11 +80,20 @@ impl From<&SubBkptMeta> for SubBreakpointSnapshot {
                 target_session: session.target_session(),
                 local_breakpoint_id: session.local_id(),
             },
-            SubBkptType::Group(group) => Self::Group {
-                id: sub_breakpoint.id(),
-                target_group: group.target_group().value(),
-                active_sessions: group.local_ids().len(),
-            },
+            SubBkptType::Group(group) => {
+                let mut installed_sessions = group
+                    .local_ids()
+                    .into_iter()
+                    .map(|(sid, _)| sid)
+                    .collect::<Vec<_>>();
+                installed_sessions.sort_unstable();
+                Self::Group {
+                    id: sub_breakpoint.id(),
+                    target_group: group.target_group().value(),
+                    active_sessions: installed_sessions.len(),
+                    installed_sessions,
+                }
+            }
         }
     }
 }

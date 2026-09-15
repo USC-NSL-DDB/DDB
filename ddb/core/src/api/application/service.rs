@@ -3693,6 +3693,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_breakpoints_project_installed_members_pending_and_removal() {
+        let model = RuntimeModel::new();
+        let identity = ServiceIdentity::new("workers-hash", "workers");
+        for sid in [42, 43] {
+            model.register_session(sid, "worker", None).await;
+            drop(model.register_service_group(sid, &identity).await);
+            model.complete_session_activation(sid, None).await;
+        }
+        let group_id = model.group_id_by_session(42).unwrap();
+        let breakpoint = model
+            .insert_breakpoint(
+                BkptLoc::new("main.c", 6),
+                BreakpointProperties::default(),
+                vec![SubBkptSpec::Group {
+                    group_id,
+                    locals: vec![],
+                }],
+            )
+            .unwrap();
+        let service = service(Arc::clone(&model));
+        let public_id = service
+            .ids
+            .encode(ResourceIdKind::Breakpoint, breakpoint.id())
+            .unwrap();
+        let public_group = service
+            .ids
+            .encode(ResourceIdKind::Group, group_id.value())
+            .unwrap();
+        let read = || {
+            service
+                .get_breakpoint(ddb_api_types::v2::GetBreakpointRequest {
+                    breakpoint_id: public_id.clone(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .breakpoint
+                .unwrap()
+        };
+        let pending = read();
+        assert!(pending.pending);
+        assert!(!pending.verified);
+        assert!(pending.sub_breakpoints.is_empty());
+
+        model.attach_group_breakpoint_session_target(breakpoint.id(), group_id, 42, 7);
+        let first = read();
+        assert!(first.verified);
+        assert!(!first.pending);
+        assert!(first.revision > pending.revision);
+        assert_eq!(first.sub_breakpoints.len(), 1);
+        assert_eq!(
+            first.sub_breakpoints[0].inherited_from_group_id.as_ref(),
+            Some(&public_group)
+        );
+        assert_eq!(
+            first.sub_breakpoints[0].session_id,
+            service.ids.encode(ResourceIdKind::Session, 42).unwrap()
+        );
+        assert_eq!(read(), first);
+
+        model.attach_group_breakpoint_session_target(breakpoint.id(), group_id, 43, 8);
+        let second = read();
+        assert!(second.verified);
+        assert_eq!(second.sub_breakpoints.len(), 2);
+        assert_eq!(second.sub_breakpoints[0], first.sub_breakpoints[0]);
+        assert_ne!(
+            second.sub_breakpoints[0].sub_breakpoint_id,
+            second.sub_breakpoints[1].sub_breakpoint_id
+        );
+        assert!(second.revision > first.revision);
+
+        model.record_local_breakpoint_deletion(42, 7);
+        let remaining = read();
+        assert_eq!(remaining.sub_breakpoints, second.sub_breakpoints[1..]);
+        assert!(remaining.verified);
+        model.record_local_breakpoint_deletion(43, 8);
+        assert_eq!(
+            service
+                .get_breakpoint(ddb_api_types::v2::GetBreakpointRequest {
+                    breakpoint_id: public_id,
+                    ..Default::default()
+                })
+                .unwrap_err()
+                .code(),
+            DdbErrorCode::NotFound
+        );
+    }
+
+    #[tokio::test]
     async fn breakpoint_and_capability_revisions_are_content_driven() {
         let model = RuntimeModel::new();
         model.register_session(42, "worker", None).await;

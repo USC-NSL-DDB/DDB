@@ -39,6 +39,10 @@ public API belong in the project release notes.
 
 ### Fixed
 
+- Group breakpoint resources include installed session members with stable
+  sub-breakpoint identities and group inheritance metadata. Installed group-only
+  breakpoints report verified; groups waiting for members remain pending.
+
 - Canonical execution states retain debugger stop reasons, signal names and
   opaque principal-thread and breakpoint identities. Stop details commit with
   thread status, survive snapshot recovery and clear when the thread resumes.
