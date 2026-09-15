@@ -131,6 +131,10 @@ pub(crate) fn decode_event(
         },
         "stopped" => DebuggerEventKind::Stopped {
             reasons: parse_reasons(&payload)?,
+            signal_name: payload
+                .get("signal-name")
+                .and_then(|value| value.expect_string_ref().ok())
+                .map(str::to_owned),
             thread: payload
                 .get("thread-id")
                 .map(|value| parse_thread_set(value, "thread-id"))
@@ -238,6 +242,7 @@ mod tests {
             stopped.kind,
             DebuggerEventKind::Stopped {
                 reasons: vec!["breakpoint-hit".into()],
+                signal_name: None,
                 thread: Some(ThreadSet::One(4)),
                 stopped_threads: Some(ThreadSet::Many(vec![4, 5])),
                 local_breakpoint_id: Some(2),

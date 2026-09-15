@@ -173,6 +173,7 @@ impl ApiQueries {
                 selected: thread.selected,
                 execution_revision: thread.execution_revision,
                 location: thread.location,
+                stop_reason: thread.stop_reason,
             })
             .collect()
     }
@@ -391,6 +392,7 @@ pub(crate) struct ThreadView {
     pub(crate) selected: bool,
     pub(crate) execution_revision: u64,
     pub(crate) location: Option<crate::state::ThreadLocation>,
+    pub(crate) stop_reason: Option<crate::state::ThreadStopReason>,
 }
 
 #[derive(Clone, Debug, Serialize)]

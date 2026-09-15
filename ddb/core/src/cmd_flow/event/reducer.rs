@@ -14,7 +14,7 @@ use tracing::trace;
 use crate::{
     cmd_flow::breakpoint::BreakpointEventPublisher,
     debugger::protocol::StreamKind,
-    state::{GlobalThreadId, RuntimeModel, ThreadStatus},
+    state::{GlobalThreadId, RuntimeModel, ThreadStatus, ThreadStopKind, ThreadStopReason},
 };
 
 use super::{
@@ -127,6 +127,7 @@ impl DebuggerEventReducer {
             }
             DebuggerEventKind::Stopped {
                 reasons,
+                signal_name,
                 thread,
                 stopped_threads,
                 local_breakpoint_id,
@@ -143,8 +144,6 @@ impl DebuggerEventReducer {
                 let Some(thread) = thread else {
                     return Ok(EventEffect::Passthrough);
                 };
-                self.update_thread_statuses(sid, thread, ThreadStatus::STOPPED, location.as_ref())
-                    .await?;
                 if is_breakpoint {
                     if let ThreadSet::One(local_thread_id) = thread {
                         self.model
@@ -167,12 +166,49 @@ impl DebuggerEventReducer {
                     None
                 };
 
-                let Some(stopped_threads) = stopped_threads else {
-                    return Ok(EventEffect::Ignored);
+                // Commit the stopped set and principal thread's reason together. A
+                // topology notification must never expose a new stop without its details.
+                let has_stopped_threads = stopped_threads.is_some();
+                let stopped_threads = stopped_threads.as_ref().unwrap_or(thread);
+                let mut stopped_ids = self.global_threads(sid, stopped_threads)?;
+                stopped_ids.extend(self.global_threads(sid, thread)?);
+                stopped_ids.sort_unstable_by_key(|id| id.value());
+                stopped_ids.dedup();
+                let local_ids = stopped_ids
+                    .iter()
+                    .map(|id| {
+                        self.model
+                            .local_thread_id(*id)
+                            .map(|id| id.1)
+                            .ok_or_else(|| anyhow!("unknown stopped thread {id}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let principal = match thread {
+                    ThreadSet::One(id) => Some(*id),
+                    _ => None,
                 };
-                self.update_thread_statuses(sid, stopped_threads, ThreadStatus::STOPPED, None)
+                self.model
+                    .update_thread_statuses_with_details(
+                        sid,
+                        &local_ids,
+                        ThreadStatus::STOPPED,
+                        principal.zip(location.clone()),
+                        Some(ThreadStopReason {
+                            kind: stop_kind(reasons),
+                            signal_name: (stop_kind(reasons) == ThreadStopKind::Signal)
+                                .then(|| signal_name.clone())
+                                .flatten(),
+                            breakpoint_id: breakpoint.map(|(id, _)| id),
+                            thread_id: principal
+                                .and_then(|id| self.model.global_thread_id(sid, id))
+                                .map(|id| id.value()),
+                        }),
+                    )
                     .await?;
 
+                if !has_stopped_threads {
+                    return Ok(EventEffect::Ignored);
+                }
                 let thread = match thread {
                     ThreadSet::All => StoppedThreadField::All,
                     ThreadSet::One(_) => {
@@ -229,19 +265,20 @@ impl DebuggerEventReducer {
             ThreadSet::All => self.model.mark_all_threads(sid, status).await?,
             ThreadSet::One(local_thread_id) => {
                 self.model
-                    .update_thread_statuses_with_location(
+                    .update_thread_statuses_with_details(
                         sid,
                         &[*local_thread_id],
                         status,
                         location
                             .cloned()
                             .map(|location| (*local_thread_id, location)),
+                        None,
                     )
                     .await?
             }
             ThreadSet::Many(local_thread_ids) => {
                 self.model
-                    .update_thread_statuses_with_location(sid, local_thread_ids, status, None)
+                    .update_thread_statuses_with_details(sid, local_thread_ids, status, None, None)
                     .await?
             }
         }
@@ -276,6 +313,24 @@ impl DebuggerEventReducer {
                 })
                 .collect(),
         }
+    }
+}
+
+fn stop_kind(reasons: &[String]) -> ThreadStopKind {
+    // Preserve unknown reasons without guessing from a source location.
+    match reasons.first().map(String::as_str) {
+        Some("breakpoint-hit") => ThreadStopKind::Breakpoint,
+        Some("watchpoint-trigger" | "read-watchpoint-trigger" | "access-watchpoint-trigger") => {
+            ThreadStopKind::Watchpoint
+        }
+        Some("end-stepping-range" | "function-finished" | "location-reached") => {
+            ThreadStopKind::Step
+        }
+        Some("signal-received") => ThreadStopKind::Signal,
+        Some("exception-received") => ThreadStopKind::Exception,
+        Some("interrupt" | "paused") => ThreadStopKind::Pause,
+        Some("entry") => ThreadStopKind::Entry,
+        _ => ThreadStopKind::Other,
     }
 }
 
@@ -353,6 +408,112 @@ mod tests {
         );
         assert_eq!(model.global_thread_id(7, 3), None);
         assert_eq!(model.session_thread_group(7, 3).await, Some(None));
+    }
+
+    #[tokio::test]
+    async fn stops_retain_reason_and_principal_thread_until_resume() {
+        let model = RuntimeModel::new();
+        model.register_session(7, "svc", None).await;
+        model.register_thread_group(7, "i1").await.unwrap();
+        model.register_thread(7, 3, "i1").await.unwrap();
+        model.register_thread(7, 4, "i1").await.unwrap();
+        let principal = model.global_thread_id(7, 3).unwrap().value();
+        let breakpoint = model
+            .insert_breakpoint(
+                crate::state::BkptLoc::new("main.c", 5),
+                crate::state::BreakpointProperties::default(),
+                vec![crate::state::SubBkptSpec::Session {
+                    sid: 7,
+                    local_id: 2,
+                }],
+            )
+            .unwrap();
+        let reducer = test_reducer(Arc::clone(&model));
+        for (reason, kind) in [
+            ("breakpoint-hit", ThreadStopKind::Breakpoint),
+            ("end-stepping-range", ThreadStopKind::Step),
+            ("function-finished", ThreadStopKind::Step),
+            ("signal-received", ThreadStopKind::Signal),
+            ("unknown-backend-reason", ThreadStopKind::Other),
+        ] {
+            reducer
+                .project(
+                    decode_event(
+                        None,
+                        "running".into(),
+                        payload(&[("thread-id", "all".into())]),
+                    )
+                    .unwrap(),
+                    7,
+                )
+                .await
+                .unwrap();
+            let running = model.thread_snapshots_for_sessions(&[7]).await;
+            assert!(running.iter().all(|thread| thread.stop_reason.is_none()));
+            reducer
+                .project(
+                    decode_event(
+                        None,
+                        "stopped".into(),
+                        payload(&[
+                            ("reason", reason.into()),
+                            ("signal-name", "SIGUSR1".into()),
+                            ("thread-id", "3".into()),
+                            ("stopped-threads", "all".into()),
+                            ("bkptno", "2".into()),
+                        ]),
+                    )
+                    .unwrap(),
+                    7,
+                )
+                .await
+                .unwrap();
+            let stopped = model.thread_snapshots_for_sessions(&[7]).await;
+            assert_eq!(stopped.len(), 2);
+            for thread in stopped {
+                assert_eq!(thread.status, ThreadStatus::STOPPED);
+                let details = thread.stop_reason.unwrap();
+                assert_eq!(details.kind, kind);
+                assert_eq!(details.thread_id, Some(principal));
+                assert_eq!(
+                    details.breakpoint_id,
+                    (kind == ThreadStopKind::Breakpoint).then(|| breakpoint.id())
+                );
+                assert_eq!(
+                    details.signal_name.as_deref(),
+                    (kind == ThreadStopKind::Signal).then_some("SIGUSR1")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_without_stopped_threads_still_updates_canonical_state() {
+        let model = RuntimeModel::new();
+        model.register_session(7, "svc", None).await;
+        model.register_thread_group(7, "i1").await.unwrap();
+        model.register_thread(7, 3, "i1").await.unwrap();
+        let reducer = test_reducer(Arc::clone(&model));
+        reducer
+            .project(
+                decode_event(
+                    None,
+                    "stopped".into(),
+                    payload(&[
+                        ("reason", "end-stepping-range".into()),
+                        ("thread-id", "3".into()),
+                    ]),
+                )
+                .unwrap(),
+                7,
+            )
+            .await
+            .unwrap();
+        let stopped = model.thread_snapshots_for_sessions(&[7]).await;
+        assert_eq!(
+            stopped[0].stop_reason.as_ref().unwrap().kind,
+            ThreadStopKind::Step
+        );
     }
 
     #[tokio::test]

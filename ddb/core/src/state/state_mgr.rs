@@ -378,16 +378,17 @@ impl StateMgr {
         tids: &[u64],
         status: session_mgr::ThreadStatus,
     ) -> StateTransitionResult<()> {
-        self.update_thread_statuses_with_location(sid, tids, status, None)
+        self.update_thread_statuses_with_details(sid, tids, status, None, None)
             .await
     }
 
-    pub async fn update_thread_statuses_with_location(
+    pub async fn update_thread_statuses_with_details(
         &self,
         sid: u64,
         tids: &[u64],
         status: session_mgr::ThreadStatus,
         location: Option<(u64, session_mgr::ThreadLocation)>,
+        stop_reason: Option<session_mgr::ThreadStopReason>,
     ) -> StateTransitionResult<()> {
         let session = self
             .session_states
@@ -408,6 +409,11 @@ impl StateMgr {
                 session_id: sid,
                 thread_id: tids.first().copied().unwrap_or_default(),
             });
+        }
+        if let Some(reason) = stop_reason {
+            for tid in tids {
+                session.set_thread_stop_reason(*tid, reason.clone());
+            }
         }
         if let Some((tid, location)) = location {
             if !tids.contains(&tid) || !session.set_thread_location(tid, location) {

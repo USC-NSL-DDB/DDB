@@ -19,6 +19,8 @@ pub(crate) use bkpt_snapshot::{BreakpointSnapshot, SubBreakpointSnapshot};
 pub(crate) use group_mgr::GroupMeta;
 pub(crate) use ids::{GlobalThreadGroupId, GlobalThreadId, GroupId, ServiceIdentity};
 pub(crate) use runtime_model::{RuntimeChange, RuntimeModel, RuntimeResourceId, SessionSnapshot};
-pub(crate) use session_mgr::{SessionStatus, ThreadContext, ThreadLocation, ThreadStatus};
+pub(crate) use session_mgr::{
+    SessionStatus, ThreadContext, ThreadLocation, ThreadStatus, ThreadStopKind, ThreadStopReason,
+};
 pub(crate) use state_mgr::{GlobalThreadIdentity, StateTransitionResult};
 pub(crate) use thread_mgr::LocalThreadId;

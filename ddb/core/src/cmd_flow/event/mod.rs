@@ -36,6 +36,7 @@ pub(crate) enum DebuggerEventKind {
     },
     Stopped {
         reasons: Vec<String>,
+        signal_name: Option<String>,
         thread: Option<ThreadSet>,
         stopped_threads: Option<ThreadSet>,
         local_breakpoint_id: Option<u64>,

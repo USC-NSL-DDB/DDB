@@ -20,12 +20,34 @@ pub(crate) struct ThreadLocation {
     pub(crate) function_name: Option<String>,
 }
 
+/// Stop details belong to one stopped execution generation and are cleared on resume.
+#[derive(Debug, Eq, PartialEq, Clone, serde::Serialize)]
+pub(crate) struct ThreadStopReason {
+    pub(crate) kind: ThreadStopKind,
+    pub(crate) signal_name: Option<String>,
+    pub(crate) breakpoint_id: Option<u64>,
+    pub(crate) thread_id: Option<u64>,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize)]
+pub(crate) enum ThreadStopKind {
+    Breakpoint,
+    Watchpoint,
+    Step,
+    Signal,
+    Exception,
+    Pause,
+    Entry,
+    Other,
+}
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) struct LocalThreadStateSnapshot {
     pub(crate) local_id: u64,
     pub(crate) status: ThreadStatus,
     pub(crate) execution_revision: u64,
     pub(crate) location: Option<ThreadLocation>,
+    pub(crate) stop_reason: Option<ThreadStopReason>,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
@@ -240,6 +262,7 @@ pub struct SessionMeta {
     // as frames and variables are valid only while this value is unchanged.
     t_revisions: HashMap<u64, u64>,
     t_locations: HashMap<u64, ThreadLocation>,
+    t_stop_reasons: HashMap<u64, ThreadStopReason>,
     curr_ctx: Option<ThreadContext>,
     in_custom_ctx: bool,
 
@@ -264,6 +287,7 @@ impl SessionMeta {
             t_status: HashMap::new(),
             t_revisions: HashMap::new(),
             t_locations: HashMap::new(),
+            t_stop_reasons: HashMap::new(),
             curr_ctx: None,
             in_custom_ctx: false,
             service_identity,
@@ -297,6 +321,7 @@ impl SessionMeta {
         if removed.is_some() {
             self.t_revisions.remove(&tid);
             self.t_locations.remove(&tid);
+            self.t_stop_reasons.remove(&tid);
         }
         removed
     }
@@ -312,6 +337,7 @@ impl SessionMeta {
         for tid in &removed {
             self.t_revisions.remove(tid);
             self.t_locations.remove(tid);
+            self.t_stop_reasons.remove(tid);
         }
         removed
     }
@@ -327,6 +353,7 @@ impl SessionMeta {
         for tid in &removed {
             self.t_revisions.remove(tid);
             self.t_locations.remove(tid);
+            self.t_stop_reasons.remove(tid);
         }
         removed
     }
@@ -393,6 +420,7 @@ impl SessionMeta {
                 status: *status,
                 execution_revision: self.t_revisions.get(local_id).copied().unwrap_or(1),
                 location: self.t_locations.get(local_id).cloned(),
+                stop_reason: self.t_stop_reasons.get(local_id).cloned(),
             })
             .collect::<Vec<_>>();
         threads.sort_unstable_by_key(|thread| thread.local_id);
@@ -424,6 +452,7 @@ impl SessionMeta {
             return false;
         }
         for tid in tids {
+            self.t_stop_reasons.remove(tid);
             if status != ThreadStatus::STOPPED {
                 self.t_locations.remove(tid);
             }
@@ -432,6 +461,18 @@ impl SessionMeta {
                 let revision = self.t_revisions.entry(*tid).or_insert(1);
                 *revision = revision.saturating_add(1);
             }
+        }
+        true
+    }
+
+    pub(crate) fn set_thread_stop_reason(&mut self, tid: u64, reason: ThreadStopReason) -> bool {
+        if self.t_status.get(&tid) != Some(&ThreadStatus::STOPPED) {
+            return false;
+        }
+        if self.t_stop_reasons.get(&tid) != Some(&reason) {
+            self.t_stop_reasons.insert(tid, reason);
+            let revision = self.t_revisions.entry(tid).or_insert(1);
+            *revision = revision.saturating_add(1);
         }
         true
     }
@@ -453,6 +494,7 @@ impl SessionMeta {
     pub fn update_all_status(&mut self, new_status: ThreadStatus) {
         if new_status != ThreadStatus::STOPPED {
             self.t_locations.clear();
+            self.t_stop_reasons.clear();
         }
         for (tid, status) in self.t_status.iter_mut() {
             if *status != new_status {

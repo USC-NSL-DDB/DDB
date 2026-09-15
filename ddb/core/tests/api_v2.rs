@@ -738,6 +738,14 @@ fn v2_protojson_is_fail_closed_scope_checked_and_idempotent_end_to_end() {
         V2_TEST_READ_TOKEN,
     );
     assert_eq!(status, StatusCode::OK, "{execution_after:?}");
+    assert_eq!(
+        execution_after["executionState"]["stopReason"]["kind"], "STOP_REASON_KIND_STEP",
+        "canonical execution state must preserve the debugger stop reason"
+    );
+    assert_eq!(
+        execution_after["executionState"]["stopReason"]["threadId"],
+        thread_id
+    );
     assert!(!execution_after["executionState"]["running"]
         .as_bool()
         .unwrap_or(false));

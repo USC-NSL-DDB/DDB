@@ -9,7 +9,9 @@ use super::{
     group_operation::GroupOperationCoordinator,
     ids::{GlobalThreadGroupId, GlobalThreadId, GroupId, ServiceIdentity},
     proclet_mgr::ProcletMgr,
-    session_mgr::{SessionMeta, SessionStatus, ThreadContext, ThreadLocation, ThreadStatus},
+    session_mgr::{
+        SessionMeta, SessionStatus, ThreadContext, ThreadLocation, ThreadStatus, ThreadStopReason,
+    },
     state_mgr::{GlobalThreadIdentity, StateMgr, StateTransitionResult},
     thread_mgr::{LocalThreadId, ThreadIdView},
 };
@@ -93,6 +95,7 @@ pub(crate) struct ThreadSnapshot {
     pub(crate) selected: bool,
     pub(crate) execution_revision: u64,
     pub(crate) location: Option<ThreadLocation>,
+    pub(crate) stop_reason: Option<ThreadStopReason>,
 }
 
 /// Immutable process state returned across the runtime-model boundary.
@@ -300,6 +303,7 @@ impl RuntimeModel {
                         selected: selected == Some(thread.local_id),
                         execution_revision: thread.execution_revision,
                         location: thread.location,
+                        stop_reason: thread.stop_reason,
                     });
                 }
             }
@@ -600,16 +604,23 @@ impl RuntimeModel {
         result
     }
 
-    pub(crate) async fn update_thread_statuses_with_location(
+    pub(crate) async fn update_thread_statuses_with_details(
         &self,
         sid: u64,
         local_thread_ids: &[u64],
         status: ThreadStatus,
         location: Option<(u64, ThreadLocation)>,
+        stop_reason: Option<ThreadStopReason>,
     ) -> StateTransitionResult<()> {
         let result = self
             .state
-            .update_thread_statuses_with_location(sid, local_thread_ids, status, location)
+            .update_thread_statuses_with_details(
+                sid,
+                local_thread_ids,
+                status,
+                location,
+                stop_reason,
+            )
             .await;
         if result.is_ok() {
             self.notify_change(RuntimeChange::topology());

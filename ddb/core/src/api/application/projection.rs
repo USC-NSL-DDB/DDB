@@ -7,7 +7,8 @@ use ddb_api_types::v2::{
     ExecutionState, ExtensionDescriptor, ExtensionState, Frame, FrameworkDescriptor, Group,
     OperationKind, OutputStreamKind, PendingCommand, PermissionScope, Process, ResourceKind, Scope,
     ScopeKind, Session, SessionStatus, SourceBreakpointLocation, SourceLocation, StateEventKind,
-    SubBreakpoint, Target, Thread, ThreadState, TransportEndpoint, Variable,
+    StopReason, StopReasonKind, SubBreakpoint, Target, Thread, ThreadState, TransportEndpoint,
+    Variable,
 };
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -18,7 +19,7 @@ use crate::{
         config::{DebuggerBackendKind, Framework},
         Config,
     },
-    state::{BreakpointSnapshot, SubBreakpointSnapshot},
+    state::{BreakpointSnapshot, SubBreakpointSnapshot, ThreadStopKind},
 };
 
 use super::debugger_reads::{DecodedFrame, DecodedVariable};
@@ -167,13 +168,52 @@ impl<'a> ProjectionContext<'a> {
         threads.sort_unstable_by_key(|thread| thread.global_id);
         let running = threads.iter().any(|thread| thread.status == "running");
         let target_key = format!("{:x}", Sha256::digest(target.encode_to_vec()));
+        let stopped_thread = (!running)
+            .then(|| {
+                threads
+                    .iter()
+                    .find(|thread| thread.selected && thread.stop_reason.is_some())
+                    .or_else(|| threads.iter().find(|thread| thread.stop_reason.is_some()))
+            })
+            .flatten();
+        let stop_reason = stopped_thread
+            .map(|thread| -> Result<StopReason, ApplicationError> {
+                let reason = thread
+                    .stop_reason
+                    .as_ref()
+                    .expect("selected a thread with a stop reason");
+                let kind = match reason.kind {
+                    ThreadStopKind::Breakpoint => StopReasonKind::Breakpoint,
+                    ThreadStopKind::Watchpoint => StopReasonKind::Watchpoint,
+                    ThreadStopKind::Step => StopReasonKind::Step,
+                    ThreadStopKind::Signal => StopReasonKind::Signal,
+                    ThreadStopKind::Exception => StopReasonKind::Exception,
+                    ThreadStopKind::Pause => StopReasonKind::Pause,
+                    ThreadStopKind::Entry => StopReasonKind::Entry,
+                    ThreadStopKind::Other => StopReasonKind::Other,
+                };
+                Ok(StopReason {
+                    kind: kind as i32,
+                    description: None,
+                    signal_name: reason.signal_name.clone(),
+                    breakpoint_id: reason
+                        .breakpoint_id
+                        .map(|id| self.ids.encode(ResourceIdKind::Breakpoint, id))
+                        .transpose()?,
+                    thread_id: reason
+                        .thread_id
+                        .map(|id| self.ids.encode(ResourceIdKind::Thread, id))
+                        .transpose()?,
+                })
+            })
+            .transpose()?;
         let mut state = ExecutionState {
             execution_state_id: self
                 .ids
                 .encode(ResourceIdKind::ExecutionState, &target_key)?,
             target: Some(target),
             running,
-            stop_reason: None,
+            stop_reason,
             location: (!running)
                 .then(|| {
                     threads

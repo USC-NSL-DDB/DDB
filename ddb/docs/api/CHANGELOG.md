@@ -39,6 +39,10 @@ public API belong in the project release notes.
 
 ### Fixed
 
+- Canonical execution states retain debugger stop reasons, signal names and
+  opaque principal-thread and breakpoint identities. Stop details commit with
+  thread status, survive snapshot recovery and clear when the thread resumes.
+
 - HTTP/ProtoJSON now uses the canonical comma-separated string mapping for
   `google.protobuf.FieldMask`, matching generated TypeScript and Python
   clients.
