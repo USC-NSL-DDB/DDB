@@ -14,6 +14,7 @@ use crate::state::group_mgr::SessionId;
 pub struct BkptLoc {
     src: String,
     line: u64,
+    function: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -40,7 +41,20 @@ impl BkptLoc {
         Self {
             src: src.into(),
             line,
+            function: false,
         }
+    }
+
+    pub fn function(name: impl Into<String>) -> Self {
+        Self {
+            src: name.into(),
+            line: 0,
+            function: true,
+        }
+    }
+
+    pub fn function_name(&self) -> Option<&str> {
+        self.function.then_some(self.src.as_str())
     }
 
     pub fn path(&self) -> &str {
@@ -52,7 +66,11 @@ impl BkptLoc {
     }
 
     pub fn breakpoint_path(&self) -> String {
-        format!("{}:{}", self.src, self.line)
+        if self.function {
+            self.src.clone()
+        } else {
+            format!("{}:{}", self.src, self.line)
+        }
     }
 }
 

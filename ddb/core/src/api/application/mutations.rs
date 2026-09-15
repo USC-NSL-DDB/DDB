@@ -1810,14 +1810,35 @@ fn breakpoint_definition(
     if let Some(condition) = spec.condition.as_deref() {
         require_nonempty_bounded("breakpoint.condition", condition, MAX_COMMAND_BYTES)?;
     }
-    let source = match spec.location.as_ref() {
-        Some(breakpoint_spec::Location::Source(source)) => source,
-        Some(breakpoint_spec::Location::Function(_)) => {
-            return Err(ApplicationError::new(
-                DdbErrorCode::Unsupported,
-                "function breakpoints are not currently supported",
-            )
-            .requiring("breakpoints.function"))
+    let location = match spec.location.as_ref() {
+        Some(breakpoint_spec::Location::Source(source)) => {
+            require_nonempty_bounded(
+                "breakpoint.location.source.source",
+                &source.source,
+                MAX_COMMAND_BYTES,
+            )?;
+            if source.line == 0 {
+                return Err(ApplicationError::invalid(
+                    "breakpoint.location.source.line",
+                    "must be greater than zero",
+                ));
+            }
+            if source.column != 0 {
+                return Err(ApplicationError::new(
+                    DdbErrorCode::Unsupported,
+                    "column-specific source breakpoints are not supported",
+                )
+                .requiring("breakpoints.source.column"));
+            }
+            BkptLoc::new(&source.source, u64::from(source.line))
+        }
+        Some(breakpoint_spec::Location::Function(function)) => {
+            require_nonempty_bounded(
+                "breakpoint.location.function.function_name",
+                &function.function_name,
+                MAX_COMMAND_BYTES,
+            )?;
+            BkptLoc::function(&function.function_name)
         }
         Some(breakpoint_spec::Location::Address(_)) => {
             return Err(ApplicationError::new(
@@ -1833,26 +1854,8 @@ fn breakpoint_definition(
             ))
         }
     };
-    require_nonempty_bounded(
-        "breakpoint.location.source.source",
-        &source.source,
-        MAX_COMMAND_BYTES,
-    )?;
-    if source.line == 0 {
-        return Err(ApplicationError::invalid(
-            "breakpoint.location.source.line",
-            "must be greater than zero",
-        ));
-    }
-    if source.column != 0 {
-        return Err(ApplicationError::new(
-            DdbErrorCode::Unsupported,
-            "column-specific source breakpoints are not supported",
-        )
-        .requiring("breakpoints.source.column"));
-    }
     Ok((
-        BkptLoc::new(&source.source, u64::from(source.line)),
+        location,
         BreakpointProperties {
             enabled: spec.enabled.unwrap_or(true),
             condition: spec.condition.clone(),

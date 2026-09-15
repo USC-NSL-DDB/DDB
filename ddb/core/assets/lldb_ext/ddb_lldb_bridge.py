@@ -1309,6 +1309,7 @@ class Bridge(object):
         condition = None
         enabled = True
         temporary = False
+        function = False
         positional = []
         index = 0
         while index < len(arguments):
@@ -1329,6 +1330,10 @@ class Bridge(object):
                 condition = arguments[index + 1]
                 index += 2
                 continue
+            if argument == "--function":
+                function = True
+                index += 1
+                continue
             if argument == "--":
                 positional.extend(arguments[index + 1 :])
                 break
@@ -1347,7 +1352,7 @@ class Bridge(object):
         location = positional[0]
         target = self._target()
         breakpoint = None
-        if ":" in location:
+        if not function and ":" in location:
             filename, line = location.rsplit(":", 1)
             try:
                 breakpoint = target.BreakpointCreateByLocation(filename, int(line))

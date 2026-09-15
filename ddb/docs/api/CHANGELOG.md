@@ -8,6 +8,11 @@ public API belong in the project release notes.
 
 ### Added
 
+- Typed function breakpoints retain their symbol names through insertion,
+  resource projection and group inheritance. Function locations are explicit in
+  GDB commands and the LLDB bridge; conditions and lifecycle operations use the
+  same breakpoint aggregate as source locations.
+
 - Canonical `ddb.api.v2` Protobuf schema, descriptor set, ProtoJSON mappings,
   generated Rust types, OpenAPI, and AsyncAPI documents.
 - Transport-independent debugger application service with typed errors,
@@ -38,6 +43,9 @@ public API belong in the project release notes.
   three-surface compatibility gates.
 
 ### Fixed
+
+- TypeScript SDK pagination accepts omitted empty ProtoJSON repeated fields,
+  including an empty ListBreakpoints response after deletion.
 
 - Group breakpoint resources include installed session members with stable
   sub-breakpoint identities and group inheritance metadata. Installed group-only

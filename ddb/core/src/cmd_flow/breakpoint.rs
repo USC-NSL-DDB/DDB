@@ -1012,6 +1012,9 @@ pub(crate) fn breakpoint_insert_command(
         arguments.push("-c".to_string());
         arguments.push(serde_json::to_string(condition).expect("serializing a string cannot fail"));
     }
+    if location.function_name().is_some() {
+        arguments.push("--function".to_string());
+    }
     arguments.push(
         serde_json::to_string(&location.breakpoint_path())
             .expect("serializing a string cannot fail"),
@@ -1030,22 +1033,12 @@ fn parse_breakpoint_definition(args: &str) -> Result<(BkptLoc, BreakpointPropert
         .last()
         .map(String::as_str)
         .ok_or_else(|| anyhow!("Breakpoint location is missing"))?;
-    let (source, line) = location.rsplit_once(':').ok_or_else(|| {
-        anyhow!(
-            "Unsupported breakpoint location '{}'. Expected <file>:<line>.",
-            location
-        )
-    })?;
-    if source.is_empty() {
-        bail!("Breakpoint source path cannot be empty");
-    }
-    let line = line
-        .parse::<u64>()
-        .map_err(|_| anyhow!("Invalid breakpoint line '{}'", line))?;
     let mut properties = BreakpointProperties::default();
+    let mut function = false;
     let mut index = 0;
     while index + 1 < arguments.len() {
         match arguments[index].as_str() {
+            "--function" => function = true,
             "-d" | "--disabled" => properties.enabled = false,
             "-t" | "--temporary" => properties.temporary = true,
             "-h" | "--hardware" => properties.hardware = true,
@@ -1057,7 +1050,27 @@ fn parse_breakpoint_definition(args: &str) -> Result<(BkptLoc, BreakpointPropert
         }
         index += 1;
     }
-    Ok((BkptLoc::new(source, line), properties))
+    let location = if function {
+        if location.trim().is_empty() {
+            bail!("Breakpoint function name cannot be empty");
+        }
+        BkptLoc::function(location)
+    } else {
+        let (source, line) = location.rsplit_once(':').ok_or_else(|| {
+            anyhow!(
+                "Unsupported breakpoint location '{}'. Expected <file>:<line>.",
+                location
+            )
+        })?;
+        if source.is_empty() {
+            bail!("Breakpoint source path cannot be empty");
+        }
+        let line = line
+            .parse::<u64>()
+            .map_err(|_| anyhow!("Invalid breakpoint line '{}'", line))?;
+        BkptLoc::new(source, line)
+    };
+    Ok((location, properties))
 }
 
 fn split_quoted_arguments(input: &str) -> Result<Vec<String>> {
@@ -1156,6 +1169,22 @@ mod tests {
 
         assert_eq!(location.path(), "C:/workspace/service.rs");
         assert_eq!(location.line(), 42);
+    }
+
+    #[test]
+    fn function_breakpoint_round_trip_preserves_symbol_and_condition() {
+        let name = "service::Worker::handle(int, int)";
+        let properties = BreakpointProperties {
+            condition: Some("value > 3".to_string()),
+            ..Default::default()
+        };
+        let command = breakpoint_insert_command(&BkptLoc::function(name), &properties);
+        let (location, actual) =
+            parse_breakpoint_definition(command.strip_prefix("-break-insert ").unwrap()).unwrap();
+        assert_eq!(location.function_name(), Some(name));
+        assert_eq!(location.breakpoint_path(), name);
+        assert_eq!(actual, properties);
+        assert!(parse_breakpoint_definition("--function \"\"").is_err());
     }
 
     #[test]

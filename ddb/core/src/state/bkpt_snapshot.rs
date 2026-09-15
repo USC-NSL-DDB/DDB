@@ -23,6 +23,8 @@ pub struct BreakpointSnapshot {
 pub struct BreakpointLocationSnapshot {
     pub src: String,
     pub line: u64,
+    #[serde(skip)]
+    pub function_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -68,6 +70,7 @@ impl From<&BkptLoc> for BreakpointLocationSnapshot {
         Self {
             src: location.path().to_string(),
             line: location.line(),
+            function_name: location.function_name().map(str::to_owned),
         }
     }
 }

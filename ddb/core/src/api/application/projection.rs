@@ -446,13 +446,20 @@ impl<'a> ProjectionContext<'a> {
             breakpoint_id,
             target: Some(target),
             spec: Some(BreakpointSpec {
-                location: Some(ddb_api_types::v2::breakpoint_spec::Location::Source(
-                    SourceBreakpointLocation {
-                        source: snapshot.location.src.clone(),
-                        line,
-                        column: 0,
-                    },
-                )),
+                location: Some(match snapshot.location.function_name.as_ref() {
+                    Some(name) => ddb_api_types::v2::breakpoint_spec::Location::Function(
+                        ddb_api_types::v2::FunctionBreakpointLocation {
+                            function_name: name.clone(),
+                        },
+                    ),
+                    None => ddb_api_types::v2::breakpoint_spec::Location::Source(
+                        SourceBreakpointLocation {
+                            source: snapshot.location.src.clone(),
+                            line,
+                            column: 0,
+                        },
+                    ),
+                }),
                 enabled: Some(snapshot.enabled),
                 condition: snapshot.condition.clone(),
                 ignore_count: None,
@@ -491,11 +498,15 @@ impl<'a> ProjectionContext<'a> {
             inherited_from_group_id,
             location: Some(SourceLocation {
                 source_reference: None,
-                path: Some(snapshot.location.src.clone()),
+                path: snapshot
+                    .location
+                    .function_name
+                    .is_none()
+                    .then(|| snapshot.location.src.clone()),
                 line,
                 column: 0,
                 address: None,
-                function_name: None,
+                function_name: snapshot.location.function_name.clone(),
             }),
             verified: true,
             message: None,
@@ -551,6 +562,7 @@ impl<'a> ProjectionContext<'a> {
     ) -> Capabilities {
         let mut breakpoint_features = vec![
             BreakpointFeature::Source as i32,
+            BreakpointFeature::Function as i32,
             BreakpointFeature::Condition as i32,
             BreakpointFeature::Temporary as i32,
         ];
