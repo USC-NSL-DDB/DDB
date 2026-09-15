@@ -131,7 +131,10 @@ impl DbgCmdGenerator for GdbCmd {
                 serde_json::to_string(cmd).expect("serializing a string cannot fail")
             ),
             GdbCmd::TargetAttach(pid) => format!("-target-attach {}", pid),
-            GdbCmd::FileExecAndSym(bin_path) => format!("-file-exec-and-symbols {}", bin_path),
+            GdbCmd::FileExecAndSym(bin_path) => format!(
+                "-file-exec-and-symbols {}",
+                serde_json::to_string(bin_path).expect("serializing a string cannot fail")
+            ),
             GdbCmd::ExeArgs(args) => format!("-exec-arguments {}", args),
             GdbCmd::Plain(cmd) => cmd.clone(),
             GdbCmd::FrameFilterCmd(ff_cmd) => {
@@ -192,7 +195,13 @@ mod tests {
         assert_eq!(cmd.generate(), "-target-attach 1234\n");
 
         let cmd = GdbCmd::FileExecAndSym("/path/to/bin".to_string());
-        assert_eq!(cmd.generate(), "-file-exec-and-symbols /path/to/bin\n");
+        assert_eq!(cmd.generate(), "-file-exec-and-symbols \"/path/to/bin\"\n");
+
+        let cmd = GdbCmd::FileExecAndSym("/path with spaces/bin\"ary".to_string());
+        assert_eq!(
+            cmd.generate(),
+            "-file-exec-and-symbols \"/path with spaces/bin\\\"ary\"\n"
+        );
 
         let cmd = GdbCmd::ExeArgs("arg1 arg2".to_string());
         assert_eq!(cmd.generate(), "-exec-arguments arg1 arg2\n");
