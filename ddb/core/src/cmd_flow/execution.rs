@@ -113,10 +113,7 @@ impl ExecutionService {
     }
 
     pub(crate) async fn send_signal(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
-        let signal = command.args.trim();
-        if signal.is_empty() {
-            bail!("-send-signal command requires a signal argument");
-        }
+        let signal = signal_argument(&command.args)?;
         let session_id = match command.target {
             Target::Session(session_id) => session_id,
             Target::Thread(global_thread_id) => {
@@ -270,11 +267,56 @@ fn require_thread_target(target: &Target, operation: &str) -> Result<()> {
     }
 }
 
+// Typed API commands encode strings as JSON. Decode the signal token before
+// embedding it in the debugger's console command, which does not accept quotes.
+fn signal_argument(arguments: &str) -> Result<String> {
+    let argument = arguments.trim();
+    let signal = if argument.starts_with('"') {
+        serde_json::from_str::<String>(argument)?
+    } else {
+        argument.to_owned()
+    };
+    if signal.is_empty()
+        || !signal
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_+-".contains(&byte))
+    {
+        bail!("-send-signal requires one signal name or number");
+    }
+    Ok(signal)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[test]
+    fn signal_arguments_accept_typed_and_cli_tokens() {
+        for signal in ["SIGINT", "SIGKILL", "0", "15", "SIGRTMIN+1"] {
+            assert_eq!(signal_argument(signal).unwrap(), signal);
+            assert_eq!(
+                signal_argument(&serde_json::to_string(signal).unwrap()).unwrap(),
+                signal
+            );
+        }
+    }
+
+    #[test]
+    fn signal_arguments_reject_multiple_or_malformed_tokens() {
+        for argument in [
+            "",
+            "SIGINT SIGKILL",
+            "\"SIGINT",
+            "\"\"",
+            "\"SIGINT\\nquit\"",
+            "SIGINT;quit",
+            "\"SIGINT\" \"SIGKILL\"",
+        ] {
+            assert!(signal_argument(argument).is_err(), "{argument}");
+        }
+    }
 
     #[test]
     fn context_switch_arguments_are_space_separated_register_assignments() {
