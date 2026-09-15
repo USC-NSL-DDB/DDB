@@ -280,9 +280,10 @@ export class DdbClient {
         current as RequestOf<UnaryMethodName>,
       )) as unknown;
       if (!isRecord(response)) throw new DdbProtocolError(`${method} returned a non-object`);
-      const pageItems = response[itemsField];
+      // ProtoJSON omits empty repeated fields.
+      const pageItems = response[itemsField] === undefined ? [] : response[itemsField];
       if (!Array.isArray(pageItems)) {
-        throw new DdbProtocolError(`${method} omitted ${itemsField}`);
+        throw new DdbProtocolError(`${method} returned invalid ${itemsField}`);
       }
       if (result.length + pageItems.length > maxItems) {
         throw new DdbProtocolError(`${method} exceeded the ${maxItems}-item bound`);

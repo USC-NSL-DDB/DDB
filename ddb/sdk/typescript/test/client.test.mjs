@@ -140,3 +140,13 @@ test("close aborts active calls", async () => {
   client.close();
   await assert.rejects(request, DdbClosedError);
 });
+
+
+test("collect accepts omitted empty ProtoJSON collections and still validates present fields", async () => {
+  let response = {};
+  const client = new DdbClient({ endpoint: "http://127.0.0.1:1", fetch: async () => Response.json(response) });
+  assert.deepEqual(await client.collect("DebuggerService.ListBreakpoints", {}), []);
+  response = { breakpoints: "invalid" };
+  await assert.rejects(client.collect("DebuggerService.ListBreakpoints", {}), /invalid breakpoints/);
+  client.close();
+});
