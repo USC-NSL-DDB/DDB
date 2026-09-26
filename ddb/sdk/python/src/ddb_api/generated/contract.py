@@ -46,6 +46,7 @@ METHODS: dict[str, MethodSpec] = {
     "DebuggerControlService.SelectThread": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/SelectThread", False, "control"),
     "DebuggerControlService.Evaluate": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate", False, "control"),
     "DebuggerControlService.SetVariable": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/SetVariable", False, "control"),
+    "DebuggerControlService.ConfigureDebugger": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/ConfigureDebugger", False, "control"),
     "DebuggerControlService.CreateBreakpoint": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/CreateBreakpoint", False, "control"),
     "DebuggerControlService.UpdateBreakpoint": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/UpdateBreakpoint", False, "control"),
     "DebuggerControlService.DeleteBreakpoint": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerControlService/DeleteBreakpoint", False, "control"),

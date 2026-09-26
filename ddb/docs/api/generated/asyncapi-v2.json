@@ -498,6 +498,33 @@
         },
         "type": "object"
       },
+      "ConfigureDebuggerRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "enablePrettyPrinting": {
+            "$ref": "#/components/schemas/Empty"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "sourceMapping": {
+            "$ref": "#/components/schemas/SourcePathMapping"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object",
+        "x-protobuf-oneofs": {
+          "setting": [
+            "enablePrettyPrinting",
+            "sourceMapping"
+          ]
+        }
+      },
       "CreateBreakpointRequest": {
         "additionalProperties": true,
         "properties": {
@@ -2329,7 +2356,8 @@
           "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
           "OPERATION_KIND_EXTENSION_ACTION",
           "OPERATION_KIND_SHUTDOWN",
-          "OPERATION_KIND_SET_VARIABLE"
+          "OPERATION_KIND_SET_VARIABLE",
+          "OPERATION_KIND_CONFIGURE_DEBUGGER"
         ]
       },
       "OperationResult": {
@@ -3349,6 +3377,18 @@
             "type": "string"
           },
           "sourceReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourcePathMapping": {
+        "additionalProperties": true,
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
             "type": "string"
           }
         },

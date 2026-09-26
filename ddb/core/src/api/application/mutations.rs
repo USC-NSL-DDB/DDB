@@ -4,17 +4,18 @@ use ddb_api_extension::{
     ExtensionInvocation, ExtensionRegistry, InvocationError, ProviderErrorKind,
 };
 use ddb_api_types::v2::{
-    breakpoint_spec, dynamic_value, operation_result, resource_upsert, state_event, target,
-    Breakpoint, BreakpointSpec, CancelOperationRequest, CreateBreakpointRequest, DdbErrorCode,
-    DeleteBreakpointRequest, DistributedBacktraceResult, DistributedBoundaryKind, DistributedFrame,
-    DynamicList, DynamicObject, DynamicValue, Empty, EvaluateRequest, EvaluationContext,
-    EvaluationResult, ExecuteRawCommandRequest, ExecuteRequest, ExecutionAction, Frame,
-    InvokeExtensionActionRequest, InvokeExtensionActionResult, Operation,
-    OperationAdmissionResponse, OperationKind, OperationResult, PermissionScope, Preconditions,
-    RawCommandDialect, RawCommandResult, RequestContext, ResourceDeleted, ResourceKind,
-    ResourceUpsert, RunDistributedBacktraceRequest, SelectThreadRequest, SessionTarget,
-    SetVariableRequest, ShutdownRequest, SourceLocation, StateEventKind, Target as PublicTarget,
-    TargetFailure, TargetOutcome, UpdateBreakpointRequest, VariableAssignmentResult,
+    breakpoint_spec, configure_debugger_request, dynamic_value, operation_result, resource_upsert,
+    state_event, target, Breakpoint, BreakpointSpec, CancelOperationRequest,
+    ConfigureDebuggerRequest, CreateBreakpointRequest, DdbErrorCode, DeleteBreakpointRequest,
+    DistributedBacktraceResult, DistributedBoundaryKind, DistributedFrame, DynamicList,
+    DynamicObject, DynamicValue, Empty, EvaluateRequest, EvaluationContext, EvaluationResult,
+    ExecuteRawCommandRequest, ExecuteRequest, ExecutionAction, Frame, InvokeExtensionActionRequest,
+    InvokeExtensionActionResult, Operation, OperationAdmissionResponse, OperationKind,
+    OperationResult, PermissionScope, Preconditions, RawCommandDialect, RawCommandResult,
+    RequestContext, ResourceDeleted, ResourceKind, ResourceUpsert, RunDistributedBacktraceRequest,
+    SelectThreadRequest, SessionTarget, SetVariableRequest, ShutdownRequest, SourceLocation,
+    StateEventKind, Target as PublicTarget, TargetFailure, TargetOutcome, UpdateBreakpointRequest,
+    VariableAssignmentResult,
 };
 use prost::Message;
 use tracing::warn;
@@ -309,6 +310,46 @@ impl DdbApplicationService {
                 _object: object,
                 variable_id: request.variable_id,
             },
+        )
+    }
+
+    pub(crate) async fn configure_debugger(
+        self: &Arc<Self>,
+        principal: &PrincipalContext,
+        request: ConfigureDebuggerRequest,
+    ) -> Result<OperationAdmissionResponse, ApplicationError> {
+        let scope = RequestScope::begin(request.context.as_ref())?;
+        let fingerprint = fingerprint_without_context(&request, |request| request.context = None);
+        if let Some(response) =
+            self.idempotent_response(principal, &scope, request.context.as_ref(), &fingerprint)?
+        {
+            return Ok(response);
+        }
+        let command = debugger_setting_command(&request, &self.config.conf.debugger.backend)?;
+        self.validate_preconditions(request.preconditions.as_ref(), None)?;
+        let resolved = self
+            .target_resolver()
+            .resolve(request.target.as_ref(), TargetPurpose::Command)
+            .await?;
+        if !matches!(
+            resolved.command,
+            CommandTarget::Session(_) | CommandTarget::SessionSet(_) | CommandTarget::Broadcast
+        ) {
+            return Err(ApplicationError::invalid(
+                "target",
+                "debugger settings require a session-wide target",
+            ));
+        }
+        scope.ensure_active()?;
+        self.admit_command(
+            principal,
+            &scope,
+            request.context.as_ref(),
+            &fingerprint,
+            OperationKind::ConfigureDebugger,
+            resolved,
+            command,
+            CompletionProjection::NoContent,
         )
     }
 
@@ -1765,6 +1806,51 @@ fn require_nonempty_bounded(
         ));
     }
     Ok(())
+}
+
+fn debugger_setting_command(
+    request: &ConfigureDebuggerRequest,
+    backend: &DebuggerBackendKind,
+) -> Result<String, ApplicationError> {
+    if matches!(backend, DebuggerBackendKind::Unknown) {
+        return Err(ApplicationError::new(
+            DdbErrorCode::Unsupported,
+            "debugger settings are unsupported by this backend",
+        ));
+    }
+    match request
+        .setting
+        .as_ref()
+        .ok_or_else(|| ApplicationError::invalid("setting", "is required"))?
+    {
+        configure_debugger_request::Setting::EnablePrettyPrinting(_) => {
+            Ok("-enable-pretty-printing".to_string())
+        }
+        configure_debugger_request::Setting::SourceMapping(mapping) => {
+            for (field, value) in [
+                ("source_mapping.from", &mapping.from),
+                ("source_mapping.to", &mapping.to),
+            ] {
+                require_nonempty_bounded(field, value, 4_096)?;
+                if value.chars().any(char::is_control) {
+                    return Err(ApplicationError::invalid(
+                        field,
+                        "must not contain control characters",
+                    ));
+                }
+            }
+            let prefix = if matches!(backend, DebuggerBackendKind::Lldb) {
+                "settings append -- target.source-map"
+            } else {
+                "set substitute-path"
+            };
+            raw_command_text(
+                RawCommandDialect::BackendNative,
+                backend,
+                &format!("{prefix} {} {}", quote(&mapping.from), quote(&mapping.to)),
+            )
+        }
+    }
 }
 
 fn raw_command_text(

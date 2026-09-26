@@ -684,6 +684,12 @@ v2_async_principal_handler!(
     set_variable
 );
 v2_async_principal_handler!(
+    v2_configure_debugger,
+    v2::ConfigureDebuggerRequest,
+    v2::OperationAdmissionResponse,
+    configure_debugger
+);
+v2_async_principal_handler!(
     v2_create_breakpoint,
     v2::CreateBreakpointRequest,
     v2::OperationAdmissionResponse,

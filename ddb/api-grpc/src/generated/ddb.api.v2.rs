@@ -2724,6 +2724,38 @@ pub mod debugger_control_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Applies a session-wide setting without exposing debugger command syntax.
+        pub async fn configure_debugger(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                ::ddb_api_types::v2::ConfigureDebuggerRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerControlService/ConfigureDebugger",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "ddb.api.v2.DebuggerControlService",
+                        "ConfigureDebugger",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Admits logical/distributed breakpoint creation.
         pub async fn create_breakpoint(
             &mut self,
@@ -2989,6 +3021,14 @@ pub mod debugger_control_service_server {
         async fn set_variable(
             &self,
             request: tonic::Request<::ddb_api_types::v2::SetVariableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
+            tonic::Status,
+        >;
+        /// Applies a session-wide setting without exposing debugger command syntax.
+        async fn configure_debugger(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::ConfigureDebuggerRequest>,
         ) -> std::result::Result<
             tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
             tonic::Status,
@@ -3306,6 +3346,58 @@ pub mod debugger_control_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SetVariableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerControlService/ConfigureDebugger" => {
+                    #[allow(non_camel_case_types)]
+                    struct ConfigureDebuggerSvc<T: DebuggerControlService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerControlService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::ConfigureDebuggerRequest,
+                    > for ConfigureDebuggerSvc<T> {
+                        type Response = ::ddb_api_types::v2::OperationAdmissionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::ConfigureDebuggerRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerControlService>::configure_debugger(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ConfigureDebuggerSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

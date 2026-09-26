@@ -8,6 +8,11 @@ public API belong in the project release notes.
 
 ### Added
 
+- `ConfigureDebugger` applies session-wide pretty-printer enablement or a source
+  prefix mapping through typed requests. Mapping order follows backend rules.
+  DDB owns path quoting and rejects thread-scoped settings and control characters
+  in paths. HTTP, gRPC and all generated SDK contracts expose the operation.
+
 - `SetVariable` assigns locals and retained evaluation children by opaque variable
   identity, including children without an assignable display expression. It uses
   control authorization, target/frame ownership, stop lifetime and idempotent

@@ -623,6 +623,8 @@ class Bridge(object):
             "-stack-list-variables": self._stack_variables,
             "-data-list-register-names": self._register_names,
             "-data-list-register-values": self._register_values,
+            # LLDB SBValue uses installed formatters by default.
+            "-enable-pretty-printing": lambda arguments: ("done", None),
             "-var-create": self._var_create,
             "-var-list-children": self._var_list_children,
             "-var-delete": self._var_delete,

@@ -69,6 +69,8 @@ const V2_DEBUGGER_CONTROL_SERVICE_EVALUATE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate";
 const V2_DEBUGGER_CONTROL_SERVICE_SET_VARIABLE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SetVariable";
+const V2_DEBUGGER_CONTROL_SERVICE_CONFIGURE_DEBUGGER_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerControlService/ConfigureDebugger";
 const V2_DEBUGGER_CONTROL_SERVICE_CREATE_BREAKPOINT_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerControlService/CreateBreakpoint";
 const V2_DEBUGGER_CONTROL_SERVICE_UPDATE_BREAKPOINT_PATH: &str =
@@ -248,6 +250,10 @@ fn v2_contract_router(authorization: &Arc<ApiAuthorization>) -> Router<ApiState>
         .route(
             V2_DEBUGGER_CONTROL_SERVICE_SET_VARIABLE_PATH,
             post(v2_set_variable),
+        )
+        .route(
+            V2_DEBUGGER_CONTROL_SERVICE_CONFIGURE_DEBUGGER_PATH,
+            post(v2_configure_debugger),
         )
         .route(
             V2_DEBUGGER_CONTROL_SERVICE_CREATE_BREAKPOINT_PATH,

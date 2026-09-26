@@ -613,6 +613,31 @@ message SetVariableRequest {
   optional Preconditions preconditions = 5;
 }
 
+// SourcePathMapping adds a source-prefix substitution using backend precedence.
+message SourcePathMapping {
+  // Prefix recorded in the target's debug information.
+  string from = 1;
+  // Corresponding source prefix on the debugger host.
+  string to = 2;
+}
+
+// ConfigureDebuggerRequest applies one session-wide debugger setting.
+message ConfigureDebuggerRequest {
+  // Mutation controls; idempotency_key and CONTROL are required.
+  RequestContext context = 1;
+  // Session, session-set, group or broadcast target; thread targets are invalid.
+  Target target = 2;
+  oneof setting {
+    // Enables installed value visualizers for subsequently created values.
+    // LLDB already enables its value formatters by default.
+    Empty enable_pretty_printing = 3;
+    // Adds one source-prefix rule. Matching order follows the backend's rules.
+    SourcePathMapping source_mapping = 4;
+  }
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 5;
+}
+
 // CreateBreakpointRequest admits creation of a logical/distributed breakpoint.
 message CreateBreakpointRequest {
   // Mutation controls; idempotency_key is required and CONTROL is required.
@@ -816,6 +841,8 @@ service DebuggerControlService {
   rpc Evaluate(EvaluateRequest) returns (OperationAdmissionResponse);
   // Assigns a variable by its stopped identity rather than its display expression.
   rpc SetVariable(SetVariableRequest) returns (OperationAdmissionResponse);
+  // Applies a session-wide setting without exposing debugger command syntax.
+  rpc ConfigureDebugger(ConfigureDebuggerRequest) returns (OperationAdmissionResponse);
   // Admits logical/distributed breakpoint creation.
   rpc CreateBreakpoint(CreateBreakpointRequest) returns (OperationAdmissionResponse);
   // Admits a field-masked breakpoint update.

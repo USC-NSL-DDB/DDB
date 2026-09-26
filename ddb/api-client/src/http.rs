@@ -876,6 +876,12 @@ impl DdbClient {
         "SetVariable"
     );
     mutation_method!(
+        configure_debugger,
+        v2::ConfigureDebuggerRequest,
+        CONTROL_SERVICE,
+        "ConfigureDebugger"
+    );
+    mutation_method!(
         create_breakpoint,
         v2::CreateBreakpointRequest,
         CONTROL_SERVICE,

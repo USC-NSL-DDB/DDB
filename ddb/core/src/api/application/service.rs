@@ -2378,6 +2378,7 @@ impl DdbApplicationService {
             OperationKind::SelectThread,
             OperationKind::Evaluate,
             OperationKind::SetVariable,
+            OperationKind::ConfigureDebugger,
             OperationKind::CreateBreakpoint,
             OperationKind::UpdateBreakpoint,
             OperationKind::DeleteBreakpoint,

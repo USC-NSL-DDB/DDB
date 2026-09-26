@@ -47,15 +47,20 @@ just send those commands through a different transport.
   threads before dispatch. The LLDB bridge uses SBValue.SetValueFromCString,
   covered by a focused success/rejection test; runtime LLDB remains unavailable.
 
+- ConfigureDebugger supplies typed pretty-printer enablement and source mappings.
+  A real GDB printer test covers dynamic roots, nested lazy children, pagination,
+  and assignment without expression names. Source mappings preserve spaces;
+  thread-scoped settings and control characters in paths are rejected.
+- Backend validation: core/HTTP/gRPC and Rust client/type tests pass, both real
+  GDB scenarios pass, TypeScript/Python SDK and LLDB bridge checks pass, and
+  generated artifacts reproduce exactly. LLDB runtime remains unavailable.
+
 ## Remaining work
 
-1. Finish dynamic/container coverage with a real pretty-printer once typed settings
-   are available. Local metadata and typed assignment are implemented.
-2. Add typed pretty-printer and source-mapping settings, with corresponding SDK
-   contracts and focused validation.
-3. Replace the adapter's raw-variable implementation and MI console/setup command
-   construction. Verify real GDB inspection, assignment, caller-frame console,
-   configuration, lifecycle cleanup and the packaged VS Code extension.
+Replace the adapter's raw-variable implementation and MI console/setup command
+construction with these native SDK contracts. Verify real GDB inspection,
+assignment, caller-frame console, configuration, lifecycle cleanup and the
+packaged VS Code extension.
 
 Reuse the existing operation admission, authentication, idempotency, frame guards,
 and generated contract machinery. Extend existing integration scenarios where

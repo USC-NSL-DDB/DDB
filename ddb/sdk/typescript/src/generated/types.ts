@@ -130,6 +130,7 @@ export const OperationKindValues = {
   OPERATION_KIND_EXTENSION_ACTION: "OPERATION_KIND_EXTENSION_ACTION",
   OPERATION_KIND_SHUTDOWN: "OPERATION_KIND_SHUTDOWN",
   OPERATION_KIND_SET_VARIABLE: "OPERATION_KIND_SET_VARIABLE",
+  OPERATION_KIND_CONFIGURE_DEBUGGER: "OPERATION_KIND_CONFIGURE_DEBUGGER",
 } as const;
 export type OperationKind = (typeof OperationKindValues)[keyof typeof OperationKindValues] | (string & {});
 
@@ -387,6 +388,14 @@ export interface ComponentHealth {
   "component"?: string;
   "status"?: HealthStatus;
   "detail"?: string;
+}
+
+export interface ConfigureDebuggerRequest {
+  "context"?: RequestContext;
+  "target"?: Target;
+  "enablePrettyPrinting"?: Empty;
+  "sourceMapping"?: SourcePathMapping;
+  "preconditions"?: Preconditions;
 }
 
 export interface CreateBreakpointRequest {
@@ -1296,6 +1305,11 @@ export interface SourceLocation {
   "column"?: number;
   "address"?: string;
   "functionName"?: string;
+}
+
+export interface SourcePathMapping {
+  "from"?: string;
+  "to"?: string;
 }
 
 export interface StateEvent {

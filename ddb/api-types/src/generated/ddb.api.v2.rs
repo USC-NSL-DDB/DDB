@@ -2220,6 +2220,7 @@ pub enum OperationKind {
     ExtensionAction = 9,
     Shutdown = 10,
     SetVariable = 12,
+    ConfigureDebugger = 13,
 }
 impl OperationKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2240,6 +2241,7 @@ impl OperationKind {
             Self::ExtensionAction => "OPERATION_KIND_EXTENSION_ACTION",
             Self::Shutdown => "OPERATION_KIND_SHUTDOWN",
             Self::SetVariable => "OPERATION_KIND_SET_VARIABLE",
+            Self::ConfigureDebugger => "OPERATION_KIND_CONFIGURE_DEBUGGER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2257,6 +2259,7 @@ impl OperationKind {
             "OPERATION_KIND_EXTENSION_ACTION" => Some(Self::ExtensionAction),
             "OPERATION_KIND_SHUTDOWN" => Some(Self::Shutdown),
             "OPERATION_KIND_SET_VARIABLE" => Some(Self::SetVariable),
+            "OPERATION_KIND_CONFIGURE_DEBUGGER" => Some(Self::ConfigureDebugger),
             _ => None,
         }
     }
@@ -3299,6 +3302,44 @@ pub struct SetVariableRequest {
     /// Optional optimistic mutation guards.
     #[prost(message, optional, tag = "5")]
     pub preconditions: ::core::option::Option<Preconditions>,
+}
+/// SourcePathMapping adds a source-prefix substitution using backend precedence.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourcePathMapping {
+    /// Prefix recorded in the target's debug information.
+    #[prost(string, tag = "1")]
+    pub from: ::prost::alloc::string::String,
+    /// Corresponding source prefix on the debugger host.
+    #[prost(string, tag = "2")]
+    pub to: ::prost::alloc::string::String,
+}
+/// ConfigureDebuggerRequest applies one session-wide debugger setting.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfigureDebuggerRequest {
+    /// Mutation controls; idempotency_key and CONTROL are required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Session, session-set, group or broadcast target; thread targets are invalid.
+    #[prost(message, optional, tag = "2")]
+    pub target: ::core::option::Option<Target>,
+    /// Optional optimistic mutation guards.
+    #[prost(message, optional, tag = "5")]
+    pub preconditions: ::core::option::Option<Preconditions>,
+    #[prost(oneof = "configure_debugger_request::Setting", tags = "3, 4")]
+    pub setting: ::core::option::Option<configure_debugger_request::Setting>,
+}
+/// Nested message and enum types in `ConfigureDebuggerRequest`.
+pub mod configure_debugger_request {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Setting {
+        /// Enables installed value visualizers for subsequently created values.
+        /// LLDB already enables its value formatters by default.
+        #[prost(message, tag = "3")]
+        EnablePrettyPrinting(super::Empty),
+        /// Adds one source-prefix rule. Matching order follows the backend's rules.
+        #[prost(message, tag = "4")]
+        SourceMapping(super::SourcePathMapping),
+    }
 }
 /// CreateBreakpointRequest admits creation of a logical/distributed breakpoint.
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -44,7 +44,8 @@ fn completed_control(ddb: &DdbProcess, method: &str, request: Value) -> Value {
         wait_for_operation(ddb, admission["operation"]["operationId"].as_str().unwrap());
     assert_eq!(
         operation["state"], "OPERATION_STATE_COMPLETED",
-        "{operation:?}"
+        "{method} {}: {operation:?}",
+        request["context"]["idempotencyKey"]
     );
     operation
 }
@@ -362,6 +363,112 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         observed["result"]["evaluation"]["value"], "123",
         "{observed:?}"
     );
+
+    if backend == "gdb" {
+        for request in [
+            json!({"context": {"idempotencyKey": "thread-setting"}, "target": target, "enablePrettyPrinting": {}}),
+            json!({"context": {"idempotencyKey": "invalid-source-setting"}, "target": session_target,
+                "sourceMapping": {"from": "/source\nshow version", "to": "/local"}}),
+        ] {
+            let (status, rejected) = ddb.api_post_json_with_bearer(
+                &rpc("DebuggerControlService", "ConfigureDebugger"),
+                &request,
+                V2_TEST_CONTROL_TOKEN,
+            );
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected:?}");
+        }
+        completed_control(
+            &ddb,
+            "ConfigureDebugger",
+            json!({
+                "context": {"idempotencyKey": "typed-pretty-printers"},
+                "target": session_target, "enablePrettyPrinting": {}
+            }),
+        );
+        completed_control(
+            &ddb,
+            "ConfigureDebugger",
+            json!({
+                "context": {"idempotencyKey": "typed-source-mapping"},
+                "target": session_target,
+                "sourceMapping": {"from": "/ddb build/source", "to": "/ddb local/source"}
+            }),
+        );
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "verify-source-mapping"},
+                "target": session_target, "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": "python mapping = gdb.execute('show substitute-path', to_string=True); assert '/ddb build/source' in mapping and '/ddb local/source' in mapping"
+            }),
+        );
+        let printer = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/api_value_printer.py");
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "install-test-printer"},
+                "target": session_target, "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": format!("python import runpy; runpy.run_path({})", serde_json::to_string(&printer.to_string_lossy()).unwrap())
+            }),
+        );
+        let (status, pretty) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ListVariables"),
+            &json!({"scopeId": scope_id}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{pretty:?}");
+        let request = pretty["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["name"] == "request")
+            .unwrap();
+        assert_eq!(request["value"], "DDB test request", "{pretty:?}");
+        assert_eq!(request["hasChildren"], true);
+        assert!(
+            request["childCount"].is_null(),
+            "dynamic count is not exact"
+        );
+        let (status, first) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": request["variableId"], "page": {"pageSize": 1}}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{first:?}");
+        assert_eq!(first["variables"].as_array().unwrap().len(), 1);
+        let headers = &first["variables"][0];
+        assert_eq!(headers["hasChildren"], true, "{headers:?}");
+        assert_eq!(headers["presentationHint"], "array", "{headers:?}");
+        assert!(headers["childCount"].is_null(), "{headers:?}");
+        let (status, second) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": request["variableId"], "page": {"pageSize": 1, "pageToken": first["page"]["nextPageToken"]}}), V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{second:?}");
+        assert_eq!(second["variables"][0]["name"], "flags");
+        let (status, nested) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": headers["variableId"]}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{nested:?}");
+        assert_eq!(nested["variables"].as_array().unwrap().len(), 2);
+        let assigned = completed_control(
+            &ddb,
+            "SetVariable",
+            json!({
+                "context": {"idempotencyKey": "assign-pretty-child"}, "target": target,
+                "variableId": nested["variables"][0]["variableId"], "value": "124"
+            }),
+        );
+        assert_eq!(
+            assigned["result"]["variableAssignment"]["value"], "124",
+            "{assigned:?}"
+        );
+    }
 
     // Retain the original evaluation. Expanding it must not execute it again.
     if backend == "gdb" {

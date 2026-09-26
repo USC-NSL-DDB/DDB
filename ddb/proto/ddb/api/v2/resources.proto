@@ -132,6 +132,7 @@ enum OperationKind {
   OPERATION_KIND_EXTENSION_ACTION = 9;
   OPERATION_KIND_SHUTDOWN = 10;
   OPERATION_KIND_SET_VARIABLE = 12;
+  OPERATION_KIND_CONFIGURE_DEBUGGER = 13;
 }
 
 // ScopeKind identifies a conventional variable namespace.

@@ -1035,6 +1035,35 @@
       "successStatus": 200
     },
     {
+      "description": "Applies a session-wide setting without exposing debugger command syntax.",
+      "errorStatuses": [
+        400,
+        401,
+        403,
+        404,
+        409,
+        410,
+        412,
+        429,
+        499,
+        500,
+        501,
+        502,
+        503,
+        504
+      ],
+      "httpMethod": "post",
+      "key": "DebuggerControlService.ConfigureDebugger",
+      "operationId": "DebuggerControlService_ConfigureDebugger",
+      "path": "/api/v2/rpc/ddb.api.v2.DebuggerControlService/ConfigureDebugger",
+      "permission": "control",
+      "protobufMethod": "/ddb.api.v2.DebuggerControlService/ConfigureDebugger",
+      "requestType": ".ddb.api.v2.ConfigureDebuggerRequest",
+      "responseType": ".ddb.api.v2.OperationAdmissionResponse",
+      "serverStreaming": false,
+      "successStatus": 200
+    },
+    {
       "description": "Admits logical/distributed breakpoint creation.",
       "errorStatuses": [
         400,

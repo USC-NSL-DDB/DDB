@@ -125,6 +125,7 @@ class OperationKindValues:
     OPERATION_KIND_EXTENSION_ACTION = "OPERATION_KIND_EXTENSION_ACTION"
     OPERATION_KIND_SHUTDOWN = "OPERATION_KIND_SHUTDOWN"
     OPERATION_KIND_SET_VARIABLE = "OPERATION_KIND_SET_VARIABLE"
+    OPERATION_KIND_CONFIGURE_DEBUGGER = "OPERATION_KIND_CONFIGURE_DEBUGGER"
 
 OperationState: TypeAlias = str
 class OperationStateValues:
@@ -391,6 +392,17 @@ ComponentHealth = TypedDict(
         "component": NotRequired["str"],
         "status": NotRequired["HealthStatus"],
         "detail": NotRequired["str"],
+    },
+)
+
+ConfigureDebuggerRequest = TypedDict(
+    "ConfigureDebuggerRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "target": NotRequired["Target"],
+        "enablePrettyPrinting": NotRequired["Empty"],
+        "sourceMapping": NotRequired["SourcePathMapping"],
+        "preconditions": NotRequired["Preconditions"],
     },
 )
 
@@ -1711,6 +1723,14 @@ SourceLocation = TypedDict(
         "column": NotRequired["int"],
         "address": NotRequired["str"],
         "functionName": NotRequired["str"],
+    },
+)
+
+SourcePathMapping = TypedDict(
+    "SourcePathMapping",
+    {
+        "from": NotRequired["str"],
+        "to": NotRequired["str"],
     },
 )
 
