@@ -14,6 +14,7 @@ pub enum ShutdownCause {
     SigTerm,
     UserExit,
     StdinEof,
+    ParentExited,
     ApiRequest,
     StdinError,
     NoSessions,
@@ -86,6 +87,25 @@ impl ShutdownCtrl {
     /// Returns the cause of shutdown, or `None` if shutdown has not been triggered.
     pub fn cause(&self) -> Option<ShutdownCause> {
         *self.state.lock().unwrap()
+    }
+
+    /// A managed server belongs to its launcher, even if the launcher is killed
+    /// before it can send an API shutdown request or close the debugger sessions.
+    pub async fn wait_for_managed_parent(&self, parent: nix::unistd::Pid) {
+        let mut stop = self.subscribe();
+        loop {
+            if *stop.borrow() {
+                return;
+            }
+            if parent.as_raw() <= 1 || nix::unistd::getppid() != parent {
+                self.trigger_once(ShutdownCause::ParentExited);
+                return;
+            }
+            tokio::select! {
+                _ = stop.changed() => return,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        }
     }
 
     /// Waits for SIGINT or SIGTERM, or returns when another source requests shutdown.

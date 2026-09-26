@@ -40,6 +40,46 @@ import gdb  # type: ignore
 #     print(f"Failed to attach debugger: {e}")
 
 
+class DdbExitPolicy(gdb.Parameter):
+    """Keep the inferior exit policy with GDB when its DDB connection is lost."""
+
+    def __init__(self):
+        super().__init__("ddb-on-exit", gdb.COMMAND_SUPPORT, gdb.PARAM_ENUM,
+                         ["detach", "kill"])
+        self.value = "detach"
+        self.set_doc = "Set whether DDB kills or detaches inferiors when GDB exits."
+        self.show_doc = "Show DDB's inferior exit policy."
+        self.closing = False
+        if hasattr(gdb.events, "gdb_exiting"):
+            gdb.events.gdb_exiting.connect(self.cleanup)
+        else:
+            # Older GDB releases route EOF through quit, but lack the exit event.
+            gdb.execute("define hook-quit\npython ddb_exit_policy.cleanup(None)\nend")
+
+    def get_set_string(self):
+        return ""
+
+    def get_show_string(self, value):
+        return "DDB inferior exit policy is " + value
+
+    def cleanup(self, _event):
+        if self.closing or self.value != "kill":
+            return
+        self.closing = True
+        gdb.execute("set confirm off")
+        for inferior in gdb.inferiors():
+            if not inferior.pid:
+                continue
+            try:
+                gdb.execute("inferior " + str(inferior.num), to_string=True)
+                gdb.execute("kill", to_string=True)
+            except gdb.error as error:
+                gdb.write("DDB could not kill inferior on exit: " + str(error) + "\n", gdb.STDERR)
+
+
+ddb_exit_policy = DdbExitPolicy()
+
+
 class LogLevel(Enum):
     ERROR = "ERROR"
     WARNING = "WARNING"

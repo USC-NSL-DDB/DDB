@@ -41,6 +41,7 @@ pub(crate) struct RuntimeConstructionOptions {
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeRunOptions {
     pub interactive: bool,
+    pub managed_parent: Option<nix::unistd::Pid>,
     pub command_workers: usize,
     pub startup_reporter: Option<StartupReporter>,
     pub remove_auth_token_after_load: bool,
@@ -219,6 +220,13 @@ impl ApplicationRuntime {
             tasks.spawn(async move {
                 shutdown.wait_for_signal().await;
                 ("signal-handler", Ok(()))
+            });
+        }
+        if let Some(parent) = options.managed_parent {
+            let shutdown = Arc::clone(shutdown);
+            tasks.spawn(async move {
+                shutdown.wait_for_managed_parent(parent).await;
+                ("managed-parent", Ok(()))
             });
         }
         if options.interactive {

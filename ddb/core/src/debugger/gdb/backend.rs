@@ -58,6 +58,15 @@ impl GdbBackend {
             "source {}",
             CORE_GDB_RUNTIME_ASSET.output_path().to_string_lossy()
         )));
+        // GDB must retain the policy if DDB dies before sending shutdown commands.
+        builder.add(GdbCmd::ConsoleExec(format!(
+            "set ddb-on-exit {}",
+            match session.on_exit {
+                OnExit::KILL => "kill",
+                OnExit::DETACH => "detach",
+            }
+        )));
+
         if plugin_bootstrap.requires_proclet_runtime {
             builder.add(GdbCmd::ConsoleExec(format!(
                 "source {}",

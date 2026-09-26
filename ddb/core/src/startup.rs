@@ -27,6 +27,7 @@ pub(crate) struct BackendStartup {
     pub allow_ephemeral_api_port: bool,
     pub preflight_debugger: bool,
     pub remove_auth_token_after_load: bool,
+    pub managed_parent: Option<nix::unistd::Pid>,
     pub reporter: Option<StartupReporter>,
 }
 
@@ -38,6 +39,7 @@ impl BackendStartup {
             allow_ephemeral_api_port: false,
             preflight_debugger: false,
             remove_auth_token_after_load: false,
+            managed_parent: None,
             reporter: None,
         }
     }
@@ -87,6 +89,7 @@ impl BackendStartup {
             interactive: false,
             preflight_debugger: true,
             remove_auth_token_after_load: args.managed,
+            managed_parent: args.managed.then(nix::unistd::getppid),
             reporter,
         })
     }

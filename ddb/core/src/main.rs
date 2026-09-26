@@ -178,6 +178,7 @@ async fn run_backend_inner(
     let run_result = runtime
         .run_with_options(RuntimeRunOptions {
             interactive: startup.interactive,
+            managed_parent: startup.managed_parent,
             command_workers,
             remove_auth_token_after_load: startup.remove_auth_token_after_load,
             startup_reporter: startup.reporter,

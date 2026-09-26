@@ -72,8 +72,43 @@ The VSIX SHA-256 is
 `1f187b882c097b1fa51f84e50f5546e89739f3b446b8eb96e3bf05c2070191cd`.
 
 Real runtime coverage uses GDB. LLDB bridge checks pass, but no LLDB runtime is
-installed. Distributed adapter behavior uses the existing DDB mock topology.
+installed. This initial validation used the existing DDB mock topology for distributed stacks.
 
 Reuse the existing operation admission, authentication, idempotency, frame guards,
 and generated contract machinery. Extend existing integration scenarios where
 possible instead of introducing duplicate test harnesses.
+
+## Greeter manual-testing regressions
+
+Follow-up work stays on the same backend and adapter branches. The test
+application is the instrumented gRPC helloworld client and server in
+`/mnt/home/ybyan/codebase/grpc/examples/cpp/helloworld`.
+
+GDB now retains `Conf.on_exit` as the `ddb-on-exit` setting. If DDB exits before
+sending cleanup commands, command-stream EOF still applies the configured kill
+or detach policy. The Python regression attaches real GDB to a disposable
+process and covers both policies while stopped and running:
+
+```sh
+python3 ddb/core/tests/gdb_exit_policy.py
+```
+
+A managed DDB server also observes its launcher's lifetime and requests graceful
+shutdown when the launcher exits. The managed-serve integration test kills a
+launcher and verifies its DDB child exits. Unmanaged API servers keep their
+existing lifetime.
+
+The adapter follow-up fixes lazy source retrieval, breakpoint ownership and
+focus, and distributed caller inspection after traversal interrupts the caller.
+Its opt-in greeter extension-host test checks client and server breakpoint
+highlighting, rendered caller-frame selection, local and caller variables,
+breakpoint-panel source navigation, and inferior cleanup. Direct greeter tests
+also verify cleanup after SIGTERM and SIGKILL of DDB. First-stack requests in
+that fixture fell from 4.1–4.9 seconds to 25–73 milliseconds after source lookup
+moved out of stack rendering. These timings describe this local test setup.
+
+Backend validation for this follow-up: 322 core tests passed, one ignored;
+eight managed-serve tests passed; both real GDB API tests passed; all four GDB
+EOF/policy combinations passed. No SDK or protocol changes were required.
+The latest VSIX hash, commits and packaged test results are in the adapter's
+`ddb-native-api-validation.txt` receipt.

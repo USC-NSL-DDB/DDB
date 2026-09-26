@@ -445,3 +445,57 @@ fn wait_for_exit(child: &mut Child) -> ExitStatus {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn managed_server_shuts_down_when_its_launcher_exits() {
+    let directory = tempfile::tempdir().unwrap();
+    let token_path = directory.path().join("tokens.json");
+    let config_path = directory.path().join("ddb.yaml");
+    let report_path = directory.path().join("startup.json");
+    write_tokens(&token_path);
+    fs::write(&config_path, format!(
+        "Framework: unspecified\nConf:\n  auto_shutdown: false\n  base_dir: {:?}\n  log_dir: {:?}\n  Debugger:\n    backend: mock\n",
+        directory.path().join("state"), directory.path().join("logs")
+    )).unwrap();
+    let mut launcher = Command::new("sh")
+        .args(["-c", "\"$@\" & wait", "ddb-test-launcher"])
+        .arg(env!("CARGO_BIN_EXE_ddb"))
+        .arg("serve")
+        .arg(&config_path)
+        .arg("--managed")
+        .arg("--api-auth-token-file")
+        .arg(&token_path)
+        .arg("--startup-report")
+        .arg(&report_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let report = wait_for_report(&report_path, &mut launcher);
+    let pid = report["pid"].as_u64().unwrap() as i32;
+    launcher.kill().unwrap();
+    launcher.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let alive = fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(") ")
+                    .map(|(_, rest)| !rest.starts_with('Z'))
+            })
+            .unwrap_or(false);
+        if !alive {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            panic!("managed DDB {pid} survived its launcher");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
