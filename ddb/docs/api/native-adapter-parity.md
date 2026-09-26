@@ -30,7 +30,7 @@ just send those commands through a different transport.
   inexact child count. Explicitly empty values remain non-expandable. A focused
   decoder-to-projection regression covers dynamic and static metadata, following
   [GDB's variable-object contract](https://www.sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-Variable-Objects.html).
-  Root metadata enrichment remains unfinished.
+  Root metadata enrichment now inspects only the requested local page.
 - Framed WATCH/HOVER evaluations return retained, expandable identities and typed
   metadata. The real GDB scenario checks a side-effecting expression runs once
   across repeated expansion, then verifies expiration after stepping. A focused
@@ -40,17 +40,20 @@ just send those commands through a different transport.
 - The full real-backend test attempt passed both GDB scenarios. Its LLDB scenario
   could not run because `lldb` is not installed.
 
+- SetVariable assigns nested local children and retained watch children through
+  their opaque identities. The real GDB scenario verifies the resulting memory
+  values, read-only rejection, idempotent replay and stale-handle rejection.
+  The existing ownership test now checks assignment rejects other sessions and
+  threads before dispatch. The LLDB bridge uses SBValue.SetValueFromCString,
+  covered by a focused success/rejection test; runtime LLDB remains unavailable.
+
 ## Remaining work
 
-1. Complete root variable metadata and dynamic/container expansion coverage.
-   Evaluation handles now live in DDB; local listing still needs complete root
-   metadata so the adapter can remove its inspection fallback.
-2. Add typed variable assignment, including children without a standalone
-   assignable expression.
-3. Add typed pretty-printer and source-mapping settings.
-4. Update Rust, TypeScript and Python client/generated contracts as applicable,
-   with focused tests of the changed requests and results.
-5. Replace the adapter's raw-variable implementation and MI console/setup command
+1. Finish dynamic/container coverage with a real pretty-printer once typed settings
+   are available. Local metadata and typed assignment are implemented.
+2. Add typed pretty-printer and source-mapping settings, with corresponding SDK
+   contracts and focused validation.
+3. Replace the adapter's raw-variable implementation and MI console/setup command
    construction. Verify real GDB inspection, assignment, caller-frame console,
    configuration, lifecycle cleanup and the packaged VS Code extension.
 

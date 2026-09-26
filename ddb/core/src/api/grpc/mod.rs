@@ -316,6 +316,7 @@ implement_grpc_api! {
         execute: v2::ExecuteRequest,
         select_thread: v2::SelectThreadRequest,
         evaluate: v2::EvaluateRequest,
+        set_variable: v2::SetVariableRequest,
         create_breakpoint: v2::CreateBreakpointRequest,
         update_breakpoint: v2::UpdateBreakpointRequest,
         delete_breakpoint: v2::DeleteBreakpointRequest,

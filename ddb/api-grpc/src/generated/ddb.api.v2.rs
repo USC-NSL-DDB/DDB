@@ -2697,6 +2697,33 @@ pub mod debugger_control_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Assigns a variable by its stopped identity rather than its display expression.
+        pub async fn set_variable(
+            &mut self,
+            request: impl tonic::IntoRequest<::ddb_api_types::v2::SetVariableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerControlService/SetVariable",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("ddb.api.v2.DebuggerControlService", "SetVariable"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Admits logical/distributed breakpoint creation.
         pub async fn create_breakpoint(
             &mut self,
@@ -2954,6 +2981,14 @@ pub mod debugger_control_service_server {
         async fn evaluate(
             &self,
             request: tonic::Request<::ddb_api_types::v2::EvaluateRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
+            tonic::Status,
+        >;
+        /// Assigns a variable by its stopped identity rather than its display expression.
+        async fn set_variable(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::SetVariableRequest>,
         ) -> std::result::Result<
             tonic::Response<::ddb_api_types::v2::OperationAdmissionResponse>,
             tonic::Status,
@@ -3222,6 +3257,55 @@ pub mod debugger_control_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = EvaluateSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerControlService/SetVariable" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetVariableSvc<T: DebuggerControlService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerControlService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::SetVariableRequest,
+                    > for SetVariableSvc<T> {
+                        type Response = ::ddb_api_types::v2::OperationAdmissionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::SetVariableRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerControlService>::set_variable(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetVariableSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

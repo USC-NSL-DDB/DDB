@@ -131,6 +131,7 @@ enum OperationKind {
   OPERATION_KIND_DISTRIBUTED_BACKTRACE = 8;
   OPERATION_KIND_EXTENSION_ACTION = 9;
   OPERATION_KIND_SHUTDOWN = 10;
+  OPERATION_KIND_SET_VARIABLE = 12;
 }
 
 // ScopeKind identifies a conventional variable namespace.
@@ -748,6 +749,14 @@ message EvaluationResult {
   optional string presentation_hint = 8;
 }
 
+// VariableAssignmentResult reports the assigned value in backend display form.
+message VariableAssignmentResult {
+  // The assigned stopped identity, still subject to execution lifetime checks.
+  string variable_id = 1;
+  // Backend-rendered value after assignment.
+  string value = 2;
+}
+
 // RawCommandResult is the bounded compatibility escape hatch result.
 message RawCommandResult {
   // Backend-neutral decoded result tree.
@@ -811,6 +820,7 @@ message OperationResult {
     DistributedBacktraceResult distributed_backtrace = 6;
     InvokeExtensionActionResult extension_action = 7;
     Empty no_content = 8;
+    VariableAssignmentResult variable_assignment = 9;
   }
 }
 

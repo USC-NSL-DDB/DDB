@@ -870,6 +870,12 @@ impl DdbClient {
     );
     mutation_method!(evaluate, v2::EvaluateRequest, CONTROL_SERVICE, "Evaluate");
     mutation_method!(
+        set_variable,
+        v2::SetVariableRequest,
+        CONTROL_SERVICE,
+        "SetVariable"
+    );
+    mutation_method!(
         create_breakpoint,
         v2::CreateBreakpointRequest,
         CONTROL_SERVICE,

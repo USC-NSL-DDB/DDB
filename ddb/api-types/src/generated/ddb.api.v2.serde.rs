@@ -16269,6 +16269,7 @@ impl serde::Serialize for OperationKind {
             Self::DistributedBacktrace => "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
             Self::ExtensionAction => "OPERATION_KIND_EXTENSION_ACTION",
             Self::Shutdown => "OPERATION_KIND_SHUTDOWN",
+            Self::SetVariable => "OPERATION_KIND_SET_VARIABLE",
         };
         serializer.serialize_str(variant)
     }
@@ -16291,6 +16292,7 @@ impl<'de> serde::Deserialize<'de> for OperationKind {
             "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
             "OPERATION_KIND_EXTENSION_ACTION",
             "OPERATION_KIND_SHUTDOWN",
+            "OPERATION_KIND_SET_VARIABLE",
         ];
 
         struct GeneratedVisitor;
@@ -16342,6 +16344,7 @@ impl<'de> serde::Deserialize<'de> for OperationKind {
                     "OPERATION_KIND_DISTRIBUTED_BACKTRACE" => Ok(OperationKind::DistributedBacktrace),
                     "OPERATION_KIND_EXTENSION_ACTION" => Ok(OperationKind::ExtensionAction),
                     "OPERATION_KIND_SHUTDOWN" => Ok(OperationKind::Shutdown),
+                    "OPERATION_KIND_SET_VARIABLE" => Ok(OperationKind::SetVariable),
                     _ => Ok(OperationKind::default()),
                 }
             }
@@ -16387,6 +16390,9 @@ impl serde::Serialize for OperationResult {
                 operation_result::Value::NoContent(v) => {
                     struct_ser.serialize_field("noContent", v)?;
                 }
+                operation_result::Value::VariableAssignment(v) => {
+                    struct_ser.serialize_field("variableAssignment", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16411,6 +16417,8 @@ impl<'de> serde::Deserialize<'de> for OperationResult {
             "extensionAction",
             "no_content",
             "noContent",
+            "variable_assignment",
+            "variableAssignment",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16423,6 +16431,7 @@ impl<'de> serde::Deserialize<'de> for OperationResult {
             DistributedBacktrace,
             ExtensionAction,
             NoContent,
+            VariableAssignment,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -16453,6 +16462,7 @@ impl<'de> serde::Deserialize<'de> for OperationResult {
                             "distributedBacktrace" | "distributed_backtrace" => Ok(GeneratedField::DistributedBacktrace),
                             "extensionAction" | "extension_action" => Ok(GeneratedField::ExtensionAction),
                             "noContent" | "no_content" => Ok(GeneratedField::NoContent),
+                            "variableAssignment" | "variable_assignment" => Ok(GeneratedField::VariableAssignment),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -16529,6 +16539,13 @@ impl<'de> serde::Deserialize<'de> for OperationResult {
                                 return Err(serde::de::Error::duplicate_field("noContent"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(operation_result::Value::NoContent)
+;
+                        }
+                        GeneratedField::VariableAssignment => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("variableAssignment"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(operation_result::Value::VariableAssignment)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -21800,6 +21817,170 @@ impl<'de> serde::Deserialize<'de> for SessionTarget {
         deserializer.deserialize_struct("ddb.api.v2.SessionTarget", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for SetVariableRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.context.is_some() {
+            len += 1;
+        }
+        if self.target.is_some() {
+            len += 1;
+        }
+        if !self.variable_id.is_empty() {
+            len += 1;
+        }
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        if self.preconditions.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.SetVariableRequest", len)?;
+        if let Some(v) = self.context.as_ref() {
+            struct_ser.serialize_field("context", v)?;
+        }
+        if let Some(v) = self.target.as_ref() {
+            struct_ser.serialize_field("target", v)?;
+        }
+        if !self.variable_id.is_empty() {
+            struct_ser.serialize_field("variableId", &self.variable_id)?;
+        }
+        if !self.value.is_empty() {
+            struct_ser.serialize_field("value", &self.value)?;
+        }
+        if let Some(v) = self.preconditions.as_ref() {
+            struct_ser.serialize_field("preconditions", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SetVariableRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "context",
+            "target",
+            "variable_id",
+            "variableId",
+            "value",
+            "preconditions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Context,
+            Target,
+            VariableId,
+            Value,
+            Preconditions,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "context" => Ok(GeneratedField::Context),
+                            "target" => Ok(GeneratedField::Target),
+                            "variableId" | "variable_id" => Ok(GeneratedField::VariableId),
+                            "value" => Ok(GeneratedField::Value),
+                            "preconditions" => Ok(GeneratedField::Preconditions),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SetVariableRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.SetVariableRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SetVariableRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut context__ = None;
+                let mut target__ = None;
+                let mut variable_id__ = None;
+                let mut value__ = None;
+                let mut preconditions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Context => {
+                            if context__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("context"));
+                            }
+                            context__ = map_.next_value()?;
+                        }
+                        GeneratedField::Target => {
+                            if target__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("target"));
+                            }
+                            target__ = map_.next_value()?;
+                        }
+                        GeneratedField::VariableId => {
+                            if variable_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("variableId"));
+                            }
+                            variable_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Preconditions => {
+                            if preconditions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preconditions"));
+                            }
+                            preconditions__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(SetVariableRequest {
+                    context: context__,
+                    target: target__,
+                    variable_id: variable_id__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                    preconditions: preconditions__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.SetVariableRequest", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ShutdownRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -26132,6 +26313,119 @@ impl<'de> serde::Deserialize<'de> for Variable {
             }
         }
         deserializer.deserialize_struct("ddb.api.v2.Variable", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VariableAssignmentResult {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.variable_id.is_empty() {
+            len += 1;
+        }
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.VariableAssignmentResult", len)?;
+        if !self.variable_id.is_empty() {
+            struct_ser.serialize_field("variableId", &self.variable_id)?;
+        }
+        if !self.value.is_empty() {
+            struct_ser.serialize_field("value", &self.value)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VariableAssignmentResult {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "variable_id",
+            "variableId",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            VariableId,
+            Value,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "variableId" | "variable_id" => Ok(GeneratedField::VariableId),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VariableAssignmentResult;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.VariableAssignmentResult")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VariableAssignmentResult, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut variable_id__ = None;
+                let mut value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::VariableId => {
+                            if variable_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("variableId"));
+                            }
+                            variable_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(VariableAssignmentResult {
+                    variable_id: variable_id__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.VariableAssignmentResult", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for WireEncoding {

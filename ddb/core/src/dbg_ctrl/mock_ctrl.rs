@@ -932,6 +932,16 @@ impl MockAttachController {
                 .into();
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
+            "-var-assign" => {
+                let arguments = serde_json::Deserializer::from_str(&args)
+                    .into_iter::<String>()
+                    .collect::<serde_json::Result<Vec<_>>>()?;
+                let [_, value] = arguments.as_slice() else {
+                    bail!("mock var-assign requires a name and value");
+                };
+                let payload: Dict = vec![("value".to_string(), value.as_str().into())].into();
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
             "-var-delete" => {
                 Self::send_result(&out_tx, token, "done", None).await?;
             }

@@ -678,6 +678,12 @@ v2_async_principal_handler!(
     evaluate
 );
 v2_async_principal_handler!(
+    v2_set_variable,
+    v2::SetVariableRequest,
+    v2::OperationAdmissionResponse,
+    set_variable
+);
+v2_async_principal_handler!(
     v2_create_breakpoint,
     v2::CreateBreakpointRequest,
     v2::OperationAdmissionResponse,

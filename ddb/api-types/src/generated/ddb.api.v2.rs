@@ -1594,6 +1594,16 @@ pub struct EvaluationResult {
     #[prost(string, optional, tag = "8")]
     pub presentation_hint: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// VariableAssignmentResult reports the assigned value in backend display form.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct VariableAssignmentResult {
+    /// The assigned stopped identity, still subject to execution lifetime checks.
+    #[prost(string, tag = "1")]
+    pub variable_id: ::prost::alloc::string::String,
+    /// Backend-rendered value after assignment.
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
 /// RawCommandResult is the bounded compatibility escape hatch result.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RawCommandResult {
@@ -1661,7 +1671,7 @@ pub struct TargetOutcome {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OperationResult {
     /// Result form selected by the operation kind.
-    #[prost(oneof = "operation_result::Value", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
+    #[prost(oneof = "operation_result::Value", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9")]
     pub value: ::core::option::Option<operation_result::Value>,
 }
 /// Nested message and enum types in `OperationResult`.
@@ -1685,6 +1695,8 @@ pub mod operation_result {
         ExtensionAction(super::InvokeExtensionActionResult),
         #[prost(message, tag = "8")]
         NoContent(super::Empty),
+        #[prost(message, tag = "9")]
+        VariableAssignment(super::VariableAssignmentResult),
     }
 }
 /// Operation is a bounded, expiring record for one admitted mutation.
@@ -2207,6 +2219,7 @@ pub enum OperationKind {
     DistributedBacktrace = 8,
     ExtensionAction = 9,
     Shutdown = 10,
+    SetVariable = 12,
 }
 impl OperationKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2226,6 +2239,7 @@ impl OperationKind {
             Self::DistributedBacktrace => "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
             Self::ExtensionAction => "OPERATION_KIND_EXTENSION_ACTION",
             Self::Shutdown => "OPERATION_KIND_SHUTDOWN",
+            Self::SetVariable => "OPERATION_KIND_SET_VARIABLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2242,6 +2256,7 @@ impl OperationKind {
             "OPERATION_KIND_DISTRIBUTED_BACKTRACE" => Some(Self::DistributedBacktrace),
             "OPERATION_KIND_EXTENSION_ACTION" => Some(Self::ExtensionAction),
             "OPERATION_KIND_SHUTDOWN" => Some(Self::Shutdown),
+            "OPERATION_KIND_SET_VARIABLE" => Some(Self::SetVariable),
             _ => None,
         }
     }
@@ -3264,6 +3279,25 @@ pub struct EvaluateRequest {
     pub evaluation_context: i32,
     /// Optional optimistic mutation guards.
     #[prost(message, optional, tag = "6")]
+    pub preconditions: ::core::option::Option<Preconditions>,
+}
+/// SetVariableRequest assigns a stopped variable, including synthetic children.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetVariableRequest {
+    /// Mutation controls; idempotency_key and CONTROL are required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Must own the variable's stopped frame.
+    #[prost(message, optional, tag = "2")]
+    pub target: ::core::option::Option<Target>,
+    /// Identity returned by ListVariables, ExpandVariable or Evaluate.
+    #[prost(string, tag = "3")]
+    pub variable_id: ::prost::alloc::string::String,
+    /// New value in backend assignment syntax; excluded from retained requests/logs.
+    #[prost(string, tag = "4")]
+    pub value: ::prost::alloc::string::String,
+    /// Optional optimistic mutation guards.
+    #[prost(message, optional, tag = "5")]
     pub preconditions: ::core::option::Option<Preconditions>,
 }
 /// CreateBreakpointRequest admits creation of a logical/distributed breakpoint.

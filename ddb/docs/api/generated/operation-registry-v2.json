@@ -1006,6 +1006,35 @@
       "successStatus": 200
     },
     {
+      "description": "Assigns a variable by its stopped identity rather than its display expression.",
+      "errorStatuses": [
+        400,
+        401,
+        403,
+        404,
+        409,
+        410,
+        412,
+        429,
+        499,
+        500,
+        501,
+        502,
+        503,
+        504
+      ],
+      "httpMethod": "post",
+      "key": "DebuggerControlService.SetVariable",
+      "operationId": "DebuggerControlService_SetVariable",
+      "path": "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SetVariable",
+      "permission": "control",
+      "protobufMethod": "/ddb.api.v2.DebuggerControlService/SetVariable",
+      "requestType": ".ddb.api.v2.SetVariableRequest",
+      "responseType": ".ddb.api.v2.OperationAdmissionResponse",
+      "serverStreaming": false,
+      "successStatus": 200
+    },
+    {
       "description": "Admits logical/distributed breakpoint creation.",
       "errorStatuses": [
         400,

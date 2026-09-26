@@ -8,6 +8,15 @@ public API belong in the project release notes.
 
 ### Added
 
+- `SetVariable` assigns locals and retained evaluation children by opaque variable
+  identity, including children without an assignable display expression. It uses
+  control authorization, target/frame ownership, stop lifetime and idempotent
+  operation admission. HTTP, gRPC and the Rust/TypeScript/Python clients expose
+  the typed request and assignment result.
+- Local variable pages now include backend-derived type, child and display-hint
+  metadata when stack listings omit child counts. Temporary inspection roots use
+  the same bounded cleanup ownership as expansion.
+
 - Framed WATCH/HOVER evaluations retain a stopped value and return its opaque
   variable identity, expandability, optional exact child count and display hint.
   Expansion reuses the evaluated value without executing the expression again.

@@ -2440,7 +2440,8 @@
           "OPERATION_KIND_RAW_COMMAND",
           "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
           "OPERATION_KIND_EXTENSION_ACTION",
-          "OPERATION_KIND_SHUTDOWN"
+          "OPERATION_KIND_SHUTDOWN",
+          "OPERATION_KIND_SET_VARIABLE"
         ]
       },
       "OperationResult": {
@@ -2469,6 +2470,9 @@
           },
           "selection": {
             "$ref": "#/components/schemas/Selection"
+          },
+          "variableAssignment": {
+            "$ref": "#/components/schemas/VariableAssignmentResult"
           }
         },
         "type": "object",
@@ -2481,7 +2485,8 @@
             "rawCommand",
             "distributedBacktrace",
             "extensionAction",
-            "noContent"
+            "noContent",
+            "variableAssignment"
           ]
         }
       },
@@ -3216,6 +3221,27 @@
         },
         "type": "object"
       },
+      "SetVariableRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "preconditions": {
+            "$ref": "#/components/schemas/Preconditions"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "value": {
+            "type": "string"
+          },
+          "variableId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ShutdownRequest": {
         "additionalProperties": true,
         "properties": {
@@ -3887,6 +3913,18 @@
           "typeName": {
             "type": "string"
           },
+          "value": {
+            "type": "string"
+          },
+          "variableId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VariableAssignmentResult": {
+        "additionalProperties": true,
+        "properties": {
           "value": {
             "type": "string"
           },
@@ -5085,6 +5123,89 @@
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/SelectThread",
         "x-ddb-registry-key": "DebuggerControlService.SelectThread",
+        "x-ddb-required-scope": "control"
+      }
+    },
+    "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SetVariable": {
+      "post": {
+        "description": "Assigns a variable by its stopped identity rather than its display expression.",
+        "operationId": "DebuggerControlService_SetVariable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/SetVariableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAdmissionResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "$ref": "#/components/responses/DdbError400"
+          },
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Assigns a variable by its stopped identity rather than its display expression.",
+        "tags": [
+          "DebuggerControlService"
+        ],
+        "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerControlService/SetVariable",
+        "x-ddb-registry-key": "DebuggerControlService.SetVariable",
         "x-ddb-required-scope": "control"
       }
     },

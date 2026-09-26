@@ -129,6 +129,7 @@ export const OperationKindValues = {
   OPERATION_KIND_DISTRIBUTED_BACKTRACE: "OPERATION_KIND_DISTRIBUTED_BACKTRACE",
   OPERATION_KIND_EXTENSION_ACTION: "OPERATION_KIND_EXTENSION_ACTION",
   OPERATION_KIND_SHUTDOWN: "OPERATION_KIND_SHUTDOWN",
+  OPERATION_KIND_SET_VARIABLE: "OPERATION_KIND_SET_VARIABLE",
 } as const;
 export type OperationKind = (typeof OperationKindValues)[keyof typeof OperationKindValues] | (string & {});
 
@@ -1016,6 +1017,7 @@ export interface OperationResult {
   "distributedBacktrace"?: DistributedBacktraceResult;
   "extensionAction"?: InvokeExtensionActionResult;
   "noContent"?: Empty;
+  "variableAssignment"?: VariableAssignmentResult;
 }
 
 export interface OperationTarget {
@@ -1232,6 +1234,14 @@ export interface SessionTarget {
   "sessionId"?: string;
 }
 
+export interface SetVariableRequest {
+  "context"?: RequestContext;
+  "target"?: Target;
+  "variableId"?: string;
+  "value"?: string;
+  "preconditions"?: Preconditions;
+}
+
 export interface ShutdownRequest {
   "context"?: RequestContext;
   "target"?: Target;
@@ -1416,4 +1426,9 @@ export interface Variable {
   "evaluateName"?: string;
   "address"?: string;
   "presentationHint"?: string;
+}
+
+export interface VariableAssignmentResult {
+  "variableId"?: string;
+  "value"?: string;
 }

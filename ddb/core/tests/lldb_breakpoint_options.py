@@ -87,5 +87,25 @@ class NativeConsoleOptionsTest(unittest.TestCase):
         self.assertEqual((status, payload), ("done", {"output": "value = 42\n"}))
 
 
+class VariableAssignmentTest(unittest.TestCase):
+    def test_assigns_stored_child_and_reports_backend_rejection(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        child = Mock()
+        child.IsValid.return_value = True
+        child.SetValueFromCString.return_value = True
+        child.GetValue.return_value = "17"
+        child.GetSummary.return_value = None
+        bridge.variable_objects = {"root.0": child}
+        error = Mock()
+        error.GetCString.return_value = "value is read-only"
+        with patch.object(bridge_module.lldb, "SBError", return_value=error, create=True):
+            result, payload = bridge._var_assign(["root.0", "17"])
+            self.assertEqual((result, payload), ("done", {"value": "17"}))
+            child.SetValueFromCString.assert_called_once_with("17", error)
+            child.SetValueFromCString.return_value = False
+            with self.assertRaisesRegex(RuntimeError, "read-only"):
+                bridge._var_assign(["root.0", "18"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -626,6 +626,7 @@ class Bridge(object):
             "-var-create": self._var_create,
             "-var-list-children": self._var_list_children,
             "-var-delete": self._var_delete,
+            "-var-assign": self._var_assign,
             "-data-evaluate-expression": self._evaluate_expression,
             "-data-read-memory-bytes": self._read_memory_bytes,
             "-file-list-exec-source-files": self._source_files,
@@ -1155,6 +1156,17 @@ class Bridge(object):
             "children": children,
             "has_more": "1" if end < count else "0",
         }
+
+    def _var_assign(self, arguments):
+        if len(arguments) != 2:
+            raise ValueError("-var-assign requires a variable-object name and value")
+        value = self.variable_objects.get(arguments[0])
+        if value is None or not value.IsValid():
+            raise ValueError("unknown variable object {}".format(arguments[0]))
+        error = lldb.SBError()
+        if not value.SetValueFromCString(arguments[1], error):
+            raise RuntimeError(_error_text(error) or "LLDB variable assignment failed")
+        return "done", {"value": _value_text(value)}
 
     def _var_delete(self, arguments):
         if len(arguments) != 1:

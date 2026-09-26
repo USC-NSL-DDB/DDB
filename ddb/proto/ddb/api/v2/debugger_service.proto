@@ -599,6 +599,20 @@ message EvaluateRequest {
   optional Preconditions preconditions = 6;
 }
 
+// SetVariableRequest assigns a stopped variable, including synthetic children.
+message SetVariableRequest {
+  // Mutation controls; idempotency_key and CONTROL are required.
+  RequestContext context = 1;
+  // Must own the variable's stopped frame.
+  Target target = 2;
+  // Identity returned by ListVariables, ExpandVariable or Evaluate.
+  string variable_id = 3;
+  // New value in backend assignment syntax; excluded from retained requests/logs.
+  string value = 4;
+  // Optional optimistic mutation guards.
+  optional Preconditions preconditions = 5;
+}
+
 // CreateBreakpointRequest admits creation of a logical/distributed breakpoint.
 message CreateBreakpointRequest {
   // Mutation controls; idempotency_key is required and CONTROL is required.
@@ -800,6 +814,8 @@ service DebuggerControlService {
   rpc SelectThread(SelectThreadRequest) returns (OperationAdmissionResponse);
   // Admits expression evaluation.
   rpc Evaluate(EvaluateRequest) returns (OperationAdmissionResponse);
+  // Assigns a variable by its stopped identity rather than its display expression.
+  rpc SetVariable(SetVariableRequest) returns (OperationAdmissionResponse);
   // Admits logical/distributed breakpoint creation.
   rpc CreateBreakpoint(CreateBreakpointRequest) returns (OperationAdmissionResponse);
   // Admits a field-masked breakpoint update.

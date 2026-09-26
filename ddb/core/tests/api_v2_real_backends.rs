@@ -279,6 +279,27 @@ fn assert_typed_inspection_on_backend(backend: &str) {
                 .find(|variable| variable["name"] == "request")
         })
         .expect("request aggregate should be visible");
+    assert_eq!(
+        request_variable["hasChildren"], true,
+        "{request_variable:?}"
+    );
+    assert!(
+        request_variable["typeName"]
+            .as_str()
+            .is_some_and(|name| name.contains("DebugRequest")),
+        "{request_variable:?}"
+    );
+    let counter = variables["variables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["name"] == "counter")
+        .unwrap();
+    assert!(
+        !counter["hasChildren"].as_bool().unwrap_or(false),
+        "{counter:?}"
+    );
+    assert_eq!(counter["childCount"], "0", "{counter:?}");
     let request_variable_id = request_variable["variableId"]
         .as_str()
         .expect("variable id should be present");
@@ -291,6 +312,56 @@ fn assert_typed_inspection_on_backend(backend: &str) {
     assert!(children["variables"]
         .as_array()
         .is_some_and(|children| children.len() >= 2));
+
+    let headers = children["variables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["name"] == "headers")
+        .unwrap();
+    let (status, entries) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ExpandVariable"),
+        &json!({"variableId": headers["variableId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{entries:?}");
+    let entry = &entries["variables"][0];
+    assert!(
+        entry["evaluateName"].is_null(),
+        "test must exercise a child without an expression"
+    );
+    let assignment_request = json!({
+        "context": {"idempotencyKey": "assign-nested-local"},
+        "target": target,
+        "variableId": entry["variableId"],
+        "value": "123"
+    });
+    let (status, forbidden) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerControlService", "SetVariable"),
+        &assignment_request,
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden:?}");
+    let assigned = completed_control(&ddb, "SetVariable", assignment_request.clone());
+    assert_eq!(
+        assigned["result"]["variableAssignment"]["value"], "123",
+        "{assigned:?}"
+    );
+    let replay = completed_control(&ddb, "SetVariable", assignment_request);
+    assert_eq!(replay["operationId"], assigned["operationId"]);
+    let observed = completed_control(
+        &ddb,
+        "Evaluate",
+        json!({
+            "context": {"idempotencyKey": "verify-nested-local"},
+            "target": target, "frameId": frame_id,
+            "expression": "request.headers[0]", "evaluationContext": "EVALUATION_CONTEXT_REPL"
+        }),
+    );
+    assert_eq!(
+        observed["result"]["evaluation"]["value"], "123",
+        "{observed:?}"
+    );
 
     // Retain the original evaluation. Expanding it must not execute it again.
     if backend == "gdb" {
@@ -323,6 +394,7 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         retained["result"]["evaluation"]["hasChildren"], true,
         "{retained:?}"
     );
+    let mut retained_child = None;
     for _ in 0..2 {
         let (status, expanded) = ddb.api_post_json_with_bearer(
             &rpc("DebuggerService", "ExpandVariable"),
@@ -330,6 +402,12 @@ fn assert_typed_inspection_on_backend(backend: &str) {
             V2_TEST_READ_TOKEN,
         );
         assert_eq!(status, StatusCode::OK, "{expanded:?}");
+        retained_child = expanded["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|child| child["name"] == "flags")
+            .map(|child| child["variableId"].clone());
         assert!(
             expanded["variables"]
                 .as_array()
@@ -337,6 +415,31 @@ fn assert_typed_inspection_on_backend(backend: &str) {
             "{expanded:?}"
         );
     }
+    let assigned = completed_control(
+        &ddb,
+        "SetVariable",
+        json!({
+            "context": {"idempotencyKey": "assign-retained-child"},
+            "target": target, "variableId": retained_child.unwrap(), "value": "7"
+        }),
+    );
+    assert_eq!(
+        assigned["result"]["variableAssignment"]["value"], "7",
+        "{assigned:?}"
+    );
+    let observed = completed_control(
+        &ddb,
+        "Evaluate",
+        json!({
+            "context": {"idempotencyKey": "verify-retained-child"},
+            "target": target, "frameId": frame_id,
+            "expression": "request.flags", "evaluationContext": "EVALUATION_CONTEXT_REPL"
+        }),
+    );
+    assert_eq!(
+        observed["result"]["evaluation"]["value"], "7",
+        "{observed:?}"
+    );
     if backend == "gdb" {
         let count = completed_control(
             &ddb,
@@ -717,6 +820,13 @@ fn assert_typed_inspection_on_backend(backend: &str) {
             &rpc("DebuggerService", "ExpandVariable"),
             &json!({"variableId": retained_id}),
             V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::GONE, "{expired:?}");
+        let (status, expired) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerControlService", "SetVariable"),
+            &json!({"context": {"idempotencyKey": "assign-expired"}, "target": target,
+                "variableId": retained_id, "value": "8"}),
+            V2_TEST_CONTROL_TOKEN,
         );
         assert_eq!(status, StatusCode::GONE, "{expired:?}");
     }

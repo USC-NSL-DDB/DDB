@@ -35,6 +35,7 @@ export interface MethodMap {
   "DebuggerControlService.Execute": { request: t.ExecuteRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
   "DebuggerControlService.SelectThread": { request: t.SelectThreadRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
   "DebuggerControlService.Evaluate": { request: t.EvaluateRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
+  "DebuggerControlService.SetVariable": { request: t.SetVariableRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
   "DebuggerControlService.CreateBreakpoint": { request: t.CreateBreakpointRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
   "DebuggerControlService.UpdateBreakpoint": { request: t.UpdateBreakpointRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
   "DebuggerControlService.DeleteBreakpoint": { request: t.DeleteBreakpointRequest; response: t.OperationAdmissionResponse; serverStreaming: false; scope: "control" };
@@ -89,6 +90,7 @@ export const METHODS = {
   "DebuggerControlService.Execute": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Execute", serverStreaming: false, scope: "control" },
   "DebuggerControlService.SelectThread": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SelectThread", serverStreaming: false, scope: "control" },
   "DebuggerControlService.Evaluate": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate", serverStreaming: false, scope: "control" },
+  "DebuggerControlService.SetVariable": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/SetVariable", serverStreaming: false, scope: "control" },
   "DebuggerControlService.CreateBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/CreateBreakpoint", serverStreaming: false, scope: "control" },
   "DebuggerControlService.UpdateBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/UpdateBreakpoint", serverStreaming: false, scope: "control" },
   "DebuggerControlService.DeleteBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerControlService/DeleteBreakpoint", serverStreaming: false, scope: "control" },

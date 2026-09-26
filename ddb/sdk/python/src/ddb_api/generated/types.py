@@ -124,6 +124,7 @@ class OperationKindValues:
     OPERATION_KIND_DISTRIBUTED_BACKTRACE = "OPERATION_KIND_DISTRIBUTED_BACKTRACE"
     OPERATION_KIND_EXTENSION_ACTION = "OPERATION_KIND_EXTENSION_ACTION"
     OPERATION_KIND_SHUTDOWN = "OPERATION_KIND_SHUTDOWN"
+    OPERATION_KIND_SET_VARIABLE = "OPERATION_KIND_SET_VARIABLE"
 
 OperationState: TypeAlias = str
 class OperationStateValues:
@@ -1317,6 +1318,7 @@ OperationResult = TypedDict(
         "distributedBacktrace": NotRequired["DistributedBacktraceResult"],
         "extensionAction": NotRequired["InvokeExtensionActionResult"],
         "noContent": NotRequired["Empty"],
+        "variableAssignment": NotRequired["VariableAssignmentResult"],
     },
 )
 
@@ -1627,6 +1629,17 @@ SessionTarget = TypedDict(
     },
 )
 
+SetVariableRequest = TypedDict(
+    "SetVariableRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "target": NotRequired["Target"],
+        "variableId": NotRequired["str"],
+        "value": NotRequired["str"],
+        "preconditions": NotRequired["Preconditions"],
+    },
+)
+
 ShutdownRequest = TypedDict(
     "ShutdownRequest",
     {
@@ -1873,5 +1886,13 @@ Variable = TypedDict(
         "evaluateName": NotRequired["str"],
         "address": NotRequired["str"],
         "presentationHint": NotRequired["str"],
+    },
+)
+
+VariableAssignmentResult = TypedDict(
+    "VariableAssignmentResult",
+    {
+        "variableId": NotRequired["str"],
+        "value": NotRequired["str"],
     },
 )

@@ -13,8 +13,8 @@ use ddb_api_types::v2::{
     OperationAdmissionResponse, OperationKind, OperationResult, PermissionScope, Preconditions,
     RawCommandDialect, RawCommandResult, RequestContext, ResourceDeleted, ResourceKind,
     ResourceUpsert, RunDistributedBacktraceRequest, SelectThreadRequest, SessionTarget,
-    ShutdownRequest, SourceLocation, StateEventKind, Target as PublicTarget, TargetFailure,
-    TargetOutcome, UpdateBreakpointRequest,
+    SetVariableRequest, ShutdownRequest, SourceLocation, StateEventKind, Target as PublicTarget,
+    TargetFailure, TargetOutcome, UpdateBreakpointRequest, VariableAssignmentResult,
 };
 use prost::Message;
 use tracing::warn;
@@ -56,6 +56,11 @@ enum CompletionProjection {
         frame: Option<StopFrameKey>,
         object: Option<Arc<super::variable_objects::VariableObject>>,
     },
+    VariableAssignment {
+        frame: StopFrameKey,
+        _object: Arc<super::variable_objects::VariableObject>,
+        variable_id: String,
+    },
     CreatedBreakpoint,
     UpdatedBreakpoint(u64),
     DeletedBreakpoint {
@@ -93,6 +98,7 @@ impl CompletionProjection {
     fn frame_guard(&self) -> Option<&StopFrameKey> {
         match self {
             Self::Evaluation { frame, .. } | Self::RawCommand { frame } => frame.as_ref(),
+            Self::VariableAssignment { frame, .. } => Some(frame),
             _ => None,
         }
     }
@@ -260,6 +266,49 @@ impl DdbApplicationService {
             resolved,
             command,
             CompletionProjection::Evaluation { frame, object },
+        )
+    }
+
+    pub(crate) async fn set_variable(
+        self: &Arc<Self>,
+        principal: &PrincipalContext,
+        request: SetVariableRequest,
+    ) -> Result<OperationAdmissionResponse, ApplicationError> {
+        let scope = RequestScope::begin(request.context.as_ref())?;
+        let fingerprint = fingerprint_without_context(&request, |request| request.context = None);
+        if let Some(response) =
+            self.idempotent_response(principal, &scope, request.context.as_ref(), &fingerprint)?
+        {
+            return Ok(response);
+        }
+        require_nonempty_bounded("value", &request.value, MAX_COMMAND_BYTES)?;
+        self.validate_preconditions(request.preconditions.as_ref(), None)?;
+        let frame = self.variable_frame(&request.variable_id).await?;
+        let frame_id = self.ids.encode(ResourceIdKind::Frame, &frame.internal)?;
+        let mut resolved = self
+            .target_resolver()
+            .resolve(request.target.as_ref(), TargetPurpose::Command)
+            .await?;
+        self.bind_frame_target(&mut resolved, Some(&frame_id))
+            .await?;
+        let (object, name) = self
+            .prepare_variable_assignment(&scope, &request.variable_id, &frame)
+            .await?;
+        let command = format!("-var-assign {} {}", quote(&name), quote(&request.value));
+        scope.ensure_active()?;
+        self.admit_command(
+            principal,
+            &scope,
+            request.context.as_ref(),
+            &fingerprint,
+            OperationKind::SetVariable,
+            resolved,
+            command,
+            CompletionProjection::VariableAssignment {
+                frame,
+                _object: object,
+                variable_id: request.variable_id,
+            },
         )
     }
 
@@ -933,7 +982,8 @@ impl DdbApplicationService {
                 // must be current before dispatch, not after the command completes.
                 if let CompletionProjection::Evaluation {
                     frame: Some(frame), ..
-                } = &projection
+                }
+                | CompletionProjection::VariableAssignment { frame, .. } = &projection
                 {
                     if let Err(error) = self.ensure_frame_current(frame).await {
                         self.fail_operation(&operation_id, &request_id, error, &session_ids);
@@ -1322,6 +1372,14 @@ impl DdbApplicationService {
                     has_children: false,
                     child_count: None,
                     presentation_hint: None,
+                })
+            }
+            CompletionProjection::VariableAssignment { variable_id, .. } => {
+                let value = response_string(outcome, "value")
+                    .ok_or_else(|| ApplicationError::backend("assignment returned no value"))?;
+                operation_result::Value::VariableAssignment(VariableAssignmentResult {
+                    variable_id,
+                    value,
                 })
             }
             CompletionProjection::CreatedBreakpoint => {
@@ -2085,6 +2143,7 @@ fn basic_retained_partial_result(
         }
         CompletionProjection::Selection
         | CompletionProjection::Evaluation { .. }
+        | CompletionProjection::VariableAssignment { .. }
         | CompletionProjection::CreatedBreakpoint
         | CompletionProjection::UpdatedBreakpoint(_)
         | CompletionProjection::DeletedBreakpoint { .. }

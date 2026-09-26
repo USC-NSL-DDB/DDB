@@ -52,7 +52,7 @@ use crate::{
 
 use super::debugger_reads::{
     decode_frames, decode_memory, decode_register_names, decode_register_values, decode_signals,
-    decode_variable_children, decode_variable_object_name, decode_variables, DecodedVariable,
+    decode_variable_children, decode_variable_object, decode_variables, DecodedVariable,
 };
 use super::{
     collection_revision, ApplicationCommandPort, ApplicationError, OpaqueIdRegistry,
@@ -1028,36 +1028,91 @@ impl DdbApplicationService {
                 "debugger variable collection exceeds the advertised bound",
             ));
         }
-        let projection = self.projection();
-        let variables = decoded
-            .iter()
-            .enumerate()
-            .map(|(index, variable)| {
-                let identity = VariableIdentity {
-                    version: 1,
-                    frame_key: frame.internal.clone(),
-                    root_ordinal: u32::try_from(index).map_err(|_| {
-                        ApplicationError::backend("debugger variable index overflowed")
-                    })?,
-                    expression: variable.name.clone(),
-                    path: Vec::new(),
-                    object_name: None,
-                };
-                let internal_id = encode_variable_identity(&identity)?;
-                projection.variable(variable, &internal_id, Some(variable.name.clone()), None)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let page = self.pages.paginate(
             &format!("variables:{scope_key}"),
             frame.execution_revision,
-            variables,
+            decoded.into_iter().enumerate().collect(),
             request.page.as_ref(),
         )?;
+        let mut variables = Vec::with_capacity(page.items.len());
+        for (index, mut variable) in page.items {
+            let mut hint = None;
+            if variable.child_count.is_none() {
+                // Stack listings commonly omit type/child metadata. Inspect only
+                // the requested page and release each temporary backend root.
+                let (_object, metadata) = self
+                    .create_variable_object(&scope, &frame, &variable.name)
+                    .await?;
+                variable.value = metadata.value;
+                variable.type_name = metadata.type_name.or(variable.type_name);
+                variable.child_count = metadata.child_count;
+                variable.has_children = metadata.has_children;
+                hint = metadata.presentation_hint;
+            }
+            let identity = VariableIdentity {
+                version: 1,
+                frame_key: frame.internal.clone(),
+                root_ordinal: u32::try_from(index)
+                    .map_err(|_| ApplicationError::backend("debugger variable index overflowed"))?,
+                expression: variable.name.clone(),
+                path: Vec::new(),
+                object_name: None,
+            };
+            variables.push(self.projection().variable(
+                &variable,
+                &encode_variable_identity(&identity)?,
+                Some(variable.name.clone()),
+                hint,
+            )?);
+        }
+        scope.ensure_active()?;
+        self.ensure_frame_current(&frame).await?;
         Ok(ListVariablesResponse {
             context: Some(scope.response_context(&self.server_instance_id)),
-            variables: page.items,
+            variables,
             page: Some(page.info),
         })
+    }
+
+    async fn create_variable_object(
+        &self,
+        scope: &RequestScope,
+        frame: &StopFrameKey,
+        expression: &str,
+    ) -> Result<
+        (
+            Arc<super::variable_objects::VariableObject>,
+            super::debugger_reads::DecodedVariableChild,
+        ),
+        ApplicationError,
+    > {
+        self.ensure_frame_current(frame).await?;
+        let object = self
+            .variable_objects
+            .reserve(frame.clone(), Arc::clone(&self.command_port))?;
+        let expression =
+            serde_json::to_string(expression).expect("serializing an expression cannot fail");
+        let command = format!(
+            "-var-create --thread {} --frame {} {} * {expression}",
+            frame.global_thread_id, frame.level, object.name,
+        );
+        scope.ensure_active()?;
+        object.mark_creation_started();
+        let outcome = scope
+            .wait(self.command_port.execute(
+                &command,
+                CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id)),
+            ))
+            .await?
+            .map_err(|_| ApplicationError::backend("debugger variable-object creation failed"))?;
+        let metadata = decode_variable_object(&outcome)?;
+        if metadata.object_name != object.name {
+            return Err(ApplicationError::backend(
+                "debugger returned an unexpected variable object name",
+            ));
+        }
+        self.ensure_frame_current(frame).await?;
+        Ok((object, metadata))
     }
 
     pub(crate) async fn expand_variable(
@@ -1079,35 +1134,9 @@ impl DdbApplicationService {
         let object = match identity.object_name.as_deref() {
             Some(name) => self.variable_objects.get(name)?,
             None => {
-                let object = self
-                    .variable_objects
-                    .reserve(frame.clone(), Arc::clone(&self.command_port))?;
-                let expression = serde_json::to_string(&identity.expression)
-                    .expect("serializing a validated expression cannot fail");
-                let command = format!(
-                    "-var-create --thread {} --frame {} {} * {expression}",
-                    frame.global_thread_id, frame.level, object.name,
-                );
-                scope.ensure_active()?;
-                object.mark_creation_started();
-                let outcome = scope
-                    .wait(self.command_port.execute(
-                        &command,
-                        CommandTarget::Thread(crate::state::GlobalThreadId::new(
-                            frame.global_thread_id,
-                        )),
-                    ))
+                self.create_variable_object(&scope, &frame, &identity.expression)
                     .await?
-                    .map_err(|_| {
-                        ApplicationError::backend("debugger variable-object creation failed")
-                    })?;
-                if decode_variable_object_name(&outcome)? != object.name {
-                    return Err(ApplicationError::backend(
-                        "debugger returned an unexpected variable object name",
-                    ));
-                }
-                self.ensure_frame_current(&frame).await?;
-                object
+                    .0
             }
         };
         let (variables, backend_has_more) = self
@@ -1160,16 +1189,39 @@ impl DdbApplicationService {
         Ok(id)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn read_variable_children(
+    pub(super) async fn variable_frame(&self, id: &str) -> Result<StopFrameKey, ApplicationError> {
+        let identity = self.decode_variable_identity(id)?;
+        self.current_frame_key(&identity.frame_key).await
+    }
+
+    pub(super) async fn prepare_variable_assignment(
+        &self,
+        scope: &RequestScope,
+        variable_id: &str,
+        frame: &StopFrameKey,
+    ) -> Result<(Arc<super::variable_objects::VariableObject>, String), ApplicationError> {
+        let identity = self.decode_variable_identity(variable_id)?;
+        let object = match identity.object_name.as_deref() {
+            Some(name) => self.variable_objects.get(name)?,
+            None => {
+                self.create_variable_object(scope, frame, &identity.expression)
+                    .await?
+                    .0
+            }
+        };
+        let name = self
+            .variable_object_at_path(scope, frame, &identity, &object.name)
+            .await?;
+        Ok((object, name))
+    }
+
+    async fn variable_object_at_path(
         &self,
         scope: &RequestScope,
         frame: &StopFrameKey,
         identity: &VariableIdentity,
         root_object_name: &str,
-        offset: usize,
-        page_size: usize,
-    ) -> Result<(Vec<ddb_api_types::v2::Variable>, bool), ApplicationError> {
+    ) -> Result<String, ApplicationError> {
         let target =
             CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id));
         let mut object_name = root_object_name.to_string();
@@ -1197,6 +1249,25 @@ impl DdbApplicationService {
             object_name = children.remove(0).object_name;
             validate_variable_object_name(&object_name)?;
         }
+
+        Ok(object_name)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn read_variable_children(
+        &self,
+        scope: &RequestScope,
+        frame: &StopFrameKey,
+        identity: &VariableIdentity,
+        root_object_name: &str,
+        offset: usize,
+        page_size: usize,
+    ) -> Result<(Vec<ddb_api_types::v2::Variable>, bool), ApplicationError> {
+        let target =
+            CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id));
+        let object_name = self
+            .variable_object_at_path(scope, frame, identity, root_object_name)
+            .await?;
 
         let low = u32::try_from(offset).map_err(|_| {
             ApplicationError::new(
@@ -2306,6 +2377,7 @@ impl DdbApplicationService {
             OperationKind::Execute,
             OperationKind::SelectThread,
             OperationKind::Evaluate,
+            OperationKind::SetVariable,
             OperationKind::CreateBreakpoint,
             OperationKind::UpdateBreakpoint,
             OperationKind::DeleteBreakpoint,
@@ -3230,7 +3302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_console_rejects_frames_owned_by_another_target_before_dispatch() {
+    async fn framed_console_and_assignment_reject_other_targets_before_dispatch() {
         let model = RuntimeModel::new();
         for sid in [42, 43] {
             model.register_session(sid, "worker", None).await;
@@ -3253,6 +3325,21 @@ mod tests {
             .encode(
                 ResourceIdKind::Frame,
                 format!("{}:{}:0", owner.global_id, owner.execution_revision),
+            )
+            .unwrap();
+        let variable_id = service
+            .ids
+            .encode(
+                ResourceIdKind::Variable,
+                &encode_variable_identity(&VariableIdentity {
+                    version: 1,
+                    frame_key: format!("{}:{}:0", owner.global_id, owner.execution_revision),
+                    root_ordinal: 0,
+                    expression: "counter".to_string(),
+                    path: Vec::new(),
+                    object_name: None,
+                })
+                .unwrap(),
             )
             .unwrap();
         let other_thread_id = service
@@ -3286,10 +3373,27 @@ mod tests {
                             idempotency_key: Some(format!("wrong-frame-{index}")),
                             ..Default::default()
                         }),
-                        target: Some(target),
+                        target: Some(target.clone()),
                         dialect: ddb_api_types::v2::RawCommandDialect::BackendNative as i32,
                         command: "print counter".to_string(),
                         frame_id: Some(frame_id.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), DdbErrorCode::InvalidArgument);
+            let error = service
+                .set_variable(
+                    &principal,
+                    ddb_api_types::v2::SetVariableRequest {
+                        context: Some(RequestContext {
+                            idempotency_key: Some(format!("wrong-variable-{index}")),
+                            ..Default::default()
+                        }),
+                        target: Some(target),
+                        variable_id: variable_id.clone(),
+                        value: "9".to_string(),
                         ..Default::default()
                     },
                 )
