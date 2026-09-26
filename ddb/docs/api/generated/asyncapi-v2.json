@@ -176,6 +176,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "maxVariableObjects": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "operationRetentionMillis": {
             "format": "uint64",
             "pattern": "^[0-9]+$",
@@ -866,7 +872,18 @@
           "address": {
             "type": "string"
           },
+          "childCount": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
           "expression": {
+            "type": "string"
+          },
+          "hasChildren": {
+            "type": "boolean"
+          },
+          "presentationHint": {
             "type": "string"
           },
           "typeName": {

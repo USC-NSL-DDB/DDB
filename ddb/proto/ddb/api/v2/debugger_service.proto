@@ -582,6 +582,8 @@ message SelectThreadRequest {
 }
 
 // EvaluateRequest admits a typed expression-evaluation operation.
+// WATCH and HOVER with frame_id retain an inspectable value for that stop;
+// expanding its variable_id does not execute the expression again.
 message EvaluateRequest {
   // Mutation controls; idempotency_key is required and CONTROL is required.
   RequestContext context = 1;

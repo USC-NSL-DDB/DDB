@@ -253,6 +253,7 @@ impl DdbApplicationService {
 
     async fn project_topology(&self) -> Result<Vec<ProjectedResource>, ApplicationError> {
         let snapshot = self.queries.snapshot().await;
+        self.variable_objects.reconcile(&snapshot.threads);
         let projection = self.projection();
         let mut resources = Vec::with_capacity(
             snapshot.sessions.len()

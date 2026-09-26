@@ -853,16 +853,19 @@ impl MockAttachController {
                     .copied()
                     .unwrap_or("ddb_api_variable");
                 let expression = parts.get(marker + 1).copied().unwrap_or("");
-                let numchild = if expression.trim_matches('"') == "request" {
-                    "3"
-                } else {
-                    "0"
-                };
+                let aggregate = expression.trim_matches('"') == "request";
+                let numchild = if aggregate { "3" } else { "0" };
                 let payload: Dict = vec![
                     ("name".to_string(), name.into()),
                     ("numchild".to_string(), numchild.into()),
-                    ("value".to_string(), "{...}".into()),
-                    ("type".to_string(), "Request".into()),
+                    (
+                        "value".to_string(),
+                        if aggregate { "{...}" } else { "42" }.into(),
+                    ),
+                    (
+                        "type".to_string(),
+                        if aggregate { "Request" } else { "int" }.into(),
+                    ),
                     ("has_more".to_string(), "0".into()),
                 ]
                 .into();

@@ -51,9 +51,8 @@ use crate::{
 };
 
 use super::debugger_reads::{
-    decode_empty_done, decode_frames, decode_memory, decode_register_names, decode_register_values,
-    decode_signals, decode_variable_children, decode_variable_object_name, decode_variables,
-    DecodedVariable,
+    decode_frames, decode_memory, decode_register_names, decode_register_values, decode_signals,
+    decode_variable_children, decode_variable_object_name, decode_variables, DecodedVariable,
 };
 use super::{
     collection_revision, ApplicationCommandPort, ApplicationError, OpaqueIdRegistry,
@@ -71,7 +70,6 @@ const MAX_SIGNAL_COUNT: usize = 4_096;
 const MAX_ADDRESS_BYTES: usize = 1_024;
 const MAX_VARIABLE_IDENTITY_BYTES: usize = 64 * 1024;
 const MAX_VARIABLE_DEPTH: usize = 32;
-const VARIABLE_OBJECT_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub(super) struct StopFrameKey {
@@ -92,6 +90,8 @@ struct VariableIdentity {
     root_ordinal: u32,
     expression: String,
     path: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    object_name: Option<String>,
 }
 
 pub(crate) struct ApplicationStateSubscription {
@@ -332,6 +332,7 @@ impl DdbApplicationConfig {
             max_memory_read_bytes: 1024 * 1024,
             max_source_lines: 2_000,
             max_variable_children: 500,
+            max_variable_objects: super::variable_objects::MAX_VARIABLE_OBJECTS as u32,
             max_state_replay_events: resource_limits.state_replay_events as u64,
             max_state_replay_bytes: resource_limits.state_replay_bytes as u64,
             state_replay_retention_millis: resource_limits.state_replay_retention_millis,
@@ -387,6 +388,7 @@ pub(crate) struct DdbApplicationService {
     pub(super) api_config: DdbApplicationConfig,
     pub(super) ids: Arc<OpaqueIdRegistry>,
     pub(super) resources: ResourceCatalog,
+    pub(super) variable_objects: super::variable_objects::VariableObjects,
     pages: PageCodec,
     pub(super) operations: OperationStore,
     pub(super) journal: StateJournal,
@@ -435,6 +437,7 @@ impl DdbApplicationService {
             api_config,
             ids: Arc::new(OpaqueIdRegistry::new(100_000)),
             resources: ResourceCatalog::new(100_000, 256, 8 * 1024 * 1024),
+            variable_objects: super::variable_objects::VariableObjects::new(),
             pages: PageCodec::new(DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
             operations: OperationStore::new(&server_instance_id, operation_config),
             journal: StateJournal::new(&server_instance_id, journal_config),
@@ -1038,6 +1041,7 @@ impl DdbApplicationService {
                     })?,
                     expression: variable.name.clone(),
                     path: Vec::new(),
+                    object_name: None,
                 };
                 let internal_id = encode_variable_identity(&identity)?;
                 projection.variable(variable, &internal_id, Some(variable.name.clone()), None)
@@ -1072,69 +1076,50 @@ impl DdbApplicationService {
         let window =
             self.pages
                 .window(&collection, frame.execution_revision, request.page.as_ref())?;
-        let target =
-            CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id));
-        let requested_object_name = format!("ddb_api_{}", uuid::Uuid::new_v4().simple());
-        let expression = serde_json::to_string(&identity.expression)
-            .expect("serializing a validated expression cannot fail");
-        let create_command = format!(
-            "-var-create --thread {} --frame {} {requested_object_name} * {expression}",
-            frame.global_thread_id, frame.level
-        );
-
-        scope.ensure_active()?;
-        let create_outcome = match scope
-            .wait(self.command_port.execute(&create_command, target.clone()))
-            .await
-        {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => {
-                self.schedule_variable_object_cleanup(&requested_object_name, target);
-                return Err(ApplicationError::backend(
-                    "debugger variable-object creation failed",
-                ));
-            }
-            Err(error) => {
-                self.schedule_variable_object_cleanup(&requested_object_name, target);
-                return Err(error);
+        let object = match identity.object_name.as_deref() {
+            Some(name) => self.variable_objects.get(name)?,
+            None => {
+                let object = self
+                    .variable_objects
+                    .reserve(frame.clone(), Arc::clone(&self.command_port))?;
+                let expression = serde_json::to_string(&identity.expression)
+                    .expect("serializing a validated expression cannot fail");
+                let command = format!(
+                    "-var-create --thread {} --frame {} {} * {expression}",
+                    frame.global_thread_id, frame.level, object.name,
+                );
+                scope.ensure_active()?;
+                object.mark_creation_started();
+                let outcome = scope
+                    .wait(self.command_port.execute(
+                        &command,
+                        CommandTarget::Thread(crate::state::GlobalThreadId::new(
+                            frame.global_thread_id,
+                        )),
+                    ))
+                    .await?
+                    .map_err(|_| {
+                        ApplicationError::backend("debugger variable-object creation failed")
+                    })?;
+                if decode_variable_object_name(&outcome)? != object.name {
+                    return Err(ApplicationError::backend(
+                        "debugger returned an unexpected variable object name",
+                    ));
+                }
+                self.ensure_frame_current(&frame).await?;
+                object
             }
         };
-        scope.ensure_active()?;
-        self.ensure_frame_current(&frame).await?;
-        let object_name = decode_variable_object_name(&create_outcome)?;
-        validate_variable_object_name(&object_name)?;
-
-        let expansion = self
+        let (variables, backend_has_more) = self
             .read_variable_children(
                 &scope,
                 &frame,
                 &identity,
-                &object_name,
+                &object.name,
                 window.offset,
                 window.size,
             )
-            .await;
-
-        let delete_command = format!(
-            "-var-delete {}",
-            serde_json::to_string(&object_name)
-                .expect("serializing a validated variable-object name cannot fail")
-        );
-        let cleanup = match scope
-            .wait(self.command_port.execute(&delete_command, target.clone()))
-            .await
-        {
-            Ok(result) => result
-                .map_err(|_| ApplicationError::backend("debugger variable-object cleanup failed"))
-                .and_then(|outcome| decode_empty_done(&outcome, "variable-object cleanup")),
-            Err(error) => {
-                self.schedule_variable_object_cleanup(&object_name, target);
-                Err(error)
-            }
-        };
-
-        let (variables, backend_has_more) = expansion?;
-        cleanup?;
+            .await?;
         scope.ensure_active()?;
         self.ensure_frame_current(&frame).await?;
         let page = self.pages.finish_window_with_more(
@@ -1151,20 +1136,28 @@ impl DdbApplicationService {
         })
     }
 
-    fn schedule_variable_object_cleanup(&self, object_name: &str, target: CommandTarget) {
-        let command_port = Arc::clone(&self.command_port);
-        let delete_command = format!(
-            "-var-delete {}",
-            serde_json::to_string(object_name)
-                .expect("serializing a validated variable-object name cannot fail")
-        );
-        tokio::spawn(async move {
-            let _ = tokio::time::timeout(
-                VARIABLE_OBJECT_CLEANUP_TIMEOUT,
-                command_port.execute(&delete_command, target),
-            )
-            .await;
-        });
+    pub(super) async fn retain_evaluation_object(
+        &self,
+        object: Arc<super::variable_objects::VariableObject>,
+    ) -> Result<String, ApplicationError> {
+        let identity = VariableIdentity {
+            version: 1,
+            frame_key: object.frame.internal.clone(),
+            root_ordinal: 0,
+            expression: "<evaluation>".to_string(),
+            path: Vec::new(),
+            object_name: Some(object.name.clone()),
+        };
+        let id = self.ids.encode(
+            ResourceIdKind::Variable,
+            &encode_variable_identity(&identity)?,
+        )?;
+        self.variable_objects.retain(Arc::clone(&object));
+        if let Err(error) = self.ensure_frame_current(&object.frame).await {
+            self.variable_objects.remove(&object.name);
+            return Err(error);
+        }
+        Ok(id)
     }
 
     #[allow(clippy::too_many_arguments)]

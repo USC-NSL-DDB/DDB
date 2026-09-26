@@ -8,6 +8,13 @@ public API belong in the project release notes.
 
 ### Added
 
+- Framed WATCH/HOVER evaluations retain a stopped value and return its opaque
+  variable identity, expandability, optional exact child count and display hint.
+  Expansion reuses the evaluated value without executing the expression again.
+  DDB cleans up roots on execution changes and thread removal. The advertised
+  `max_variable_objects` limit bounds retained and in-flight roots. Generated
+  Rust, TypeScript and Python contracts include the result metadata and limit.
+
 - Native console dialects are accepted by ExecuteRawCommand. Its optional
   `frame_id` binds a CLI command to an owning stopped frame and rejects stale or
   mismatched context before dispatch. Console commands may resume execution.

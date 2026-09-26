@@ -316,6 +316,7 @@ export interface ApiLimits {
   "maxOperationRecordBytes"?: string;
   "maxOutputEventBytes"?: string;
   "maxSourceBytes"?: string;
+  "maxVariableObjects"?: number;
 }
 
 export interface BackendDescriptor {
@@ -503,6 +504,9 @@ export interface EvaluationResult {
   "typeName"?: string;
   "variableId"?: string;
   "address"?: string;
+  "hasChildren"?: boolean;
+  "childCount"?: string;
+  "presentationHint"?: string;
 }
 
 export interface ExecuteRawCommandRequest {

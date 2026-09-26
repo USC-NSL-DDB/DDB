@@ -164,6 +164,9 @@ impl serde::Serialize for ApiLimits {
         if self.max_source_bytes != 0 {
             len += 1;
         }
+        if self.max_variable_objects != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.ApiLimits", len)?;
         if self.max_page_size != 0 {
             struct_ser.serialize_field("maxPageSize", &self.max_page_size)?;
@@ -252,6 +255,9 @@ impl serde::Serialize for ApiLimits {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxSourceBytes", ToString::to_string(&self.max_source_bytes).as_str())?;
         }
+        if self.max_variable_objects != 0 {
+            struct_ser.serialize_field("maxVariableObjects", &self.max_variable_objects)?;
+        }
         struct_ser.end()
     }
 }
@@ -304,6 +310,8 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
             "maxOutputEventBytes",
             "max_source_bytes",
             "maxSourceBytes",
+            "max_variable_objects",
+            "maxVariableObjects",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -329,6 +337,7 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
             MaxOperationRecordBytes,
             MaxOutputEventBytes,
             MaxSourceBytes,
+            MaxVariableObjects,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -372,6 +381,7 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
                             "maxOperationRecordBytes" | "max_operation_record_bytes" => Ok(GeneratedField::MaxOperationRecordBytes),
                             "maxOutputEventBytes" | "max_output_event_bytes" => Ok(GeneratedField::MaxOutputEventBytes),
                             "maxSourceBytes" | "max_source_bytes" => Ok(GeneratedField::MaxSourceBytes),
+                            "maxVariableObjects" | "max_variable_objects" => Ok(GeneratedField::MaxVariableObjects),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -412,6 +422,7 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
                 let mut max_operation_record_bytes__ = None;
                 let mut max_output_event_bytes__ = None;
                 let mut max_source_bytes__ = None;
+                let mut max_variable_objects__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::MaxPageSize => {
@@ -582,6 +593,14 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::MaxVariableObjects => {
+                            if max_variable_objects__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxVariableObjects"));
+                            }
+                            max_variable_objects__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -609,6 +628,7 @@ impl<'de> serde::Deserialize<'de> for ApiLimits {
                     max_operation_record_bytes: max_operation_record_bytes__.unwrap_or_default(),
                     max_output_event_bytes: max_output_event_bytes__.unwrap_or_default(),
                     max_source_bytes: max_source_bytes__.unwrap_or_default(),
+                    max_variable_objects: max_variable_objects__.unwrap_or_default(),
                 })
             }
         }
@@ -4926,6 +4946,15 @@ impl serde::Serialize for EvaluationResult {
         if self.address.is_some() {
             len += 1;
         }
+        if self.has_children {
+            len += 1;
+        }
+        if self.child_count.is_some() {
+            len += 1;
+        }
+        if self.presentation_hint.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.EvaluationResult", len)?;
         if !self.expression.is_empty() {
             struct_ser.serialize_field("expression", &self.expression)?;
@@ -4941,6 +4970,17 @@ impl serde::Serialize for EvaluationResult {
         }
         if let Some(v) = self.address.as_ref() {
             struct_ser.serialize_field("address", v)?;
+        }
+        if self.has_children {
+            struct_ser.serialize_field("hasChildren", &self.has_children)?;
+        }
+        if let Some(v) = self.child_count.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("childCount", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.presentation_hint.as_ref() {
+            struct_ser.serialize_field("presentationHint", v)?;
         }
         struct_ser.end()
     }
@@ -4959,6 +4999,12 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
             "variable_id",
             "variableId",
             "address",
+            "has_children",
+            "hasChildren",
+            "child_count",
+            "childCount",
+            "presentation_hint",
+            "presentationHint",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4968,6 +5014,9 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
             TypeName,
             VariableId,
             Address,
+            HasChildren,
+            ChildCount,
+            PresentationHint,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4995,6 +5044,9 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
                             "typeName" | "type_name" => Ok(GeneratedField::TypeName),
                             "variableId" | "variable_id" => Ok(GeneratedField::VariableId),
                             "address" => Ok(GeneratedField::Address),
+                            "hasChildren" | "has_children" => Ok(GeneratedField::HasChildren),
+                            "childCount" | "child_count" => Ok(GeneratedField::ChildCount),
+                            "presentationHint" | "presentation_hint" => Ok(GeneratedField::PresentationHint),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5019,6 +5071,9 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
                 let mut type_name__ = None;
                 let mut variable_id__ = None;
                 let mut address__ = None;
+                let mut has_children__ = None;
+                let mut child_count__ = None;
+                let mut presentation_hint__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expression => {
@@ -5051,6 +5106,26 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
                             }
                             address__ = map_.next_value()?;
                         }
+                        GeneratedField::HasChildren => {
+                            if has_children__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hasChildren"));
+                            }
+                            has_children__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ChildCount => {
+                            if child_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("childCount"));
+                            }
+                            child_count__ =
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::PresentationHint => {
+                            if presentation_hint__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("presentationHint"));
+                            }
+                            presentation_hint__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5062,6 +5137,9 @@ impl<'de> serde::Deserialize<'de> for EvaluationResult {
                     type_name: type_name__,
                     variable_id: variable_id__,
                     address: address__,
+                    has_children: has_children__.unwrap_or_default(),
+                    child_count: child_count__,
+                    presentation_hint: presentation_hint__,
                 })
             }
         }

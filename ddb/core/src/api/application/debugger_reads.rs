@@ -344,6 +344,23 @@ pub(crate) fn decode_variable_object_name(
         .ok_or_else(|| malformed("debugger variable object is missing its name"))
 }
 
+pub(crate) fn decode_variable_object(
+    outcome: &CommandOutcome,
+) -> Result<DecodedVariableChild, ApplicationError> {
+    let payload = single_done_payload(outcome, "variable-object creation")?;
+    let (child_count, has_children) = variable_child_metadata(payload)?;
+    let name = decode_variable_object_name(outcome)?;
+    Ok(DecodedVariableChild {
+        object_name: name.clone(),
+        display_name: name,
+        value: optional_string(payload, "value")?.unwrap_or_default(),
+        type_name: optional_string(payload, "type")?,
+        child_count,
+        has_children,
+        presentation_hint: optional_string(payload, "displayhint")?,
+    })
+}
+
 // Dynamic pretty-printers discover children lazily; numchild is not a total.
 fn variable_child_metadata(value: &Dict) -> Result<(Option<u64>, bool), ApplicationError> {
     let count = optional_string(value, "numchild")?
@@ -424,27 +441,6 @@ pub(crate) fn decode_variable_children(
         ));
     }
     Ok(DecodedVariableChildren { children, has_more })
-}
-
-pub(crate) fn decode_empty_done(
-    outcome: &CommandOutcome,
-    subject: &'static str,
-) -> Result<(), ApplicationError> {
-    let completion = outcome
-        .response_ref()
-        .ok_or_else(|| malformed(format!("debugger returned no {subject} response")))?;
-    let responses = completion.get_responses();
-    if responses.len() != 1 {
-        return Err(malformed(format!(
-            "target-scoped {subject} command returned an unexpected response count"
-        )));
-    }
-    if responses[0].get_message() != "done" {
-        return Err(ApplicationError::backend(format!(
-            "debugger rejected the {subject} command"
-        )));
-    }
-    Ok(())
 }
 
 fn single_done_payload<'a>(

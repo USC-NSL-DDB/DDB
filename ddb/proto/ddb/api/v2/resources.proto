@@ -270,6 +270,8 @@ message ApiLimits {
   uint64 max_output_event_bytes = 20;
   // Maximum bytes in one debugger-known source file eligible for reading.
   uint64 max_source_bytes = 21;
+  // Maximum retained and in-flight stopped variable roots across sessions.
+  uint32 max_variable_objects = 22;
 }
 
 // DeprecationNotice announces an API behavior scheduled for removal.
@@ -738,6 +740,12 @@ message EvaluationResult {
   optional string variable_id = 4;
   // Optional memory address represented as opaque text.
   optional string address = 5;
+  // True when the retained value may have children.
+  bool has_children = 6;
+  // Exact child count when known; dynamic values may omit it.
+  optional uint64 child_count = 7;
+  // Backend display hint such as "array" or "map".
+  optional string presentation_hint = 8;
 }
 
 // RawCommandResult is the bounded compatibility escape hatch result.

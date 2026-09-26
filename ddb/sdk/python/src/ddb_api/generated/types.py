@@ -299,6 +299,7 @@ ApiLimits = TypedDict(
         "maxOperationRecordBytes": NotRequired["str"],
         "maxOutputEventBytes": NotRequired["str"],
         "maxSourceBytes": NotRequired["str"],
+        "maxVariableObjects": NotRequired["int"],
     },
 )
 
@@ -561,6 +562,9 @@ EvaluationResult = TypedDict(
         "typeName": NotRequired["str"],
         "variableId": NotRequired["str"],
         "address": NotRequired["str"],
+        "hasChildren": NotRequired["bool"],
+        "childCount": NotRequired["str"],
+        "presentationHint": NotRequired["str"],
     },
 )
 

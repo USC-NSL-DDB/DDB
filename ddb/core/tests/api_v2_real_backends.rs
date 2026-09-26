@@ -33,6 +33,22 @@ fn wait_for_operation(ddb: &DdbProcess, operation_id: &str) -> Value {
     panic!("operation {operation_id} did not complete")
 }
 
+fn completed_control(ddb: &DdbProcess, method: &str, request: Value) -> Value {
+    let (status, admission) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerControlService", method),
+        &request,
+        V2_TEST_CONTROL_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{admission:?}");
+    let operation =
+        wait_for_operation(ddb, admission["operation"]["operationId"].as_str().unwrap());
+    assert_eq!(
+        operation["state"], "OPERATION_STATE_COMPLETED",
+        "{operation:?}"
+    );
+    operation
+}
+
 fn assert_typed_inspection_on_backend(backend: &str) {
     let example = build_real_loop_example();
     let binary_path = example.binary_path.to_string_lossy();
@@ -275,6 +291,79 @@ fn assert_typed_inspection_on_backend(backend: &str) {
     assert!(children["variables"]
         .as_array()
         .is_some_and(|children| children.len() >= 2));
+
+    // Retain the original evaluation. Expanding it must not execute it again.
+    if backend == "gdb" {
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "retained-eval-setup"},
+                "target": target,
+                "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": "python gdb.set_convenience_variable('ddb_eval_count', 0); gdb.execute('set language c')"
+            }),
+        );
+    }
+    let retained = completed_control(
+        &ddb,
+        "Evaluate",
+        json!({
+            "context": {"idempotencyKey": "retained-eval"},
+            "target": target,
+            "expression": if backend == "gdb" { "($ddb_eval_count += 1, request)" } else { "request" },
+            "frameId": frame_id,
+            "evaluationContext": "EVALUATION_CONTEXT_WATCH"
+        }),
+    );
+    let retained_id = retained["result"]["evaluation"]["variableId"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        retained["result"]["evaluation"]["hasChildren"], true,
+        "{retained:?}"
+    );
+    for _ in 0..2 {
+        let (status, expanded) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": retained_id}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{expanded:?}");
+        assert!(
+            expanded["variables"]
+                .as_array()
+                .is_some_and(|items| items.len() >= 2),
+            "{expanded:?}"
+        );
+    }
+    if backend == "gdb" {
+        let count = completed_control(
+            &ddb,
+            "Evaluate",
+            json!({
+                "context": {"idempotencyKey": "retained-eval-count"},
+                "target": target,
+                "expression": "$ddb_eval_count",
+                "frameId": frame_id,
+                "evaluationContext": "EVALUATION_CONTEXT_REPL"
+            }),
+        );
+        assert_eq!(
+            count["result"]["evaluation"]["value"], "1",
+            "evaluation ran more than once: {count:?}"
+        );
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "retained-eval-language"},
+                "target": target,
+                "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": "set language auto"
+            }),
+        );
+    }
 
     let (status, memory) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "ReadMemory"),
@@ -602,6 +691,34 @@ fn assert_typed_inspection_on_backend(backend: &str) {
             operation["state"], "OPERATION_STATE_COMPLETED",
             "console execution may invalidate its input frame: {operation:?}"
         );
+    }
+    if backend == "gdb" {
+        // Command completion acknowledges the step; the next stop arrives later.
+        let mut stopped = false;
+        for _ in 0..500 {
+            let (status, threads) = ddb.api_post_json_with_bearer(
+                &rpc("DebuggerService", "ListThreads"),
+                &json!({"target": target}),
+                V2_TEST_READ_TOKEN,
+            );
+            assert_eq!(status, StatusCode::OK, "{threads:?}");
+            if threads["threads"].as_array().is_some_and(|threads| {
+                threads.iter().any(|thread| {
+                    thread["threadId"] == thread_id && thread["state"] == "THREAD_STATE_STOPPED"
+                })
+            }) {
+                stopped = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(stopped, "native step did not reach its next stop");
+        let (status, expired) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": retained_id}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::GONE, "{expired:?}");
     }
 }
 

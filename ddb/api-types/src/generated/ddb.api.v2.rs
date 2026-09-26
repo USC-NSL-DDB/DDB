@@ -927,6 +927,9 @@ pub struct ApiLimits {
     /// Maximum bytes in one debugger-known source file eligible for reading.
     #[prost(uint64, tag = "21")]
     pub max_source_bytes: u64,
+    /// Maximum retained and in-flight stopped variable roots across sessions.
+    #[prost(uint32, tag = "22")]
+    pub max_variable_objects: u32,
 }
 /// DeprecationNotice announces an API behavior scheduled for removal.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1581,6 +1584,15 @@ pub struct EvaluationResult {
     /// Optional memory address represented as opaque text.
     #[prost(string, optional, tag = "5")]
     pub address: ::core::option::Option<::prost::alloc::string::String>,
+    /// True when the retained value may have children.
+    #[prost(bool, tag = "6")]
+    pub has_children: bool,
+    /// Exact child count when known; dynamic values may omit it.
+    #[prost(uint64, optional, tag = "7")]
+    pub child_count: ::core::option::Option<u64>,
+    /// Backend display hint such as "array" or "map".
+    #[prost(string, optional, tag = "8")]
+    pub presentation_hint: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// RawCommandResult is the bounded compatibility escape hatch result.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3231,6 +3243,8 @@ pub struct SelectThreadRequest {
     pub preconditions: ::core::option::Option<Preconditions>,
 }
 /// EvaluateRequest admits a typed expression-evaluation operation.
+/// WATCH and HOVER with frame_id retain an inspectable value for that stop;
+/// expanding its variable_id does not execute the expression again.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EvaluateRequest {
     /// Mutation controls; idempotency_key is required and CONTROL is required.

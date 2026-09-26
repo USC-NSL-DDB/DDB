@@ -54,6 +54,7 @@ enum CompletionProjection {
     Selection,
     Evaluation {
         frame: Option<StopFrameKey>,
+        object: Option<Arc<super::variable_objects::VariableObject>>,
     },
     CreatedBreakpoint,
     UpdatedBreakpoint(u64),
@@ -91,7 +92,7 @@ struct ExtensionOperationTask {
 impl CompletionProjection {
     fn frame_guard(&self) -> Option<&StopFrameKey> {
         match self {
-            Self::Evaluation { frame } | Self::RawCommand { frame } => frame.as_ref(),
+            Self::Evaluation { frame, .. } | Self::RawCommand { frame } => frame.as_ref(),
             _ => None,
         }
     }
@@ -224,10 +225,31 @@ impl DdbApplicationService {
                 )
             })
             .unwrap_or_default();
-        let command = format!(
-            "-data-evaluate-expression{frame_option} {}",
-            quote(&request.expression)
-        );
+        let object = if matches!(
+            evaluation_context,
+            EvaluationContext::Watch | EvaluationContext::Hover
+        ) {
+            frame
+                .as_ref()
+                .map(|frame| {
+                    self.variable_objects
+                        .reserve(frame.clone(), Arc::clone(&self.command_port))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let command = match object.as_ref() {
+            Some(object) => format!(
+                "-var-create{frame_option} {} * {}",
+                object.name,
+                quote(&request.expression)
+            ),
+            None => format!(
+                "-data-evaluate-expression{frame_option} {}",
+                quote(&request.expression)
+            ),
+        };
         scope.ensure_active()?;
         self.admit_command(
             principal,
@@ -237,7 +259,7 @@ impl DdbApplicationService {
             OperationKind::Evaluate,
             resolved,
             command,
-            CompletionProjection::Evaluation { frame },
+            CompletionProjection::Evaluation { frame, object },
         )
     }
 
@@ -879,6 +901,16 @@ impl DdbApplicationService {
             }
         }
 
+        let retained_object_name = match &projection {
+            CompletionProjection::Evaluation {
+                object: Some(object),
+                ..
+            } => {
+                object.mark_creation_started();
+                Some(object.name.clone())
+            }
+            _ => None,
+        };
         match self
             .command_port
             .execute_tracked(&command, target, &operation_id, kind)
@@ -899,7 +931,10 @@ impl DdbApplicationService {
                 }
                 // A console command may intentionally resume execution. Its frame
                 // must be current before dispatch, not after the command completes.
-                if let CompletionProjection::Evaluation { frame: Some(frame) } = &projection {
+                if let CompletionProjection::Evaluation {
+                    frame: Some(frame), ..
+                } = &projection
+                {
                     if let Err(error) = self.ensure_frame_current(frame).await {
                         self.fail_operation(&operation_id, &request_id, error, &session_ids);
                         return;
@@ -927,11 +962,12 @@ impl DdbApplicationService {
                                     );
                                 }
                             }
-                            Err(error) => warn!(
-                                operation_id,
-                                code = ?error.code(),
-                                "operation completion could not be retained"
-                            ),
+                            Err(error) => {
+                                if let Some(name) = retained_object_name.as_deref() {
+                                    self.variable_objects.remove(name);
+                                }
+                                warn!(operation_id, code = ?error.code(), "operation completion could not be retained");
+                            }
                         }
                     }
                     Err(error) => {
@@ -1251,7 +1287,29 @@ impl DdbApplicationService {
                 )?;
                 operation_result::Value::Selection(selection)
             }
-            CompletionProjection::Evaluation { .. } => {
+            CompletionProjection::Evaluation {
+                object: Some(object),
+                ..
+            } => {
+                let decoded = super::debugger_reads::decode_variable_object(outcome)?;
+                if decoded.object_name != object.name {
+                    return Err(ApplicationError::backend(
+                        "debugger returned an unexpected variable object name",
+                    ));
+                }
+                let variable_id = self.retain_evaluation_object(object).await?;
+                operation_result::Value::Evaluation(EvaluationResult {
+                    expression: "<redacted>".to_string(),
+                    value: decoded.value,
+                    type_name: decoded.type_name,
+                    variable_id: Some(variable_id),
+                    address: None,
+                    has_children: decoded.has_children,
+                    child_count: decoded.child_count,
+                    presentation_hint: decoded.presentation_hint,
+                })
+            }
+            CompletionProjection::Evaluation { object: None, .. } => {
                 let value = response_string(outcome, "value")
                     .ok_or_else(|| ApplicationError::backend("evaluation returned no value"))?;
                 let type_name = response_string(outcome, "type");
@@ -1261,6 +1319,9 @@ impl DdbApplicationService {
                     type_name,
                     variable_id: None,
                     address: None,
+                    has_children: false,
+                    child_count: None,
+                    presentation_hint: None,
                 })
             }
             CompletionProjection::CreatedBreakpoint => {

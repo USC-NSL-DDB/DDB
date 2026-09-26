@@ -19,6 +19,7 @@ mod resource_catalog;
 mod runtime_events;
 mod service;
 mod target;
+mod variable_objects;
 pub(crate) use command_port::ApplicationCommandPort;
 pub(crate) use command_port::CommandPortError;
 #[cfg(test)]
