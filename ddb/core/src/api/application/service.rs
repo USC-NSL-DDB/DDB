@@ -1254,6 +1254,7 @@ impl DdbApplicationService {
                     value: child.value,
                     type_name: child.type_name,
                     child_count: child.child_count,
+                    has_children: child.has_children,
                 };
                 projection.variable(&variable, &internal_id, None, child.presentation_hint)
             })

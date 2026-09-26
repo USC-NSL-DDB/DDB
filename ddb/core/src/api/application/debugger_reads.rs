@@ -25,6 +25,7 @@ pub(crate) struct DecodedVariable {
     pub(crate) value: String,
     pub(crate) type_name: Option<String>,
     pub(crate) child_count: Option<u64>,
+    pub(crate) has_children: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +35,7 @@ pub(crate) struct DecodedVariableChild {
     pub(crate) value: String,
     pub(crate) type_name: Option<String>,
     pub(crate) child_count: Option<u64>,
+    pub(crate) has_children: bool,
     pub(crate) presentation_hint: Option<String>,
 }
 
@@ -138,18 +140,13 @@ pub(crate) fn decode_variables(
             let name = optional_string(variable, "name")?
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| malformed("debugger variable is missing its name"))?;
-            let child_count = optional_string(variable, "numchild")?
-                .map(|value| {
-                    value
-                        .parse::<u64>()
-                        .map_err(|_| malformed("debugger variable has an invalid child count"))
-                })
-                .transpose()?;
+            let (child_count, has_children) = variable_child_metadata(variable)?;
             Ok(DecodedVariable {
                 name,
                 value: optional_string(variable, "value")?.unwrap_or_default(),
                 type_name: optional_string(variable, "type")?,
                 child_count,
+                has_children,
             })
         })
         .collect()
@@ -347,6 +344,34 @@ pub(crate) fn decode_variable_object_name(
         .ok_or_else(|| malformed("debugger variable object is missing its name"))
 }
 
+// Dynamic pretty-printers discover children lazily; numchild is not a total.
+fn variable_child_metadata(value: &Dict) -> Result<(Option<u64>, bool), ApplicationError> {
+    let count = optional_string(value, "numchild")?
+        .map(|count| {
+            count
+                .parse::<u64>()
+                .map_err(|_| malformed("debugger variable has an invalid child count"))
+        })
+        .transpose()?;
+    let flag = |name| -> Result<bool, ApplicationError> {
+        match optional_string(value, name)?.as_deref() {
+            None | Some("0") | Some("false") => Ok(false),
+            Some("1") | Some("true") => Ok(true),
+            _ => Err(malformed(
+                "debugger variable has an invalid child metadata flag",
+            )),
+        }
+    };
+    let dynamic = flag("dynamic")?;
+    let has_more = flag("has_more")?;
+    Ok((
+        if dynamic || has_more { None } else { count },
+        (dynamic && value.get("has_more").is_none())
+            || has_more
+            || count.is_some_and(|count| count > 0),
+    ))
+}
+
 pub(crate) fn decode_variable_children(
     outcome: &CommandOutcome,
 ) -> Result<DecodedVariableChildren, ApplicationError> {
@@ -372,19 +397,14 @@ pub(crate) fn decode_variable_children(
             let display_name = optional_string(child, "exp")?
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| object_name.clone());
-            let child_count = optional_string(child, "numchild")?
-                .map(|value| {
-                    value.parse::<u64>().map_err(|_| {
-                        malformed("debugger variable child has an invalid child count")
-                    })
-                })
-                .transpose()?;
+            let (child_count, has_children) = variable_child_metadata(child)?;
             Ok(DecodedVariableChild {
                 object_name,
                 display_name,
                 value: optional_string(child, "value")?.unwrap_or_default(),
                 type_name: optional_string(child, "type")?,
                 child_count,
+                has_children,
                 presentation_hint: optional_string(child, "displayhint")?,
             })
         })
@@ -627,6 +647,7 @@ mod tests {
                 value: "0x1000".to_string(),
                 type_name: Some("Request *".to_string()),
                 child_count: Some(3),
+                has_children: true,
             }]
         );
 
@@ -642,6 +663,60 @@ mod tests {
             decode_variables(&outcome(payload)).unwrap_err().code(),
             DdbErrorCode::BackendFailed
         );
+    }
+
+    #[test]
+    fn dynamic_children_remain_expandable_without_an_exact_count() {
+        use super::super::{projection::ProjectionContext, OpaqueIdRegistry, ResourceCatalog};
+        let ids = OpaqueIdRegistry::new(16);
+        let resources = ResourceCatalog::new(16, 128, 1_024);
+        let config = crate::common::Config::default();
+        let projection = ProjectionContext::new(&ids, &resources, &config);
+        // Child tuples can omit has_more even when their dynamic pretty-printer
+        // has children. Static scalars must still remain non-expandable.
+        for (dynamic, more, expandable, count) in [
+            ("1", None, true, None),
+            ("1", Some("1"), true, None),
+            ("1", Some("0"), false, None),
+            ("0", Some("1"), true, None),
+            ("0", Some("0"), false, Some(0)),
+        ] {
+            let mut fields = HashMap::from([
+                ("name".into(), Value::String("root.child".into())),
+                ("exp".into(), Value::String("items".into())),
+                ("numchild".into(), Value::String("0".into())),
+                ("dynamic".into(), Value::String(dynamic.into())),
+                ("displayhint".into(), Value::String("array".into())),
+            ]);
+            if let Some(more) = more {
+                fields.insert("has_more".into(), Value::String(more.into()));
+            }
+            let payload = Dict::new(HashMap::from([(
+                "children".into(),
+                Value::List(vec![Value::Dict(Dict::new(fields))]),
+            )]));
+            let child = decode_variable_children(&outcome(payload))
+                .unwrap()
+                .children
+                .remove(0);
+            let variable = projection
+                .variable(
+                    &DecodedVariable {
+                        name: child.display_name,
+                        value: child.value,
+                        type_name: child.type_name,
+                        child_count: child.child_count,
+                        has_children: child.has_children,
+                    },
+                    "dynamic-child",
+                    None,
+                    child.presentation_hint,
+                )
+                .unwrap();
+            assert_eq!(variable.has_children, expandable);
+            assert_eq!(variable.child_count, count);
+            assert_eq!(variable.presentation_hint.as_deref(), Some("array"));
+        }
     }
 
     #[test]

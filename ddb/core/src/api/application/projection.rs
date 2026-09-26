@@ -328,7 +328,7 @@ impl<'a> ProjectionContext<'a> {
             name: view.name.clone(),
             value: view.value.clone(),
             type_name: view.type_name.clone(),
-            has_children: view.child_count.is_some_and(|count| count > 0),
+            has_children: view.has_children,
             child_count: view.child_count,
             evaluate_name,
             address: None,

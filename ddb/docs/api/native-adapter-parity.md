@@ -14,7 +14,7 @@ just send those commands through a different transport.
 - ExecuteRawCommand accepts native CLI text and the matching GDB/LLDB CLI dialect.
   DDB handles quoting and conversion to its internal command protocol. A mismatched
   explicit dialect is rejected. The existing MI dialect remains compatible.
-- Validation: 320 core unit tests pass, one ignored; all three API integration
+- Validation: 321 core unit tests pass, one ignored; all three API integration
   tests pass. Rust client/type, TypeScript and Python SDK suites also pass. The real GDB inspection test
   sets a convenience variable through native CLI and reads it through Evaluate.
 
@@ -25,6 +25,12 @@ just send those commands through a different transport.
 - The LLDB bridge uses explicit SBExecutionContext for framed commands, following
   [LLDB's command interpreter API](https://lldb.llvm.org/python_api/lldb.SBCommandInterpreter.html).
   Its frame forwarding is covered without an LLDB installation.
+
+- Variable child projections preserve lazy dynamic expandability and omit an
+  inexact child count. Explicitly empty values remain non-expandable. A focused
+  decoder-to-projection regression covers dynamic and static metadata, following
+  [GDB's variable-object contract](https://www.sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-Variable-Objects.html).
+  Root metadata enrichment and retained evaluation handles remain unfinished.
 
 ## Remaining work
 
