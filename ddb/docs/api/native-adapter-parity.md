@@ -55,12 +55,24 @@ just send those commands through a different transport.
   GDB scenarios pass, TypeScript/Python SDK and LLDB bridge checks pass, and
   generated artifacts reproduce exactly. LLDB runtime remains unavailable.
 
-## Remaining work
+## Adapter migration and final validation
 
-Replace the adapter's raw-variable implementation and MI console/setup command
-construction with these native SDK contracts. Verify real GDB inspection,
-assignment, caller-frame console, configuration, lifecycle cleanup and the
-packaged VS Code extension.
+The adapter migration is committed as `8695795` on `codex/canonical-ddb-api` in
+`/mnt/home/ybyan/projs/vscode-adapter`. It vendors the SDK built from backend API
+commit `10f0f8aa`. RawVariables and the adapter's MI command construction are
+removed. Console/autorun text uses the native CLI dialect with canonical frame
+identities; inspection, assignment and settings use typed SDK methods.
+
+Adapter validation passed 113 unit tests and all 12 canonical integration
+scenarios. The extracted VSIX passed four stdio scenarios and the real VS Code
+extension-host scenario. Its active runtime was compared byte-for-byte with the
+committed checkout. The validated package and receipt are saved outside `/tmp`
+as `ddb-native-api.vsix` and `ddb-native-api-validation.txt` in the adapter repo.
+The VSIX SHA-256 is
+`1f187b882c097b1fa51f84e50f5546e89739f3b446b8eb96e3bf05c2070191cd`.
+
+Real runtime coverage uses GDB. LLDB bridge checks pass, but no LLDB runtime is
+installed. Distributed adapter behavior uses the existing DDB mock topology.
 
 Reuse the existing operation admission, authentication, idempotency, frame guards,
 and generated contract machinery. Extend existing integration scenarios where
