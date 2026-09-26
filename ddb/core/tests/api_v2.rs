@@ -718,6 +718,20 @@ fn v2_protojson_is_fail_closed_scope_checked_and_idempotent_end_to_end() {
     );
     assert_eq!(status, StatusCode::GONE, "{stale_registers:?}");
     assert_eq!(stale_registers["code"], "DDB_ERROR_CODE_EXPIRED");
+    let (status, stale_console) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerControlService", "ExecuteRawCommand"),
+        &json!({
+            "context": {"idempotencyKey": "stale-frame-console"},
+            "target": thread_target,
+            "command": "print counter",
+            "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+            "frameId": frame_id_before
+        }),
+        V2_TEST_CONTROL_TOKEN,
+    );
+    assert_eq!(status, StatusCode::GONE, "{stale_console:?}");
+    assert_eq!(stale_console["code"], "DDB_ERROR_CODE_EXPIRED");
+
     let (status, stale_evaluation) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerControlService", "Evaluate"),
         &json!({

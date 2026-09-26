@@ -1583,13 +1583,20 @@ class Bridge(object):
         return "done", {"signals": records}
 
     def _interpreter_exec(self, arguments):
+        frame = None
+        if "--frame" in arguments or "--thread" in arguments:
+            frame, arguments = self._frame_and_arguments(arguments)
         if len(arguments) < 2 or arguments[0] != "console":
             raise ValueError("-interpreter-exec only supports the console interpreter")
         command = " ".join(arguments[1:])
         if command.startswith("signal "):
             command = "process signal " + command[len("signal ") :]
         result = lldb.SBCommandReturnObject()
-        self.debugger.GetCommandInterpreter().HandleCommand(command, result)
+        interpreter = self.debugger.GetCommandInterpreter()
+        if frame is None:
+            interpreter.HandleCommand(command, result)
+        else:
+            interpreter.HandleCommand(command, lldb.SBExecutionContext(frame), result)
         if not result.Succeeded():
             raise RuntimeError(result.GetError())
         output = result.GetOutput() or ""

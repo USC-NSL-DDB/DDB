@@ -511,6 +511,7 @@ export interface ExecuteRawCommandRequest {
   "dialect"?: RawCommandDialect;
   "command"?: string;
   "preconditions"?: Preconditions;
+  "frameId"?: string;
 }
 
 export interface ExecuteRequest {

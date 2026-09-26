@@ -209,6 +209,7 @@ fn public_rust_sdk_negotiates_mutates_reconnects_and_converges() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 let admitted = client
                     .execute_raw_command(v2::ExecuteRawCommandRequest {
+                        frame_id: None,
                         context: Some(v2::RequestContext {
                             idempotency_key: Some(key.to_string()),
                             ..Default::default()

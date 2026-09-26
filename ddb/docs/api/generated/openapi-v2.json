@@ -1005,6 +1005,9 @@
           "dialect": {
             "$ref": "#/components/schemas/RawCommandDialect"
           },
+          "frameId": {
+            "type": "string"
+          },
           "preconditions": {
             "$ref": "#/components/schemas/Preconditions"
           },

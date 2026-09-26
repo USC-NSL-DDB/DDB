@@ -84,42 +84,6 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         .as_str()
         .expect("session id should be present");
     let session_target = json!({"session": {"sessionId": session_id}});
-    if backend == "gdb" {
-        let (status, admitted) = ddb.api_post_json_with_bearer(
-            &rpc("DebuggerControlService", "ExecuteRawCommand"),
-            &json!({
-                "context": {"idempotencyKey": "native-console-set"},
-                "target": session_target,
-                "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
-                "command": "set $ddb_native_console = 41"
-            }),
-            V2_TEST_CONTROL_TOKEN,
-        );
-        assert_eq!(status, StatusCode::OK, "{admitted:?}");
-        let operation =
-            wait_for_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
-        assert_eq!(
-            operation["state"], "OPERATION_STATE_COMPLETED",
-            "{operation:?}"
-        );
-        let (status, admitted) = ddb.api_post_json_with_bearer(
-            &rpc("DebuggerControlService", "Evaluate"),
-            &json!({
-                "context": {"idempotencyKey": "native-console-read"},
-                "target": session_target,
-                "expression": "$ddb_native_console + 1",
-                "evaluationContext": "EVALUATION_CONTEXT_WATCH"
-            }),
-            V2_TEST_CONTROL_TOKEN,
-        );
-        assert_eq!(status, StatusCode::OK, "{admitted:?}");
-        let operation =
-            wait_for_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
-        assert_eq!(
-            operation["result"]["evaluation"]["value"], "42",
-            "{operation:?}"
-        );
-    }
     let (status, capabilities) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "GetCapabilities"),
         &json!({"target": session_target}),
@@ -214,6 +178,54 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         .as_str()
         .expect("frame id should be present");
 
+    if backend == "gdb" {
+        let caller = frames["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|frame| {
+                frame["functionName"]
+                    .as_str()
+                    .is_some_and(|name| name == "ddb_real_loop::main")
+            })
+            .expect("caller frame should be present");
+        assert!(caller["level"].as_u64().unwrap() > 0);
+        let (status, admitted) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerControlService", "ExecuteRawCommand"),
+            &json!({
+                "context": {"idempotencyKey": "native-console-set"},
+                "target": session_target,
+                "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": "set $ddb_native_console = sleep_ms + 36",
+                "frameId": caller["frameId"]
+            }),
+            V2_TEST_CONTROL_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{admitted:?}");
+        let operation =
+            wait_for_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
+        assert_eq!(
+            operation["state"], "OPERATION_STATE_COMPLETED",
+            "{operation:?}"
+        );
+        let (status, admitted) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerControlService", "Evaluate"),
+            &json!({
+                "context": {"idempotencyKey": "native-console-read"},
+                "target": session_target,
+                "expression": "$ddb_native_console + 1",
+                "evaluationContext": "EVALUATION_CONTEXT_WATCH"
+            }),
+            V2_TEST_CONTROL_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{admitted:?}");
+        let operation =
+            wait_for_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
+        assert_eq!(
+            operation["result"]["evaluation"]["value"], "42",
+            "{operation:?}"
+        );
+    }
     let (status, registers) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "ListRegisters"),
         &json!({
@@ -571,6 +583,26 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         completed["state"], "OPERATION_STATE_COMPLETED",
         "{backend}: {completed:?}"
     );
+    if backend == "gdb" {
+        let (status, admitted) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerControlService", "ExecuteRawCommand"),
+            &json!({
+                "context": {"idempotencyKey": "native-console-resume"},
+                "target": target,
+                "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": "next",
+                "frameId": frame_id
+            }),
+            V2_TEST_CONTROL_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{admitted:?}");
+        let operation =
+            wait_for_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
+        assert_eq!(
+            operation["state"], "OPERATION_STATE_COMPLETED",
+            "console execution may invalidate its input frame: {operation:?}"
+        );
+    }
 }
 
 #[test]

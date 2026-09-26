@@ -5091,6 +5091,9 @@ impl serde::Serialize for ExecuteRawCommandRequest {
         if self.preconditions.is_some() {
             len += 1;
         }
+        if self.frame_id.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.ExecuteRawCommandRequest", len)?;
         if let Some(v) = self.context.as_ref() {
             struct_ser.serialize_field("context", v)?;
@@ -5109,6 +5112,9 @@ impl serde::Serialize for ExecuteRawCommandRequest {
         if let Some(v) = self.preconditions.as_ref() {
             struct_ser.serialize_field("preconditions", v)?;
         }
+        if let Some(v) = self.frame_id.as_ref() {
+            struct_ser.serialize_field("frameId", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5124,6 +5130,8 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
             "dialect",
             "command",
             "preconditions",
+            "frame_id",
+            "frameId",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5133,6 +5141,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
             Dialect,
             Command,
             Preconditions,
+            FrameId,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5160,6 +5169,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
                             "dialect" => Ok(GeneratedField::Dialect),
                             "command" => Ok(GeneratedField::Command),
                             "preconditions" => Ok(GeneratedField::Preconditions),
+                            "frameId" | "frame_id" => Ok(GeneratedField::FrameId),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5184,6 +5194,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
                 let mut dialect__ = None;
                 let mut command__ = None;
                 let mut preconditions__ = None;
+                let mut frame_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Context => {
@@ -5216,6 +5227,12 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
                             }
                             preconditions__ = map_.next_value()?;
                         }
+                        GeneratedField::FrameId => {
+                            if frame_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("frameId"));
+                            }
+                            frame_id__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5227,6 +5244,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRawCommandRequest {
                     dialect: dialect__.unwrap_or_default(),
                     command: command__.unwrap_or_default(),
                     preconditions: preconditions__,
+                    frame_id: frame_id__,
                 })
             }
         }

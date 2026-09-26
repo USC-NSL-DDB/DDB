@@ -994,6 +994,7 @@ async fn mock_control_workflow(
     .context("Mock output stream did not connect")??;
     let raw = client
         .execute_raw_command(v2::ExecuteRawCommandRequest {
+            frame_id: None,
             context: Some(mutation_context(DdbClient::new_idempotency_key())),
             target: Some(target.clone()),
             dialect: v2::RawCommandDialect::GdbMi as i32,

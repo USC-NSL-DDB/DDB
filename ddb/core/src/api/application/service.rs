@@ -3236,6 +3236,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_console_rejects_frames_owned_by_another_target_before_dispatch() {
+        let model = RuntimeModel::new();
+        for sid in [42, 43] {
+            model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
+            model.register_thread_group(sid, "i1").await.unwrap();
+            for tid in [11, 12] {
+                model.register_thread(sid, tid, "i1").await.unwrap();
+            }
+            model
+                .update_thread_statuses(sid, &[11, 12], ThreadStatus::STOPPED)
+                .await
+                .unwrap();
+        }
+        let port = Arc::new(RecordingCommandPort::default());
+        let service = service_with_port(model, port.clone());
+        let threads = service.queries.threads_for_sessions(&[42]).await;
+        let owner = &threads[0];
+        let frame_id = service
+            .ids
+            .encode(
+                ResourceIdKind::Frame,
+                format!("{}:{}:0", owner.global_id, owner.execution_revision),
+            )
+            .unwrap();
+        let other_thread_id = service
+            .ids
+            .encode(ResourceIdKind::Thread, threads[1].global_id)
+            .unwrap();
+        let targets = [
+            session_target(service.ids.encode(ResourceIdKind::Session, 43).unwrap()),
+            PublicTarget {
+                selector: Some(target::Selector::Thread(ddb_api_types::v2::ThreadTarget {
+                    thread_id: other_thread_id.clone(),
+                })),
+            },
+            PublicTarget {
+                selector: Some(target::Selector::Multiple(MultipleTarget {
+                    targets: vec![PublicTarget {
+                        selector: Some(target::Selector::Thread(ddb_api_types::v2::ThreadTarget {
+                            thread_id: other_thread_id,
+                        })),
+                    }],
+                })),
+            },
+        ];
+        let principal = PrincipalContext::new("controller").unwrap();
+        for (index, target) in targets.into_iter().enumerate() {
+            let error = service
+                .execute_raw_command(
+                    &principal,
+                    ddb_api_types::v2::ExecuteRawCommandRequest {
+                        context: Some(RequestContext {
+                            idempotency_key: Some(format!("wrong-frame-{index}")),
+                            ..Default::default()
+                        }),
+                        target: Some(target),
+                        dialect: ddb_api_types::v2::RawCommandDialect::BackendNative as i32,
+                        command: "print counter".to_string(),
+                        frame_id: Some(frame_id.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), DdbErrorCode::InvalidArgument);
+        }
+        assert_eq!(port.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn debugger_reads_do_not_wait_past_the_request_deadline() {
         let model = RuntimeModel::new();
         model.register_session(42, "worker", None).await;

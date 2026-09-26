@@ -8,6 +8,11 @@ public API belong in the project release notes.
 
 ### Added
 
+- Native console dialects are accepted by ExecuteRawCommand. Its optional
+  `frame_id` binds a CLI command to an owning stopped frame and rejects stale or
+  mismatched context before dispatch. Console commands may resume execution.
+  Rust, TypeScript and Python request types include the new field.
+
 - Typed breakpoint ignore counts are retained in logical breakpoint properties,
   projected in BreakpointSpec and applied during debugger insertion and group
   inheritance. GDB uses `-i`; the LLDB bridge verifies SetIgnoreCount and rolls

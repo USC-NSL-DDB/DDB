@@ -649,6 +649,9 @@ message ExecuteRawCommandRequest {
   string command = 4;
   // Optional optimistic mutation guards.
   optional Preconditions preconditions = 5;
+  // Optional stopped-frame identity for native CLI dialects. The target must own
+  // this frame. Raw GDB MI commands encode their own frame options instead.
+  optional string frame_id = 6;
 }
 
 // RunDistributedBacktraceRequest admits one DDB-specific backtrace operation.

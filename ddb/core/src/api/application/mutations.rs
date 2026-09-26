@@ -62,7 +62,9 @@ enum CompletionProjection {
         public_id: String,
         context: StateEventContext,
     },
-    RawCommand,
+    RawCommand {
+        frame: Option<StopFrameKey>,
+    },
     DistributedBacktrace {
         max_frames: usize,
     },
@@ -89,13 +91,13 @@ struct ExtensionOperationTask {
 impl CompletionProjection {
     fn frame_guard(&self) -> Option<&StopFrameKey> {
         match self {
-            Self::Evaluation { frame } => frame.as_ref(),
+            Self::Evaluation { frame } | Self::RawCommand { frame } => frame.as_ref(),
             _ => None,
         }
     }
 
     fn requires_concrete_target_completions(&self) -> bool {
-        matches!(self, Self::NoContent | Self::RawCommand)
+        matches!(self, Self::NoContent | Self::RawCommand { .. })
     }
 }
 
@@ -210,33 +212,9 @@ impl DdbApplicationService {
                 "evaluation must resolve to exactly one debugger session",
             ));
         }
-        let frame = match request.frame_id.as_deref() {
-            Some(frame_id) => Some(self.current_frame(frame_id).await?),
-            None => None,
-        };
-        if let Some(frame) = frame.as_ref() {
-            let frame_session_id = self
-                .queries
-                .thread_session_id(frame.global_thread_id)
-                .ok_or_else(|| ApplicationError::not_found("frame thread"))?;
-            if resolved.session_ids.as_slice() != [frame_session_id] {
-                return Err(ApplicationError::invalid(
-                    "target",
-                    "must resolve to the debugger session that owns frame_id",
-                ));
-            }
-            if matches!(
-                &resolved.command,
-                CommandTarget::Thread(thread) if thread.value() != frame.global_thread_id
-            ) {
-                return Err(ApplicationError::invalid(
-                    "target",
-                    "thread target does not own frame_id",
-                ));
-            }
-            resolved.command =
-                CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id));
-        }
+        let frame = self
+            .bind_frame_target(&mut resolved, request.frame_id.as_deref())
+            .await?;
         let frame_option = frame
             .as_ref()
             .map(|frame| {
@@ -261,6 +239,52 @@ impl DdbApplicationService {
             command,
             CompletionProjection::Evaluation { frame },
         )
+    }
+
+    async fn bind_frame_target(
+        &self,
+        resolved: &mut ResolvedTarget,
+        frame_id: Option<&str>,
+    ) -> Result<Option<StopFrameKey>, ApplicationError> {
+        let frame = match frame_id {
+            Some(frame_id) => Some(self.current_frame(frame_id).await?),
+            None => None,
+        };
+        if let Some(frame) = frame.as_ref() {
+            let frame_session_id = self
+                .queries
+                .thread_session_id(frame.global_thread_id)
+                .ok_or_else(|| ApplicationError::not_found("frame thread"))?;
+            if resolved.session_ids.as_slice() != [frame_session_id] {
+                return Err(ApplicationError::invalid(
+                    "target",
+                    "must resolve to the debugger session that owns frame_id",
+                ));
+            }
+            // Session ownership is checked above. Thread-only selectors must
+            // also include this thread, even when nested in a compound target.
+            fn contains_thread(target: &CommandTarget, id: u64, session_id: u64) -> bool {
+                match target {
+                    CommandTarget::Thread(thread) => thread.value() == id,
+                    CommandTarget::Session(session) => *session == session_id,
+                    CommandTarget::SessionSet(sessions) => sessions.contains(&session_id),
+                    CommandTarget::Broadcast => true,
+                    CommandTarget::Multiple(targets) => targets
+                        .iter()
+                        .any(|target| contains_thread(target, id, session_id)),
+                    _ => false,
+                }
+            }
+            if !contains_thread(&resolved.command, frame.global_thread_id, frame_session_id) {
+                return Err(ApplicationError::invalid(
+                    "target",
+                    "thread target does not own frame_id",
+                ));
+            }
+            resolved.command =
+                CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id));
+        }
+        Ok(frame)
     }
 
     pub(crate) async fn create_breakpoint(
@@ -472,7 +496,13 @@ impl DdbApplicationService {
                 format!("unknown raw dialect {}", request.dialect),
             )
         })?;
-        let command = raw_command_text(
+        if dialect == RawCommandDialect::GdbMi && request.frame_id.is_some() {
+            return Err(ApplicationError::invalid(
+                "frame_id",
+                "is supported only for native CLI dialects",
+            ));
+        }
+        let mut command = raw_command_text(
             dialect,
             &self.config.conf.debugger.backend,
             &request.command,
@@ -486,10 +516,21 @@ impl DdbApplicationService {
         } else {
             TargetPurpose::Command
         };
-        let resolved = self
+        let mut resolved = self
             .target_resolver()
             .resolve(request.target.as_ref(), target_purpose)
             .await?;
+        let frame = self
+            .bind_frame_target(&mut resolved, request.frame_id.as_deref())
+            .await?;
+        if let Some(frame) = frame.as_ref() {
+            command = format!(
+                "-interpreter-exec --thread {} --frame {} console {}",
+                frame.global_thread_id,
+                frame.level,
+                quote(&request.command)
+            );
+        }
         validate_raw_command_target(&parsed, &resolved.command)?;
         scope.ensure_active()?;
         self.admit_command(
@@ -500,7 +541,7 @@ impl DdbApplicationService {
             OperationKind::RawCommand,
             resolved,
             command,
-            CompletionProjection::RawCommand,
+            CompletionProjection::RawCommand { frame },
         )
     }
 
@@ -856,7 +897,9 @@ impl DdbApplicationService {
                         return;
                     }
                 }
-                if let Some(frame) = projection.frame_guard() {
+                // A console command may intentionally resume execution. Its frame
+                // must be current before dispatch, not after the command completes.
+                if let CompletionProjection::Evaluation { frame: Some(frame) } = &projection {
                     if let Err(error) = self.ensure_frame_current(frame).await {
                         self.fail_operation(&operation_id, &request_id, error, &session_ids);
                         return;
@@ -1264,7 +1307,7 @@ impl DdbApplicationService {
                 })?;
                 operation_result::Value::NoContent(Empty {})
             }
-            CompletionProjection::RawCommand => {
+            CompletionProjection::RawCommand { .. } => {
                 operation_result::Value::RawCommand(raw_command_result(outcome))
             }
             CompletionProjection::DistributedBacktrace { max_frames } => {
@@ -1976,7 +2019,7 @@ fn basic_retained_partial_result(
     let outcome = CommandOutcome::silent(report.completion().clone());
     let value = match projection {
         CompletionProjection::NoContent => operation_result::Value::NoContent(Empty {}),
-        CompletionProjection::RawCommand => {
+        CompletionProjection::RawCommand { .. } => {
             operation_result::Value::RawCommand(raw_command_result(&outcome))
         }
         CompletionProjection::Selection

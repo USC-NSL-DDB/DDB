@@ -1181,6 +1181,7 @@ fn measure_v2_http_step_stop(
             if output_load != OutputLoad::None {
                 let admission = client
                     .execute_raw_command(v2::ExecuteRawCommandRequest {
+                        frame_id: None,
                         target: Some(target.clone()),
                         dialect: v2::RawCommandDialect::GdbMi as i32,
                         command: format!(

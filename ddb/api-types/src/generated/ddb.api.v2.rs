@@ -3324,6 +3324,10 @@ pub struct ExecuteRawCommandRequest {
     /// Optional optimistic mutation guards.
     #[prost(message, optional, tag = "5")]
     pub preconditions: ::core::option::Option<Preconditions>,
+    /// Optional stopped-frame identity for native CLI dialects. The target must own
+    /// this frame. Raw GDB MI commands encode their own frame options instead.
+    #[prost(string, optional, tag = "6")]
+    pub frame_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// RunDistributedBacktraceRequest admits one DDB-specific backtrace operation.
 #[derive(Clone, PartialEq, ::prost::Message)]

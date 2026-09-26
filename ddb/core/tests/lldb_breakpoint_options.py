@@ -59,5 +59,33 @@ class BreakpointOptionsTest(unittest.TestCase):
         self.target.BreakpointCreateByLocation.assert_not_called()
 
 
+class NativeConsoleOptionsTest(unittest.TestCase):
+    def test_explicit_frame_is_passed_to_the_command_interpreter(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        bridge.debugger = Mock()
+        bridge.emitter = Mock()
+        frame = Mock()
+        thread = Mock()
+        thread.GetFrameAtIndex.return_value = frame
+        bridge._thread = lambda: thread
+        result = Mock()
+        result.GetOutput.return_value = "value = 42\n"
+        context = Mock()
+        lldb = types.SimpleNamespace(
+            SBCommandReturnObject=lambda: result,
+            SBExecutionContext=Mock(return_value=context),
+        )
+        with patch.object(bridge_module, "lldb", lldb):
+            status, payload = bridge._interpreter_exec(
+                ["--frame", "2", "console", "frame variable value"]
+            )
+        thread.GetFrameAtIndex.assert_called_once_with(2)
+        lldb.SBExecutionContext.assert_called_once_with(frame)
+        bridge.debugger.GetCommandInterpreter().HandleCommand.assert_called_once_with(
+            "frame variable value", context, result
+        )
+        self.assertEqual((status, payload), ("done", {"output": "value = 42\n"}))
+
+
 if __name__ == "__main__":
     unittest.main()

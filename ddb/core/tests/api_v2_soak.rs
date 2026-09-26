@@ -243,6 +243,7 @@ fn public_sdk_recovers_after_rollover_and_slow_output_without_blocking_control()
             tokio::time::sleep(Duration::from_millis(25)).await;
             let admission = first_client
                 .execute_raw_command(v2::ExecuteRawCommandRequest {
+                    frame_id: None,
                     context: Some(v2::RequestContext {
                         idempotency_key: Some("soak-output-prime".to_string()),
                         ..Default::default()
@@ -274,6 +275,7 @@ fn public_sdk_recovers_after_rollover_and_slow_output_without_blocking_control()
             iterations("DDB_API_SOAK_OUTPUT_ITERATIONS", OUTPUT_ITERATIONS_DEFAULT);
         let admission = client
             .execute_raw_command(v2::ExecuteRawCommandRequest {
+                frame_id: None,
                 context: Some(v2::RequestContext {
                     idempotency_key: Some("soak-output-bulk".to_string()),
                     ..Default::default()

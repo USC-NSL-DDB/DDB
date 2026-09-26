@@ -572,6 +572,7 @@ ExecuteRawCommandRequest = TypedDict(
         "dialect": NotRequired["RawCommandDialect"],
         "command": NotRequired["str"],
         "preconditions": NotRequired["Preconditions"],
+        "frameId": NotRequired["str"],
     },
 )
 
