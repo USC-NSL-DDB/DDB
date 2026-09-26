@@ -472,15 +472,13 @@ impl DdbApplicationService {
                 format!("unknown raw dialect {}", request.dialect),
             )
         })?;
-        if dialect != RawCommandDialect::GdbMi {
-            return Err(ApplicationError::new(
-                DdbErrorCode::Unsupported,
-                "the public raw-command escape hatch currently accepts the DDB MI facade",
-            )
-            .requiring("raw_command.gdb_mi"));
-        }
-        let parsed: ParsedInputCmd = request.command.as_str().try_into().map_err(|_| {
-            ApplicationError::invalid("command", "is not valid DDB/MI command syntax")
+        let command = raw_command_text(
+            dialect,
+            &self.config.conf.debugger.backend,
+            &request.command,
+        )?;
+        let parsed: ParsedInputCmd = command.as_str().try_into().map_err(|_| {
+            ApplicationError::invalid("command", "is not valid debugger command syntax")
         })?;
         self.validate_preconditions(request.preconditions.as_ref(), None)?;
         let target_purpose = if parsed.prefix == "-break-insert" {
@@ -501,7 +499,7 @@ impl DdbApplicationService {
             &fingerprint,
             OperationKind::RawCommand,
             resolved,
-            request.command,
+            command,
             CompletionProjection::RawCommand,
         )
     }
@@ -1607,6 +1605,40 @@ fn require_nonempty_bounded(
     Ok(())
 }
 
+fn raw_command_text(
+    dialect: RawCommandDialect,
+    backend: &DebuggerBackendKind,
+    command: &str,
+) -> Result<String, ApplicationError> {
+    match dialect {
+        RawCommandDialect::GdbMi => return Ok(command.to_owned()),
+        RawCommandDialect::BackendNative
+            if matches!(
+                backend,
+                DebuggerBackendKind::Gdb | DebuggerBackendKind::Lldb | DebuggerBackendKind::Mock
+            ) => {}
+        RawCommandDialect::GdbCli
+            if matches!(
+                backend,
+                DebuggerBackendKind::Gdb | DebuggerBackendKind::Mock
+            ) => {}
+        RawCommandDialect::LldbCli if matches!(backend, DebuggerBackendKind::Lldb) => {}
+        RawCommandDialect::Unspecified => {
+            return Err(ApplicationError::invalid(
+                "dialect",
+                "a command dialect is required",
+            ))
+        }
+        _ => {
+            return Err(ApplicationError::new(
+                DdbErrorCode::Unsupported,
+                "command dialect does not match the configured debugger",
+            ))
+        }
+    }
+    Ok(format!("-interpreter-exec console {}", quote(command)))
+}
+
 fn execution_command(request: &ExecuteRequest) -> Result<String, ApplicationError> {
     let action = ExecutionAction::try_from(request.action).map_err(|_| {
         ApplicationError::invalid(
@@ -2128,4 +2160,47 @@ fn typed_execution_defaults_to_ddb_history_recording() {
         ..Default::default()
     };
     assert_eq!(execution_command(&interrupt).unwrap(), "-exec-interrupt");
+}
+
+#[test]
+fn native_console_preserves_text_and_rejects_other_backend_dialects() {
+    let command = "set variable message = \"hello world\"";
+    let native = raw_command_text(
+        RawCommandDialect::BackendNative,
+        &DebuggerBackendKind::Gdb,
+        command,
+    )
+    .unwrap();
+    let encoded = native.strip_prefix("-interpreter-exec console ").unwrap();
+    assert_eq!(serde_json::from_str::<String>(encoded).unwrap(), command);
+    assert_eq!(
+        raw_command_text(
+            RawCommandDialect::GdbCli,
+            &DebuggerBackendKind::Gdb,
+            command
+        )
+        .unwrap(),
+        native
+    );
+    assert!(raw_command_text(
+        RawCommandDialect::LldbCli,
+        &DebuggerBackendKind::Gdb,
+        command
+    )
+    .is_err());
+    assert!(raw_command_text(
+        RawCommandDialect::GdbCli,
+        &DebuggerBackendKind::Lldb,
+        command
+    )
+    .is_err());
+    assert_eq!(
+        raw_command_text(
+            RawCommandDialect::GdbMi,
+            &DebuggerBackendKind::Gdb,
+            "-thread-info"
+        )
+        .unwrap(),
+        "-thread-info"
+    );
 }

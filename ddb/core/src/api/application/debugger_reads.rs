@@ -351,9 +351,11 @@ pub(crate) fn decode_variable_children(
     outcome: &CommandOutcome,
 ) -> Result<DecodedVariableChildren, ApplicationError> {
     let payload = single_done_payload(outcome, "variable-child")?;
-    let children = match payload.get("children") {
+    let children: &[Value] = match payload.get("children") {
         Some(Value::List(values)) => values,
         Some(_) => return Err(malformed("debugger variable children have the wrong type")),
+        // GDB omits the collection for a scalar or empty variable object.
+        None if optional_string(payload, "numchild")?.as_deref() == Some("0") => &[],
         None => {
             return Err(malformed(
                 "debugger variable-child response is missing its collection",
@@ -640,6 +642,25 @@ mod tests {
             decode_variables(&outcome(payload)).unwrap_err().code(),
             DdbErrorCode::BackendFailed
         );
+    }
+
+    #[test]
+    fn scalar_expansion_accepts_an_omitted_empty_collection() {
+        let response = |count: &str| {
+            outcome(Dict::new(HashMap::from([(
+                "numchild".to_string(),
+                Value::String(count.to_string()),
+            )])))
+        };
+        assert_eq!(
+            decode_variable_children(&response("0")).unwrap(),
+            DecodedVariableChildren {
+                children: Vec::new(),
+                has_more: false,
+            }
+        );
+        assert!(decode_variable_children(&response("1")).is_err());
+        assert!(decode_variable_children(&outcome(Dict::new(HashMap::new()))).is_err());
     }
 
     #[test]
