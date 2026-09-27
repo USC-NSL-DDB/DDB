@@ -1068,3 +1068,128 @@ fn gdb_raw_breakpoint_command_validates_scope_and_completes_on_a_session() {
         Some(example.breakpoint_line)
     );
 }
+
+#[test]
+fn gdb_inspects_optimized_inline_frames_with_filters_enabled() {
+    let _guard = real_test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("optimized-frame-args");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/optimized_frame_args.cc");
+    let compile = std::process::Command::new("g++")
+        .args(["-g", "-O2"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("GCC C++ compiler is required for the optimized DWARF fixture");
+    assert!(
+        compile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let binary_path = binary.to_string_lossy();
+    let mut ddb = DdbProcess::spawn_real_binary_sessions_with_v2_auth(
+        "gdb",
+        &[BinarySessionSpec {
+            tag: "optimized",
+            alias: "optimized",
+            hash: "optimized",
+            pid: 9303,
+            ip: "127.0.0.1",
+            start_delay_ms: 0,
+            binary_path: &binary_path,
+            binary_args: vec![],
+            stop_at_entry: true,
+        }],
+    );
+    let sessions = ddb.wait_for_sessions_len(1);
+    ddb.wait_for_stdout_count("*stopped", 1);
+    let sid = session_id_by_tag(&sessions, "optimized");
+    ddb.send_cmd(&format!(
+        "901-break-insert --session {sid} {}:4",
+        source.display()
+    ));
+    ddb.wait_for_stdout_line("901^done");
+    ddb.send_cmd(&format!("902-exec-continue --session {sid}"));
+    ddb.wait_for_stdout_count("*stopped", 2);
+
+    let (status, sessions) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSessions"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{sessions:?}");
+    let target = json!({"session": {"sessionId": sessions["sessions"][0]["sessionId"]}});
+    completed_control(
+        &ddb,
+        "ExecuteRawCommand",
+        json!({
+            "context": {"idempotencyKey": "optimized-fixture-symbol"},
+            "target": target, "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+            "command": "python from gdb.FrameDecorator import FrameDecorator; assert any(arg.symbol().name == 'unused' and arg.symbol().addr_class == gdb.SYMBOL_LOC_OPTIMIZED_OUT for arg in FrameDecorator(gdb.newest_frame().older()).frame_args()), 'fixture must have an optimized-out inline argument'"
+        }),
+    );
+    // A pass-through filter alone reproduces the GDB bug. No DDB filtering
+    // rules, synthetic variables, or intentionally throwing decorators.
+    completed_control(
+        &ddb,
+        "ExecuteRawCommand",
+        json!({
+            "context": {"idempotencyKey": "optimized-identity-filter"},
+            "target": target, "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+            "command": "python gdb.frame_filters.clear(); gdb.frame_filters['identity'] = type('Identity', (), {'enabled': True, 'priority': 100, 'filter': lambda self, frames: frames})()"
+        }),
+    );
+    completed_control(
+        &ddb,
+        "ExecuteRawCommand",
+        json!({
+            "context": {"idempotencyKey": "optimized-enable-filter"},
+            "target": target, "dialect": "RAW_COMMAND_DIALECT_GDB_MI",
+            "command": "-enable-frame-filters"
+        }),
+    );
+    let (status, threads) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListThreads"),
+        &json!({"target": target}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{threads:?}");
+    let (status, frames) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListFrames"),
+        &json!({"threadId": threads["threads"][0]["threadId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{frames:?}");
+    let frame = frames["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|frame| {
+            frame["functionName"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("worker"))
+        })
+        .expect("optimized inline worker frame must remain visible");
+    let (status, scopes) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListScopes"),
+        &json!({"frameId": frame["frameId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{scopes:?}");
+    let (status, variables) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListVariables"),
+        &json!({"scopeId": scopes["scopes"][0]["scopeId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{variables:?}");
+    assert!(
+        variables["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|var| var["name"] == "visible" && var["value"] == "8"),
+        "{variables:?}"
+    );
+}
