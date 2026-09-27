@@ -22,8 +22,10 @@ public API belong in the project release notes.
   metadata when stack listings omit child counts. Temporary inspection roots use
   the same bounded cleanup ownership as expansion.
 
-- Framed WATCH/HOVER evaluations retain a stopped value and return its opaque
-  variable identity, expandability, optional exact child count and display hint.
+- Framed WATCH/HOVER evaluations return expandability, optional exact child count
+  and display hint. Expandable values retain an opaque variable identity; scalar
+  values release their temporary object so repeated refreshes do not exhaust the
+  inspection budget.
   Expansion reuses the evaluated value without executing the expression again.
   DDB cleans up roots on execution changes and thread removal. The advertised
   `max_variable_objects` limit bounds retained and in-flight roots. Generated

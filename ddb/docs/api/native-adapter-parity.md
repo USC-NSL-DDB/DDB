@@ -1,13 +1,18 @@
 # Native adapter API work
 
-This work continues on `codex/vscode-api-parity` in the persistent worktree
-`/mnt/home/ybyan/projs/DDB-vscode-api-parity`. The main DDB checkout is unchanged.
-The adapter remains on `codex/canonical-ddb-api` until the backend contracts are ready.
+The VS Code adapter uses typed API v2 operations for inspection, variable
+assignment, debugger settings and execution. Native console requests keep the
+debugger's CLI syntax; DDB performs its internal protocol conversion.
 
-The objective is to remove the adapter's construction of GDB MI commands, not
-just send those commands through a different transport.
+The implementation includes GDB frame-filter isolation for local inspection and
+managed debugger cleanup. See [the GDB hang analysis](../gdb-frame-filter-inspection-hang.md)
+for the upstream cause of filtered variable inspection hanging.
 
-## Implemented so far
+The entries below record implementation and validation checkpoints from the
+migration. Commit IDs, test counts and package hashes describe those checkpoints,
+not the current build. Reproduce validation from the adapter's test instructions.
+
+## Implementation checkpoints
 
 - Empty variable expansion accepts GDB's omitted children collection only when
   `numchild` explicitly equals zero. Malformed responses remain errors.
@@ -112,3 +117,15 @@ eight managed-serve tests passed; both real GDB API tests passed; all four GDB
 EOF/policy combinations passed. No SDK or protocol changes were required.
 The latest VSIX hash, commits and packaged test results are in the adapter's
 `ddb-native-api-validation.txt` receipt.
+
+## Evaluation resource lifetime
+
+Scalar watch and hover evaluations release their temporary backend object after
+reading its value and metadata. They return no expandable variable identity.
+A real GDB regression refreshes a scalar watch 1,025 times at one stop, exceeding
+the 1,024-root limit without consuming retained capacity.
+
+Expandable evaluations retain their original value so expanding a side-effecting
+expression does not execute it again. Those identities expire when execution
+changes. The shared stop-scoped root limit still applies to distinct retained
+expandable values; this change does not introduce an eviction or release API.

@@ -1388,12 +1388,19 @@ impl DdbApplicationService {
                         "debugger returned an unexpected variable object name",
                     ));
                 }
-                let variable_id = self.retain_evaluation_object(object).await?;
+                // Leaf evaluations cannot be expanded, so retaining their roots
+                // would exhaust the stop-scoped budget on watch/hover refreshes.
+                let variable_id = if decoded.has_children {
+                    Some(self.retain_evaluation_object(object).await?)
+                } else {
+                    self.ensure_frame_current(&object.frame).await?;
+                    None
+                };
                 operation_result::Value::Evaluation(EvaluationResult {
                     expression: "<redacted>".to_string(),
                     value: decoded.value,
                     type_name: decoded.type_name,
-                    variable_id: Some(variable_id),
+                    variable_id,
                     address: None,
                     has_children: decoded.has_children,
                     child_count: decoded.child_count,

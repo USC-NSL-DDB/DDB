@@ -628,6 +628,25 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         "{backend}: {completed:?}"
     );
     assert!(completed["result"]["evaluation"]["value"].is_string());
+    if backend == "gdb" {
+        // Scalar watches have no expandable identity. Repeated refreshes at the
+        // same stop must not consume the shared 1,024-root inspection budget.
+        for index in 0..1_025 {
+            let evaluated = completed_control(
+                &ddb,
+                "Evaluate",
+                json!({
+                    "context": {"idempotencyKey": format!("scalar-refresh-{index}")},
+                    "target": target,
+                    "expression": "counter",
+                    "frameId": frame_id,
+                    "evaluationContext": "EVALUATION_CONTEXT_WATCH"
+                }),
+            );
+            assert!(evaluated["result"]["evaluation"]["value"].is_string());
+            assert!(evaluated["result"]["evaluation"]["variableId"].is_null());
+        }
+    }
 
     let (status, breakpoints) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "ListBreakpoints"),
