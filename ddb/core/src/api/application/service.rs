@@ -1011,10 +1011,13 @@ impl DdbApplicationService {
             .strip_suffix(":locals")
             .ok_or_else(|| ApplicationError::not_found("scope"))?;
         let frame = self.current_frame_key(frame_key).await?;
+        // Frame filters shape displayed call stacks, not the physical frame
+        // identified by this API handle. GDB's decorated variable enumeration
+        // can also hang on library frames; inspect their native locals directly.
         let outcome = scope
             .wait(self.command_port.execute(
                 &format!(
-                    "-stack-list-variables --thread {} --frame {} --all-values",
+                    "-stack-list-variables --thread {} --frame {} --no-frame-filters --all-values",
                     frame.global_thread_id, frame.level
                 ),
                 CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id)),

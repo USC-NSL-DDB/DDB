@@ -266,6 +266,28 @@ fn assert_typed_inspection_on_backend(backend: &str) {
     let scope_id = scopes["scopes"][0]["scopeId"]
         .as_str()
         .expect("scope id should be present");
+    if backend == "gdb" {
+        let filter = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/api_frame_filter.py");
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "install-inspection-frame-filter"},
+                "target": session_target, "dialect": "RAW_COMMAND_DIALECT_BACKEND_NATIVE",
+                "command": format!("python import runpy; runpy.run_path({})", serde_json::to_string(&filter.to_string_lossy()).unwrap())
+            }),
+        );
+        completed_control(
+            &ddb,
+            "ExecuteRawCommand",
+            json!({
+                "context": {"idempotencyKey": "enable-inspection-frame-filter"},
+                "target": session_target, "dialect": "RAW_COMMAND_DIALECT_GDB_MI",
+                "command": "-enable-frame-filters"
+            }),
+        );
+    }
     let (status, variables) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "ListVariables"),
         &json!({"scopeId": scope_id}),
