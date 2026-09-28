@@ -291,6 +291,9 @@ impl DdbProcess {
 
         let mut command = Command::new(binary);
         command
+            // Fixtures supply their own symbols. Ignore distro debuginfod URLs
+            // so debugger startup cannot depend on an external symbol server.
+            .env("DEBUGINFOD_URLS", "")
             .arg(config_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1078,6 +1081,10 @@ pub fn build_real_loop_example() -> &'static BuiltRealExample {
             .arg("build")
             .arg("--manifest-path")
             .arg(&manifest_path)
+            // Keep standalone fixture output at the path consumed below even
+            // when the parent test suite uses a shared CARGO_TARGET_DIR.
+            .arg("--target-dir")
+            .arg(manifest_path.parent().unwrap().join("target"))
             .status()
             .expect("fixture build command should run");
         assert!(status.success(), "fixture build should succeed");
@@ -1116,6 +1123,10 @@ pub fn build_real_dbt_example() -> &'static BuiltRealBinaryExample {
             .arg("build")
             .arg("--manifest-path")
             .arg(&manifest_path)
+            // Keep standalone fixture output at the path consumed below even
+            // when the parent test suite uses a shared CARGO_TARGET_DIR.
+            .arg("--target-dir")
+            .arg(manifest_path.parent().unwrap().join("target"))
             .status()
             .expect("fixture build command should run");
         assert!(status.success(), "dbt fixture build should succeed");

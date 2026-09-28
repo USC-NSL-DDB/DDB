@@ -3,8 +3,8 @@ mod support;
 use std::process::{Child, Command};
 
 use support::{
-    bkpt_id, build_real_loop_example, real_test_guard, session_id_by_tag, AttachSessionSpec,
-    BinarySessionSpec, DdbProcess,
+    bkpt_id, build_real_loop_example, capture_session_context, real_test_guard, session_id_by_tag,
+    AttachSessionSpec, BinarySessionSpec, DdbProcess,
 };
 
 struct Debuggee(Child);
@@ -48,9 +48,34 @@ fn launches_real_example_under_lldb_and_hits_source_breakpoint() {
 
     let sessions = ddb.wait_for_sessions_len(1);
     ddb.wait_for_stdout_count("thread-created", 1);
-    ddb.wait_for_stdout_count("*stopped", 1);
+    let entry = ddb.wait_for_stdout_line_with_all(&["*stopped", "reason=\"entry\""]);
+    assert!(
+        entry.contains("main"),
+        "entry stop must reach application main: {entry}"
+    );
 
     let sid = session_id_by_tag(&sessions, "real-lldb-a");
+    let pc = capture_session_context(&ddb, sid)["pc"];
+    ddb.send_cmd(&format!("590-stack-list-frames --session {sid}"));
+    ddb.wait_for_stdout_line("590^done");
+    // Inspecting a frame caches its address in LLDB. Register edits must also
+    // update that cached frame, even when no execution occurred between reads.
+    ddb.send_cmd(&format!(
+        "591-switch-context-custom --session {sid} pc={}",
+        pc + 4
+    ));
+    ddb.wait_for_stdout_line("591^done");
+    ddb.send_cmd(&format!("592-stack-list-frames --session {sid} 0 0"));
+    let changed_frame = ddb.wait_for_stdout_line("592^done");
+    ddb.send_cmd(&format!(
+        "593-switch-context-custom --session {sid} pc={pc}"
+    ));
+    ddb.wait_for_stdout_line("593^done");
+    assert!(
+        changed_frame.contains(&format!("addr=\"{:#x}\"", pc + 4)),
+        "frame address stayed cached after context switch: {changed_frame}"
+    );
+
     ddb.send_cmd(&format!(
         "601-break-insert --session {} {}:{}",
         sid, source_path, example.breakpoint_line
@@ -96,6 +121,10 @@ fn launches_real_example_under_lldb_and_hits_source_breakpoint() {
         "record-time command did not update the inferior environment: {continued}"
     );
     ddb.wait_for_stdout_count("reason=\"breakpoint-hit\"", 2);
+    ddb.send_cmd(&format!("607-send-signal --session {} SIGUSR1", sid));
+    ddb.wait_for_stdout_line_with_all(&["*stopped", "signal-name=\"SIGUSR1\""]);
+    ddb.send_cmd(&format!("608-send-signal --session {} SIGKILL", sid));
+    ddb.wait_for_sessions_len(0);
 }
 
 #[test]

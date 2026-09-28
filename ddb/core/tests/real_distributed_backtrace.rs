@@ -146,6 +146,7 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
 
     let sessions = ddb.wait_for_sessions_len(depth);
     ddb.wait_for_stdout_count("thread-created", depth);
+    let mut caller_pcs = Vec::new();
     for role_index in 1..=depth {
         let sid = session_id_by_tag(&sessions, &session_tag(role_index));
         let sid_needle = format!("session-id=\"{sid}\"");
@@ -158,6 +159,27 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
             "role {role_index} session {sid} produced an incomplete register context: {context:?}"
         );
         write_context_file(ctx_dir.path(), role_index, &context);
+        if role_index < depth {
+            caller_pcs.push((sid, context["pc"]));
+            // The real RPC caller keeps running after capturing its metadata.
+            // Reconstruct an earlier stack, not the same stop cached by LLDB.
+            let token = 7_000 + sid;
+            ddb.send_cmd(&format!("{token}-exec-continue --session {sid}"));
+            ddb.wait_for_stdout_line(&format!("{token}^running"));
+        }
+    }
+
+    for (sid, pc) in &caller_pcs {
+        let token = 7_500 + sid;
+        ddb.send_cmd(&format!("{token}-exec-interrupt --session {sid}"));
+        ddb.wait_for_stdout_line(&format!("{token}^done"));
+        ddb.wait_for_session_stopped(*sid);
+        assert_ne!(capture_session_context(&ddb, *sid)["pc"], *pc);
+        let thread = resolve_single_thread_gtid(&mut ddb, *sid);
+        // Populate LLDB's frame cache, as VS Code does on a paused thread.
+        let token = 7_600 + sid;
+        ddb.send_cmd(&format!("{token}-stack-list-frames --thread {thread}"));
+        ddb.wait_for_stdout_line(&format!("{token}^done"));
     }
 
     let leaf_sid = session_id_by_tag(&sessions, &session_tag(depth));
@@ -190,6 +212,16 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
         output.contains(&format!("session=\"{root_sid}\"")),
         "root session {root_sid} missing from DBT output: {output}"
     );
+    for (_, pc) in caller_pcs {
+        assert!(
+            output.split("addr=\"").skip(1).any(|part| {
+                part.split('"').next().and_then(|address| {
+                    u64::from_str_radix(address.trim_start_matches("0x"), 16).ok()
+                }) == Some(pc)
+            }),
+            "saved caller PC {pc:#x} missing from reconstructed stack: {output}"
+        );
+    }
     assert_eq!(
         output.matches("boundary_frame=\"1\"").count(),
         depth.saturating_sub(1),

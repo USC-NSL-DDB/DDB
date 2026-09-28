@@ -346,6 +346,8 @@ class ProcessMonitor(object):
         self._last_stop_id = None
         self._stack_prewarmed = False
         self.pause_started_ns = None
+        self.entry_breakpoint_id = None
+        self.entry_instruction = False
         self._lock = threading.Lock()
 
     def start(self):
@@ -364,6 +366,8 @@ class ProcessMonitor(object):
             self._last_stop_id = None
             self._stack_prewarmed = False
             self.pause_started_ns = None
+            self.entry_breakpoint_id = None
+            self.entry_instruction = False
 
     def snapshot(self, process=None):
         process = process or self.debugger.GetSelectedTarget().GetProcess()
@@ -493,8 +497,7 @@ class ProcessMonitor(object):
                 "LLDB stack prewarm failed:\n{}".format(traceback.format_exc()), "log"
             )
 
-    @staticmethod
-    def _stop_payload(process, thread, state):
+    def _stop_payload(self, process, thread, state):
         payload = {"reason": "stopped", "stopped-threads": "all"}
         if thread and thread.IsValid():
             payload["thread-id"] = _text(thread.GetIndexID())
@@ -502,7 +505,13 @@ class ProcessMonitor(object):
             if reason == lldb.eStopReasonBreakpoint:
                 payload["reason"] = "breakpoint-hit"
                 if thread.GetStopReasonDataCount() > 0:
-                    payload["bkptno"] = _text(thread.GetStopReasonDataAtIndex(0))
+                    breakpoint_id = thread.GetStopReasonDataAtIndex(0)
+                    if breakpoint_id == self.entry_breakpoint_id:
+                        payload["reason"] = "entry"
+                        process.GetTarget().BreakpointDelete(breakpoint_id)
+                        self.entry_breakpoint_id = None
+                    else:
+                        payload["bkptno"] = _text(breakpoint_id)
             elif reason in (
                 lldb.eStopReasonPlanComplete,
                 lldb.eStopReasonTrace,
@@ -516,6 +525,10 @@ class ProcessMonitor(object):
                     payload["signal-name"] = _text(
                         unix_signals.GetSignalAsCString(number)
                     )
+                    if self.entry_instruction and number == signal.SIGSTOP:
+                        payload["reason"] = "entry"
+                        payload.pop("signal-name", None)
+                        self.entry_instruction = False
             target = process.GetTarget()
             frame = thread.GetFrameAtIndex(0)
             if frame and frame.IsValid():
@@ -606,6 +619,7 @@ class Bridge(object):
             "-target-attach": self._attach,
             "-exec-run": self._run,
             "-exec-continue": self._continue,
+            "-exec-signal": self._signal,
             "-record-time-and-continue": self._record_time_and_continue,
             "-exec-interrupt": self._interrupt,
             "-exec-interrupt-if-running": self._interrupt_if_running,
@@ -750,9 +764,20 @@ class Bridge(object):
             True,
         )
         if "--start" in arguments:
-            launch_info.SetLaunchFlags(
-                launch_info.GetLaunchFlags() | lldb.eLaunchFlagStopAtEntry
-            )
+            # Match -exec-run --start: stop at application main, not the loader's
+            # first instruction. LLDB's StopAtEntry launch flag means the latter.
+            entry = target.BreakpointCreateByName("main")
+            if entry and entry.IsValid() and entry.GetNumLocations() > 0:
+                # Delete after projecting the stop. LLDB removes one-shot IDs
+                # from stop-reason data before clients can identify their hit.
+                self.monitor.entry_breakpoint_id = entry.GetID()
+            else:
+                if entry and entry.IsValid():
+                    target.BreakpointDelete(entry.GetID())
+                self.monitor.entry_instruction = True
+                launch_info.SetLaunchFlags(
+                    launch_info.GetLaunchFlags() | lldb.eLaunchFlagStopAtEntry
+                )
         error = lldb.SBError()
         process = target.Launch(launch_info, error)
         if error.Fail() or not process or not process.IsValid():
@@ -765,6 +790,37 @@ class Bridge(object):
         if error.Fail():
             raise RuntimeError(_error_text(error))
         return "running", {}
+
+    def _signal(self, arguments):
+        if len(arguments) != 1:
+            raise ValueError("-exec-signal requires one signal name or number")
+        process = self._process()
+        name = arguments[0]
+        numeric = name[3:] if name.startswith("SIG") else name
+        number = (
+            int(numeric)
+            if numeric.isdigit()
+            else process.GetUnixSignals().GetSignalNumberFromName(name)
+        )
+        if number <= 0:
+            raise ValueError("Expected a positive signal number or name: " + name)
+        if number == signal.SIGKILL:
+            return self._kill([])
+        if process.GetState() in (
+            lldb.eStateStopped, lldb.eStateCrashed, lldb.eStateSuspended
+        ):
+            # SBProcess.Signal uses LLDB's asynchronous interrupt path, which
+            # rejects stopped targets on Linux. DDB runs this bridge on the
+            # inferior's host, including SSH sessions. Queue the signal before
+            # resuming so a startup signal cannot race past the runtime waiter.
+            if process.GetTarget().GetPlatform().GetName() != "host":
+                raise ValueError("Signal delivery to a stopped remote LLDB target is unsupported")
+            os.kill(process.GetProcessID(), number)
+            return self._continue([])
+        error = process.Signal(number)
+        if error.Fail():
+            raise RuntimeError(_error_text(error))
+        return "done", {}
 
     def _find_environment_variable(self, name):
         process = self._process()
@@ -1533,6 +1589,11 @@ class Bridge(object):
             old_context[alias] = _text(_value_u64(register))
             if not register.SetValueFromCString(rendered):
                 raise RuntimeError("failed to set LLDB register {}".format(register_name))
+        # Writing an SBValue register does not invalidate LLDB's cached frame
+        # address/unwinder. SetPC updates that state after all registers change.
+        pc = _value_u64(frame.FindRegister(register_names["pc"]))
+        if not frame.SetPC(pc):
+            raise RuntimeError("failed to refresh LLDB frames after context switch")
         return "done", {"message": "success", "old_ctx": old_context}
 
     def _get_remote_backtrace(self, _arguments):
@@ -1604,7 +1665,7 @@ class Bridge(object):
             raise ValueError("-interpreter-exec only supports the console interpreter")
         command = " ".join(arguments[1:])
         if command.startswith("signal "):
-            command = "process signal " + command[len("signal ") :]
+            return self._signal(shlex.split(command)[1:])
         result = lldb.SBCommandReturnObject()
         interpreter = self.debugger.GetCommandInterpreter()
         if frame is None:

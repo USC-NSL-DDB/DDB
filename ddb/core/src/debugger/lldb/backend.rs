@@ -198,9 +198,8 @@ impl DebuggerBackend for LldbBackend {
     fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
         match action {
             DebuggerBootstrapAction::Signal(signal) => format!(
-                "-interpreter-exec console {}",
-                serde_json::to_string(&format!("process signal {signal}"))
-                    .expect("serializing a string cannot fail")
+                "-exec-signal {}",
+                serde_json::to_string(signal).expect("serializing a string cannot fail")
             ),
         }
     }
@@ -274,6 +273,14 @@ mod tests {
             .commands
             .iter()
             .any(|command| command.contains("program with spaces")));
+    }
+
+    #[test]
+    fn bootstrap_signals_use_the_bridge_delivery_command() {
+        assert_eq!(
+            LldbBackend.bootstrap_action_command(&DebuggerBootstrapAction::Signal("SIG40".into())),
+            "-exec-signal \"SIG40\""
+        );
     }
 
     #[test]

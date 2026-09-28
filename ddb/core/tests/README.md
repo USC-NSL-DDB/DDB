@@ -102,7 +102,8 @@ The shared harness in `support/mod.rs` will:
 The fixture is intentionally simple and architecture-neutral:
 
 - breakpoints are inserted by source file and line number
-- tests assert MI/API behavior, not register values or instruction addresses
+- tests assert MI/API behavior and compare captured register addresses when
+  verifying context restoration; they do not assume fixed instruction addresses
 
 The attach fixture explicitly allows the sibling debugger relationship under
 Linux Yama `ptrace_scope=1`. Production targets remain subject to their normal
@@ -129,3 +130,43 @@ compilation, strict Clippy checks for the DDB package, and:
 cargo test --workspace --all-targets
 cargo test -p ddb --all-targets --all-features
 ```
+
+## LLDB gRPC validation
+
+The instrumented GCC-built greeter binaries require LLDB 20 or later. LLDB 18
+rejects `DW_FORM_data16` and leaves their source breakpoints unresolved. On Ubuntu
+24.04, install `lldb-20 python3-lldb-20` and make that version available as `lldb`
+on each target host. Discovered targets use SSH, so check its executable lookup
+there as well. The integration harness clears `DEBUGINFOD_URLS` to keep remote
+symbol servers out of local test timing.
+
+The LLDB regressions cover:
+
+- Stopping at application `main` for `stop_at_entry`, with an entry stop reason.
+- Sending signals to a paused process, including terminating it with SIGKILL.
+- Updating the cached frame address after restoring saved registers. An SBValue
+  register write alone updates the register but leaves LLDB's frame cache stale;
+  the bridge finishes with `SBFrame.SetPC` to refresh the frame and unwinder.
+- Distributed stacks after callers have executed beyond their saved contexts.
+- Launch, attach, variables, memory, registers, and typed API operations.
+
+Signal delivery honors LLDB's signal stop/pass policy. A stopped local target
+receives a queued host signal before resuming, because LLDB's asynchronous
+`SBProcess.Signal` path rejects stopped targets. The bridge runs on the target
+host for SSH sessions too. Runtime startup signal 40 wakes `sigwait`, after
+which the DDB connector raises SIGTRAP to establish the initial pause. Signal 0
+is not a supported delivery operation; Continue is a separate operation.
+
+Run the focused backend checks from this worktree:
+
+```sh
+CARGO_TARGET_DIR=/tmp/ddb-canonical-build cargo test --manifest-path ddb/Cargo.toml \
+  -p ddb --bin ddb --test api_v2_real_backends \
+  --test real_lldb_session_bootstrap --test real_distributed_backtrace
+python3 ddb/core/tests/lldb_breakpoint_options.py
+```
+
+The adapter repository contains `examples/grpc/` profiles and an extension-host
+scenario that drives the actual greeter client and server. That scenario is
+required in addition to the synthetic fixtures to validate C++ RPC caller
+frames, VS Code selection, and attached-process cleanup.

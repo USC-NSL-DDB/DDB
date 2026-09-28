@@ -3335,7 +3335,7 @@ mod tests {
             .ids
             .encode(
                 ResourceIdKind::Variable,
-                &encode_variable_identity(&VariableIdentity {
+                encode_variable_identity(&VariableIdentity {
                     version: 1,
                     frame_key: format!("{}:{}:0", owner.global_id, owner.execution_revision),
                     root_ordinal: 0,
