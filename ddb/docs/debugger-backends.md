@@ -25,7 +25,7 @@ event reducers and domain services
 - bundled runtime assets
 - debugger process startup
 - attach or launch bootstrap
-- interrupt, console, framework-action, and shutdown commands
+- interrupt, signal delivery, console, framework-action, and shutdown commands
 - construction of the per-session protocol codec
 
 Startup is an explicit two-phase plan. A backend may first write the minimal
@@ -112,6 +112,54 @@ Unsupported capability combinations fail during backend resolution, before the
 application runtime starts. They must not degrade into partial sessions or
 silently change command semantics.
 
+## Signal delivery contract
+
+The public `DebuggerControlService.Execute` action `SIGNAL`, legacy
+`-send-signal`, and framework startup signals all use
+`DebuggerBackend::signal_command(&DebuggerSignal)`. `DebuggerSignal` validates
+one signal token, so framework plugins and user requests cannot inject console
+commands. Signal names and numbers are interpreted for the target platform.
+
+The operation delivers a signal and resumes the stopped process, subject to
+its debugger's signal stop/pass policy. It does not promise that the process
+will remain running: the debugger may stop on that signal, and SIGKILL ends the
+process. A thread target selects its owning session. Command flow interrupts
+a running process first and holds one session lease across interrupt and
+delivery so another command cannot interleave. It restores any saved execution
+registers left by distributed-stack inspection before delivering the signal,
+using the same restoration step as Continue. A failed interrupt or restoration
+aborts delivery.
+The post-attach startup handshake already has a stopped process. Unsupported signals or delivery mechanisms must return errors, never
+silently continue without delivering the signal.
+
+Framework plugins declare `DebuggerBootstrapAction::Signal`, without command
+syntax. Its shared implementation validates the token and delegates to the same
+backend method as an ordinary signal request. A new backend must implement that
+method explicitly, including returning an error for unsupported delivery.
+Generic command flow must not render `signal ...` or another debugger's syntax.
+Raw console commands remain backend-native and are a separate interface.
+
+GDB renders its native `signal` command. LLDB renders the bridge's
+`-exec-signal` operation. On Linux, LLDB's native asynchronous signal path rejects
+stopped processes. Its bridge queues an OS signal on the inferior's host before
+resuming. This also works for DDB's SSH sessions because the bridge runs on the
+target host. The bridge rejects stopped non-host LLDB platforms, where a local
+PID could refer to a different process. This platform-specific mechanism stays
+inside the LLDB implementation, without changes to connectors or framework
+plugins.
+
+For the gRPC/Nu startup handshake, the connector consumes signal 40 through
+`sigwait` and raises SIGTRAP for the initial pause. Signal 40 is a framework
+requirement, not a special case in command flow. The LLDB signal implementation
+also handles other signals. GDB's `signal 0` convention is backend-specific and
+is not supported by LLDB; portable clients use Continue to resume normally.
+
+The real API suite exercises the same typed signal request on GDB and LLDB for
+both stopped and running targets. Distributed-stack tests verify that nonfatal
+signal delivery restores a reconstructed caller first, on both backends.
+LLDB bootstrap tests additionally cover named
+signals and the real greeter suite checks the signal-40 connector handshake.
+
 ## Pause-time and FAKETIME contract
 
 The `-record-time-and-continue`, `-record-time-and-next`,
@@ -163,7 +211,8 @@ configuration, and the fail-closed no-resume behavior.
 
 1. Add its configuration variant and backend module under `core/src/debugger/`.
 2. Implement `DebuggerBackend`, including a truthful capability declaration
-   and fail-fast validation for unsupported framework requirements.
+   and fail-fast validation for unsupported framework requirements. Implement the
+   signal-delivery contract above rather than relying on a GDB console fallback.
 3. Implement a per-session `DebuggerProtocol`. Keep native parser types inside
    the backend module and normalize at this boundary.
 4. Render all bootstrap and shutdown behavior in the backend. Do not add native

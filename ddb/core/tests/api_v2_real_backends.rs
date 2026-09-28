@@ -980,6 +980,69 @@ fn assert_typed_inspection_on_backend(backend: &str) {
     }
 }
 
+// Both backends must serve the same typed signal operation without relying on
+// a console spelling shared with GDB. Exercise stopped and running targets.
+fn assert_typed_signal_on_backend(backend: &str) {
+    let example = build_real_loop_example();
+    let binary_path = example.binary_path.to_string_lossy();
+    for running in [false, true] {
+        let mut ddb = DdbProcess::spawn_real_binary_sessions_with_v2_auth(
+            backend,
+            &[BinarySessionSpec {
+                tag: "signal-target",
+                alias: "signal-target",
+                hash: "signal-target",
+                pid: 9_310,
+                ip: "127.0.0.1",
+                start_delay_ms: 0,
+                binary_path: &binary_path,
+                binary_args: vec!["--max-iterations".into(), "100000".into()],
+                stop_at_entry: true,
+            }],
+        );
+        ddb.wait_for_sessions_len(1);
+        ddb.wait_for_stdout_count("*stopped", 1);
+        let (status, sessions) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ListSessions"),
+            &json!({}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{sessions:?}");
+        let target = json!({"session": {"sessionId": sessions["sessions"][0]["sessionId"]}});
+        if running {
+            completed_control(
+                &ddb,
+                "Execute",
+                json!({
+                    "context": {"idempotencyKey": "signal-resume"},
+                    "target": target, "action": "EXECUTION_ACTION_CONTINUE"
+                }),
+            );
+        }
+        completed_control(
+            &ddb,
+            "Execute",
+            json!({
+                "context": {"idempotencyKey": "signal-kill"},
+                "target": target, "action": "EXECUTION_ACTION_SIGNAL", "signalName": "SIGKILL"
+            }),
+        );
+        ddb.wait_for_sessions_len(0);
+    }
+}
+
+#[test]
+fn gdb_typed_signal_handles_stopped_and_running_targets() {
+    let _guard = real_test_guard();
+    assert_typed_signal_on_backend("gdb");
+}
+
+#[test]
+fn lldb_typed_signal_handles_stopped_and_running_targets() {
+    let _guard = real_test_guard();
+    assert_typed_signal_on_backend("lldb");
+}
+
 #[test]
 fn gdb_serves_typed_v2_inspection_contract() {
     let _guard = real_test_guard();

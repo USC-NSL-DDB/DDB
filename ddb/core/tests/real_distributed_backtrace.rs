@@ -212,12 +212,12 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
         output.contains(&format!("session=\"{root_sid}\"")),
         "root session {root_sid} missing from DBT output: {output}"
     );
-    for (_, pc) in caller_pcs {
+    for (_, pc) in &caller_pcs {
         assert!(
             output.split("addr=\"").skip(1).any(|part| {
                 part.split('"').next().and_then(|address| {
                     u64::from_str_radix(address.trim_start_matches("0x"), 16).ok()
-                }) == Some(pc)
+                }) == Some(*pc)
             }),
             "saved caller PC {pc:#x} missing from reconstructed stack: {output}"
         );
@@ -227,6 +227,30 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
         depth.saturating_sub(1),
         "unexpected boundary-frame count for depth {depth}: {output}"
     );
+
+    for (sid, _) in caller_pcs {
+        let in_custom_context = |ddb: &DdbProcess| {
+            ddb.api_get("/sessions")
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|session| session["sid"] == sid)
+                .unwrap()["in_custom_context"]
+                .as_bool()
+                .unwrap()
+        };
+        assert!(in_custom_context(&ddb), "DBT must reconstruct caller {sid}");
+        ddb.send_cmd(&format!("-send-signal --session {sid} SIGCONT"));
+        // Signal commands have no legacy result line. A subsequent command on
+        // that session provides a completion barrier before checking the model.
+        let token = 9_000 + sid;
+        ddb.send_cmd(&format!("{token}-list-signals --session {sid}"));
+        ddb.wait_for_stdout_line(&format!("{token}^done"));
+        assert!(
+            !in_custom_context(&ddb),
+            "signal resumed caller {sid} without restoring its real registers"
+        );
+    }
 }
 
 #[test]

@@ -4,9 +4,9 @@ use crate::{
     common::config::{Config, OnExit},
     debugger::{
         protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerBootstrapPlan,
-        DebuggerSessionContext,
+        DebuggerSessionContext, DebuggerSignal,
     },
-    plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
+    plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
 
@@ -195,13 +195,11 @@ impl DebuggerBackend for LldbBackend {
         )
     }
 
-    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
-        match action {
-            DebuggerBootstrapAction::Signal(signal) => format!(
-                "-exec-signal {}",
-                serde_json::to_string(signal).expect("serializing a string cannot fail")
-            ),
-        }
+    fn signal_command(&self, signal: &DebuggerSignal) -> Result<String> {
+        Ok(format!(
+            "-exec-signal {}",
+            serde_json::to_string(signal.as_str()).expect("serializing a string cannot fail")
+        ))
     }
 
     fn shutdown_commands(&self, on_exit: &OnExit) -> String {
@@ -278,7 +276,11 @@ mod tests {
     #[test]
     fn bootstrap_signals_use_the_bridge_delivery_command() {
         assert_eq!(
-            LldbBackend.bootstrap_action_command(&DebuggerBootstrapAction::Signal("SIG40".into())),
+            LldbBackend
+                .bootstrap_action_command(&crate::plugin::DebuggerBootstrapAction::Signal(
+                    "SIG40".into()
+                ))
+                .unwrap(),
             "-exec-signal \"SIG40\""
         );
     }

@@ -111,6 +111,28 @@ impl DebuggerBootstrapPlan {
     }
 }
 
+/// A single debugger signal name or number, never console command text.
+/// Name/number availability is target-specific and is checked by the backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebuggerSignal(String);
+
+impl DebuggerSignal {
+    pub fn new(signal: &str) -> Result<Self> {
+        if signal.is_empty()
+            || !signal
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_+-".contains(&byte))
+        {
+            anyhow::bail!("expected one signal name or number");
+        }
+        Ok(Self(signal.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &'static str;
     fn capabilities(&self) -> DebuggerCapabilities {
@@ -159,7 +181,20 @@ pub trait DebuggerBackend: Send + Sync + std::fmt::Debug {
     ) -> Result<DebuggerBootstrapPlan>;
     fn interrupt_command(&self) -> String;
     fn console_exec_command(&self, command: &str) -> String;
-    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String;
+    /// Deliver a signal to a stopped process and resume it, subject to the
+    /// debugger's signal stop/pass policy. SIGKILL terminates the process.
+    /// Callers stop a running target first; bootstrap already owns a stopped
+    /// target. Implementations must return an error for unsupported delivery,
+    /// never substitute an ordinary continue. No native syntax belongs in callers.
+    fn signal_command(&self, signal: &DebuggerSignal) -> Result<String>;
+
+    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> Result<String> {
+        match action {
+            DebuggerBootstrapAction::Signal(signal) => {
+                self.signal_command(&DebuggerSignal::new(signal)?)
+            }
+        }
+    }
     fn shutdown_commands(&self, on_exit: &OnExit) -> String;
 }
 
@@ -225,6 +260,36 @@ mod tests {
         DEFAULT_EMBEDED_GDB_EXT_FRAME_FILTER_PATH, DEFAULT_EMBEDED_GDB_EXT_PATH,
         DEFAULT_GDB_EXT_FRAME_FILTER_NAME, DEFAULT_GDB_EXT_NAME,
     };
+
+    #[test]
+    fn bootstrap_and_user_signals_share_validation_and_backend_rendering() {
+        let backends: [&dyn DebuggerBackend; 3] =
+            [&gdb::GdbBackend, &lldb::LldbBackend, &mock::MockBackend];
+        for backend in backends {
+            for token in ["SIG40", "SIGUSR1", "9", "SIGRTMIN+1"] {
+                let signal = DebuggerSignal::new(token).unwrap();
+                assert_eq!(
+                    backend
+                        .bootstrap_action_command(&DebuggerBootstrapAction::Signal(token.into()))
+                        .unwrap(),
+                    backend.signal_command(&signal).unwrap(),
+                    "{} startup and user delivery differ",
+                    backend.name()
+                );
+            }
+            for token in [
+                "",
+                "SIG40\nquit",
+                "SIGINT SIGKILL",
+                "SIG40;quit",
+                "\"SIG40\"",
+            ] {
+                assert!(backend
+                    .bootstrap_action_command(&DebuggerBootstrapAction::Signal(token.into()))
+                    .is_err());
+            }
+        }
+    }
 
     #[test]
     fn bundled_asset_output_path_joins_output_dir_and_file_name() {

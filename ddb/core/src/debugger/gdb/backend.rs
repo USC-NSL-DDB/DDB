@@ -11,9 +11,9 @@ use crate::{
     },
     debugger::{
         protocol::DebuggerProtocol, BundledDebuggerAsset, DebuggerBackend, DebuggerBootstrapPlan,
-        DebuggerCapabilities, DebuggerSessionContext,
+        DebuggerCapabilities, DebuggerSessionContext, DebuggerSignal,
     },
-    plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
+    plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
     session::{SessionMode, SessionRequest, SessionStart},
 };
 
@@ -240,12 +240,8 @@ impl DebuggerBackend for GdbBackend {
         GdbCmd::ConsoleExec(command.to_string()).generate()
     }
 
-    fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
-        match action {
-            DebuggerBootstrapAction::Signal(signal) => {
-                self.console_exec_command(&format!("signal {signal}"))
-            }
-        }
+    fn signal_command(&self, signal: &DebuggerSignal) -> Result<String> {
+        Ok(self.console_exec_command(&format!("signal {}", signal.as_str())))
     }
 
     fn shutdown_commands(&self, on_exit: &OnExit) -> String {

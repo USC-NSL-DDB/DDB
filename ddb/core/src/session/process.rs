@@ -133,7 +133,7 @@ impl SessionProcess {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("session runtime is not started"))?;
         for action in &actions {
-            Self::execute_bootstrap_command(handle, self.backend.bootstrap_action_command(action))
+            Self::execute_bootstrap_command(handle, self.backend.bootstrap_action_command(action)?)
                 .await?;
         }
         Ok(())
@@ -234,7 +234,7 @@ mod tests {
             DebuggerCapabilities, DebuggerSessionContext,
         },
         notification::NotificationManager,
-        plugin::{DebuggerBootstrapAction, FrameworkDebuggerBootstrap, FrameworkPlugin},
+        plugin::{FrameworkDebuggerBootstrap, FrameworkPlugin},
         session::{lifecycle, SessionRequestBuilder},
         state::RuntimeModel,
     };
@@ -295,10 +295,8 @@ mod tests {
             command.to_string()
         }
 
-        fn bootstrap_action_command(&self, action: &DebuggerBootstrapAction) -> String {
-            match action {
-                DebuggerBootstrapAction::Signal(signal) => signal.clone(),
-            }
+        fn signal_command(&self, signal: &crate::debugger::DebuggerSignal) -> Result<String> {
+            Ok(signal.as_str().to_owned())
         }
 
         fn shutdown_commands(&self, _on_exit: &OnExit) -> String {

@@ -1664,8 +1664,6 @@ class Bridge(object):
         if len(arguments) < 2 or arguments[0] != "console":
             raise ValueError("-interpreter-exec only supports the console interpreter")
         command = " ".join(arguments[1:])
-        if command.startswith("signal "):
-            return self._signal(shlex.split(command)[1:])
         result = lldb.SBCommandReturnObject()
         interpreter = self.debugger.GetCommandInterpreter()
         if frame is None:

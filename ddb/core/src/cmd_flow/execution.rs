@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::{
     common::Config,
-    debugger::DebuggerBackend,
+    debugger::{DebuggerBackend, DebuggerSignal},
     feature::proclet_restore::ProcletRestorationMgr,
     state::{LocalThreadId, RuntimeModel, ThreadContext, ThreadStatus},
 };
@@ -19,7 +19,7 @@ use super::{
         CommandFanoutError, CommandFanoutReport, SessionCommandFailure, SessionCommandFailureKind,
         Target,
     },
-    transaction::TransactionCoordinator,
+    transaction::{SessionTransaction, TransactionCoordinator},
     CommandOutcome, FinishedCmd, ParsedSessionResponse, Presentation,
 };
 
@@ -126,20 +126,33 @@ impl ExecutionService {
             _ => bail!("-send-signal command should specify a thread or session"),
         };
 
-        self.executor
-            .execute(
-                &self.backend.interrupt_command(),
-                Target::Session(session_id),
-            )
-            .await?;
-
-        let signal_command = self
-            .backend
-            .console_exec_command(&format!("signal {}", signal));
+        let signal_command = self.backend.signal_command(&signal)?;
+        let transaction = self.transactions.begin(session_id).await?;
         let mut response = self
             .executor
-            .execute(&signal_command, Target::Session(session_id))
+            .execute_exclusive(
+                &self.backend.interrupt_command(),
+                Target::Session(session_id),
+                transaction.lease(),
+            )
             .await?;
+        // A rejected interrupt must not be followed by a command requiring a stop.
+        if response
+            .get_responses()
+            .iter()
+            .all(|reply| reply.get_message() != "error")
+        {
+            self.restore_custom_context(session_id, &transaction)
+                .await?;
+            response = self
+                .executor
+                .execute_exclusive(
+                    &signal_command,
+                    Target::Session(session_id),
+                    transaction.lease(),
+                )
+                .await?;
+        }
         if let Some(token) = command.external_token {
             response.set_external_token(token);
         }
@@ -183,6 +196,32 @@ impl ExecutionService {
             .begin(session_id)
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
+        self.restore_custom_context(session_id, &transaction)
+            .await?;
+
+        let execution_target = match command.target {
+            Target::Thread(thread_id) => Target::Thread(thread_id),
+            _ => Target::Session(session_id),
+        };
+        let response = self
+            .executor
+            .execute_parsed_exclusive(command, execution_target, transaction.lease())
+            .await?;
+        if response
+            .get_responses()
+            .iter()
+            .all(|response| response.get_message() != "error")
+        {
+            transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
+        }
+        Ok(response)
+    }
+
+    async fn restore_custom_context(
+        &self,
+        session_id: u64,
+        transaction: &SessionTransaction,
+    ) -> Result<()> {
         let snapshot = transaction
             .session_snapshot()
             .await
@@ -212,22 +251,7 @@ impl ExecutionService {
             }
         }
 
-        let execution_target = match command.target {
-            Target::Thread(thread_id) => Target::Thread(thread_id),
-            _ => Target::Session(session_id),
-        };
-        let response = self
-            .executor
-            .execute_parsed_exclusive(command, execution_target, transaction.lease())
-            .await?;
-        if response
-            .get_responses()
-            .iter()
-            .all(|response| response.get_message() != "error")
-        {
-            transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
-        }
-        Ok(response)
+        Ok(())
     }
 
     async fn thread_command(
@@ -267,23 +291,15 @@ fn require_thread_target(target: &Target, operation: &str) -> Result<()> {
     }
 }
 
-// Typed API commands encode strings as JSON. Decode the signal token before
-// embedding it in the debugger's console command, which does not accept quotes.
-fn signal_argument(arguments: &str) -> Result<String> {
+// Typed API commands encode strings as JSON. Decode before shared validation.
+fn signal_argument(arguments: &str) -> Result<DebuggerSignal> {
     let argument = arguments.trim();
     let signal = if argument.starts_with('"') {
         serde_json::from_str::<String>(argument)?
     } else {
         argument.to_owned()
     };
-    if signal.is_empty()
-        || !signal
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_+-".contains(&byte))
-    {
-        bail!("-send-signal requires one signal name or number");
-    }
-    Ok(signal)
+    DebuggerSignal::new(&signal)
 }
 
 #[cfg(test)]
@@ -295,9 +311,11 @@ mod tests {
     #[test]
     fn signal_arguments_accept_typed_and_cli_tokens() {
         for signal in ["SIGINT", "SIGKILL", "0", "15", "SIGRTMIN+1"] {
-            assert_eq!(signal_argument(signal).unwrap(), signal);
+            assert_eq!(signal_argument(signal).unwrap().as_str(), signal);
             assert_eq!(
-                signal_argument(&serde_json::to_string(signal).unwrap()).unwrap(),
+                signal_argument(&serde_json::to_string(signal).unwrap())
+                    .unwrap()
+                    .as_str(),
                 signal
             );
         }
