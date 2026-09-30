@@ -1075,7 +1075,24 @@ class Bridge(object):
 
         include_values = "--no-values" not in arguments
         variables = []
-        values = frame.GetVariables(True, True, True, True)
+        # SBFrame's statics flag includes the entire compilation unit's globals,
+        # including repeated header constants. This scope is locals/arguments.
+        values = frame.GetVariables(True, True, False, True)
+        # Retain function-local statics by visiting only active lexical blocks.
+        # Stop at this frame's block so an inline frame cannot inherit its caller.
+        block = frame.GetBlock()
+        frame_block = frame.GetFrameBlock()
+        while block and block.IsValid():
+            statics = block.GetVariables(
+                frame, False, False, True, lldb.eDynamicDontRunTarget
+            )
+            for index in range(statics.GetSize()):
+                value = statics.GetValueAtIndex(index)
+                if value and value.IsValid() and value.IsInScope():
+                    values.Append(value)
+            if block == frame_block:
+                break
+            block = block.GetParent()
         for index in range(values.GetSize()):
             value = values.GetValueAtIndex(index)
             if not value or not value.IsValid():

@@ -1375,3 +1375,127 @@ fn gdb_inspects_optimized_inline_frames_with_filters_enabled() {
         "{variables:?}"
     );
 }
+
+fn assert_frame_variables_exclude_file_globals(backend: &str) {
+    let _guard = real_test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("variable-scopes");
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/variable_scopes.cc");
+    let line = std::fs::read_to_string(&source)
+        .unwrap()
+        .lines()
+        .position(|line| line.contains("VARIABLES_MARKER"))
+        .unwrap()
+        + 1;
+    let compile = std::process::Command::new("g++")
+        .args(["-g", "-O0"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("GCC C++ compiler is required for the scope fixture");
+    assert!(
+        compile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let binary_path = binary.to_string_lossy();
+    let mut ddb = DdbProcess::spawn_real_binary_sessions_with_v2_auth(
+        backend,
+        &[BinarySessionSpec {
+            tag: "variable-scopes",
+            alias: "variable-scopes",
+            hash: "variable-scopes",
+            pid: 9304,
+            ip: "127.0.0.1",
+            start_delay_ms: 0,
+            binary_path: &binary_path,
+            binary_args: vec![],
+            stop_at_entry: true,
+        }],
+    );
+    let sessions = ddb.wait_for_sessions_len(1);
+    ddb.wait_for_stdout_count("*stopped", 1);
+    let sid = session_id_by_tag(&sessions, "variable-scopes");
+    ddb.send_cmd(&format!(
+        "901-break-insert --session {sid} {}:{line}",
+        source.display()
+    ));
+    ddb.wait_for_stdout_line("901^done");
+    ddb.send_cmd(&format!("902-exec-continue --session {sid}"));
+    ddb.wait_for_stdout_line("902^running");
+    ddb.wait_for_stdout_count("*stopped", 2);
+    ddb.wait_for_stdout_line_with_all(&[
+        "*stopped",
+        "reason=\"breakpoint-hit\"",
+        &format!("session-id=\"{sid}\""),
+    ]);
+
+    let (status, sessions) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSessions"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{sessions:?}");
+    let target = json!({"session": {"sessionId": sessions["sessions"][0]["sessionId"]}});
+    let (status, threads) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListThreads"),
+        &json!({"target": target}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{threads:?}");
+    let (status, frames) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListFrames"),
+        &json!({"threadId": threads["threads"][0]["threadId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{frames:?}");
+    let frame_id = &frames["frames"][0]["frameId"];
+    let (status, scopes) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListScopes"),
+        &json!({"frameId": frame_id}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{scopes:?}");
+    for _ in 0..2 {
+        let (status, variables) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ListVariables"),
+            &json!({"scopeId": scopes["scopes"][0]["scopeId"]}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{variables:?}");
+        let mut names = variables["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, ["argument", "local", "local_static", "nested", "nested_static"],
+            "{backend} must retain block statics, exclude globals and expired blocks, and not duplicate variables: {variables:?}");
+    }
+    let evaluated = completed_control(
+        &ddb,
+        "Evaluate",
+        json!({
+            "context": {"idempotencyKey": "watch-global"}, "target": target,
+            "frameId": frame_id, "expression": "library::global_noise",
+            "evaluationContext": "EVALUATION_CONTEXT_WATCH"
+        }),
+    );
+    assert_eq!(
+        evaluated["result"]["evaluation"]["value"], "91",
+        "{evaluated:?}"
+    );
+}
+
+#[test]
+fn lldb_frame_variables_exclude_file_globals() {
+    assert_frame_variables_exclude_file_globals("lldb");
+}
+
+#[test]
+fn gdb_frame_variables_exclude_file_globals() {
+    assert_frame_variables_exclude_file_globals("gdb");
+}
