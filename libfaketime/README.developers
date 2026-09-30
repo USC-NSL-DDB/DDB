@@ -77,6 +77,26 @@ DEVELOPMENT, BUILDING, AND TESTING
   let us know and consider wrapping your code in #ifdef / #ifndef __APPLE__
   statements.
 
+DDB pause accounting regression (Linux)
+--------------------------------------
+
+From the DDB repository root, run:
+
+    make -C libfaketime
+    make -C libfaketime/test test_clock_nanosleep_offset
+    LIBFAKETIME_PATH="$PWD/libfaketime/src/libfaketimeMT.so.1" \
+      cargo test --manifest-path ddb/Cargo.toml -p ddb --test real_faketime
+
+The standalone test checks both libraries after successful and failed monotonic
+sleeps. It changes FAKETIME in place, as the debugger does, then checks the time
+observed by the program. The DDB tests exercise real GDB and LLDB launch, attach,
+and stepping. Explicitly select the rebuilt library: changing the debugger alone
+does not update libfaketime already loaded into a debuggee.
+
+Never return or jump out of DONT_FAKE_TIME's argument. Its trailing assignment
+restores the thread-local recursion guard. Skipping that assignment leaves
+subsequent clock reads uncompensated, even when FAKETIME_NO_CACHE=1.
+
 
 DOCUMENTATION
 =============

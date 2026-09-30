@@ -11,6 +11,10 @@ EXPECTATIONS = $(notdir $(basename $(wildcard snippets/*.variable)))
 
 ALL_TESTS = timetest test
 
+ifeq ($(shell uname),Linux)
+ALL_TESTS += test_clock_nanosleep_offset
+endif
+
 ifneq ($(filter -DINTERCEPT_SYSCALL,${CFLAGS}),)
 ALL_TESTS += confirm_variadic_promotion
 else
@@ -42,6 +46,17 @@ randomtest: repeat_random
 
 libmallocintercept.so: libmallocintercept.c
 	${CC} -shared -o $@ -fpic ${CFLAGS} $<
+
+clock_nanosleep_offset: clock_nanosleep_offset.c
+	${CC} -o $@ ${CFLAGS} $< ${LDFLAGS}
+
+test_clock_nanosleep_offset: clock_nanosleep_offset
+	@for library in libfaketime.so.1 libfaketimeMT.so.1; do \
+	  env LD_PRELOAD="$(CURDIR)/../src/$$library" \
+	    FAKETIME=-00000000000000000000.000000000 FAKETIME_NO_CACHE=1 \
+	    FAKETIME_DONT_FAKE_MONOTONIC=1 FAKETIME_DISABLE_SHM=1 \
+	    ./clock_nanosleep_offset || exit $$?; \
+	done
 
 # ensure our variadic argument unpacking/repacking works as expected
 confirm_variadic_promotion: variadic_promotion
@@ -76,9 +91,11 @@ use_lib_%: _use_lib_test.c snippets/%.c lib%.so
 ## cleanup and metainformation
 
 clean:
+	@rm -f clock_nanosleep_offset
 	@rm -f ${OBJ} timetest getrandom_test syscall_test $(foreach f,${TEST_SNIPPETS},use_lib_${f} lib${f}.so run_${f}) variadic_promotion variadic/*.o repeat_random libmallocintercept.so
 
 distclean: clean
 	@echo
 
 .PHONY: all test clean distclean randomtest snippets test_variable_data test_library_constructors
+.PHONY: test_clock_nanosleep_offset

@@ -203,7 +203,9 @@ struct __timeval64
  */
 static __thread bool dont_fake = false;
 
-/* Wrapper for function calls, which we want to return system time */
+/* Wrapper for function calls, which we want to return system time.
+ * Do not return or jump out of call: the thread-local guard must be restored.
+ */
 #define DONT_FAKE_TIME(call)          \
   do {                                \
     bool dont_fake_orig = dont_fake;  \
@@ -1700,7 +1702,9 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *req, s
 
   if (dont_fake)
   {
-    DONT_FAKE_TIME(return (*real_clock_nanosleep)(clock_id, flags, req, rem));
+    int result;
+    DONT_FAKE_TIME(result = (*real_clock_nanosleep)(clock_id, flags, req, rem));
+    return result;
   }
 
   /* If monotonic faking is disabled, don't try to enforce fake deadlines. */
@@ -1709,7 +1713,9 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *req, s
     get_fake_monotonic_setting(&fake_monotonic_clock);
     if (!fake_monotonic_clock)
     {
-      DONT_FAKE_TIME(return (*real_clock_nanosleep)(clock_id, flags, req, rem));
+      int result;
+      DONT_FAKE_TIME(result = (*real_clock_nanosleep)(clock_id, flags, req, rem));
+      return result;
     }
   }
 
@@ -1785,11 +1791,13 @@ int usleep(useconds_t usec)
   ftpl_init();
   if (dont_fake)
   {
+    int result;
 #ifdef MACOS_DYLD_INTERPOSE
-    DONT_FAKE_TIME(return (*usleep)(usec));
+    DONT_FAKE_TIME(result = (*usleep)(usec));
 #else
-    DONT_FAKE_TIME(return (*real_usleep)(usec));
+    DONT_FAKE_TIME(result = (*real_usleep)(usec));
 #endif
+    return result;
   }
 
   struct timespec fake_req = {(time_t)(usec / 1000000), (long)((usec % 1000000) * 1000)};

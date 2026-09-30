@@ -9,6 +9,7 @@ test/repeat_random
 test/getentropy_test
 test/syscall_test
 test/variadic_promotion
+test/clock_nanosleep_offset
 
 src/libfaketime.dylib.1
 src/libfaketime.1.dylib
