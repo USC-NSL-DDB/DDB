@@ -2,7 +2,7 @@
 
 These tests live under `core/tests` and are intended to exercise DDB as a real process, not just individual Rust units.
 
-Run all integration and unit tests from the repository root with:
+Run all integration and unit tests from the `ddb/` Cargo workspace with:
 
 ```bash
 cargo test -p ddb
@@ -157,10 +157,10 @@ host for SSH sessions too. Runtime startup signal 40 wakes `sigwait`, after
 which the DDB connector raises SIGTRAP to establish the initial pause. Signal 0
 is not a supported delivery operation; Continue is a separate operation.
 
-Run the focused backend checks from this worktree:
+Run the focused backend checks from the repository root:
 
 ```sh
-CARGO_TARGET_DIR=/tmp/ddb-canonical-build cargo test --manifest-path ddb/Cargo.toml \
+cargo test --manifest-path ddb/Cargo.toml \
   -p ddb --bin ddb --test api_v2_real_backends \
   --test real_lldb_session_bootstrap --test real_distributed_backtrace
 python3 ddb/core/tests/lldb_breakpoint_options.py

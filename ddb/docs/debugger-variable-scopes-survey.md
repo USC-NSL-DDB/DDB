@@ -83,7 +83,9 @@ Source: [VS Code variables view](https://github.com/microsoft/vscode/blob/9666ca
 
 ## Implications for DDB
 
-The following are design recommendations, not changes made by this survey:
+The following recommendations informed the implementation. See the
+[variable-scope contract](api/variable-scopes.md) for the implemented behavior
+and validation coverage:
 
 1. Keep **Locals and arguments** first. Preserve function-local statics according to lexical visibility. Do not restore unrelated compilation-unit globals to that list.
 2. Add separately requested **File statics** and **Globals**, showing the compilation unit or source file in the scope label or description. Alternatively, a combined **Globals and statics** scope follows LLVM's model and avoids suggesting that every backend can classify all storage categories equally well.
@@ -93,11 +95,11 @@ The following are design recommendations, not changes made by this survey:
 6. Distinguish symbol identity from its label. Preserve different declarations and shadowed values; disambiguate with declaration location or module. Remove only verified duplicate identities. Keep display labels separate from expression paths.
 7. Carry paging through the SDK and backend. Slicing an already fetched, fully evaluated list reduces UI size but not debugger work. Scope metadata and symbol enumeration should avoid reading every value solely to calculate counts.
 
-The current DDB API already declares scope kinds for arguments, locals, statics, globals and registers, plus expense/count fields and paged variable requests. The current service still creates only the locals scope, while the adapter appends Registers. Existing page responses follow full enumeration, and the adapter collects pages before applying its DAP slice. These are implementation gaps rather than a reason to invent an LLDB-specific UI route. Add browsing through typed ListScopes/ListVariables, with backend-specific enumeration behind the native debugger boundary. The adapter should consume typed scopes rather than issue raw GDB or LLDB commands. Thread-local values require the owning thread as well as the process context. Sources: [DDB scope resource model](../proto/ddb/api/v2/resources.proto), [DDB inspection service](../core/src/api/application/service.rs), and [adapter inspection implementation](/mnt/home/ybyan/projs/vscode-adapter/src/v2/inspection.mts:324).
+At the time of this survey, the DDB API already declared the scope kinds, expense/count fields and paged variable requests, but the service created only Locals and the adapter appended Registers. Paging followed full enumeration. The implementation now exposes separate scopes and bounded paging through the existing typed API. Backend-specific enumeration stays behind the native debugger interface; the adapter consumes typed scopes. Thread-local values retain the owning thread as well as the process context. Sources: [DDB scope resource model](../proto/ddb/api/v2/resources.proto), [DDB inspection service](../core/src/api/application/service.rs), and `src/v2/inspection.mts` in the [adapter repository](https://github.com/USC-NSL-DDB/vscode-adapter).
 
-GDB's Python block API supplies `static_block` for the current compilation unit's static symbols and `global_block` for its global symbols. This provides a native basis for a shared scope contract, although symbol readability, value creation, imported symbols, and paging still need implementation tests. Source: [GDB Blocks in Python](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Blocks-In-Python.html).
+GDB's Python block API supplies `static_block` for the current compilation unit's static symbols and `global_block` for its global symbols. The implementation uses these blocks to support the shared scope contract. Source: [GDB Blocks in Python](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Blocks-In-Python.html).
 
-## Validation needed before implementation is considered complete
+## Recommended validation
 
 Use a small C++ fixture with arguments, ordinary locals, function-local statics, two file statics sharing a name, namespace globals, thread-local values, included-header constants, shadowing and unavailable optimized values. Verify both GDB and LLDB, then the actual greeter frame. Assert that merely selecting a frame does not eagerly evaluate Globals. Check expansion, editing and Watch expressions against the correct declaration, frame and session; check paging and invalidation after resume. Measure large compilation-unit lists separately from local-variable latency.
 

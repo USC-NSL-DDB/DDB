@@ -240,12 +240,25 @@ fn assert_distributed_backtrace(debugger: DebuggerUnderTest, depth: usize) {
                 .unwrap()
         };
         assert!(in_custom_context(&ddb), "DBT must reconstruct caller {sid}");
-        ddb.send_cmd(&format!("-send-signal --session {sid} SIGCONT"));
-        // Signal commands have no legacy result line. A subsequent command on
-        // that session provides a completion barrier before checking the model.
-        let token = 9_000 + sid;
-        ddb.send_cmd(&format!("{token}-list-signals --session {sid}"));
-        ddb.wait_for_stdout_line(&format!("{token}^done"));
+        // CLI commands run concurrently and signal delivery has no MI result
+        // line. Await the signal itself before inspecting restored state.
+        let (status, result) = ddb.api_post_json(
+            "/api/v1/commands",
+            &serde_json::json!({
+                "command": format!("-send-signal --session {sid} SIGCONT"),
+                "wait": true,
+            }),
+        );
+        assert!(status.is_success(), "signal delivery failed: {result}");
+        assert_eq!(result["data"]["state"], "completed", "{result}");
+        let responses = result["data"]["result"]["responses"].as_array().unwrap();
+        assert!(!responses.is_empty(), "missing signal response: {result}");
+        assert!(
+            responses
+                .iter()
+                .all(|response| response["status"] != "error"),
+            "signal delivery failed: {result}"
+        );
         assert!(
             !in_custom_context(&ddb),
             "signal resumed caller {sid} without restoring its real registers"

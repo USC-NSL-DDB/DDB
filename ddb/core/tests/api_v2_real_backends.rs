@@ -1376,7 +1376,7 @@ fn gdb_inspects_optimized_inline_frames_with_filters_enabled() {
     );
 }
 
-fn assert_frame_variables_exclude_file_globals(backend: &str) {
+fn assert_variable_scope_contract(backend: &str) {
     let _guard = real_test_guard();
     let temp = tempfile::tempdir().unwrap();
     let binary = temp.path().join("variable-scopes");
@@ -1702,11 +1702,11 @@ fn assert_frame_variables_exclude_file_globals(backend: &str) {
 }
 
 #[test]
-fn lldb_frame_variables_exclude_file_globals() {
-    assert_frame_variables_exclude_file_globals("lldb");
+fn lldb_variable_scope_contract() {
+    assert_variable_scope_contract("lldb");
 }
 
 #[test]
-fn gdb_frame_variables_exclude_file_globals() {
-    assert_frame_variables_exclude_file_globals("gdb");
+fn gdb_variable_scope_contract() {
+    assert_variable_scope_contract("gdb");
 }
