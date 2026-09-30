@@ -673,7 +673,7 @@ impl DdbProcess {
         }
     }
 
-    fn debug_dump(&self) -> String {
+    pub fn debug_dump(&self) -> String {
         let stdout = self.stdout.snapshot().join("\n");
         let stderr = self.stderr.snapshot().join("\n");
         let log_dir = self._tempdir.path().join("logs");

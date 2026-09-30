@@ -15,6 +15,67 @@ with patch.dict(sys.modules, {"lldb": types.ModuleType("lldb")}):
     spec.loader.exec_module(bridge_module)
 
 
+class ProcessMonitorTest(unittest.TestCase):
+    def setUp(self):
+        self.api = patch.multiple(
+            bridge_module.lldb,
+            SBListener=Mock(),
+            SBEvent=Mock(),
+            SBProcess=Mock(),
+            eStateStopped=5,
+            eStateRunning=6,
+            eStateStepping=7,
+            eStateCrashed=8,
+            eStateSuspended=11,
+            create=True,
+        )
+        self.api.start()
+        self.addCleanup(self.api.stop)
+        self.emitter = Mock()
+        self.monitor = bridge_module.ProcessMonitor(Mock(), self.emitter)
+        self.monitor._ensure_process = Mock()
+        self.monitor._sync_threads = Mock()
+        self.monitor._stop_payload = Mock(return_value={"reason": "entry"})
+        self.process = Mock()
+        self.process.GetState.return_value = 5
+        self.process.GetStopID.return_value = 1
+        self.thread = Mock()
+        self.thread.IsValid.return_value = False
+        self.process.GetSelectedThread.return_value = self.thread
+        self.process.GetThreadAtIndex.return_value = self.thread
+
+    def test_launch_snapshot_waits_for_an_inspectable_stop(self):
+        self.monitor.snapshot(self.process)
+        self.emitter.event.assert_not_called()
+        self.monitor._sync_threads.assert_not_called()
+        self.assertIsNone(self.monitor.pause_started_ns)
+
+        self.thread.IsValid.return_value = True
+        self.monitor.snapshot(self.process)
+        self.emitter.event.assert_called_once_with("stopped", {"reason": "entry"})
+        self.assertIsNotNone(self.monitor.pause_started_ns)
+        self.monitor.snapshot(self.process)
+        self.emitter.event.assert_called_once()
+
+    def test_stale_stop_does_not_replace_current_running_state(self):
+        self.thread.IsValid.return_value = True
+        self.process.GetState.return_value = 6
+        self.monitor._publish_state(self.process, 5)
+        self.emitter.event.assert_not_called()
+        self.assertIsNone(self.monitor.pause_started_ns)
+
+    def test_automatically_restarted_event_is_not_a_user_stop(self):
+        api = bridge_module.lldb.SBProcess
+        api.EventIsProcessEvent.return_value = True
+        api.GetProcessFromEvent.return_value = self.process
+        api.GetStateFromEvent.return_value = 5
+        api.GetRestartedFromEvent.return_value = True
+        self.monitor.listener.GetNextEvent.side_effect = [True, False]
+        self.monitor._publish_state = Mock()
+        self.monitor.poll()
+        self.monitor._publish_state.assert_not_called()
+
+
 class BreakpointOptionsTest(unittest.TestCase):
     def setUp(self):
         self.breakpoint = Mock()

@@ -385,6 +385,9 @@ class ProcessMonitor(object):
             if not process or not process.IsValid():
                 continue
             state = lldb.SBProcess.GetStateFromEvent(event)
+            # Internal stops that LLDB has already resumed are not user pauses.
+            if lldb.SBProcess.GetRestartedFromEvent(event):
+                continue
             try:
                 self._publish_state(process, state)
             except Exception:
@@ -437,6 +440,16 @@ class ProcessMonitor(object):
     def _publish_state(self, process, state):
         with self._lock:
             self._ensure_process(process)
+            thread = None
+            if state == lldb.eStateStopped:
+                thread = process.GetSelectedThread()
+                if not thread or not thread.IsValid():
+                    thread = process.GetThreadAtIndex(0)
+                # Async launch can briefly report stopped while its native run
+                # lock still prevents inspection. Wait for the usable stop event
+                # instead of publishing a pause that Continue cannot resume.
+                if not thread or not thread.IsValid() or process.GetState() != state:
+                    return
             self._sync_threads(process)
             stop_id = process.GetStopID() if state == lldb.eStateStopped else None
             if state == self._last_state and (
@@ -449,7 +462,7 @@ class ProcessMonitor(object):
                 self.emitter.event("running", {"thread-id": "all"})
             elif state in (lldb.eStateStopped, lldb.eStateCrashed, lldb.eStateSuspended):
                 self.pause_started_ns = time.monotonic_ns()
-                thread = process.GetSelectedThread()
+                thread = thread or process.GetSelectedThread()
                 if not thread or not thread.IsValid():
                     thread = process.GetThreadAtIndex(0)
                 self.emitter.event("stopped", self._stop_payload(process, thread, state))

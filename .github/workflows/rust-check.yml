@@ -225,6 +225,9 @@ jobs:
         with:
           cache-scope: rust-tests
 
+      - name: Run LLDB bridge unit tests
+        run: python3 ddb/core/tests/lldb_breakpoint_options.py
+
       - name: Run workspace tests
         working-directory: ddb
         run: cargo test --workspace --all-targets

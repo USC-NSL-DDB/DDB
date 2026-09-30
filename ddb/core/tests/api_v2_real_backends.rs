@@ -43,9 +43,11 @@ fn completed_control(ddb: &DdbProcess, method: &str, request: Value) -> Value {
     let operation =
         wait_for_operation(ddb, admission["operation"]["operationId"].as_str().unwrap());
     assert_eq!(
-        operation["state"], "OPERATION_STATE_COMPLETED",
-        "{method} {}: {operation:?}",
-        request["context"]["idempotencyKey"]
+        operation["state"],
+        "OPERATION_STATE_COMPLETED",
+        "{method} {}: {operation:?}\n{}",
+        request["context"]["idempotencyKey"],
+        ddb.debug_dump()
     );
     operation
 }
