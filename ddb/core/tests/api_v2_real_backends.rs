@@ -1031,6 +1031,106 @@ fn assert_typed_signal_on_backend(backend: &str) {
     }
 }
 
+fn assert_continue_with_running_peer(backend: &str) {
+    let example = build_real_loop_example();
+    let binary_path = example.binary_path.to_string_lossy();
+    let specs: Vec<_> = ["server", "client"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, tag)| BinarySessionSpec {
+            tag,
+            alias: tag,
+            hash: tag,
+            pid: 9_320 + index as u64,
+            ip: "127.0.0.1",
+            start_delay_ms: 0,
+            binary_path: &binary_path,
+            binary_args: vec![
+                "--max-iterations".into(),
+                "100000".into(),
+                "--worker-thread".into(),
+            ],
+            stop_at_entry: true,
+        })
+        .collect();
+    let mut ddb = DdbProcess::spawn_real_binary_sessions_with_v2_auth(backend, &specs);
+    ddb.wait_for_sessions_len(2);
+    ddb.wait_for_stdout_count("*stopped", 2);
+    let (status, sessions) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSessions"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{sessions:?}");
+    let server = &sessions["sessions"][0]["sessionId"];
+    completed_control(
+        &ddb,
+        "Execute",
+        json!({
+            "context": {"idempotencyKey": "resume-server"},
+            "target": {"session": {"sessionId": server}}, "action": "EXECUTION_ACTION_CONTINUE"
+        }),
+    );
+    if backend == "gdb" {
+        // GDB reports new worker threads while the process stays running.
+        ddb.wait_for_stdout_count("thread-created", 3);
+    }
+    let operation = completed_control(
+        &ddb,
+        "Execute",
+        json!({
+            "context": {"idempotencyKey": "resume-all"},
+            "target": {"broadcast": {}}, "action": "EXECUTION_ACTION_CONTINUE"
+        }),
+    );
+    let outcomes = operation["targetOutcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|outcome| outcome["succeeded"] == true));
+    for session in sessions["sessions"].as_array().unwrap() {
+        let target = json!({"session": {"sessionId": session["sessionId"]}});
+        let (status, threads) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ListThreads"),
+            &json!({"target": target}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{threads:?}");
+        let threads = threads["threads"].as_array().unwrap();
+        assert!(!threads.is_empty());
+        assert!(threads
+            .iter()
+            .all(|thread| thread["state"] == "THREAD_STATE_RUNNING"));
+        // Repeated Continue must also succeed for an individual running session.
+        completed_control(
+            &ddb,
+            "Execute",
+            json!({
+                "context": {"idempotencyKey": format!("repeat-{}", session["sessionId"])},
+                "target": target, "action": "EXECUTION_ACTION_CONTINUE"
+            }),
+        );
+    }
+    completed_control(
+        &ddb,
+        "Execute",
+        json!({
+            "context": {"idempotencyKey": "resume-all-running"},
+            "target": {"broadcast": {}}, "action": "EXECUTION_ACTION_CONTINUE"
+        }),
+    );
+}
+
+#[test]
+fn lldb_continue_with_running_peer() {
+    let _guard = real_test_guard();
+    assert_continue_with_running_peer("lldb");
+}
+
+#[test]
+fn gdb_continue_with_running_peer() {
+    let _guard = real_test_guard();
+    assert_continue_with_running_peer("gdb");
+}
+
 #[test]
 fn gdb_typed_signal_handles_stopped_and_running_targets() {
     let _guard = real_test_guard();

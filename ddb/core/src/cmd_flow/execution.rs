@@ -196,6 +196,25 @@ impl ExecutionService {
             .begin(session_id)
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
+        // Continue is idempotent for a known-running session. Broadcasts often
+        // mix running peers with newly attached or breakpoint-stopped targets.
+        // Check under the lease so queued execution commands cannot both resume
+        // the same process. Unknown/empty state still goes through the backend.
+        if transaction
+            .session_snapshot()
+            .await
+            .is_some_and(|snapshot| snapshot.all_threads_running && !snapshot.in_custom_context)
+        {
+            return Ok(FinishedCmd::new(
+                command.external_token,
+                session_id,
+                vec![ParsedSessionResponse::new(
+                    session_id,
+                    "running".into(),
+                    None,
+                )],
+            ));
+        }
         self.restore_custom_context(session_id, &transaction)
             .await?;
 

@@ -66,6 +66,11 @@ fn write_clock_delta(path: &Path, before_ns: i128, after_ns: i128) {
 fn main() {
     allow_debugger_attach();
     let args = std::env::args().collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--worker-thread") {
+        thread::spawn(|| loop {
+            thread::sleep(Duration::from_secs(1));
+        });
+    }
     let sleep_ms = parse_arg(&args, "--sleep-ms")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(25);

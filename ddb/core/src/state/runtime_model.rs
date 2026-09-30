@@ -68,6 +68,7 @@ pub(crate) struct SessionSnapshot {
     pub(crate) current_context: Option<ThreadContext>,
     pub(crate) in_custom_context: bool,
     pub(crate) all_threads_stopped: bool,
+    pub(crate) all_threads_running: bool,
 }
 
 impl SessionSnapshot {
@@ -80,6 +81,7 @@ impl SessionSnapshot {
             current_context: meta.current_context().cloned(),
             in_custom_context: meta.is_in_custom_context(),
             all_threads_stopped: meta.all_threads_stopped(),
+            all_threads_running: meta.all_threads_running(),
         }
     }
 }

@@ -15,6 +15,15 @@ and an idempotency key.
 
 ## Partial fanout operations
 
+`Execute` with `EXECUTION_ACTION_CONTINUE` resumes paused targets and succeeds
+without issuing another native Continue for sessions whose threads are all
+known to be running. This applies to individual targets and broadcasts, so a
+running server can coexist with a newly attached, paused client. The check runs
+under the session's execution lease and does not generate a new execution
+transition for an already-running session. Empty or unknown thread state is
+not treated as running. Genuine debugger failures still produce failed target
+outcomes.
+
 A partially successful fanout mutation terminates in
 `OPERATION_STATE_FAILED`, uses `DDB_ERROR_CODE_PARTIAL_FAILURE`, and carries an
 outcome for every target. When the mutation creates or changes a resource, its

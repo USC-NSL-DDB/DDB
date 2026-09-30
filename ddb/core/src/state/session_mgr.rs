@@ -410,6 +410,15 @@ impl SessionMeta {
             .all(|status| *status == ThreadStatus::STOPPED)
     }
 
+    pub(crate) fn all_threads_running(&self) -> bool {
+        // An empty thread list is unknown, not evidence that execution resumed.
+        !self.t_status.is_empty()
+            && self
+                .t_status
+                .values()
+                .all(|status| *status == ThreadStatus::RUNNING)
+    }
+
     /// Returns detached local thread status for read-only public projections.
     pub(crate) fn thread_status_snapshot(&self) -> (Option<u64>, Vec<LocalThreadStateSnapshot>) {
         let mut threads = self
@@ -691,6 +700,25 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn running_session_requires_known_running_threads() {
+        let mut meta = SessionMeta::new(1, "svc-a".to_string(), None);
+        assert!(!meta.all_threads_running());
+        meta.add_thread_group("i1");
+        meta.create_thread(10, "i1");
+        assert!(!meta.all_threads_running());
+        meta.update_all_status(ThreadStatus::RUNNING);
+        assert!(meta.all_threads_running());
+        meta.create_thread(11, "i1");
+        assert!(!meta.all_threads_running());
+        meta.update_thread_statuses(&[11], ThreadStatus::STOPPED);
+        assert!(!meta.all_threads_running());
+        meta.update_thread_statuses(&[11], ThreadStatus::RUNNING);
+        assert!(meta.all_threads_running());
+        meta.exit_thread_group("i1");
+        assert!(!meta.all_threads_running());
+    }
 
     #[test]
     fn session_meta_removing_thread_group_cleans_thread_indexes() {
