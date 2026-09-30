@@ -1966,6 +1966,9 @@ fn operation_result_summary(result: &v2::OperationResult) -> Option<String> {
         operation_result::Value::Evaluation(evaluation) => {
             format!("{} = {}", evaluation.expression, evaluation.value)
         }
+        operation_result::Value::VariableAssignment(assignment) => {
+            format!("assigned value: {}", assignment.value)
+        }
         operation_result::Value::Breakpoint(breakpoint) => {
             format!("breakpoint {}", breakpoint.breakpoint_id)
         }

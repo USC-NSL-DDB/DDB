@@ -627,6 +627,7 @@ message ConfigureDebuggerRequest {
   RequestContext context = 1;
   // Session, session-set, group or broadcast target; thread targets are invalid.
   Target target = 2;
+  // Exactly one session-wide setting to apply to each resolved target.
   oneof setting {
     // Enables installed value visualizers for subsequently created values.
     // LLDB already enables its value formatters by default.

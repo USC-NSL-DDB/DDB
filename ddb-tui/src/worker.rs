@@ -522,6 +522,7 @@ async fn handle_v2(
                         dialect: v2::RawCommandDialect::GdbMi as i32,
                         command: command.clone(),
                         preconditions: None,
+                        frame_id: None,
                     })
                     .await?,
             )

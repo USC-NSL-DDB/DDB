@@ -763,6 +763,11 @@ impl MockAttachController {
                 };
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
+            "-ddb-list-scope-variables" => {
+                // Mock fixtures define locals only; their nonlocal scopes are empty.
+                let payload: Dict = vec![("variables".to_string(), Value::List(Vec::new()))].into();
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
             "-list-signals" => {
                 let signal =
                     |name: &str, stop: &str, print: &str, pass: &str, description: &str| {
@@ -1393,6 +1398,24 @@ mod tests {
             );
         }
         assert!(stdout_text(events.recv_async().await.unwrap()).contains("^done"));
+    }
+
+    #[tokio::test]
+    async fn mock_nonlocal_scopes_return_empty_variable_collections() {
+        let mut controller = MockAttachController::new(MockSessionConfig::default(), 9);
+        let transport = controller.launch("").await.unwrap();
+        let (writer, events) = transport.into_parts();
+
+        for kind in ["statics", "globals"] {
+            writer
+                .write(Bytes::from(format!(
+                    "-ddb-list-scope-variables --thread 1 --frame 0 {kind} 0 2\n"
+                )))
+                .await
+                .unwrap();
+            let payload = result_payload(events.recv_async().await.unwrap());
+            assert!(payload["variables"].expect_list_ref().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

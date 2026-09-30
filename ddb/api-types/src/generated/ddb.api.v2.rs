@@ -3325,11 +3325,13 @@ pub struct ConfigureDebuggerRequest {
     /// Optional optimistic mutation guards.
     #[prost(message, optional, tag = "5")]
     pub preconditions: ::core::option::Option<Preconditions>,
+    /// Exactly one session-wide setting to apply to each resolved target.
     #[prost(oneof = "configure_debugger_request::Setting", tags = "3, 4")]
     pub setting: ::core::option::Option<configure_debugger_request::Setting>,
 }
 /// Nested message and enum types in `ConfigureDebuggerRequest`.
 pub mod configure_debugger_request {
+    /// Exactly one session-wide setting to apply to each resolved target.
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Setting {
         /// Enables installed value visualizers for subsequently created values.
