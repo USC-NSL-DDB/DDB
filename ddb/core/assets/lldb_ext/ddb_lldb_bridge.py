@@ -886,7 +886,11 @@ class Bridge(object):
             + (now_ns - pause_started_ns) / 1e9,
             9,
         )
-        new_entry = "FAKETIME=-{:.9f}".format(candidate_accumulated_seconds)
+        # Keep the reserved numeric width across updates. Shortening the C
+        # string loses its visible capacity and rejects the next digit boundary.
+        prefix = "FAKETIME=-"
+        offset = "{:.9f}".format(candidate_accumulated_seconds)
+        new_entry = prefix + offset.zfill(len(old_entry) - len(prefix))
         if len(new_entry) > len(old_entry):
             raise RuntimeError(
                 "cannot synchronize FAKETIME: existing environment buffer is too small"

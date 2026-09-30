@@ -832,7 +832,10 @@ def sync_pause_time(
 
     pause_duration_s = (curr_ts_ns - pause_start_time) / 1e9
     candidate_accumulated_time = round(accumulated_time + pause_duration_s, 9)
-    faketime_value = f"-{candidate_accumulated_time:.9f}"
+    # Preserve the reserved numeric width instead of shortening the C string
+    # and losing capacity when the accumulated pause crosses a digit boundary.
+    width = len(read_c_string(faketime_ptr)) - len("FAKETIME=-")
+    faketime_value = "-" + f"{candidate_accumulated_time:.9f}".zfill(width)
     modify_env_variable("FAKETIME", faketime_value, faketime_ptr)
 
     accumulated_time = candidate_accumulated_time

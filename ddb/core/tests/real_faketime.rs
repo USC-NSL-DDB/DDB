@@ -55,6 +55,94 @@ const RESUME_ACTIONS: [ResumeAction; 4] = [
     ResumeAction::Finish,
 ];
 
+fn assert_pause_offset_can_grow(backend: &str) {
+    let _guard = real_test_guard();
+    let example = build_real_loop_example();
+    let binary_path = example.binary_path.to_str().unwrap();
+    let mut ddb = DdbProcess::spawn_faketime_binary_sessions(
+        backend,
+        &[BinarySessionSpec {
+            tag: "pet-growth",
+            alias: "pet-growth",
+            hash: "pet-growth",
+            pid: 9290,
+            ip: "127.0.0.1",
+            start_delay_ms: 0,
+            binary_path,
+            binary_args: vec!["--max-iterations".into(), "100000".into()],
+            stop_at_entry: true,
+        }],
+        &libfaketime_path(),
+    );
+    let sessions = ddb.wait_for_sessions_len(1);
+    let sid = session_id_by_tag(&sessions, "pet-growth");
+    ddb.wait_for_stdout_count("*stopped", 1);
+    let state = ddb.api_get("/api/v1/state");
+    let pid = state["data"]["processes"][0]["system_process_id"]
+        .as_u64()
+        .expect("inferior PID should be published");
+    ddb.send_cmd(&format!(
+        "901-break-insert --session {sid} {}:{}",
+        example.source_path.display(),
+        example.breakpoint_line
+    ));
+    ddb.wait_for_stdout_line("901^done");
+    for (index, seconds) in [0, 10, 100, 1000].into_iter().enumerate() {
+        // Advance only debugger pause accounting, avoiding minutes of test sleeps.
+        // The real debugger still updates actual inferior memory and resumes it.
+        let setup = if backend == "gdb" {
+            format!("python accumulated_time={seconds}; pause_start_time=time.perf_counter_ns()")
+        } else {
+            format!("script import gc,time; b=next(o for o in gc.get_objects() if type(o).__name__=='Bridge'); b.accumulated_pause_seconds={seconds}; b.monitor.pause_started_ns=time.monotonic_ns()")
+        };
+        let (status, result) = ddb.api_post_json("/api/v1/commands", &serde_json::json!({
+            "command": format!("-interpreter-exec console {}", serde_json::to_string(&setup).unwrap()),
+            "target": {"kind": "session", "session_id": sid}, "wait": true
+        }));
+        assert!(status.is_success(), "{result}");
+        let (status, result) = ddb.api_post_json(
+            "/api/v1/commands",
+            &serde_json::json!({
+                "command": "-record-time-and-continue",
+                "target": {"kind": "session", "session_id": sid}, "wait": true
+            }),
+        );
+        assert!(status.is_success(), "{result}");
+        let response = &result["data"]["result"]["responses"][0];
+        assert_ne!(
+            response["status"], "error",
+            "{backend} offset {seconds}: {result}"
+        );
+        ddb.wait_for_stdout_count("*stopped", index + 2);
+        let environment = std::fs::read(format!("/proc/{pid}/environ")).unwrap();
+        let entry = environment
+            .split(|byte| *byte == 0)
+            .find(|entry| entry.starts_with(b"FAKETIME="))
+            .expect("inferior must retain its FAKETIME entry");
+        let entry = std::str::from_utf8(entry).unwrap();
+        assert_eq!(
+            entry.len(),
+            "FAKETIME=".len() + FAKETIME_INITIAL_VALUE.len(),
+            "every update must preserve the reserved width: {entry}"
+        );
+        let offset: f64 = entry.strip_prefix("FAKETIME=-").unwrap().parse().unwrap();
+        assert!(
+            offset >= f64::from(seconds) && offset < f64::from(seconds) + 2.0,
+            "inferior memory must contain the updated offset: {entry}"
+        );
+    }
+}
+
+#[test]
+fn gdb_pause_offset_can_grow_across_decimal_boundaries() {
+    assert_pause_offset_can_grow("gdb");
+}
+
+#[test]
+fn lldb_pause_offset_can_grow_across_decimal_boundaries() {
+    assert_pause_offset_can_grow("lldb");
+}
+
 struct Debuggee(Child);
 
 impl Debuggee {
