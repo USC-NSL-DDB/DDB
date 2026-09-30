@@ -22,6 +22,7 @@ pub(crate) struct DecodedFrame {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVariable {
     pub(crate) name: String,
+    pub(crate) evaluate_name: Option<String>,
     pub(crate) value: String,
     pub(crate) type_name: Option<String>,
     pub(crate) child_count: Option<u64>,
@@ -142,6 +143,7 @@ pub(crate) fn decode_variables(
                 .ok_or_else(|| malformed("debugger variable is missing its name"))?;
             let (child_count, has_children) = variable_child_metadata(variable)?;
             Ok(DecodedVariable {
+                evaluate_name: optional_string(variable, "evaluate-name")?,
                 name,
                 value: optional_string(variable, "value")?.unwrap_or_default(),
                 type_name: optional_string(variable, "type")?,
@@ -639,6 +641,7 @@ mod tests {
         assert_eq!(
             decode_variables(&outcome(payload)).unwrap(),
             vec![DecodedVariable {
+                evaluate_name: None,
                 name: "request".to_string(),
                 value: "0x1000".to_string(),
                 type_name: Some("Request *".to_string()),
@@ -698,6 +701,7 @@ mod tests {
             let variable = projection
                 .variable(
                     &DecodedVariable {
+                        evaluate_name: None,
                         name: child.display_name,
                         value: child.value,
                         type_name: child.type_name,

@@ -315,6 +315,33 @@ impl<'a> ProjectionContext<'a> {
         })
     }
 
+    pub(crate) fn nonlocal_scope(
+        &self,
+        frame_key: &str,
+        statics: bool,
+    ) -> Result<Scope, ApplicationError> {
+        let suffix = if statics { "statics" } else { "globals" };
+        Ok(Scope {
+            scope_id: self
+                .ids
+                .encode(ResourceIdKind::Scope, format!("{frame_key}:{suffix}"))?,
+            frame_id: self.ids.encode(ResourceIdKind::Frame, frame_key)?,
+            kind: if statics {
+                ScopeKind::Statics
+            } else {
+                ScopeKind::Globals
+            } as i32,
+            name: if statics {
+                "File statics"
+            } else {
+                "Globals (current source unit)"
+            }
+            .to_string(),
+            expensive: true,
+            variable_count: None,
+        })
+    }
+
     pub(crate) fn variable(
         &self,
         view: &DecodedVariable,

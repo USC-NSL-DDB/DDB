@@ -579,6 +579,107 @@ class GetRemoteBTInfo(gdb.MICommand):
         }
 
 
+def scope_symbols(kind):
+    """Enumerate declarations in the selected compilation unit, without values."""
+    frame = gdb.selected_frame()
+    try:
+        block = frame.block()
+    except RuntimeError:
+        return []  # Assembly and stripped frames have no lexical scope.
+    if kind not in ("statics", "globals"):
+        raise gdb.GdbError("unknown variable scope")
+    block = block.static_block if kind == "statics" else block.global_block
+    symbols = {}
+    for symbol in block:
+        if not (symbol.is_variable or symbol.is_constant):
+            continue
+        # DWARF can contain duplicate declarations, especially header constants.
+        # Never merge by name alone: different files/storage remain distinct.
+        key = (
+            symbol.symtab.fullname() if symbol.symtab else "",
+            symbol.line, symbol.name, symbol.linkage_name,
+            str(symbol.type), symbol.addr_class,
+        )
+        if key in symbols and (symbol.is_constant or symbols[key] == symbol):
+            continue
+        # Distinct storage with identical declaration metadata remains distinct.
+        while key in symbols:
+            key = key + (len(symbols),)
+        symbols[key] = symbol
+    return sorted(symbols.items(), key=lambda item: (item[1].name, item[0]))
+
+
+class ScopeSymbolValue(gdb.Function):
+    def __init__(self):
+        super().__init__("ddb_scope_symbol")
+
+    def invoke(self, statics, ordinal):
+        symbols = scope_symbols("statics" if int(statics) else "globals")
+        # Returning the native lvalue preserves its type and storage, including
+        # TLS and anonymous types. GDB var-assign therefore edits the original.
+        return symbols[int(ordinal)][1].value(gdb.selected_frame())
+
+
+class ListScopeVariablesMICommand(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-ddb-list-scope-variables")
+
+    def invoke(self, arguments):
+        kind, start, count = arguments
+        start, count = int(start), int(count)
+        if start < 0 or count < 0:
+            raise gdb.GdbError("invalid scope page")
+        symbols = scope_symbols(kind)
+        names = {}
+        locations = {}
+        for key, symbol in symbols:
+            names[symbol.name] = names.get(symbol.name, 0) + 1
+            location = (symbol.name, key[0], key[1])
+            locations[location] = locations.get(location, 0) + 1
+        variables = []
+        for offset, (key, symbol) in enumerate(symbols[start : start + count]):
+            name = symbol.name
+            if names[name] > 1:
+                name += " @ {}:{}".format(key[0], key[1])
+                if locations[(symbol.name, key[0], key[1])] > 1:
+                    name += " [{}]".format(start + offset + 1)
+            metadata = {"type": str(symbol.type)}
+            # The last requested record is metadata-only continuation lookahead.
+            if offset + 1 < count:
+                root = None
+                try:
+                    expression = "$ddb_scope_symbol({}, {})".format(
+                        int(kind == "statics"), start + offset
+                    )
+                    metadata = gdb.execute_mi("-var-create", "-", "*", expression)
+                    root = metadata["name"]
+                except gdb.error:
+                    metadata.update(value="<unavailable>", numchild=0)
+                finally:
+                    if root is not None:
+                        gdb.execute_mi("-var-delete", root)
+            metadata["name"] = name
+            if symbol.symtab:
+                filename = symbol.symtab.fullname().replace("\\", "\\\\").replace("'", "\\'")
+                metadata["evaluate-name"] = "'{}'::{}".format(filename, symbol.name)
+            variables.append(metadata)
+        return {"variables": variables}
+
+
+class ScopeVarCreateMICommand(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-ddb-scope-var-create")
+
+    def invoke(self, arguments):
+        name, kind, ordinal = arguments
+        if kind not in ("statics", "globals") or int(ordinal) < 0:
+            raise gdb.GdbError("invalid scope symbol")
+        expression = "$ddb_scope_symbol({}, {})".format(
+            int(kind == "statics"), int(ordinal)
+        )
+        return gdb.execute_mi("-var-create", name, "*", expression)
+
+
 class ListSignalsMICommand(gdb.MICommand):
     def __init__(self):
         super().__init__("-list-signals")
@@ -1092,3 +1193,7 @@ RecordTimeAndFinishMiCommand()
 
 ListSignalsMICommand()
 InterruptIfRunningMICommand()
+
+ScopeSymbolValue()
+ListScopeVariablesMICommand()
+ScopeVarCreateMICommand()

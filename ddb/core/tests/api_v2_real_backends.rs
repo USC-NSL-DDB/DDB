@@ -1391,6 +1391,7 @@ fn assert_frame_variables_exclude_file_globals(backend: &str) {
     let compile = std::process::Command::new("g++")
         .args(["-g", "-O0"])
         .arg(&source)
+        .arg(source.with_file_name("variable_scopes_other.cc"))
         .arg("-o")
         .arg(&binary)
         .output()
@@ -1458,6 +1459,42 @@ fn assert_frame_variables_exclude_file_globals(backend: &str) {
         V2_TEST_READ_TOKEN,
     );
     assert_eq!(status, StatusCode::OK, "{scopes:?}");
+    let kinds: Vec<_> = scopes["scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|scope| scope["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "SCOPE_KIND_LOCALS",
+            "SCOPE_KIND_STATICS",
+            "SCOPE_KIND_GLOBALS"
+        ]
+    );
+    for (index, expected_name, expected_value) in [
+        (1, "library::file_noise", "92"),
+        (2, "library::global_noise", "91"),
+    ] {
+        assert_eq!(scopes["scopes"][index]["expensive"], true);
+        let (status, variables) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ListVariables"),
+            &json!({"scopeId": scopes["scopes"][index]["scopeId"]}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{variables:?}");
+        let variables = variables["variables"].as_array().unwrap();
+        let selected = variables
+            .iter()
+            .filter(|v| v["name"] == expected_name)
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1, "{backend}: {variables:?}");
+        assert_eq!(selected[0]["value"], expected_value);
+        assert!(!variables
+            .iter()
+            .any(|v| v["name"] == "local_static" || v["name"] == "nested_static"));
+    }
     for _ in 0..2 {
         let (status, variables) = ddb.api_post_json_with_bearer(
             &rpc("DebuggerService", "ListVariables"),
@@ -1472,9 +1509,164 @@ fn assert_frame_variables_exclude_file_globals(backend: &str) {
             .map(|value| value["name"].as_str().unwrap())
             .collect::<Vec<_>>();
         names.sort_unstable();
-        assert_eq!(names, ["argument", "local", "local_static", "nested", "nested_static"],
+        assert_eq!(names, ["argument", "local", "local_static", "nested", "nested_static", "shadowed"],
             "{backend} must retain block statics, exclude globals and expired blocks, and not duplicate variables: {variables:?}");
     }
+    for (index, object_name, expected, replacement) in [
+        (1, "file_pair", "21", "121"),
+        (2, "global_pair", "11", "111"),
+    ] {
+        let mut token = None;
+        let mut all = Vec::new();
+        loop {
+            let (status, page) = ddb.api_post_json_with_bearer(
+                &rpc("DebuggerService", "ListVariables"),
+                &json!({"scopeId": scopes["scopes"][index]["scopeId"],
+                        "page": {"pageSize": 1, "pageToken": token}}),
+                V2_TEST_READ_TOKEN,
+            );
+            assert_eq!(status, StatusCode::OK, "{page:?}");
+            let items = page["variables"].as_array().unwrap();
+            assert!(items.len() <= 1);
+            all.extend(items.iter().cloned());
+            token = page["page"]["nextPageToken"].as_str().map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+            assert!(all.len() < 30, "pagination did not terminate");
+        }
+        let names = all
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names.iter().collect::<std::collections::HashSet<_>>().len(),
+            names.len(),
+            "duplicate declarations: {names:?}"
+        );
+        let object = all.iter().find(|v| v["name"] == object_name).unwrap();
+        let (status, children) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerService", "ExpandVariable"),
+            &json!({"variableId": object["variableId"]}),
+            V2_TEST_READ_TOKEN,
+        );
+        assert_eq!(status, StatusCode::OK, "{children:?}");
+        let children = if let Some(access) = children["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "public")
+        {
+            let (status, children) = ddb.api_post_json_with_bearer(
+                &rpc("DebuggerService", "ExpandVariable"),
+                &json!({"variableId": access["variableId"]}),
+                V2_TEST_READ_TOKEN,
+            );
+            assert_eq!(status, StatusCode::OK, "{children:?}");
+            children
+        } else {
+            children
+        };
+        let member = children["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "first")
+            .expect("struct field must be expandable");
+        assert_eq!(member["value"], expected);
+        let assigned = completed_control(
+            &ddb,
+            "SetVariable",
+            json!({
+                "context": {"idempotencyKey": format!("edit-{object_name}")}, "target": target,
+                "variableId": member["variableId"], "value": replacement,
+            }),
+        );
+        assert_eq!(
+            assigned["result"]["variableAssignment"]["value"], replacement,
+            "{assigned:?}"
+        );
+        let evaluated = completed_control(
+            &ddb,
+            "Evaluate",
+            json!({
+                "context": {"idempotencyKey": format!("verify-{object_name}")}, "target": target,
+                "frameId": frame_id, "expression": format!("{object_name}.first"),
+                "evaluationContext": "EVALUATION_CONTEXT_WATCH",
+            }),
+        );
+        assert_eq!(evaluated["result"]["evaluation"]["value"], replacement);
+        if index == 2 {
+            let shadowed = all.iter().find(|v| v["name"] == "shadowed").unwrap();
+            assert_eq!(shadowed["value"], "41", "must not resolve the local shadow");
+            let watched = completed_control(
+                &ddb,
+                "Evaluate",
+                json!({
+                    "context": {"idempotencyKey": "watch-shadowed-global"}, "target": target,
+                    "frameId": frame_id, "expression": shadowed["evaluateName"],
+                    "evaluationContext": "EVALUATION_CONTEXT_WATCH",
+                }),
+            );
+            assert_eq!(
+                watched["result"]["evaluation"]["value"], "41",
+                "Watch must identify the global: {shadowed:?}"
+            );
+            let tls = all.iter().find(|v| v["name"] == "thread_value").unwrap();
+            assert_eq!(tls["value"], "31");
+            let assigned = completed_control(
+                &ddb,
+                "SetVariable",
+                json!({
+                    "context": {"idempotencyKey": "edit-shadowed-global"}, "target": target,
+                    "variableId": shadowed["variableId"], "value": "141",
+                }),
+            );
+            assert_eq!(assigned["result"]["variableAssignment"]["value"], "141");
+            let evaluated = completed_control(
+                &ddb,
+                "Evaluate",
+                json!({
+                    "context": {"idempotencyKey": "verify-local-unaffected"}, "target": target,
+                    "frameId": frame_id, "expression": "shadowed",
+                    "evaluationContext": "EVALUATION_CONTEXT_WATCH",
+                }),
+            );
+            assert_eq!(evaluated["result"]["evaluation"]["value"], "51");
+        }
+    }
+    // The caller belongs to a different compilation unit with a same-named
+    // file static. Its scope must resolve that frame, never global selection.
+    let caller_id = &frames["frames"][1]["frameId"];
+    let (status, caller_scopes) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListScopes"),
+        &json!({"frameId": caller_id}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{caller_scopes:?}");
+    let (status, caller_statics) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListVariables"),
+        &json!({"scopeId": caller_scopes["scopes"][1]["scopeId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{caller_statics:?}");
+    let caller_pair = caller_statics["variables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "file_pair")
+        .unwrap();
+    let caller_watch = completed_control(
+        &ddb,
+        "Evaluate",
+        json!({
+            "context": {"idempotencyKey": "caller-file-static"}, "target": target,
+            "frameId": caller_id, "expression": format!("({}).first", caller_pair["evaluateName"].as_str().unwrap()),
+            "evaluationContext": "EVALUATION_CONTEXT_WATCH",
+        }),
+    );
+    assert_eq!(caller_watch["result"]["evaluation"]["value"], "71");
+
     let evaluated = completed_control(
         &ddb,
         "Evaluate",
@@ -1487,6 +1679,25 @@ fn assert_frame_variables_exclude_file_globals(backend: &str) {
     assert_eq!(
         evaluated["result"]["evaluation"]["value"], "91",
         "{evaluated:?}"
+    );
+    let completed = completed_control(
+        &ddb,
+        "Execute",
+        json!({
+            "context": {"idempotencyKey": "finish-scope-test"}, "target": target,
+            "action": "EXECUTION_ACTION_CONTINUE",
+        }),
+    );
+    assert!(completed["error"].is_null(), "{completed:?}");
+    let (status, stale) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListVariables"),
+        &json!({"scopeId": scopes["scopes"][2]["scopeId"]}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "resumed scopes must expire: {stale:?}"
     );
 }
 

@@ -4,6 +4,10 @@ The VS Code adapter uses typed API v2 operations for inspection, variable
 assignment, debugger settings and execution. Native console requests keep the
 debugger's CLI syntax; DDB performs its internal protocol conversion.
 
+GDB and LLDB expose separate locals, file statics and compilation-unit globals.
+See [variable scopes](variable-scopes.md) for loading, identity, Watch and paging
+semantics.
+
 The implementation includes GDB frame-filter isolation for local inspection and
 managed debugger cleanup. See [the GDB hang analysis](../gdb-frame-filter-inspection-hang.md)
 for the upstream cause of filtered variable inspection hanging.

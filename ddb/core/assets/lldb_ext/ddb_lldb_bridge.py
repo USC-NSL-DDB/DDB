@@ -640,6 +640,8 @@ class Bridge(object):
             # LLDB SBValue uses installed formatters by default.
             "-enable-pretty-printing": lambda arguments: ("done", None),
             "-var-create": self._var_create,
+            "-ddb-list-scope-variables": self._list_scope_variables,
+            "-ddb-scope-var-create": self._scope_var_create,
             "-var-list-children": self._var_list_children,
             "-var-delete": self._var_delete,
             "-var-assign": self._var_assign,
@@ -1075,28 +1077,10 @@ class Bridge(object):
 
         include_values = "--no-values" not in arguments
         variables = []
-        # SBFrame's statics flag includes the entire compilation unit's globals,
-        # including repeated header constants. This scope is locals/arguments.
-        values = frame.GetVariables(True, True, False, True)
-        # Retain function-local statics by visiting only active lexical blocks.
-        # Stop at this frame's block so an inline frame cannot inherit its caller.
-        block = frame.GetBlock()
-        frame_block = frame.GetFrameBlock()
-        while block and block.IsValid():
-            statics = block.GetVariables(
-                frame, False, False, True, lldb.eDynamicDontRunTarget
-            )
-            for index in range(statics.GetSize()):
-                value = statics.GetValueAtIndex(index)
-                if value and value.IsValid() and value.IsInScope():
-                    values.Append(value)
-            if block == frame_block:
-                break
-            block = block.GetParent()
-        for index in range(values.GetSize()):
-            value = values.GetValueAtIndex(index)
-            if not value or not value.IsValid():
-                continue
+        # Lexical blocks distinguish real locals from compilation-unit symbols.
+        # LLDB 20 can classify a global TLS symbol as VariableLocal, so category
+        # flags on SBFrame.GetVariables alone are insufficient here.
+        for value in self._lexical_variables(frame):
             record = {
                 "name": _text(value.GetName()),
                 "type": _text(value.GetTypeName()),
@@ -1170,6 +1154,115 @@ class Bridge(object):
             ]
         }
 
+    @staticmethod
+    def _lexical_variables(frame):
+        values = []
+        seen = set()
+        block = frame.GetBlock()
+        frame_block = frame.GetFrameBlock()
+        while block and block.IsValid():
+            block_values = block.GetVariables(
+                frame, True, True, True, lldb.eDynamicDontRunTarget
+            )
+            for index in range(block_values.GetSize()):
+                value = block_values.GetValueAtIndex(index)
+                if (
+                    value and value.IsValid() and value.IsInScope()
+                    and value.GetID() not in seen
+                ):
+                    seen.add(value.GetID())
+                    values.append(value)
+            if block == frame_block:
+                break
+            block = block.GetParent()
+        return values
+
+    def _scope_symbols(self, frame, kind):
+        """Compilation-unit declarations excluding the selected lexical scope."""
+        if kind not in ("statics", "globals"):
+            raise ValueError("unknown variable scope")
+        values = frame.GetVariables(True, True, True, True, lldb.eDynamicDontRunTarget)
+        lexical = {
+            self._scope_symbol_key(value) for value in self._lexical_variables(frame)
+        }
+        symbols = {}
+        for index in range(values.GetSize()):
+            value = values.GetValueAtIndex(index)
+            category = value.GetValueType()
+            is_static = category == lldb.eValueTypeVariableStatic
+            if category not in (
+                lldb.eValueTypeVariableStatic, lldb.eValueTypeVariableGlobal,
+                lldb.eValueTypeVariableThreadLocal, lldb.eValueTypeVariableLocal,
+            ):
+                continue
+            if is_static != (kind == "statics"):
+                continue
+            key = self._scope_symbol_key(value)
+            if key in lexical:
+                continue
+            symbols.setdefault(key, value)
+        return sorted(symbols.items(), key=lambda item: (item[1].GetName() or "", item[0]))
+
+    @staticmethod
+    def _scope_symbol_key(value):
+        declaration = value.GetDeclaration()
+        # Declaration identity is scoped to this compilation unit. Without a
+        # source origin, preserve native identity rather than merging symbols.
+        # GetLoadAddress is unsuitable: it evaluates unrequested values.
+        native_id = (
+            0 if declaration.GetLine() and declaration.GetFileSpec().IsValid()
+            else value.GetID()
+        )
+        return (
+            _text(value.GetName()), _text(declaration.GetFileSpec()),
+            declaration.GetLine(), declaration.GetColumn(),
+            _text(value.GetTypeName()), value.GetValueType(), native_id,
+        )
+
+    def _list_scope_variables(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
+        kind, start, count = arguments
+        start, count = int(start), int(count)
+        if start < 0 or count < 0:
+            raise ValueError("invalid scope page")
+        symbols = self._scope_symbols(frame, kind)
+        names = {}
+        locations = {}
+        for key, value in symbols:
+            name = re.sub(r"^::", "", _text(value.GetName()))
+            names[name] = names.get(name, 0) + 1
+            location = (name, key[1], key[2])
+            locations[location] = locations.get(location, 0) + 1
+        variables = []
+        for offset, (key, value) in enumerate(symbols[start : start + count]):
+            name = re.sub(r"^::", "", _text(value.GetName()))
+            if names[name] > 1:
+                repeated_location = locations[(name, key[1], key[2])] > 1
+                name += " @ {}:{}".format(key[1], key[2])
+                if repeated_location:
+                    name += " [{}]".format(start + offset + 1)
+            metadata = {"name": name, "type": _text(value.GetTypeName())}
+            # The last requested record is metadata-only continuation lookahead.
+            if offset + 1 < count:
+                expression = lldb.SBStream()
+                if value.GetExpressionPath(expression):
+                    metadata["evaluate-name"] = expression.GetData()
+                rendered = _value_text(value)
+                unavailable = value.GetError().Fail()
+                metadata["value"] = "<unavailable>" if unavailable else rendered
+                metadata["numchild"] = "0" if unavailable else _text(value.GetNumChildren())
+            variables.append(metadata)
+        return "done", {"variables": variables}
+
+    def _scope_var_create(self, arguments):
+        frame, arguments = self._frame_and_arguments(arguments)
+        name, kind, ordinal = arguments
+        ordinal = int(ordinal)
+        symbols = self._scope_symbols(frame, kind)
+        if ordinal < 0 or ordinal >= len(symbols):
+            raise ValueError("invalid scope symbol")
+        return self._store_variable_object(name, symbols[ordinal][1])
+
     def _var_create(self, arguments):
         frame, arguments = self._frame_and_arguments(arguments)
         if len(arguments) < 3 or arguments[1] not in ("*", "@"):
@@ -1178,12 +1271,31 @@ class Bridge(object):
         if name in self.variable_objects:
             raise ValueError("duplicate variable object {}".format(name))
         expression = " ".join(arguments[2:])
-        value = frame.FindVariable(expression)
+        value = self._find_variable(frame, expression)
         if not value or not value.IsValid():
             value = frame.EvaluateExpression(expression)
         if not value or not value.IsValid() or value.GetError().Fail():
             error = value.GetError() if value and value.IsValid() else None
             raise RuntimeError(_error_text(error) or "LLDB variable creation failed")
+        return self._store_variable_object(name, value)
+
+    def _find_variable(self, frame, expression):
+        if expression.startswith("::"):
+            # LLDB 20's expression parser can bind ::name to a shadowing local.
+            # Resolve a qualified symbol path against native declarations first;
+            # compound expressions still belong to the expression evaluator.
+            for kind in ("globals", "statics"):
+                for _, value in self._scope_symbols(frame, kind):
+                    path = lldb.SBStream()
+                    if value.GetExpressionPath(path) and path.GetData() == expression:
+                        return value
+        elif re.match(r"^[A-Za-z_]\w*$", expression):
+            return frame.FindVariable(expression)
+        return None
+
+    def _store_variable_object(self, name, value):
+        if name in self.variable_objects:
+            raise ValueError("duplicate variable object {}".format(name))
         self.variable_objects[name] = value
         return "done", {
             "name": name,
@@ -1267,7 +1379,9 @@ class Bridge(object):
         if not arguments:
             raise ValueError("-data-evaluate-expression requires an expression")
         expression = " ".join(arguments)
-        value = frame.EvaluateExpression(expression)
+        value = self._find_variable(frame, expression)
+        if not value or not value.IsValid():
+            value = frame.EvaluateExpression(expression)
         if not value or not value.IsValid() or value.GetError().Fail():
             error = value.GetError() if value and value.IsValid() else None
             raise RuntimeError(_error_text(error) or "LLDB expression evaluation failed")

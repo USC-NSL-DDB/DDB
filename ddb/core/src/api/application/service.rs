@@ -92,6 +92,8 @@ struct VariableIdentity {
     path: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     object_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope_kind: Option<String>,
 }
 
 pub(crate) struct ApplicationStateSubscription {
@@ -987,7 +989,11 @@ impl DdbApplicationService {
     ) -> Result<ListScopesResponse, ApplicationError> {
         let scope = RequestScope::begin(request.context.as_ref())?;
         let frame = self.current_frame(&request.frame_id).await?;
-        let scopes = vec![self.projection().locals_scope(&frame.internal)?];
+        let scopes = vec![
+            self.projection().locals_scope(&frame.internal)?,
+            self.projection().nonlocal_scope(&frame.internal, true)?,
+            self.projection().nonlocal_scope(&frame.internal, false)?,
+        ];
         let page = self.pages.paginate(
             &format!("scopes:{}", frame.internal),
             frame.execution_revision,
@@ -1007,10 +1013,16 @@ impl DdbApplicationService {
     ) -> Result<ListVariablesResponse, ApplicationError> {
         let scope = RequestScope::begin(request.context.as_ref())?;
         let scope_key = self.ids.decode(ResourceIdKind::Scope, &request.scope_id)?;
-        let frame_key = scope_key
-            .strip_suffix(":locals")
+        let (frame_key, kind) = scope_key
+            .rsplit_once(':')
+            .filter(|(_, kind)| matches!(*kind, "locals" | "statics" | "globals"))
             .ok_or_else(|| ApplicationError::not_found("scope"))?;
         let frame = self.current_frame_key(frame_key).await?;
+        if kind != "locals" {
+            return self
+                .list_nonlocal_variables(&scope, &frame, &scope_key, kind, request.page.as_ref())
+                .await;
+        }
         // Frame filters shape displayed call stacks, not the physical frame
         // identified by this API handle. GDB's decorated variable enumeration
         // can also hang on library frames; inspect their native locals directly.
@@ -1044,7 +1056,7 @@ impl DdbApplicationService {
                 // Stack listings commonly omit type/child metadata. Inspect only
                 // the requested page and release each temporary backend root.
                 let (_object, metadata) = self
-                    .create_variable_object(&scope, &frame, &variable.name)
+                    .create_variable_object(&scope, &frame, &variable.name, None)
                     .await?;
                 variable.value = metadata.value;
                 variable.type_name = metadata.type_name.or(variable.type_name);
@@ -1060,6 +1072,7 @@ impl DdbApplicationService {
                 expression: variable.name.clone(),
                 path: Vec::new(),
                 object_name: None,
+                scope_kind: None,
             };
             variables.push(self.projection().variable(
                 &variable,
@@ -1077,11 +1090,83 @@ impl DdbApplicationService {
         })
     }
 
+    async fn list_nonlocal_variables(
+        &self,
+        scope: &RequestScope,
+        frame: &StopFrameKey,
+        scope_key: &str,
+        kind: &str,
+        request: Option<&ddb_api_types::v2::PageRequest>,
+    ) -> Result<ListVariablesResponse, ApplicationError> {
+        let collection = format!("variables:{scope_key}");
+        let window = self
+            .pages
+            .window(&collection, frame.execution_revision, request)?;
+        let outcome = scope
+            .wait(self.command_port.execute(
+                &format!(
+                    "-ddb-list-scope-variables --thread {} --frame {} {kind} {} {}",
+                    frame.global_thread_id,
+                    frame.level,
+                    window.offset,
+                    window.size + 1
+                ),
+                CommandTarget::Thread(crate::state::GlobalThreadId::new(frame.global_thread_id)),
+            ))
+            .await?
+            .map_err(|_| ApplicationError::backend("debugger scope query failed"))?;
+        self.ensure_frame_current(frame).await?;
+        let decoded = decode_variables(&outcome)?;
+        if decoded.len() > window.size + 1 {
+            return Err(ApplicationError::backend(
+                "debugger exceeded the requested scope page",
+            ));
+        }
+        // The extra record is metadata-only lookahead. Read values exclusively
+        // for the requested page, using the native symbol rather than its label.
+        let more = decoded.len() > window.size;
+        let mut variables = Vec::new();
+        for (offset, variable) in decoded.into_iter().take(window.size).enumerate() {
+            let ordinal = u32::try_from(window.offset + offset)
+                .map_err(|_| ApplicationError::backend("scope index overflowed"))?;
+            let identity = VariableIdentity {
+                version: 1,
+                frame_key: frame.internal.clone(),
+                root_ordinal: ordinal,
+                expression: String::new(),
+                path: Vec::new(),
+                object_name: None,
+                scope_kind: Some(kind.to_string()),
+            };
+            variables.push(self.projection().variable(
+                &variable,
+                &encode_variable_identity(&identity)?,
+                variable.evaluate_name.clone(),
+                None,
+            )?);
+        }
+        scope.ensure_active()?;
+        self.ensure_frame_current(frame).await?;
+        let page = self.pages.finish_window_with_more(
+            &collection,
+            frame.execution_revision,
+            window,
+            variables,
+            more,
+        );
+        Ok(ListVariablesResponse {
+            context: Some(scope.response_context(&self.server_instance_id)),
+            variables: page.items,
+            page: Some(page.info),
+        })
+    }
+
     async fn create_variable_object(
         &self,
         scope: &RequestScope,
         frame: &StopFrameKey,
         expression: &str,
+        symbol: Option<(&str, u32)>,
     ) -> Result<
         (
             Arc<super::variable_objects::VariableObject>,
@@ -1095,10 +1180,16 @@ impl DdbApplicationService {
             .reserve(frame.clone(), Arc::clone(&self.command_port))?;
         let expression =
             serde_json::to_string(expression).expect("serializing an expression cannot fail");
-        let command = format!(
-            "-var-create --thread {} --frame {} {} * {expression}",
-            frame.global_thread_id, frame.level, object.name,
-        );
+        let command = match symbol {
+            Some((kind, ordinal)) => format!(
+                "-ddb-scope-var-create --thread {} --frame {} {} {kind} {ordinal}",
+                frame.global_thread_id, frame.level, object.name
+            ),
+            None => format!(
+                "-var-create --thread {} --frame {} {} * {expression}",
+                frame.global_thread_id, frame.level, object.name
+            ),
+        };
         scope.ensure_active()?;
         object.mark_creation_started();
         let outcome = scope
@@ -1137,9 +1228,17 @@ impl DdbApplicationService {
         let object = match identity.object_name.as_deref() {
             Some(name) => self.variable_objects.get(name)?,
             None => {
-                self.create_variable_object(&scope, &frame, &identity.expression)
-                    .await?
-                    .0
+                self.create_variable_object(
+                    &scope,
+                    &frame,
+                    &identity.expression,
+                    identity
+                        .scope_kind
+                        .as_deref()
+                        .map(|kind| (kind, identity.root_ordinal)),
+                )
+                .await?
+                .0
             }
         };
         let (variables, backend_has_more) = self
@@ -1179,6 +1278,7 @@ impl DdbApplicationService {
             expression: "<evaluation>".to_string(),
             path: Vec::new(),
             object_name: Some(object.name.clone()),
+            scope_kind: None,
         };
         let id = self.ids.encode(
             ResourceIdKind::Variable,
@@ -1207,9 +1307,17 @@ impl DdbApplicationService {
         let object = match identity.object_name.as_deref() {
             Some(name) => self.variable_objects.get(name)?,
             None => {
-                self.create_variable_object(scope, frame, &identity.expression)
-                    .await?
-                    .0
+                self.create_variable_object(
+                    scope,
+                    frame,
+                    &identity.expression,
+                    identity
+                        .scope_kind
+                        .as_deref()
+                        .map(|kind| (kind, identity.root_ordinal)),
+                )
+                .await?
+                .0
             }
         };
         let name = self
@@ -1317,6 +1425,7 @@ impl DdbApplicationService {
                 child_identity.path.push(child_index);
                 let internal_id = encode_variable_identity(&child_identity)?;
                 let variable = DecodedVariable {
+                    evaluate_name: None,
                     name: child.display_name,
                     value: child.value,
                     type_name: child.type_name,
@@ -1659,7 +1768,11 @@ impl DdbApplicationService {
             .map_err(|_| ApplicationError::not_found("variable"))?;
         if identity.version != 1
             || identity.frame_key.is_empty()
-            || identity.expression.trim().is_empty()
+            || (identity.scope_kind.is_none() && identity.expression.trim().is_empty())
+            || identity
+                .scope_kind
+                .as_deref()
+                .is_some_and(|kind| !matches!(kind, "statics" | "globals"))
             || identity.expression.len() > MAX_VARIABLE_IDENTITY_BYTES
             || identity.path.len() > MAX_VARIABLE_DEPTH
         {
@@ -3342,6 +3455,7 @@ mod tests {
                     expression: "counter".to_string(),
                     path: Vec::new(),
                     object_name: None,
+                    scope_kind: None,
                 })
                 .unwrap(),
             )
