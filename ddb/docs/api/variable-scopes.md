@@ -74,6 +74,15 @@ this does not claim that VS Code virtualizes all named-variable lists. Previousl
 fetched identities remain available for editing when pages are requested out of
 order. Invalid, oversized or non-progressing page requests fail explicitly.
 
+Watch and hover expressions are evaluated in the selected frame. If the native
+debugger rejects an evaluation, the failed operation and its target outcome say
+"Cannot evaluate this expression in the selected frame". VS Code displays this
+inline without a popup. Selecting a frame where the expression is valid evaluates
+it again normally. This wording also covers invalid expressions and unavailable
+values; it does not assume that every evaluation failure means a missing local.
+Timeouts, unavailable sessions, stale frames and other command failures retain
+their distinct errors. Error codes and SDK contracts are unchanged.
+
 ## Validation
 
 The real-backend scope fixture covers lexical/static/global separation, included

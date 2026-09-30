@@ -1178,6 +1178,8 @@ impl DdbApplicationService {
         let mut has_success = false;
         let mut has_failure = false;
         let mut failures_are_timeouts = true;
+        let mut failures_are_evaluation_rejections =
+            matches!(projection, CompletionProjection::Evaluation { .. });
         for sid in sessions {
             let failure = report
                 .failures()
@@ -1206,7 +1208,9 @@ impl DdbApplicationService {
                 SessionCommandFailureKind::AdmissionTimeout
                     | SessionCommandFailureKind::ResponseTimeout
             );
-            let target_error = command_target_error(kind)
+            failures_are_evaluation_rejections &=
+                kind == SessionCommandFailureKind::DebuggerRejected;
+            let target_error = command_target_error(kind, projection)
                 .with_operation_id(operation_id)
                 .to_contract(request_id);
             target_failures.push(TargetFailure {
@@ -1242,6 +1246,8 @@ impl DdbApplicationService {
                 "debugger command timed out",
                 true,
             )
+        } else if failures_are_evaluation_rejections {
+            (DdbErrorCode::BackendFailed, EVALUATION_UNAVAILABLE, false)
         } else {
             (
                 DdbErrorCode::BackendFailed,
@@ -2274,7 +2280,12 @@ fn missing_target_completion_report(
     })
 }
 
-fn command_target_error(kind: SessionCommandFailureKind) -> ApplicationError {
+const EVALUATION_UNAVAILABLE: &str = "Cannot evaluate this expression in the selected frame";
+
+fn command_target_error(
+    kind: SessionCommandFailureKind,
+    projection: &CompletionProjection,
+) -> ApplicationError {
     match kind {
         SessionCommandFailureKind::AdmissionTimeout
         | SessionCommandFailureKind::ResponseTimeout => ApplicationError::new(
@@ -2285,6 +2296,14 @@ fn command_target_error(kind: SessionCommandFailureKind) -> ApplicationError {
             DdbErrorCode::Unavailable,
             "debugger session was unavailable for command admission",
         ),
+        // Missing locals, optimized-out values and invalid expressions are
+        // evaluation failures, not failures to control the target. Keep the
+        // failed operation and avoid guessing which expression error occurred.
+        SessionCommandFailureKind::DebuggerRejected
+            if matches!(projection, CompletionProjection::Evaluation { .. }) =>
+        {
+            ApplicationError::backend(EVALUATION_UNAVAILABLE)
+        }
         SessionCommandFailureKind::DebuggerRejected => ApplicationError::new(
             DdbErrorCode::BackendFailed,
             "debugger rejected command for target",
@@ -2296,6 +2315,35 @@ fn command_target_error(kind: SessionCommandFailureKind) -> ApplicationError {
             )
         }
     }
+}
+
+#[test]
+fn evaluation_rejection_has_context_without_masking_command_failures() {
+    let evaluation = CompletionProjection::Evaluation {
+        frame: None,
+        object: None,
+    };
+    let rejected = command_target_error(SessionCommandFailureKind::DebuggerRejected, &evaluation);
+    assert_eq!(rejected.code(), DdbErrorCode::BackendFailed);
+    assert_eq!(rejected.to_string(), EVALUATION_UNAVAILABLE);
+    for kind in [
+        SessionCommandFailureKind::AdmissionTimeout,
+        SessionCommandFailureKind::ResponseTimeout,
+        SessionCommandFailureKind::AdmissionRejected,
+        SessionCommandFailureKind::ResponseFailed,
+        SessionCommandFailureKind::ExecutionFailed,
+    ] {
+        let actual = command_target_error(kind, &evaluation);
+        let control = command_target_error(kind, &CompletionProjection::NoContent);
+        assert_eq!(actual.code(), control.code());
+        assert_eq!(actual.to_string(), control.to_string());
+        assert_ne!(actual.to_string(), EVALUATION_UNAVAILABLE);
+    }
+    let control = command_target_error(
+        SessionCommandFailureKind::DebuggerRejected,
+        &CompletionProjection::RawCommand { frame: None },
+    );
+    assert_eq!(control.to_string(), "debugger rejected command for target");
 }
 
 fn dynamic_dict(dict: &Dict, depth: usize, nodes: &mut usize) -> Option<DynamicValue> {
