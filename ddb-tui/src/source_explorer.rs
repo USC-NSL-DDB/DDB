@@ -127,6 +127,14 @@ impl Default for Explorer {
 }
 
 impl Explorer {
+    pub fn invalidate_server(&mut self) {
+        let generation = self.generation;
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+    }
+
     pub fn open(&mut self, catalog: bool) -> Request {
         self.visible = true;
         self.go(if catalog {

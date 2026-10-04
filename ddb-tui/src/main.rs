@@ -1,6 +1,9 @@
 mod api;
 mod cli;
 mod model;
+mod source_binding;
+#[cfg(test)]
+mod source_binding_tests;
 mod source_browser;
 mod source_explorer;
 mod source_explorer_input;
@@ -13,10 +16,9 @@ mod worker;
 use std::{io, time::Duration};
 
 use anyhow::{Context, Result};
-use api::{
-    thread_target, ApiClient, BreakpointTarget, CapabilitiesExt, ClientConfig,
-    TUI_API_COMPATIBILITY,
-};
+#[cfg(test)]
+use api::BreakpointTarget;
+use api::{thread_target, ApiClient, CapabilitiesExt, ClientConfig, TUI_API_COMPATIBILITY};
 use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::{
@@ -1016,15 +1018,22 @@ fn refresh_stack(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 }
 
 fn toggle_breakpoint(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
-    let Some(session_id) = app.current_thread().map(|thread| thread.session_id.clone()) else {
-        app.status = "select a DDB session before setting a breakpoint".to_string();
+    let indices = app.source_breakpoint_indices();
+    if indices.len() > 1 {
+        app.focus = Focus::Breakpoints;
+        app.selected_breakpoint = indices[0];
+        app.status =
+            "multiple DDB breakpoints at this location; select one in Breakpoints and press Delete"
+                .into();
         return;
-    };
-    let target = BreakpointTarget::Session(session_id);
-    if let Some((id, api_target)) = app
-        .breakpoint_at_source_cursor(target)
-        .and_then(|breakpoint| Some((breakpoint.id.clone(), breakpoint.target.clone()?)))
-    {
+    }
+    if let Some(index) = indices.first() {
+        let breakpoint = &app.breakpoints[*index];
+        let Some(api_target) = breakpoint.target.clone() else {
+            app.error("breakpoint has no explicit target; refresh before deleting it");
+            return;
+        };
+        let id = breakpoint.id.clone();
         if !app.capabilities.supports_breakpoint_action("delete") {
             app.status = "breakpoint deletion is not supported by this DDB API".to_string();
             return;
@@ -1052,10 +1061,8 @@ fn start_breakpoint_prompt(app: &mut App) {
         .any(|feature| app.capabilities.supports_breakpoint_action(feature))
     {
         app.status = "advanced breakpoints are not supported by this DDB API".to_string();
-    } else if app.source_browser.cursor_location().is_none() {
-        app.status = "load a source file before setting a breakpoint".to_string();
-    } else if app.current_thread().is_none() {
-        app.status = "select a DDB session before setting a breakpoint".to_string();
+    } else if let Err(error) = app.source_breakpoint_location() {
+        app.error(error);
     } else {
         app.start_input(InputMode::Breakpoint);
     }
@@ -1127,15 +1134,12 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
     let Ok(api_line) = u32::try_from(line.max(1)) else {
         return app.error("source line exceeds the API limit");
     };
-    let (target, location) = match requested_source {
-        Some(path) => (
-            None,
-            v2::SourceLocation {
-                path: Some(path),
-                line: api_line,
-                ..Default::default()
-            },
-        ),
+    let location = match requested_source {
+        Some(path) => v2::SourceLocation {
+            path: Some(path),
+            line: api_line,
+            ..Default::default()
+        },
         None => match app.source_browser.current_location(line) {
             Some(location) => location,
             None => {
@@ -1146,7 +1150,7 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
     };
     if let Some(request) = app
         .source_browser
-        .navigate(target, location, Navigation::Manual)
+        .navigate(None, location, Navigation::Manual)
     {
         queue_request(app, requests, BackendRequest::LoadSource(request));
     }

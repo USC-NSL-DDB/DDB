@@ -15,7 +15,7 @@ use ratatui::{
 
 use crate::{
     api::CapabilitiesExt,
-    model::{same_source, App, Control, Focus, InputMode, TopologyRowKind, UiAreas},
+    model::{App, Control, Focus, InputMode, TopologyRowKind, UiAreas},
 };
 
 const ACCENT: Color = Color::Rgb(86, 156, 214);
@@ -570,8 +570,31 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
         .source_browser
         .document()
         .map(|source| {
+            let owner_names = source
+                .source
+                .owners
+                .iter()
+                .take(3)
+                .map(|owner| {
+                    app.sessions
+                        .iter()
+                        .find(|session| session.session_id == owner.session_id)
+                        .map(|session| session.display_name.as_str())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or(&owner.session_id)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let owners = if owner_names.is_empty() {
+                "unbound".to_owned()
+            } else if source.source.owners.len() > 3 {
+                format!("{owner_names}, +{}", source.source.owners.len() - 3)
+            } else {
+                owner_names
+            };
             format!(
-                "{} · {} · {} lines",
+                "[{}] {} · {} · {} lines",
+                terminal_text(&owners),
                 terminal_text(&source.path),
                 if app.source_browser.following() {
                     "following"
@@ -606,6 +629,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
 
     let height = inner.height as usize;
     let start = source_start(app);
+    let binding = source.debugger_binding();
     let end = (start + height).min(source.lines.len());
     let lines = source.lines[start..end]
         .iter()
@@ -613,21 +637,26 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
         .map(|(offset, text)| {
             let line_number = source.start_line + start + offset;
             let is_executing = app.execution_location.as_ref().is_some_and(|location| {
-                location.line == line_number && same_source(&location.source, &source.path)
+                location.line == line_number
+                    && binding.is_some_and(|binding| {
+                        binding.matches_location(&location.session_id, &location.source)
+                    })
             });
             let is_distributed_stop = !is_executing
                 && app.threads.iter().any(|thread| {
                     thread.state.eq_ignore_ascii_case("stopped")
                         && thread.line == Some(line_number as u64)
-                        && thread
-                            .file
-                            .as_ref()
-                            .is_some_and(|path| same_source(path, &source.path))
+                        && thread.file.as_ref().is_some_and(|path| {
+                            binding.is_some_and(|binding| {
+                                binding.matches_location(&thread.session_id, path)
+                            })
+                        })
                 });
             let is_cursor = source.cursor == line_number;
             let has_breakpoint = app.breakpoints.iter().any(|breakpoint| {
-                breakpoint.location.line == line_number as u64
-                    && same_source(&breakpoint.location.src, &source.path)
+                binding.is_some_and(|binding| {
+                    binding.marks_breakpoint(breakpoint, line_number, &app.sessions)
+                })
             });
             let style = if is_executing {
                 Style::default()
@@ -1619,6 +1648,14 @@ mod v2_tests {
             v2::SourceContent {
                 source: Some(v2::SourceFile {
                     source_reference: "source/main".to_string(),
+                    debugger_path: Some("/src/main.rs".into()),
+                    owners: ["session/alpha", "session/beta"]
+                        .into_iter()
+                        .map(|session_id| v2::SourceOwner {
+                            session_id: session_id.into(),
+                            ..Default::default()
+                        })
+                        .collect(),
                     path: Some("/src/main.rs".to_string()),
                     name: "main.rs".to_string(),
                     media_type: "text/plain".to_string(),
@@ -1636,7 +1673,7 @@ mod v2_tests {
         assert!(app.source_browser.move_cursor(1).is_none());
         app.breakpoints.push(Breakpoint {
             id: "breakpoint/1".to_string(),
-            target: None,
+            target: Some(crate::api::session_target("session/alpha")),
             location: BreakpointLocation {
                 src: "/src/main.rs".to_string(),
                 line: 4,

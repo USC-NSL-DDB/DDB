@@ -35,36 +35,6 @@ impl BreakpointTarget {
             },
         }
     }
-
-    pub fn matches(&self, candidate: &v2::Target) -> bool {
-        matches!(
-            (self, candidate.selector.as_ref()),
-            (
-                Self::Session(expected),
-                Some(target::Selector::Session(v2::SessionTarget { session_id }))
-            ) if expected == session_id
-        ) || matches!(
-            (self, candidate.selector.as_ref()),
-            (
-                Self::Group(expected),
-                Some(target::Selector::Group(v2::GroupTarget { group_id }))
-            ) if expected == group_id
-        ) || matches!(
-            (self, candidate.selector.as_ref()),
-            (Self::Broadcast, Some(target::Selector::Broadcast(_)))
-        ) || match (self, candidate.selector.as_ref()) {
-            (Self::Multiple(expected), Some(target::Selector::Multiple(candidate))) => {
-                expected.len() == candidate.targets.len()
-                    && expected.iter().all(|expected| {
-                        candidate
-                            .targets
-                            .iter()
-                            .any(|candidate| expected.matches(candidate))
-                    })
-            }
-            _ => false,
-        }
-    }
 }
 
 pub fn session_target(session_id: impl Into<String>) -> v2::Target {
@@ -235,8 +205,11 @@ mod tests {
     #[test]
     fn breakpoint_target_keeps_opaque_identifiers() {
         let target = BreakpointTarget::Group("group/alpha:7".to_string());
-        assert!(target.matches(&target.clone().into_api_target()));
-        assert!(!target.matches(&session_target("group/alpha:7")));
+        assert_eq!(target.into_api_target(), group_target("group/alpha:7"));
+        assert_ne!(
+            group_target("group/alpha:7"),
+            session_target("group/alpha:7")
+        );
     }
 
     #[test]

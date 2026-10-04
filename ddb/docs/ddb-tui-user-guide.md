@@ -115,6 +115,15 @@ come from public extension descriptors/state/actions instead of hard-coded TUI
 knowledge. The complete keyboard, mouse, and gutter reference is in the
 `ddb-tui` README.
 
+Source browsing is independent of frame inspection. Use `o` or the source
+panel's Open button for configured DDB `SourceRoots`, and `Ctrl-P` for the
+debugger catalog. The source title identifies its owners; `f` returns to the
+selected thread's execution location. A breakpoint uses the document's declared
+debugger path, and its target picker defaults to the document's single owner,
+not whichever thread is selected. Unmapped files cannot create source
+breakpoints. Multiple matching logical breakpoints require a choice in the
+breakpoint manager before deletion.
+
 The existing global policy remains the compatibility default:
 
 ```yaml

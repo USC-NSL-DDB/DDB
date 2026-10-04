@@ -281,6 +281,7 @@ pub struct MemoryBlock {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceLocation {
+    pub session_id: String,
     pub source: String,
     pub line: usize,
 }
@@ -399,6 +400,7 @@ pub struct App {
     pub inspection_generation: u64,
     inspected_thread_id: Option<String>,
     pub source_browser: SourceBrowser,
+    source_server_instance: Option<String>,
     pub source_explorer: crate::source_explorer::Explorer,
     pub execution_location: Option<SourceLocation>,
     pub timeline_scroll: usize,
@@ -451,6 +453,7 @@ impl App {
             inspection_generation: 0,
             inspected_thread_id: None,
             source_browser: SourceBrowser::default(),
+            source_server_instance: None,
             source_explorer: crate::source_explorer::Explorer::default(),
             execution_location: None,
             timeline_scroll: 0,
@@ -511,6 +514,21 @@ impl App {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: v2::Snapshot) {
+        if !snapshot.server_instance_id.is_empty() {
+            if self
+                .source_server_instance
+                .as_ref()
+                .is_some_and(|previous| previous != &snapshot.server_instance_id)
+            {
+                self.source_browser.invalidate_server();
+                self.source_explorer.invalidate_server();
+                self.breakpoint_target_picker = None;
+                self.signal_picker = None;
+                self.invalidate_inspection();
+                self.push_timeline("DDB instance changed; discarded server-scoped source references and navigation history");
+            }
+            self.source_server_instance = Some(snapshot.server_instance_id.clone());
+        }
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         if let Some(capabilities) = snapshot.capabilities.clone() {
             self.apply_capabilities(capabilities);
@@ -743,6 +761,7 @@ impl App {
             .min_by_key(|frame| frame.distributed_index)
             .and_then(|frame| {
                 Some(SourceLocation {
+                    session_id: frame.session_id.clone(),
                     source: frame.file.clone()?,
                     line: frame.line? as usize,
                 })
@@ -1235,18 +1254,17 @@ impl App {
         if options.hardware && !self.capabilities.supports_breakpoint_action("hardware") {
             return Err("hardware breakpoints are not supported by this DDB API".to_string());
         }
-        let (source, line) = self
-            .source_browser
-            .cursor_location()
-            .map(|(source, line)| (source.to_string(), line as u64))
-            .ok_or_else(|| "load a source file before setting a breakpoint".to_string())?;
+        let (source, line) = self.source_breakpoint_location()?;
         if self.sessions.is_empty() {
             return Err("DDB has no sessions eligible for a breakpoint".to_string());
         }
 
         let selected_session_id = self
-            .current_thread()
-            .map(|thread| thread.session_id.clone());
+            .source_browser
+            .document()
+            .and_then(|document| document.debugger_binding())
+            .and_then(|binding| binding.single_owner())
+            .map(str::to_owned);
         let mut choices = Vec::new();
         if self.capabilities.supports_breakpoint_action("distributed") {
             choices.push(BreakpointTargetChoice {
@@ -1633,31 +1651,31 @@ impl App {
         self.inspected_thread_id.as_deref() == Some(thread_id)
     }
 
-    pub fn breakpoint_at_source_cursor(&self, target: BreakpointTarget) -> Option<&Breakpoint> {
-        let (source, line) = self.source_browser.cursor_location()?;
-        self.breakpoints.iter().find(|breakpoint| {
-            breakpoint.location.line == line as u64
-                && same_source(&breakpoint.location.src, source)
-                && (breakpoint
-                    .target
-                    .as_ref()
-                    .is_some_and(|candidate| target.matches(candidate))
-                    || breakpoint
-                        .sub_breakpoints
-                        .iter()
-                        .any(|member| match &target {
-                            BreakpointTarget::Session(session_id) => {
-                                member.session_id == *session_id
-                            }
-                            BreakpointTarget::Group(group_id) => {
-                                member.inherited_from_group_id.as_ref() == Some(group_id)
-                            }
-                            BreakpointTarget::Broadcast => true,
-                            BreakpointTarget::Multiple(targets) => targets
-                                .iter()
-                                .any(|target| target_matches_sub_breakpoint(target, member)),
-                        }))
-        })
+    pub fn source_breakpoint_location(&self) -> Result<(String, u64), String> {
+        let document = self
+            .source_browser
+            .document()
+            .ok_or("load a source file before setting a breakpoint")?;
+        let binding = document.debugger_binding().ok_or("this document has no debugger path mapping; configure a source mapping before setting a breakpoint")?;
+        Ok((binding.path.to_owned(), document.cursor as u64))
+    }
+
+    pub fn source_breakpoint_indices(&self) -> Vec<usize> {
+        let Some(document) = self.source_browser.document() else {
+            return Vec::new();
+        };
+        let Some(binding) = document.debugger_binding() else {
+            return Vec::new();
+        };
+        self.breakpoints
+            .iter()
+            .enumerate()
+            .filter_map(|(index, breakpoint)| {
+                binding
+                    .marks_breakpoint(breakpoint, document.cursor, &self.sessions)
+                    .then_some(index)
+            })
+            .collect()
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -1813,51 +1831,6 @@ fn move_line(line: usize, delta: isize) -> usize {
     (line as isize + delta).max(0) as usize
 }
 
-pub(crate) fn same_source(left: &str, right: &str) -> bool {
-    let left_parts = source_components(left);
-    let right_parts = source_components(right);
-    if left_parts == right_parts {
-        return true;
-    }
-    let left_absolute = source_is_absolute(left);
-    let right_absolute = source_is_absolute(right);
-    match (left_absolute, right_absolute) {
-        (true, false) => right_parts.len() >= 2 && left_parts.ends_with(&right_parts),
-        (false, true) => left_parts.len() >= 2 && right_parts.ends_with(&left_parts),
-        (true, true) | (false, false) => false,
-    }
-}
-
-fn source_components(path: &str) -> Vec<&str> {
-    let absolute = source_is_absolute(path);
-    let mut components = Vec::new();
-    let drive_prefix_len = usize::from(
-        path.as_bytes()
-            .get(1)
-            .is_some_and(|separator| *separator == b':'),
-    );
-    for component in path.split(['/', '\\']) {
-        match component {
-            "" | "." => {}
-            ".." if components.len() > drive_prefix_len => {
-                components.pop();
-            }
-            ".." if !absolute => components.push(component),
-            ".." => {}
-            _ => components.push(component),
-        }
-    }
-    components
-}
-
-fn source_is_absolute(path: &str) -> bool {
-    path.starts_with(['/', '\\'])
-        || path
-            .as_bytes()
-            .get(1)
-            .is_some_and(|separator| *separator == b':')
-}
-
 fn short_model_path(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
@@ -1871,19 +1844,6 @@ fn session_status_name(status: i32) -> &'static str {
         v2::SessionStatus::Exited => "exited",
         v2::SessionStatus::Failed => "failed",
         v2::SessionStatus::Unspecified => "unknown",
-    }
-}
-
-fn target_matches_sub_breakpoint(target: &BreakpointTarget, member: &v2::SubBreakpoint) -> bool {
-    match target {
-        BreakpointTarget::Session(session_id) => member.session_id == *session_id,
-        BreakpointTarget::Group(group_id) => {
-            member.inherited_from_group_id.as_ref() == Some(group_id)
-        }
-        BreakpointTarget::Broadcast => true,
-        BreakpointTarget::Multiple(targets) => targets
-            .iter()
-            .any(|target| target_matches_sub_breakpoint(target, member)),
     }
 }
 
@@ -2430,6 +2390,11 @@ mod v2_tests {
         v2::SourceContent {
             source: Some(v2::SourceFile {
                 source_reference: format!("source/{path}"),
+                debugger_path: Some(path.into()),
+                owners: vec![v2::SourceOwner {
+                    session_id: "session/alpha".into(),
+                    group_id: Some("group/alpha".into()),
+                }],
                 path: Some(path.to_string()),
                 name: path.to_string(),
                 media_type: "text/plain".to_string(),
@@ -2620,13 +2585,6 @@ mod v2_tests {
     }
 
     #[test]
-    fn source_matching_handles_remote_absolute_and_local_relative_paths() {
-        assert!(same_source("/build/project/src/main.rs", "src/main.rs"));
-        assert!(same_source("src\\main.rs", "src/main.rs"));
-        assert!(!same_source("/a/main.rs", "/b/main.rs"));
-    }
-
-    #[test]
     fn panel_hit_testing_excludes_borders_and_applies_scroll_offset() {
         let mut areas = UiAreas::default();
         areas.add_panel(Focus::Threads, Rect::new(10, 5, 20, 8), 4, 1);
@@ -2676,11 +2634,7 @@ mod v2_tests {
                 sub_breakpoints: Vec::new(),
             },
         ];
-        assert_eq!(
-            app.breakpoint_at_source_cursor(BreakpointTarget::Group("group/alpha".to_string()))
-                .map(|breakpoint| breakpoint.id.as_str()),
-            Some("breakpoint/group")
-        );
+        assert_eq!(app.source_breakpoint_indices(), vec![0]);
     }
 
     #[test]

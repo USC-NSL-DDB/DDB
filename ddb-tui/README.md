@@ -148,8 +148,15 @@ Opening a file does not change debugger selection, evaluation context, or the
 execution target. It disables following until `f` is pressed in Source.
 Alt-Left/Right restores document history and cursor positions.
 
-TUI-local checkout configuration and ownership-aware breakpoint routing are
-still being implemented. An exported DDB-host root is not a TUI-local root.
+The source title identifies the document's owners. Execution and breakpoint
+markers require both a matching owner and the exact declared debugger path;
+equal filenames or path suffixes do not establish a relationship. A mapped
+workspace file uses `debugger_path` for breakpoints, never its display path.
+Without that mapping, source breakpoint placement is rejected.
+
+TUI-local checkout configuration is still being implemented. An exported
+DDB-host root is not a TUI-local root. A backend-instance change invalidates
+DDB source references and history; an ordinary refresh preserves browsing.
 
 The distributed call stack is the primary stack view. Selecting a stopped thread
 requests DDB's cross-session backtrace automatically; `d` is only an explicit
@@ -169,6 +176,12 @@ explicit multi-target selection as advertised. A selected group absorbs its
 redundant member-session selections. The manager preserves aggregate and
 per-session sub-breakpoint status, including pending/verification messages.
 
+The picker preselects a document's single owner, independent of the selected
+thread. Unbound and multi-owner documents require an explicit target choice.
+`b` deletes only a unique matching logical breakpoint. If several match, it
+focuses the breakpoint manager so you can select which one to delete. Session,
+group, broadcast, and multi-target scopes remain available explicitly.
+
 The `B` prompt accepts `-t`/`--temporary`, `-h`/`--hardware`, and a condition
 introduced by `if`, `-c`, or `--condition`. For example:
 
@@ -183,9 +196,10 @@ options are rejected before any request is sent to DDB.
 The variables panel preserves the scopes returned by DDB. Non-expensive scopes
 load automatically; expensive scopes (such as globals and file statics) load
 only when expanded. Scope and variable handles are valid for the current stop
-and are discarded when the inspection changes. Evaluation and source navigation
-use the owning thread of the selected distributed frame, not the thread where
-the backtrace began. The expression prompt uses the API's REPL context; it does
+and are discarded when the inspection changes. Evaluation and explicit frame
+reveal use the owning thread of the selected distributed frame, not the thread
+where the backtrace began. Manual file browsing does not change that context.
+The expression prompt uses the API's REPL context; it does
 not create retained watch values.
 
 Memory reads default to 128 bytes. Add `; BYTE_COUNT` to choose a bounded

@@ -214,3 +214,50 @@ Remaining acceptance work: explicit frontend-local roots and mappings, origin-
 and owner-aware execution/breakpoint markers, source-aware breakpoint placement,
 and distributed terminal regressions for same-path/different-owner checkouts.
 No end-to-end completion claim is made for these requirements.
+
+### Source ownership and breakpoint stage
+
+- Explorer stage committed as `4f50425d`.
+- Added one debugger-binding module for exact debugger-path and session-owner
+  matching. Removed suffix matching, lexical path guessing, and the old
+  target-scoped cursor lookup. Execution locations now carry their session ID.
+  The source title displays document ownership independently of the toolbar's
+  execution target. Group markers use current session membership, not a group
+  ID captured when a document was read.
+- Breakpoint drafts use `SourceFile.debugger_path`; absent mappings fail before
+  a mutation is queued. A single document owner is the default picker choice.
+  Unbound/multi-owner documents require explicit selection. All native DDB
+  session, group, broadcast, and multi-target choices remain available.
+  Multiple matching logical breakpoints focus the manager rather than deleting
+  an arbitrary match. Resolved sub-breakpoints retain their owning session.
+- Removed debugger targets from persistent document/history state. Resolved
+  opaque source references determine identity, including identical paths at
+  identical lines in different sessions. Reopening an already displayed frame
+  source does not add history merely because the opening request has no target.
+- Backend-instance changes discard DDB source handles, discovery state, and
+  history while retaining monotonically increasing request generations. Late
+  old-instance responses cannot match a new request. Same-instance refreshes
+  preserve manually chosen documents.
+- Added a distributed PTY regression with two sessions reporting the same
+  `/build/app/main.rs`, each mapped to different checkout content. It selects
+  alpha, browses beta, verifies beta's breakpoint target and debugger path,
+  steps alpha while beta's document and cursor remain displayed, removes beta's
+  breakpoint, and restores follow mode at alpha's new execution line.
+- Unit verification covers exact path/owner isolation, mapped breakpoint
+  placement, independent selection, unbound/multi-owner scope, ambiguous
+  deletion, resolved sub-breakpoints, group migration, rendered markers,
+  opaque history identity, and backend-instance invalidation.
+- Final checks passed: 114 TUI unit tests; five selected PTY workflows, including
+  the distributed-owner regression and real GDB/LLDB; strict Clippy across all
+  TUI targets; formatting and `git diff --check`. The other 12 PTY workflows were
+  not run in this stage. No backend contract or generated artifact changed.
+
+The remaining implementation is TUI-local roots and explicit checkout mappings,
+including provider-aware document identity and local filesystem verification.
+The frontend must not represent local files with fabricated DDB references or
+silently fall back to local files when backend reads fail. Local documents must
+remain independent of backend-instance source invalidation. Provider-aware
+remote handles must include their server instance and check source-response
+contexts, including replacement detected by a source read before a new state
+snapshot arrives. The snapshot invalidation in this stage is not that full
+request/response identity check.

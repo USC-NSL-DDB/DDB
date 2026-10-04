@@ -24,6 +24,162 @@ static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 #[ignore = "requires the sibling DDB binary and a PTY"]
+fn distributed_source_ownership_terminal_workflow() {
+    let directory = tempfile::tempdir().unwrap();
+    for owner in ["alpha", "beta"] {
+        let root = directory.path().join(owner);
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("main.rs"),
+            (1..=30)
+                .map(|line| format!("{owner}_CHECKOUT line {line}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let port = reserve_port();
+        let mut config = format!(
+            r#"Framework: unspecified
+Conf:
+  auto_shutdown: false
+  api_server_port: {port}
+  api_insecure_allow_unauthenticated_v2: true
+  base_dir: "{}/state"
+  log_dir: "{}/logs"
+  Debugger:
+    backend: mock
+SourceRoots:
+  - name: alpha-checkout
+    path: ./alpha
+    debugger_path: /build/app
+    session_tags: [alpha]
+  - name: beta-checkout
+    path: ./beta
+    debugger_path: /build/app
+    session_tags: [beta]
+StaticSessions:
+"#,
+            directory.path().display(),
+            directory.path().display()
+        );
+        for (index, owner) in ["alpha", "beta"].into_iter().enumerate() {
+            config.push_str(&format!(
+                r#"  - tag: {owner}
+    alias: {owner}-worker
+    hash: shared-program
+    pid: {}
+    start_delay_ms: 0
+    mock:
+      source_file: /build/app/main.rs
+      source_line: 9
+      function: {owner}_work
+      exit_on_continue: false
+      exit_on_bootstrap: false
+"#,
+                1900 + index
+            ));
+        }
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    let snapshot = ddb
+        .wait_for_snapshot(|snapshot| snapshot.sessions.len() == 2 && snapshot.threads.len() == 2);
+    let alpha = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.display_name.contains("alpha-worker"))
+        .unwrap()
+        .session_id
+        .clone();
+    let beta = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.display_name.contains("beta-worker"))
+        .unwrap()
+        .session_id
+        .clone();
+    let alpha_thread = snapshot
+        .threads
+        .iter()
+        .find(|thread| thread.session_id == alpha)
+        .unwrap()
+        .thread_id
+        .clone();
+    let beta_thread = snapshot
+        .threads
+        .iter()
+        .find(|thread| thread.session_id == beta)
+        .unwrap()
+        .thread_id
+        .clone();
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("2 sessions");
+    tui.click_topology_thread("alpha-worker");
+    tui.wait_for("alpha_CHECKOUT line 9");
+    tui.wait_for_source_marker('▶', 9);
+
+    // Open beta's independently configured root while alpha remains selected.
+    tui.send(b"o");
+    tui.wait_for("[root] beta-checkout");
+    tui.send(b"beta-checkout\r");
+    tui.wait_for("[file] beta-checkout/main.rs");
+    tui.send(b"\r");
+    tui.wait_for("beta_CHECKOUT line 1");
+    tui.clear_capture();
+    tui.send(b"g9\r");
+    tui.wait_for_frame(|frame| {
+        frame.lines().any(|line| {
+            line.contains("9 │ beta_CHECKOUT line 9")
+                && line.contains('▸')
+                && line.contains('◆')
+                && !line.contains('▶')
+        })
+    });
+    tui.send(b"b");
+    tui.wait_for("DDB breakpoint targets");
+    tui.send(b"\r");
+    let snapshot = ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.len() == 1);
+    let breakpoint = &snapshot.breakpoints[0];
+    assert!(
+        matches!(breakpoint.target.as_ref().and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Session(target)) if target.session_id == beta)
+    );
+    assert!(
+        matches!(breakpoint.spec.as_ref().and_then(|spec| spec.location.as_ref()), Some(v2::breakpoint_spec::Location::Source(location)) if location.source == "/build/app/main.rs")
+    );
+
+    // Stepping still applies to alpha. Beta's document/cursor remain on screen.
+    tui.clear_capture();
+    tui.send(b"\x1b[21~");
+    tui.wait_for("next:");
+    assert_eq!(ddb.wait_for_top_frame_line_change(&alpha_thread, 9), 10);
+    assert_eq!(ddb.top_frame_line(&beta_thread), 9);
+    tui.wait_for_frame(|frame| {
+        frame.lines().any(|line| {
+            line.contains("9 │ beta_CHECKOUT line 9")
+                && line.contains('●')
+                && line.contains('▸')
+                && !line.contains('▶')
+        })
+    });
+    tui.clear_capture();
+    tui.send(b"b");
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.is_empty());
+    tui.send(b"f");
+    tui.wait_for("alpha_CHECKOUT line 10");
+    tui.wait_for_source_marker('▶', 10);
+    tui.quit();
+    ddb.shutdown();
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
 fn source_explorer_terminal_workflow_without_sessions() {
     let directory = tempfile::tempdir().unwrap();
     let checkout = directory.path().join("checkout");
@@ -1275,6 +1431,35 @@ impl Tui {
             .write_all(input)
             .expect("TUI input should be written");
         self.stdin.flush().expect("TUI input should flush");
+    }
+
+    fn click_topology_thread(&mut self, session_label: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            self.assert_running();
+            let row = self.frames.lock().unwrap().back().and_then(|frame| {
+                let mut under_session = false;
+                frame.lines().enumerate().find_map(|(row, line)| {
+                    let topology = line.chars().take(33).collect::<String>();
+                    if topology.contains(session_label) {
+                        under_session = true;
+                        return None;
+                    }
+                    (under_session && topology.contains('•')).then_some(row + 1)
+                })
+            });
+            if let Some(row) = row {
+                self.clear_capture();
+                self.send(format!("\x1b[<0;12;{row}M\x1b[<0;12;{row}m").as_bytes());
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "thread below {session_label} not found:\n{}",
+                self.output_text()
+            );
+            thread::sleep(POLL);
+        }
     }
 
     fn wait_for(&mut self, needle: &str) {

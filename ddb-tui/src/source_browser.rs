@@ -13,7 +13,6 @@ const HISTORY_LIMIT: usize = 100;
 #[derive(Clone, Debug)]
 pub struct SourceDocument {
     pub source: v2::SourceFile,
-    pub target: Option<v2::Target>,
     pub path: String,
     pub start_line: usize,
     pub end_line: usize,
@@ -21,6 +20,12 @@ pub struct SourceDocument {
     pub lines: Vec<String>,
     pub cursor: usize,
     pub scroll: usize,
+}
+
+impl SourceDocument {
+    pub fn debugger_binding(&self) -> Option<crate::source_binding::DebuggerBinding<'_>> {
+        crate::source_binding::DebuggerBinding::from_source(&self.source)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -41,7 +46,6 @@ pub enum Navigation {
 
 #[derive(Clone, Debug)]
 struct Position {
-    target: Option<v2::Target>,
     location: v2::SourceLocation,
     scroll: usize,
 }
@@ -78,6 +82,17 @@ impl Default for SourceBrowser {
 }
 
 impl SourceBrowser {
+    /// Opaque DDB references cannot survive a backend-instance change. Preserve
+    /// the generation counter so a late old-instance response cannot match a
+    /// new request after the reset.
+    pub fn invalidate_server(&mut self) {
+        let generation = self.generation;
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+    }
+
     pub fn document(&self) -> Option<&SourceDocument> {
         self.document.as_ref()
     }
@@ -182,12 +197,12 @@ impl SourceBrowser {
             self.set_cursor(line);
             return None;
         }
-        let (target, location) = self.current_location(line)?;
+        let location = self.current_location(line)?;
         self.following = false;
         self.record_history = false;
         self.history_direction = None;
         self.restore_scroll = None;
-        Some(self.request(target, location))
+        Some(self.request(None, location))
     }
 
     pub fn history(&mut self, forward: bool) -> Option<SourceRequest> {
@@ -200,7 +215,7 @@ impl SourceBrowser {
         self.record_history = false;
         self.history_direction = Some(forward);
         self.restore_scroll = Some(destination.scroll);
-        Some(self.request(destination.target, destination.location))
+        Some(self.request(None, destination.location))
     }
 
     pub fn apply(&mut self, generation: u64, content: v2::SourceContent) -> bool {
@@ -233,8 +248,8 @@ impl SourceBrowser {
             }
         } else if self.record_history {
             if let Some(current) = self.position() {
-                if current.target != request.target
-                    || !same_document(&current.location, &request.location)
+                if current.location.source_reference.as_deref()
+                    != Some(source.source_reference.as_str())
                     || current.location.line != request.location.line
                 {
                     push_bounded(&mut self.back, current);
@@ -258,7 +273,6 @@ impl SourceBrowser {
         self.document = Some(SourceDocument {
             path: source.path.clone().unwrap_or_else(|| source.name.clone()),
             source,
-            target: request.target,
             start_line: first,
             end_line: last,
             total_lines: content.total_lines as usize,
@@ -282,6 +296,7 @@ impl SourceBrowser {
         true
     }
 
+    #[cfg(test)]
     pub fn cursor_location(&self) -> Option<(&str, usize)> {
         self.document
             .as_ref()
@@ -300,27 +315,20 @@ impl SourceBrowser {
         }
     }
 
-    pub fn current_location(
-        &self,
-        line: usize,
-    ) -> Option<(Option<v2::Target>, v2::SourceLocation)> {
+    pub fn current_location(&self, line: usize) -> Option<v2::SourceLocation> {
         let document = self.document.as_ref()?;
-        Some((
-            document.target.clone(),
-            v2::SourceLocation {
-                source_reference: Some(document.source.source_reference.clone()),
-                path: Some(document.path.clone()),
-                line: u32::try_from(line.max(1)).ok()?,
-                ..Default::default()
-            },
-        ))
+        Some(v2::SourceLocation {
+            source_reference: Some(document.source.source_reference.clone()),
+            path: Some(document.path.clone()),
+            line: u32::try_from(line.max(1)).ok()?,
+            ..Default::default()
+        })
     }
 
     fn position(&self) -> Option<Position> {
         let document = self.document.as_ref()?;
-        let (target, location) = self.current_location(document.cursor)?;
+        let location = self.current_location(document.cursor)?;
         Some(Position {
-            target,
             location,
             scroll: document.scroll,
         })
@@ -347,13 +355,6 @@ impl SourceBrowser {
         self.pending = None;
         self.restore_scroll = None;
         self.history_direction = None;
-    }
-}
-
-fn same_document(left: &v2::SourceLocation, right: &v2::SourceLocation) -> bool {
-    match (&left.source_reference, &right.source_reference) {
-        (Some(left), Some(right)) => left == right,
-        _ => left.path.is_some() && left.path == right.path,
     }
 }
 
