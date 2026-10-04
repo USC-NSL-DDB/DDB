@@ -59,7 +59,7 @@ completion while any requirement remains unverified.
 
 ## Verification interfaces
 
-Proposed for confirmation: canonical operations through the public Rust SDK,
+Verification uses canonical operations through the public Rust SDK,
 the source-browser module's navigation interface, and rendered keyboard/mouse
 workflows through the existing terminal test harness.
 
@@ -92,3 +92,19 @@ Required behavior checks:
   worker inspection cancellation, and `clear_inspection_details`.
 - Confirmed existing source discovery in `core/src/source`; current public source
   operations are `ResolveSource` and `ReadSource`, with DDB-host filesystem reads.
+- Plan and research committed as `4e8561ad`.
+- The first refactor introduces `SourceBrowser`, which owns document
+  state, navigation history, following state, and source request generations.
+  Source requests have an independent worker task lane. Frame inspection no
+  longer reads source or clears the displayed document.
+- `cargo check --manifest-path ddb-tui/Cargo.toml --offline` passed after the
+  refactor with no warnings. Formatting and `git diff --check` passed.
+- Migrated tests from removed App source fields to the browser interface. The
+  unit suite passes all 90 tests, including nine browser regressions. Strict
+  Clippy with `--all-targets -- -D warnings` passes.
+- The mock full-terminal workflow passes with source preservation during running,
+  independent cursor and execution movement, and explicit follow resumption.
+  Its initial preservation assertion incorrectly included the toolbar play icon;
+  the corrected assertion examines the body below the toolbar.
+- Source discovery/export operations, root configuration, explorer UI, source
+  ownership/mapping enforcement, and end-to-end verification remain unfinished.

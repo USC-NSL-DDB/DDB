@@ -561,12 +561,17 @@ fn breakpoint_target_label(app: &App, value: Option<&v2::Target>) -> String {
 
 fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let source_label = app
-        .source
-        .as_ref()
+        .source_browser
+        .document()
         .map(|source| {
             format!(
-                "{} · {} lines",
+                "{} · {} · {} lines",
                 terminal_text(&source.path),
+                if app.source_browser.following() {
+                    "following"
+                } else {
+                    "browsing · f: follow"
+                },
                 source
                     .total_lines
                     .map_or_else(|| "?".to_string(), |total| total.to_string())
@@ -577,9 +582,9 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = panel_block(&source_title, app.focus == Focus::Source);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let Some(source) = app.source.as_ref() else {
+    let Some(source) = app.source_browser.document() else {
         frame.render_widget(
-            Paragraph::new("Select a stopped thread to load source")
+            Paragraph::new("Open source with g (path:line), or select a stopped frame")
                 .style(Style::default().fg(MUTED))
                 .alignment(Alignment::Center),
             inner,
@@ -607,9 +612,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
                             .as_ref()
                             .is_some_and(|path| same_source(path, &source.path))
                 });
-            let is_cursor = app.source_cursor.as_ref().is_some_and(|cursor| {
-                cursor.line == line_number && same_source(&cursor.source, &source.path)
-            });
+            let is_cursor = source.cursor == line_number;
             let has_breakpoint = app.breakpoints.iter().any(|breakpoint| {
                 breakpoint.location.line == line_number as u64
                     && same_source(&breakpoint.location.src, &source.path)
@@ -1276,6 +1279,7 @@ fn draw_help(frame: &mut Frame<'_>, root: Rect) {
         Line::from("c cycle execution scope: thread → session → group → all"),
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
         Line::from("g open source: line or path:line   j jump execution   s signal"),
+        Line::from("source: f follow execution   Alt+Left/Right navigation history"),
         Line::from("extensions: arrows select; a/Enter/click invokes declared action"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),
         Line::from(": raw DDB/MI command            r refresh"),
@@ -1347,9 +1351,9 @@ fn short_path(path: &str) -> &str {
 }
 
 fn source_start(app: &App) -> usize {
-    app.source
-        .as_ref()
-        .map(|source| app.source_scroll.min(source.lines.len().saturating_sub(1)))
+    app.source_browser
+        .document()
+        .map(|source| source.scroll.min(source.lines.len().saturating_sub(1)))
         .unwrap_or_default()
 }
 
@@ -1597,7 +1601,8 @@ mod v2_tests {
             }),
             ..Default::default()
         }]);
-        app.apply_source(
+        crate::source_browser::tests::show_source(
+            &mut app.source_browser,
             v2::SourceContent {
                 source: Some(v2::SourceFile {
                     source_reference: "source/main".to_string(),

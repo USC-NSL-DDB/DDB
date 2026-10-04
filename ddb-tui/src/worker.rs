@@ -13,6 +13,7 @@ use crate::{
         ProjectedStateSyncItem, StateSyncOptions,
     },
     model::{BackendRequest, DebuggerActivity, DebuggerEvent, EventStreamStatus, UiMessage},
+    source_browser::SourceRequest,
 };
 
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -25,6 +26,7 @@ pub async fn run(
     messages: mpsc::Sender<UiMessage>,
 ) {
     let mut inspections = JoinSet::new();
+    let mut sources = JoinSet::new();
     let mut deferred = VecDeque::new();
     let mut inspection_generation = None;
     loop {
@@ -46,7 +48,25 @@ pub async fn run(
             }
         }
 
-        if let Some((generation, thread_id)) = inspection_context(&request) {
+        if let BackendRequest::LoadSource(request) = request {
+            sources.abort_all();
+            while let Some(result) = sources.try_join_next() {
+                report_inspection_failure(result, &messages).await;
+            }
+            let client = client.clone();
+            let messages = messages.clone();
+            sources.spawn(async move {
+                let generation = request.generation;
+                let update = match source_content(&client, request).await {
+                    Ok(source) => UiMessage::Source { generation, source },
+                    Err(error) => UiMessage::SourceError {
+                        generation,
+                        error: format!("{error:#}"),
+                    },
+                };
+                let _ = messages.send(update).await;
+            });
+        } else if let Some((generation, thread_id)) = inspection_context(&request) {
             if inspection_generation.is_some_and(|active| active != generation) {
                 inspections.abort_all();
             }
@@ -96,6 +116,7 @@ pub async fn run(
         }
     }
     inspections.shutdown().await;
+    sources.shutdown().await;
 }
 
 async fn report_inspection_failure(
@@ -143,11 +164,6 @@ fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
             thread_id,
             generation,
             ..
-        }
-        | BackendRequest::LoadSource {
-            thread_id,
-            generation,
-            ..
         } => Some((*generation, thread_id.clone())),
         _ => None,
     }
@@ -172,51 +188,20 @@ async fn handle(
         } => inspect_thread(client, messages, thread_id, generation).await?,
         BackendRequest::InspectFrame {
             thread_id,
-            owner_thread_id,
             generation,
             frame_id,
-            source,
-            line,
         } => {
             inspect_scopes(client, messages, &frame_id, &thread_id, generation).await?;
             let registers = list_frame_registers(client, &frame_id).await?;
             messages
                 .send(UiMessage::Registers {
                     generation,
-                    thread_id: thread_id.clone(),
+                    thread_id,
                     registers,
                 })
                 .await?;
-            if let (Some(source), Some(line)) = (source, line) {
-                let content =
-                    source_content(client, &owner_thread_id, &source, line as usize).await?;
-                messages
-                    .send(UiMessage::Source {
-                        generation,
-                        thread_id,
-                        source: content,
-                        line: line as usize,
-                    })
-                    .await?;
-            }
         }
-        BackendRequest::LoadSource {
-            thread_id,
-            owner_thread_id,
-            generation,
-            source,
-            line,
-        } => {
-            let content = source_content(client, &owner_thread_id, &source, line).await?;
-            messages
-                .send(UiMessage::Source {
-                    generation,
-                    thread_id,
-                    source: content,
-                    line,
-                })
-                .await?;
-        }
+        BackendRequest::LoadSource(_) => unreachable!("source requests have their own task lane"),
         BackendRequest::ListSignals { target } => {
             let signals = client
                 .collect_signals(
@@ -572,12 +557,10 @@ async fn inspect_thread(
     )
     .await?;
     let result = distributed_frames(client, &thread_id).await?;
-    let first_frame = result.frames.iter().find_map(|distributed| {
-        distributed
-            .frame
-            .clone()
-            .map(|frame| (distributed.thread_id.clone(), frame))
-    });
+    let first_frame = result
+        .frames
+        .iter()
+        .find_map(|distributed| distributed.frame.clone());
     messages
         .send(UiMessage::DistributedFrames {
             generation,
@@ -585,7 +568,7 @@ async fn inspect_thread(
             result,
         })
         .await?;
-    if let Some((frame_thread_id, frame)) = first_frame {
+    if let Some(frame) = first_frame {
         inspect_scopes(client, messages, &frame.frame_id, &thread_id, generation).await?;
         let registers = list_frame_registers(client, &frame.frame_id).await?;
         messages
@@ -595,22 +578,6 @@ async fn inspect_thread(
                 registers,
             })
             .await?;
-        if let Some(location) = frame.location.as_ref() {
-            if let Some(path) = location.path.as_deref() {
-                let content =
-                    source_content(client, &frame_thread_id, path, location.line as usize)
-                        .await
-                        .with_context(|| format!("failed to load source '{path}'"))?;
-                messages
-                    .send(UiMessage::Source {
-                        generation,
-                        thread_id,
-                        source: content,
-                        line: location.line as usize,
-                    })
-                    .await?;
-            }
-        }
     }
     Ok(())
 }
@@ -713,28 +680,28 @@ async fn list_scope_variables(
 
 async fn source_content(
     client: &ApiClient,
-    thread_id: &str,
-    path: &str,
-    line: usize,
+    request: SourceRequest,
 ) -> anyhow::Result<v2::SourceContent> {
-    let line = u32::try_from(line).context("source line exceeds the API limit")?;
-    let source = client
-        .resolve_source(v2::ResolveSourceRequest {
-            context: None,
-            target: Some(thread_target(thread_id)),
-            location: Some(v2::SourceLocation {
-                path: Some(path.to_string()),
-                line,
-                ..Default::default()
-            }),
-        })
-        .await?
-        .source
-        .context("ResolveSource omitted source")?;
+    let line = u32::try_from(request.line).context("source line exceeds the API limit")?;
+    let reference = match request.location.source_reference.clone() {
+        Some(reference) => reference,
+        None => {
+            client
+                .resolve_source(v2::ResolveSourceRequest {
+                    context: None,
+                    target: request.target,
+                    location: Some(request.location),
+                })
+                .await?
+                .source
+                .context("ResolveSource omitted source")?
+                .source_reference
+        }
+    };
     client
         .read_source(v2::ReadSourceRequest {
             context: None,
-            source_reference: source.source_reference,
+            source_reference: reference,
             start_line: line.saturating_sub(100).max(1),
             max_lines: 240,
         })

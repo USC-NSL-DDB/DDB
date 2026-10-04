@@ -96,7 +96,11 @@ fn mock_backend_full_terminal_workflow() {
     tui.send(b"\x1b[15~");
     tui.wait_for("continue: completed");
     tui.wait_for("exec · running");
-    tui.wait_for("Select a stopped thread to load source");
+    tui.wait_for_frame(|frame| {
+        frame.contains("exec · running")
+            && frame.contains("▸     9 │")
+            && !frame.lines().skip(3).any(|line| line.contains('▶'))
+    });
     tui.clear_capture();
     tui.wait_for("exec · stopped");
     // A stopped event precedes the asynchronous frame/source inspection.
@@ -120,6 +124,10 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for("exec · stopped");
     tui.wait_for_source_marker('▶', 10);
     tui.wait_for_source_marker('▸', 11);
+
+    tui.clear_capture();
+    tui.send(b"f");
+    tui.wait_for_source_marker('▸', 10);
 
     let output = tui.quit();
     assert!(
@@ -1182,6 +1190,28 @@ impl Tui {
             assert!(
                 Instant::now() < deadline,
                 "expandable variable {name:?} not visible:\n{}",
+                self.output_text()
+            );
+            thread::sleep(POLL);
+        }
+    }
+
+    fn wait_for_frame(&mut self, predicate: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            self.assert_running();
+            if self
+                .frames
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|frame| predicate(frame))
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected terminal frame not rendered:\n{}",
                 self.output_text()
             );
             thread::sleep(POLL);

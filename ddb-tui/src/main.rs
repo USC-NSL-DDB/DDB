@@ -1,6 +1,7 @@
 mod api;
 mod cli;
 mod model;
+mod source_browser;
 mod supervisor;
 mod ui;
 mod worker;
@@ -30,6 +31,7 @@ use model::{
     InputMode, UiMessage,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use source_browser::Navigation;
 use supervisor::ManagedBackend;
 use tokio::sync::mpsc;
 
@@ -363,6 +365,15 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
     }
 
     match key.code {
+        KeyCode::Left | KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
+            if let Some(request) = app.source_browser.history(key.code == KeyCode::Right) {
+                queue_request(app, requests, BackendRequest::LoadSource(request));
+            }
+        }
+        KeyCode::Char('f') if app.focus == Focus::Source => {
+            app.source_browser.set_following(true);
+            reveal_frame(app, requests, Navigation::Follow);
+        }
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('?') => app.show_help = true,
         KeyCode::Char(':') => {
@@ -806,9 +817,9 @@ fn select_mouse_item(app: &mut App, focus: Focus, item: usize) -> bool {
             true
         }
         Focus::Source => {
-            if let Some(source) = app.source.as_ref() {
+            if let Some(source) = app.source_browser.document() {
                 let line = (source.start_line + item).min(source.end_line);
-                app.set_source_cursor_line(line);
+                app.source_browser.set_cursor(line);
             }
             true
         }
@@ -877,16 +888,14 @@ fn inspect_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
                     return;
                 }
                 let generation = app.begin_frame_inspection();
+                reveal_frame(app, requests, Navigation::Frame);
                 queue_request(
                     app,
                     requests,
                     BackendRequest::InspectFrame {
                         thread_id,
-                        owner_thread_id: frame.thread_id,
                         generation,
                         frame_id: frame.id,
-                        source: frame.file,
-                        line: frame.line,
                     },
                 );
             }
@@ -1008,7 +1017,7 @@ fn start_breakpoint_prompt(app: &mut App) {
         .any(|feature| app.capabilities.supports_breakpoint_action(feature))
     {
         app.status = "advanced breakpoints are not supported by this DDB API".to_string();
-    } else if app.source_cursor_location().is_none() {
+    } else if app.source_browser.cursor_location().is_none() {
         app.status = "load a source file before setting a breakpoint".to_string();
     } else if app.current_thread().is_none() {
         app.status = "select a DDB session before setting a breakpoint".to_string();
@@ -1080,31 +1089,64 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
         Ok(location) => location,
         Err(error) => return app.error(error),
     };
-    let Some(thread_id) = app.current_thread().map(|thread| thread.id.clone()) else {
-        app.status = "select a thread before loading source".to_string();
-        return;
+    let Ok(api_line) = u32::try_from(line.max(1)) else {
+        return app.error("source line exceeds the API limit");
     };
-    let owner_thread_id = app
-        .current_frame()
-        .filter(|frame| !frame.boundary)
-        .map(|frame| frame.thread_id.clone())
-        .unwrap_or_else(|| thread_id.clone());
-    let Some((source, line, generation)) = app.prepare_source_navigation(requested_source, line)
-    else {
-        app.status = "enter path:line when no source file is loaded".to_string();
-        return;
-    };
-    queue_request(
-        app,
-        requests,
-        BackendRequest::LoadSource {
-            thread_id,
-            owner_thread_id,
-            generation,
-            source,
-            line,
+    let (target, location) = match requested_source {
+        Some(path) => (
+            None,
+            v2::SourceLocation {
+                path: Some(path),
+                line: api_line,
+                ..Default::default()
+            },
+        ),
+        None => match app.source_browser.current_location(line) {
+            Some(location) => location,
+            None => {
+                app.status = "enter path:line when no source file is loaded".to_string();
+                return;
+            }
         },
-    );
+    };
+    if let Some(request) = app
+        .source_browser
+        .navigate(target, location, Navigation::Manual)
+    {
+        queue_request(app, requests, BackendRequest::LoadSource(request));
+    }
+}
+
+fn reveal_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>, navigation: Navigation) {
+    let frame = if navigation == Navigation::Follow {
+        app.frames
+            .iter()
+            .filter(|frame| {
+                !frame.boundary
+                    && app
+                        .current_thread()
+                        .is_some_and(|thread| frame.thread_id == thread.id)
+            })
+            .min_by_key(|frame| frame.distributed_index)
+    } else {
+        app.current_frame().filter(|frame| !frame.boundary)
+    };
+    let Some(frame) = frame.cloned() else { return };
+    let (Some(path), Some(line)) = (frame.file, frame.line) else {
+        return;
+    };
+    let Ok(line) = u32::try_from(line) else {
+        return;
+    };
+    let target = Some(thread_target(frame.thread_id));
+    let location = v2::SourceLocation {
+        path: Some(path),
+        line,
+        ..Default::default()
+    };
+    if let Some(request) = app.source_browser.navigate(target, location, navigation) {
+        queue_request(app, requests, BackendRequest::LoadSource(request));
+    }
 }
 
 fn parse_source_navigation(input: &str) -> Result<(Option<String>, usize), String> {
@@ -1259,6 +1301,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     None
                 };
                 app.apply_distributed_frames(result.frames);
+                reveal_frame(app, requests, Navigation::Follow);
                 app.distributed_stack_truncation = truncation;
                 if let Some(reason) = app.distributed_stack_truncation.clone() {
                     app.status = format!("DDB distributed stack is truncated: {reason}");
@@ -1303,14 +1346,12 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                 app.apply_memory(memory);
             }
         }
-        UiMessage::Source {
-            generation,
-            thread_id,
-            source,
-            line,
-        } => {
-            if app.inspection_is_current(generation, &thread_id) {
-                app.apply_source(source, line);
+        UiMessage::Source { generation, source } => {
+            app.source_browser.apply(generation, source);
+        }
+        UiMessage::SourceError { generation, error } => {
+            if app.source_browser.fail(generation) {
+                app.error(error);
             }
         }
         UiMessage::ExpansionError {
@@ -1392,11 +1433,17 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
         Err(mpsc::error::TrySendError::Full(
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            app.error("DDB request queue is full; wait for the current operation and retry")
+        Err(mpsc::error::TrySendError::Full(request)) => {
+            if let BackendRequest::LoadSource(request) = request {
+                app.source_browser.fail(request.generation);
+            }
+            app.error("DDB request queue is full; wait for the current operation and retry");
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            app.backend_unavailable("DDB request worker is unavailable")
+        Err(mpsc::error::TrySendError::Closed(request)) => {
+            if let BackendRequest::LoadSource(request) = request {
+                app.source_browser.fail(request.generation);
+            }
+            app.backend_unavailable("DDB request worker is unavailable");
         }
     }
 }
@@ -1542,17 +1589,23 @@ mod tests {
     }
 
     #[test]
-    fn source_navigation_releases_cancelled_expansion_loading_state() {
+    fn source_navigation_does_not_cancel_variable_expansion() {
         let mut app = distributed_caller_app();
         app.apply_scopes(vec![v2::Scope {
             scope_id: "locals".into(),
             ..Default::default()
         }]);
         assert!(app.variables[0].loading);
-        app.prepare_source_navigation(Some("parent.rs".into()), 500)
-            .unwrap();
-        assert!(!app.variables[0].loading);
-        assert_eq!(app.toggle_selected_variable().as_deref(), Some("locals"));
+        let generation = app.inspection_generation;
+        let (requests, mut receiver) = mpsc::channel(1);
+        goto_source_line(&mut app, &requests, "parent.rs:500");
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::LoadSource(_)
+        ));
+        assert!(app.variables[0].loading);
+        assert_eq!(app.inspection_generation, generation);
+        assert!(app.toggle_selected_variable().is_none());
     }
 
     #[test]
@@ -1585,16 +1638,16 @@ mod tests {
     }
 
     #[test]
-    fn source_navigation_uses_frame_owner_but_retains_inspection_identity() {
-        let mut app = distributed_caller_app();
+    fn manual_source_navigation_does_not_require_a_frame_or_thread() {
+        let mut app = App::new("http://localhost".into());
         let (requests, mut receiver) = mpsc::channel(1);
         goto_source_line(&mut app, &requests, "parent.rs:500");
         assert!(
-            matches!(receiver.try_recv().unwrap(), BackendRequest::LoadSource {
-            thread_id, owner_thread_id, generation, source, line: 500,
-        } if thread_id == "thread/child" && owner_thread_id == "thread/parent"
-            && generation == app.inspection_generation && source == "parent.rs")
+            matches!(receiver.try_recv().unwrap(), BackendRequest::LoadSource(request)
+                if request.target.is_none() && request.line == 500
+                && request.location.path.as_deref() == Some("parent.rs"))
         );
+        assert_eq!(app.inspection_generation, 0);
     }
 
     #[test]

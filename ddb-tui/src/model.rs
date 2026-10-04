@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use serde_json::Value;
 
 use crate::api::{group_target, session_target, thread_target, BreakpointTarget, CapabilitiesExt};
+use crate::source_browser::{SourceBrowser, SourceRequest};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
@@ -254,15 +255,6 @@ pub struct MemoryBlock {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
-pub struct SourceView {
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub total_lines: Option<usize>,
-    pub lines: Vec<String>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceLocation {
     pub source: String,
@@ -382,11 +374,8 @@ pub struct App {
     pub selected_breakpoint: usize,
     pub inspection_generation: u64,
     inspected_thread_id: Option<String>,
-    pub source: Option<SourceView>,
+    pub source_browser: SourceBrowser,
     pub execution_location: Option<SourceLocation>,
-    pub source_cursor: Option<SourceLocation>,
-    source_cursor_pinned: bool,
-    pub source_scroll: usize,
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
     pub timeline: VecDeque<String>,
@@ -436,11 +425,8 @@ impl App {
             selected_breakpoint: 0,
             inspection_generation: 0,
             inspected_thread_id: None,
-            source: None,
+            source_browser: SourceBrowser::default(),
             execution_location: None,
-            source_cursor: None,
-            source_cursor_pinned: false,
-            source_scroll: 0,
             timeline_scroll: 0,
             extension_scroll: 0,
             timeline: VecDeque::with_capacity(500),
@@ -546,11 +532,8 @@ impl App {
             self.variables.clear();
             self.registers.clear();
             self.memory.clear();
-            self.source = None;
             self.distributed_stack_truncation = None;
             self.execution_location = None;
-            self.source_cursor = None;
-            self.source_cursor_pinned = false;
             self.selected_thread = 0;
             self.selected_topology = None;
             self.selected_frame = 0;
@@ -843,40 +826,6 @@ impl App {
             begin: block.address,
             bytes: block.data,
         }];
-    }
-
-    pub fn apply_source(&mut self, content: v2::SourceContent, active_line: usize) {
-        let first_line = (content.start_line as usize).max(1);
-        let lines = decode_source_lines(&content.content, content.line_count);
-        let last_line = first_line.saturating_add(lines.len().saturating_sub(1));
-        let active_line = active_line.clamp(first_line, last_line);
-        let path = content
-            .source
-            .as_ref()
-            .and_then(|source| source.path.clone())
-            .or_else(|| content.source.as_ref().map(|source| source.name.clone()))
-            .unwrap_or_else(|| "<source>".to_string());
-        let preserved_cursor_line = self
-            .source_cursor
-            .as_ref()
-            .filter(|_| self.source_cursor_pinned)
-            .filter(|cursor| same_source(&cursor.source, &path))
-            .map(|cursor| cursor.line)
-            .filter(|line| (first_line..=last_line).contains(line));
-        let cursor_line = preserved_cursor_line.unwrap_or(active_line);
-        self.source_cursor_pinned = preserved_cursor_line.is_some();
-        self.source_cursor = Some(SourceLocation {
-            source: path.clone(),
-            line: cursor_line,
-        });
-        self.source_scroll = active_line.saturating_sub(first_line).saturating_sub(8);
-        self.source = Some(SourceView {
-            path,
-            start_line: first_line,
-            end_line: last_line,
-            total_lines: (!content.has_more).then_some(last_line),
-            lines,
-        });
     }
 
     pub fn current_thread(&self) -> Option<&ThreadItem> {
@@ -1261,7 +1210,8 @@ impl App {
             return Err("hardware breakpoints are not supported by this DDB API".to_string());
         }
         let (source, line) = self
-            .source_cursor_location()
+            .source_browser
+            .cursor_location()
             .map(|(source, line)| (source.to_string(), line as u64))
             .ok_or_else(|| "load a source file before setting a breakpoint".to_string())?;
         if self.sessions.is_empty() {
@@ -1483,7 +1433,6 @@ impl App {
 
     pub fn begin_frame_inspection(&mut self) -> u64 {
         self.inspection_generation = self.inspection_generation.wrapping_add(1).max(1);
-        self.source_cursor_pinned = false;
         self.clear_inspection_details();
         self.inspection_generation
     }
@@ -1621,46 +1570,10 @@ impl App {
         input
     }
 
-    pub fn prepare_source_navigation(
-        &mut self,
-        requested_source: Option<String>,
-        line: usize,
-    ) -> Option<(String, usize, u64)> {
-        let (path, total_lines) = match requested_source {
-            Some(path) => {
-                let total_lines = self
-                    .source
-                    .as_ref()
-                    .filter(|source| same_source(&source.path, &path))
-                    .and_then(|source| source.total_lines);
-                (path, total_lines)
-            }
-            None => {
-                let source = self.source.as_ref()?;
-                (source.path.clone(), source.total_lines)
-            }
-        };
-        let line = total_lines.map_or_else(|| line.max(1), |total| line.clamp(1, total.max(1)));
-        self.source_cursor = Some(SourceLocation {
-            source: path.clone(),
-            line,
-        });
-        self.source_cursor_pinned = true;
-        // Advancing the generation cancels in-flight expansion requests.
-        for variable in &mut self.variables {
-            variable.loading = false;
-        }
-        self.inspection_generation = self.inspection_generation.wrapping_add(1).max(1);
-        self.inspected_thread_id = self.current_thread().map(|thread| thread.id.clone());
-        Some((path, line, self.inspection_generation))
-    }
-
     fn invalidate_inspection(&mut self) {
         self.frames.clear();
         self.distributed_stack_truncation = None;
         self.execution_location = None;
-        self.source_cursor = None;
-        self.source_cursor_pinned = false;
         self.selected_frame = 0;
         self.selected_variable = 0;
         self.inspected_thread_id = None;
@@ -1672,7 +1585,6 @@ impl App {
         self.variables.clear();
         self.registers.clear();
         self.memory.clear();
-        self.source = None;
     }
 
     pub fn inspection_is_current(&self, generation: u64, thread_id: &str) -> bool {
@@ -1695,29 +1607,8 @@ impl App {
         self.inspected_thread_id.as_deref() == Some(thread_id)
     }
 
-    pub fn source_cursor_location(&self) -> Option<(&str, usize)> {
-        let source = self.source.as_ref()?;
-        let cursor = self.source_cursor.as_ref()?;
-        same_source(&cursor.source, &source.path).then_some((source.path.as_str(), cursor.line))
-    }
-
-    pub fn set_source_cursor_line(&mut self, line: usize) {
-        let Some(source) = self.source.as_ref() else {
-            return;
-        };
-        let first_line = source.start_line.max(1);
-        let last_line = source.end_line.max(first_line);
-        let line = line.clamp(first_line, last_line);
-        self.source_cursor = Some(SourceLocation {
-            source: source.path.clone(),
-            line,
-        });
-        self.source_cursor_pinned = true;
-        self.source_scroll = line.saturating_sub(source.start_line).saturating_sub(8);
-    }
-
     pub fn breakpoint_at_source_cursor(&self, target: BreakpointTarget) -> Option<&Breakpoint> {
-        let (source, line) = self.source_cursor_location()?;
+        let (source, line) = self.source_browser.cursor_location()?;
         self.breakpoints.iter().find(|breakpoint| {
             breakpoint.location.line == line as u64
                 && same_source(&breakpoint.location.src, source)
@@ -1755,11 +1646,16 @@ impl App {
             }
             Focus::Source => {
                 let line = self
-                    .source_cursor_location()
+                    .source_browser
+                    .cursor_location()
                     .map(|(_, line)| line)
-                    .or_else(|| self.source.as_ref().map(|source| source.start_line))
+                    .or_else(|| {
+                        self.source_browser
+                            .document()
+                            .map(|source| source.start_line)
+                    })
                     .unwrap_or(1);
-                self.set_source_cursor_line(move_line(line, delta));
+                self.source_browser.set_cursor(move_line(line, delta));
             }
             Focus::Timeline => {
                 self.timeline_scroll = move_line(self.timeline_scroll, delta);
@@ -1860,20 +1756,6 @@ impl App {
         self.api_connected = false;
         self.error(error);
     }
-}
-
-fn decode_source_lines(content: &str, line_count: u32) -> Vec<String> {
-    if line_count == 0 {
-        return Vec::new();
-    }
-
-    let lines = content.split('\n').map(str::to_string).collect::<Vec<_>>();
-    debug_assert_eq!(
-        lines.len(),
-        line_count as usize,
-        "SourceContent line_count must match its newline-delimited content"
-    );
-    lines
 }
 
 fn protocol_label(capabilities: &v2::Capabilities) -> String {
@@ -2323,19 +2205,10 @@ pub enum BackendRequest {
     },
     InspectFrame {
         thread_id: String,
-        owner_thread_id: String,
         generation: u64,
         frame_id: String,
-        source: Option<String>,
-        line: Option<u64>,
     },
-    LoadSource {
-        thread_id: String,
-        owner_thread_id: String,
-        generation: u64,
-        source: String,
-        line: usize,
-    },
+    LoadSource(SourceRequest),
     Control(Control, v2::Target),
     Jump {
         location: String,
@@ -2442,9 +2315,11 @@ pub enum UiMessage {
     },
     Source {
         generation: u64,
-        thread_id: String,
         source: v2::SourceContent,
-        line: usize,
+    },
+    SourceError {
+        generation: u64,
+        error: String,
     },
     ExpansionError {
         generation: u64,
@@ -2493,6 +2368,7 @@ mod v2_tests {
 
     use super::*;
     use crate::api::{group_target, session_target};
+    use crate::source_browser::tests::show_source;
 
     fn thread(id: &str, state: v2::ThreadState, path: &str, line: u32) -> v2::Thread {
         v2::Thread {
@@ -2547,16 +2423,6 @@ mod v2_tests {
         }
     }
 
-    #[test]
-    fn source_decoder_preserves_contractual_blank_lines() {
-        assert_eq!(decode_source_lines("", 0), Vec::<String>::new());
-        assert_eq!(decode_source_lines("", 1), vec![String::new()]);
-        assert_eq!(
-            decode_source_lines("first\n", 2),
-            vec!["first".to_string(), String::new()]
-        );
-    }
-
     fn snapshot_with_session() -> v2::Snapshot {
         v2::Snapshot {
             sessions: vec![v2::Session {
@@ -2582,7 +2448,7 @@ mod v2_tests {
             type_name: Some("int".to_string()),
             ..Default::default()
         }]);
-        app.apply_source(source("/src/main.rs", 1, 40), 12);
+        show_source(&mut app.source_browser, source("/src/main.rs", 1, 40), 12);
         app
     }
 
@@ -2652,20 +2518,20 @@ mod v2_tests {
     #[test]
     fn source_cursor_remains_independent_when_execution_moves() {
         let mut app = populated_app(v2::ThreadState::Stopped);
-        app.set_source_cursor_line(13);
+        app.source_browser.set_cursor(13);
         app.apply_frames(vec![frame("frame/next", 0, "/src/main.rs", 20)]);
-        app.apply_source(source("/src/main.rs", 1, 40), 20);
+        show_source(&mut app.source_browser, source("/src/main.rs", 1, 40), 20);
         assert_eq!(app.execution_location.as_ref().unwrap().line, 20);
-        assert_eq!(app.source_cursor.as_ref().unwrap().line, 13);
+        assert_eq!(app.source_browser.document().unwrap().cursor, 13);
     }
 
     #[test]
     fn untouched_source_cursor_follows_a_new_execution_stop() {
         let mut app = populated_app(v2::ThreadState::Stopped);
         app.apply_frames(vec![frame("frame/next", 0, "/src/main.rs", 20)]);
-        app.apply_source(source("/src/main.rs", 1, 40), 20);
+        show_source(&mut app.source_browser, source("/src/main.rs", 1, 40), 20);
         assert_eq!(app.execution_location.as_ref().unwrap().line, 20);
-        assert_eq!(app.source_cursor.as_ref().unwrap().line, 20);
+        assert_eq!(app.source_browser.document().unwrap().cursor, 20);
     }
 
     #[test]
@@ -2679,7 +2545,10 @@ mod v2_tests {
         )]);
         assert!(app.frames.is_empty());
         assert!(app.execution_location.is_none());
-        assert!(app.source.is_none());
+        assert_eq!(
+            app.source_browser.cursor_location(),
+            Some(("/src/main.rs", 12))
+        );
 
         let mut app = populated_app(v2::ThreadState::Stopped);
         app.apply_threads(vec![thread(
@@ -2720,9 +2589,10 @@ mod v2_tests {
         ]);
         app.selected_frame = 1;
         app.begin_frame_inspection();
-        app.apply_source(source("/src/lib.rs", 1, 20), 5);
+        app.source_browser.set_following(true);
+        show_source(&mut app.source_browser, source("/src/lib.rs", 1, 20), 5);
         assert_eq!(app.execution_location.as_ref().unwrap().line, 12);
-        assert_eq!(app.source_cursor.as_ref().unwrap().line, 5);
+        assert_eq!(app.source_browser.document().unwrap().cursor, 5);
     }
 
     #[test]
@@ -2939,7 +2809,7 @@ mod v2_tests {
         beta.session_id = "session/beta".to_string();
         beta.name = Some("worker".to_string());
         app.apply_threads(vec![alpha, beta]);
-        app.apply_source(source("/src/main.rs", 1, 30), 12);
+        show_source(&mut app.source_browser, source("/src/main.rs", 1, 30), 12);
 
         let rows = app.topology_rows();
         assert_eq!(
@@ -3064,14 +2934,17 @@ mod v2_tests {
         );
     }
     #[test]
-    fn empty_snapshot_clears_all_debuggee_views() {
+    fn empty_snapshot_clears_inspection_but_keeps_the_document() {
         let mut app = populated_app(v2::ThreadState::Stopped);
         app.apply_snapshot(v2::Snapshot::default());
         assert!(app.threads.is_empty());
         assert!(app.frames.is_empty());
         assert!(app.variables.is_empty());
         assert!(app.execution_location.is_none());
-        assert!(app.source_cursor.is_none());
+        assert_eq!(
+            app.source_browser.cursor_location(),
+            Some(("/src/main.rs", 12))
+        );
     }
 
     #[test]
@@ -3174,6 +3047,9 @@ mod v2_tests {
             ..Default::default()
         });
         assert!(app.threads.is_empty());
-        assert!(app.source.is_none());
+        assert_eq!(
+            app.source_browser.cursor_location(),
+            Some(("/src/main.rs", 12))
+        );
     }
 }

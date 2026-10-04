@@ -103,6 +103,8 @@ the backend and frontend together when the API contract changes.
 | `e` | Evaluate an expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `g` | Go to a source line (loads another source window when needed) |
+| `f` in Source | Resume following the selected thread's execution location |
+| `Alt+Left` / `Alt+Right` | Navigate source history without changing debugger selection |
 | `j` | Jump execution to a debugger location |
 | `s` | Send a signal to the selected thread |
 | `a` / `Enter` in Extensions | Invoke an action declared by the active DDB extension |
