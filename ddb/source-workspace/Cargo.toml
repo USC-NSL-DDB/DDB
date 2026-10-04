@@ -1,0 +1,17 @@
+[package]
+name = "ddb-source-workspace"
+version = "0.1.0"
+edition = "2021"
+description = "Confined source workspaces and bounded source content caching for DDB"
+license = "Apache-2.0"
+
+[dependencies]
+cap-std = "4.0.3"
+sha2 = "0.10.9"
+thiserror = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

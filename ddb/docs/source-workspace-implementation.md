@@ -106,5 +106,24 @@ Required behavior checks:
   independent cursor and execution movement, and explicit follow resumption.
   Its initial preservation assertion incorrectly included the toolbar play icon;
   the corrected assertion examines the body below the toolbar.
-- Source discovery/export operations, root configuration, explorer UI, source
-  ownership/mapping enforcement, and end-to-end verification remain unfinished.
+- Document/frame separation was committed as `eeca56ef`.
+- Stage 2 is split into a shared-filesystem commit and a canonical API commit.
+  The `ddb-source-workspace` module pins explicit directory grants with
+  `cap-std`; subsequent reads and enumeration stay relative to those grants.
+  It rejects traversal, escaped symlinks, nonregular files, and oversized reads.
+- Sixteen shared-filesystem tests pass, including FIFO rejection, cached-file
+  replacement, symlink replacement, independent roots, shared byte/count bounds,
+  CRLF/blank/EOF handling, 2,001 directory entries, and 100 repeated windows in a
+  100,000-line source file. Strict Clippy for this module and the SDK passed.
+- Content and directory snapshots have independently bounded shared caches.
+  A regression demonstrated that rapid directory edits can share timestamps.
+  First-page listings therefore always enumerate afresh; continuation snapshots
+  can be reused for at most 30 seconds with renewed access checks. The regression
+  now passes without sleeps or weakened fresh-listing assertions.
+- Backend source discovery/export implementation and its canonical contract are
+  under verification. The serial check passed 333 backend unit tests with one
+  pre-existing ignored test, source SDK/security tests, HTTP/gRPC parity, existing
+  source resolution, and runtime OpenAPI/AsyncAPI conformance. Real-debugger
+  verification is still running; these results do not establish TUI completion.
+- Explorer/quick-open UI, local-root handling, frontend ownership-aware markers
+  and breakpoints, and complete terminal verification remain unfinished.

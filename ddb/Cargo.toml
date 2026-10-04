@@ -6,6 +6,7 @@ members = [
     "api-types",
     "api-grpc",
     "api-client",
+    "source-workspace",
     "api-conformance",
     "api-extension",
     "examples/extensions/sample-extension",
