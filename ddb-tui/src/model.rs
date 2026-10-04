@@ -400,6 +400,7 @@ pub struct App {
     pub inspection_generation: u64,
     inspected_thread_id: Option<String>,
     pub source_browser: SourceBrowser,
+    pub source_workspace: std::sync::Arc<crate::source_workspace::Workspace>,
     source_server_instance: Option<String>,
     pub source_explorer: crate::source_explorer::Explorer,
     pub execution_location: Option<SourceLocation>,
@@ -453,6 +454,7 @@ impl App {
             inspection_generation: 0,
             inspected_thread_id: None,
             source_browser: SourceBrowser::default(),
+            source_workspace: std::sync::Arc::default(),
             source_server_instance: None,
             source_explorer: crate::source_explorer::Explorer::default(),
             execution_location: None,
@@ -525,15 +527,20 @@ impl App {
                 self.breakpoint_target_picker = None;
                 self.signal_picker = None;
                 self.invalidate_inspection();
-                self.push_timeline("DDB instance changed; discarded server-scoped source references and navigation history");
+                self.push_timeline("DDB instance changed; discarded remote source handles, retained local documents");
             }
             self.source_server_instance = Some(snapshot.server_instance_id.clone());
+            self.source_browser
+                .set_server_instance(snapshot.server_instance_id.clone());
+            self.source_explorer
+                .set_server_instance(snapshot.server_instance_id.clone());
         }
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         if let Some(capabilities) = snapshot.capabilities.clone() {
             self.apply_capabilities(capabilities);
         }
         self.sessions = snapshot.sessions;
+        self.source_workspace.update_sessions(&self.sessions);
         self.groups = snapshot.groups;
         self.execution_states = snapshot.execution_states;
         self.breakpoints = snapshot
@@ -1262,9 +1269,8 @@ impl App {
         let selected_session_id = self
             .source_browser
             .document()
-            .and_then(|document| document.debugger_binding())
-            .and_then(|binding| binding.single_owner())
-            .map(str::to_owned);
+            .and_then(|document| document.debugger_binding(&self.sessions))
+            .and_then(|binding| binding.single_owner().map(str::to_owned));
         let mut choices = Vec::new();
         if self.capabilities.supports_breakpoint_action("distributed") {
             choices.push(BreakpointTargetChoice {
@@ -1656,15 +1662,15 @@ impl App {
             .source_browser
             .document()
             .ok_or("load a source file before setting a breakpoint")?;
-        let binding = document.debugger_binding().ok_or("this document has no debugger path mapping; configure a source mapping before setting a breakpoint")?;
-        Ok((binding.path.to_owned(), document.cursor as u64))
+        let binding = document.debugger_binding(&self.sessions).ok_or("this document has no debugger path mapping; configure a source mapping before setting a breakpoint")?;
+        Ok((binding.path.into_owned(), document.cursor as u64))
     }
 
     pub fn source_breakpoint_indices(&self) -> Vec<usize> {
         let Some(document) = self.source_browser.document() else {
             return Vec::new();
         };
-        let Some(binding) = document.debugger_binding() else {
+        let Some(binding) = document.debugger_binding(&self.sessions) else {
             return Vec::new();
         };
         self.breakpoints
@@ -2297,7 +2303,7 @@ pub enum UiMessage {
     },
     Source {
         generation: u64,
-        source: v2::SourceContent,
+        source: crate::source_types::Content,
     },
     SourceError {
         generation: u64,

@@ -65,9 +65,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiA
         x = x.saturating_add(width);
     }
     let path = match &explorer.place {
-        Place::Roots => "DDB workspace roots".to_owned(),
+        Place::Roots => "Local and DDB source roots".to_owned(),
         Place::Catalog => "Debugger source catalog".to_owned(),
-        Place::Directory { root, path } => format!("DDB · {}/{path}", root.name),
+        Place::Directory { root, path } => format!("{} · {}/{path}", root.host(), root.name()),
     };
     let filter = if explorer.place == Place::Catalog {
         "search"
@@ -89,18 +89,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiA
     for index in explorer.visible_indices() {
         let entry = &explorer.entries[index];
         let (kind, owners, unavailable) = match entry {
-            Entry::Root(root) => ("[root]", root.owners.as_slice(), false),
-            Entry::Directory(_) => ("[dir]", &[][..], false),
-            Entry::Link(_) => ("[link]", &[][..], false),
-            Entry::Other(_) => ("[other]", &[][..], false),
+            Entry::Root(root) => (root.host(), root.owners(&app.sessions), false),
+            Entry::Directory(_) => ("dir", std::borrow::Cow::Borrowed(&[][..]), false),
+            Entry::Link(_) => ("link", std::borrow::Cow::Borrowed(&[][..]), false),
+            Entry::Other(_) => ("other", std::borrow::Cow::Borrowed(&[][..]), false),
             Entry::Source(source) => (
-                if source.origin == v2::SourceOrigin::Debugger as i32 {
-                    "[debug]"
-                } else {
-                    "[file]"
-                },
-                source.owners.as_slice(),
-                source.availability == v2::SourceAvailability::Unavailable as i32,
+                source.kind(),
+                source.owners(&app.sessions),
+                source.unavailable_reason().is_some(),
             ),
         };
         let owners = owners
@@ -115,8 +111,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiA
             .collect::<Vec<_>>()
             .join(", ");
         labels.push(format!(
-            "{kind} {}{}{}",
-            terminal_text(entry.label()),
+            "[{kind}] {}{}{}",
+            terminal_text(&entry.label()),
             if owners.is_empty() {
                 String::new()
             } else {
@@ -182,7 +178,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiA
     }
     let selected = explorer.selected_entry();
     let unavailable = match selected {
-        Some(Entry::Source(source)) => source.unavailable_reason.as_deref(),
+        Some(Entry::Source(source)) => source.unavailable_reason(),
         _ => None,
     };
     let detail = explorer

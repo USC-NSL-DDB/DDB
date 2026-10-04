@@ -9,6 +9,9 @@ mod source_explorer;
 mod source_explorer_input;
 #[cfg(test)]
 mod source_explorer_interaction_tests;
+mod source_provider;
+mod source_types;
+mod source_workspace;
 mod supervisor;
 mod ui;
 mod worker;
@@ -48,6 +51,10 @@ use tokio::sync::mpsc;
 async fn main() -> Result<()> {
     let args = Args::parse();
     let mode = args.parse_mode()?;
+    let workspace = std::sync::Arc::new(match &args.source_workspace {
+        Some(path) => source_workspace::Workspace::load(path)?,
+        None => source_workspace::Workspace::default(),
+    });
 
     let mut managed = match &mode {
         Mode::Connect { .. } => None,
@@ -67,6 +74,7 @@ async fn main() -> Result<()> {
         token.as_deref(),
         args.refresh_ms,
         managed.as_ref(),
+        workspace,
     )
     .await;
     let cleanup = match managed.as_mut() {
@@ -81,9 +89,11 @@ async fn run_frontend(
     token: Option<&str>,
     refresh_ms: u64,
     managed: Option<&ManagedBackend>,
+    workspace: std::sync::Arc<source_workspace::Workspace>,
 ) -> Result<()> {
     let client = negotiate_client(endpoint, token, managed).await?;
     let mut app = App::new(endpoint.to_string());
+    app.source_workspace = workspace;
     if let Some(backend) = managed {
         app.push_timeline(format!(
             "managed DDB {} ready (instance {}, log {})",
@@ -216,7 +226,12 @@ async fn run(
 ) -> Result<()> {
     let (request_tx, request_rx) = mpsc::channel(64);
     let (message_tx, mut message_rx) = mpsc::channel(128);
-    let mut worker_task = tokio::spawn(worker::run(client.clone(), request_rx, message_tx.clone()));
+    let mut worker_task = tokio::spawn(worker::run(
+        client.clone(),
+        app.source_workspace.clone(),
+        request_rx,
+        message_tx.clone(),
+    ));
     let mut event_task = tokio::spawn(worker::watch_events(client.clone(), message_tx.clone()));
     let mut output_task = tokio::spawn(worker::watch_output(client, message_tx));
     request_tx
@@ -1134,25 +1149,22 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
     let Ok(api_line) = u32::try_from(line.max(1)) else {
         return app.error("source line exceeds the API limit");
     };
-    let location = match requested_source {
-        Some(path) => v2::SourceLocation {
-            path: Some(path),
-            line: api_line,
-            ..Default::default()
-        },
-        None => match app.source_browser.current_location(line) {
-            Some(location) => location,
-            None => {
-                app.status = "enter path:line when no source file is loaded".to_string();
-                return;
-            }
-        },
+    let request = match requested_source {
+        Some(path) => app.source_browser.navigate(
+            None,
+            v2::SourceLocation {
+                path: Some(path),
+                line: api_line,
+                ..Default::default()
+            },
+            Navigation::Manual,
+        ),
+        None => app.source_browser.go_to_line(line),
     };
-    if let Some(request) = app
-        .source_browser
-        .navigate(None, location, Navigation::Manual)
-    {
+    if let Some(request) = request {
         queue_request(app, requests, BackendRequest::LoadSource(request));
+    } else {
+        app.status = "enter path:line when no source file is loaded".to_string();
     }
 }
 
@@ -1701,8 +1713,7 @@ mod tests {
         goto_source_line(&mut app, &requests, "parent.rs:500");
         assert!(
             matches!(receiver.try_recv().unwrap(), BackendRequest::LoadSource(request)
-                if request.target.is_none() && request.line == 500
-                && request.location.path.as_deref() == Some("parent.rs"))
+                if request.line == 500 && matches!(&request.address, source_types::Address::Resolve { target: None, location, .. } if location.path.as_deref() == Some("parent.rs")))
         );
         assert_eq!(app.inspection_generation, 0);
     }

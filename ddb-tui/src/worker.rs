@@ -13,7 +13,6 @@ use crate::{
         ProjectedStateSyncItem, StateSyncOptions,
     },
     model::{BackendRequest, DebuggerActivity, DebuggerEvent, EventStreamStatus, UiMessage},
-    source_browser::SourceRequest,
 };
 
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,6 +25,7 @@ mod source_explorer_tests;
 
 pub async fn run(
     client: ApiClient,
+    workspace: std::sync::Arc<crate::source_workspace::Workspace>,
     mut requests: mpsc::Receiver<BackendRequest>,
     messages: mpsc::Sender<UiMessage>,
 ) {
@@ -60,9 +60,11 @@ pub async fn run(
             }
             let client = client.clone();
             let messages = messages.clone();
+            let workspace = workspace.clone();
             sources.spawn(async move {
                 let generation = request.generation;
-                let update = match source_content(&client, request).await {
+                let update = match crate::source_provider::read(&client, &workspace, request).await
+                {
                     Ok(source) => UiMessage::Source { generation, source },
                     Err(error) => UiMessage::SourceError {
                         generation,
@@ -78,9 +80,10 @@ pub async fn run(
             }
             let client = client.clone();
             let messages = messages.clone();
+            let workspace = workspace.clone();
             discoveries.spawn(async move {
                 let generation = request.generation;
-                let result = crate::source_explorer::fetch(&client, request)
+                let result = crate::source_provider::discover(&client, &workspace, request)
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let _ = messages
@@ -706,49 +709,6 @@ async fn list_scope_variables(
         .await?)
 }
 
-async fn source_content(
-    client: &ApiClient,
-    request: SourceRequest,
-) -> anyhow::Result<v2::SourceContent> {
-    let line = u32::try_from(request.line).context("source line exceeds the API limit")?;
-    let reference = match request.location.source_reference.clone() {
-        Some(reference) => reference,
-        None => {
-            client
-                .resolve_source(v2::ResolveSourceRequest {
-                    context: None,
-                    root_reference: request.root_reference,
-                    target: request.target,
-                    location: Some(request.location),
-                })
-                .await?
-                .source
-                .context("ResolveSource omitted source")?
-                .source_reference
-        }
-    };
-    let mut read = v2::ReadSourceRequest {
-        context: None,
-        source_reference: reference,
-        start_line: line.saturating_sub(100).max(1),
-        max_lines: 240,
-    };
-    let content = client
-        .read_source(read.clone())
-        .await?
-        .source
-        .context("ReadSource omitted source")?;
-    if content.line_count == 0 && content.total_lines > 0 && read.start_line > content.total_lines {
-        read.start_line = content.total_lines.saturating_sub(239).max(1);
-        return client
-            .read_source(read)
-            .await?
-            .source
-            .context("ReadSource omitted source");
-    }
-    Ok(content)
-}
-
 async fn complete_operation(
     client: &ApiClient,
     admission: v2::OperationAdmissionResponse,
@@ -1066,6 +1026,10 @@ mod tests {
             assert_eq!(request.source_reference, "src-workspace");
             let beyond = request.start_line > 3;
             Json(v2::ReadSourceResponse {
+                context: Some(v2::ResponseContext {
+                    server_instance_id: "test".into(),
+                    ..Default::default()
+                }),
                 source: Some(v2::SourceContent {
                     source: Some(v2::SourceFile {
                         source_reference: request.source_reference,
@@ -1082,7 +1046,6 @@ mod tests {
                     total_lines: 3,
                     has_more: false,
                 }),
-                ..Default::default()
             })
         }
         let calls = Calls::default();
@@ -1097,19 +1060,31 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
         let mut browser = crate::source_browser::SourceBrowser::default();
-        let request = browser
-            .navigate(
-                None,
-                v2::SourceLocation {
-                    source_reference: Some("src-workspace".into()),
-                    line: 999,
-                    ..Default::default()
-                },
-                crate::source_browser::Navigation::Manual,
-            )
-            .unwrap();
+        let request = browser.open_source(crate::source_browser::tests::remote_source(
+            v2::SourceFile {
+                source_reference: "src-workspace".into(),
+                ..Default::default()
+            },
+        ));
+        // Navigate an already resolved document beyond its actual end.
+        let initial = crate::source_browser::tests::remote_content(v2::SourceContent {
+            source: Some(v2::SourceFile {
+                source_reference: "src-workspace".into(),
+                ..Default::default()
+            }),
+            total_lines: 1000,
+            ..Default::default()
+        });
+        browser.apply(request.generation, initial);
+        let request = browser.go_to_line(999).unwrap();
         let generation = request.generation;
-        let content = source_content(&client, request).await.unwrap();
+        let content = crate::source_provider::read(
+            &client,
+            &crate::source_workspace::Workspace::default(),
+            request,
+        )
+        .await
+        .unwrap();
         assert!(browser.apply(generation, content));
         assert_eq!(browser.document().unwrap().cursor, 3);
         assert_eq!(browser.document().unwrap().lines, ["one", "two", "three"]);
@@ -1227,7 +1202,7 @@ mod tests {
         assert!(updates.try_recv().is_err());
 
         let (requests, request_rx) = mpsc::channel(4);
-        let worker = tokio::spawn(run(client, request_rx, messages));
+        let worker = tokio::spawn(run(client, Arc::default(), request_rx, messages));
         requests
             .send(BackendRequest::ExpandScope {
                 scope_id: "globals".into(),
@@ -1275,7 +1250,7 @@ mod tests {
         let client = ApiClient::new(crate::api::ClientConfig::new("http://127.0.0.1:1")).unwrap();
         let (requests, request_rx) = mpsc::channel(4);
         let (messages, mut message_rx) = mpsc::channel(4);
-        let worker = tokio::spawn(run(client, request_rx, messages));
+        let worker = tokio::spawn(run(client, std::sync::Arc::default(), request_rx, messages));
         requests
             .send(BackendRequest::ExpandVariable {
                 variable_id: "value".into(),

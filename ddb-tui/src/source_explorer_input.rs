@@ -105,10 +105,7 @@ fn activate(app: &mut App, requests: &mpsc::Sender<BackendRequest>, directory: b
             return;
         }
         Action::Open(source) => app.source_browser.open_source(source),
-        Action::Resolve {
-            root_reference,
-            path,
-        } => app.source_browser.open_export(root_reference, path),
+        Action::Resolve { root, path } => app.source_browser.open_export(root, path),
     };
     app.source_explorer.close();
     app.focus = Focus::Source;

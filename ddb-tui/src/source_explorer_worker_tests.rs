@@ -13,6 +13,10 @@ async fn read(State(backend): State<Arc<Backend>>) -> Json<v2::ReadSourceRespons
     backend.read_started.add_permits(1);
     backend.read_allowed.acquire().await.unwrap().forget();
     Json(v2::ReadSourceResponse {
+        context: Some(v2::ResponseContext {
+            server_instance_id: "test".into(),
+            ..Default::default()
+        }),
         source: Some(v2::SourceContent {
             source: Some(v2::SourceFile {
                 source_reference: "file".into(),
@@ -24,7 +28,6 @@ async fn read(State(backend): State<Arc<Backend>>) -> Json<v2::ReadSourceRespons
             total_lines: 1,
             ..Default::default()
         }),
-        ..Default::default()
     })
 }
 
@@ -34,7 +37,13 @@ async fn list(
 ) -> Json<v2::ListSourcesResponse> {
     assert_eq!(request.page.as_ref().unwrap().page_size, 100);
     backend.queries.lock().unwrap().push(request.query);
-    Json(v2::ListSourcesResponse::default())
+    Json(v2::ListSourcesResponse {
+        context: Some(v2::ResponseContext {
+            server_instance_id: "test".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
 }
 
 #[tokio::test]
@@ -51,9 +60,9 @@ async fn discovery_is_debounced_and_cancellation_does_not_cancel_a_source_read()
         let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
         let (requests, receiver) = mpsc::channel(8);
         let (messages, mut updates) = mpsc::channel(8);
-        let worker = tokio::spawn(run(client, receiver, messages));
+        let worker = tokio::spawn(run(client, Arc::default(), receiver, messages));
         let mut browser = crate::source_browser::SourceBrowser::default();
-        let source = browser.navigate(None, v2::SourceLocation { source_reference: Some("file".into()), line: 1, ..Default::default() }, crate::source_browser::Navigation::Manual).unwrap();
+        let source = browser.open_source(crate::source_browser::tests::remote_source(v2::SourceFile { source_reference: "file".into(), ..Default::default() }));
         requests.send(BackendRequest::LoadSource(source.clone())).await.unwrap();
         backend.read_started.acquire().await.unwrap().forget();
 

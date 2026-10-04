@@ -1,10 +1,12 @@
 use super::*;
+use crate::source_browser::tests::remote_source;
 use crate::source_explorer::{Control as ExplorerControl, Entry, Page, Place};
+use crate::source_types::SourceId;
 use ratatui::{backend::TestBackend, Terminal};
 
 fn source_page() -> Page {
     Page {
-        entries: vec![Entry::Source(v2::SourceFile {
+        entries: vec![Entry::Source(remote_source(v2::SourceFile {
             source_reference: "source/other-session/main".into(),
             name: "main.rs".into(),
             path: Some("/build/main.rs".into()),
@@ -15,7 +17,7 @@ fn source_page() -> Page {
             availability: v2::SourceAvailability::Unavailable as i32,
             unavailable_reason: Some("checkout is not mounted".into()),
             ..Default::default()
-        })],
+        }))],
         next_token: None,
         warnings: vec!["catalog refresh skipped for running session".into()],
     }
@@ -93,10 +95,12 @@ fn opening_a_catalog_source_preserves_inspection_and_execution_target() {
         panic!("opening a catalog row should only read source");
     };
     assert_eq!(
-        request.location.source_reference.as_deref(),
-        Some("source/other-session/main")
+        request.address.id(),
+        Some(SourceId::Ddb {
+            instance: "test".into(),
+            reference: "source/other-session/main".into()
+        })
     );
-    assert!(request.target.is_none());
     assert!(!app.source_explorer.visible);
     assert!(!app.source_browser.following());
     assert_eq!(app.current_thread().unwrap().id, "thread/selected");

@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::{Breakpoint, BreakpointLocation, SourceLocation, ThreadItem};
 use crate::source_binding::DebuggerBinding;
+use crate::source_browser::tests::{remote_content, remote_source};
 use ratatui::{backend::TestBackend, Terminal};
 
 fn file(owners: &[&str], mapped: bool) -> v2::SourceFile {
@@ -57,17 +58,19 @@ fn app(owners: &[&str], mapped: bool) -> App {
         line: 2,
     });
     let source = file(owners, mapped);
-    let request = app.source_browser.open_source(source.clone());
+    let request = app
+        .source_browser
+        .open_source(remote_source(source.clone()));
     assert!(app.source_browser.apply(
         request.generation,
-        v2::SourceContent {
+        remote_content(v2::SourceContent {
             source: Some(source),
             content: "first\nsecond\nthird".into(),
             start_line: 1,
             line_count: 3,
             total_lines: 3,
             has_more: false
-        }
+        })
     ));
     app.source_browser.set_cursor(2);
     app
@@ -96,14 +99,14 @@ fn breakpoint(id: &str, target: v2::Target) -> Breakpoint {
 
 #[test]
 fn bindings_require_exact_debugger_path_and_owner_not_a_display_path_or_suffix() {
-    let source = file(&["a"], true);
-    let binding = DebuggerBinding::from_source(&source).unwrap();
+    let source = remote_source(file(&["a"], true));
+    let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
     assert!(binding.matches_location("a", "/build/main.rs"));
     assert!(!binding.matches_location("b", "/build/main.rs"));
     assert!(!binding.matches_location("a", "main.rs"));
     assert!(!binding.matches_location("a", "checkout/main.rs"));
     assert!(!binding.matches_location("a", "/other/build/main.rs"));
-    assert!(DebuggerBinding::from_source(&file(&["a"], false)).is_none());
+    assert!(DebuggerBinding::from_source(&remote_source(file(&["a"], false)), &[]).is_none());
 }
 
 #[test]
@@ -186,8 +189,8 @@ fn breakpoint_toggle_never_deletes_an_unrelated_owner_or_an_ambiguous_match() {
 #[test]
 fn resolved_breakpoints_and_group_membership_preserve_source_ownership() {
     let mut app = app(&["a"], true);
-    let source = file(&["a"], true);
-    let binding = DebuggerBinding::from_source(&source).unwrap();
+    let source = remote_source(file(&["a"], true));
+    let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
     let mut bp = breakpoint("group", api::group_target("group"));
     assert!(binding.marks_breakpoint(&bp, 2, &app.sessions));
     app.sessions[0].group_id = Some("moved".into());
@@ -248,14 +251,16 @@ fn rendered_execution_and_breakpoint_markers_do_not_cross_session_owners() {
 fn backend_replacement_invalidates_source_handles_but_same_instance_refresh_preserves_browsing() {
     let mut app = app(&["a"], true);
     let first = v2::Snapshot {
-        server_instance_id: "backend-a".into(),
+        server_instance_id: "test".into(),
         sessions: app.sessions.clone(),
         ..Default::default()
     };
     app.apply_snapshot(first.clone());
     app.apply_snapshot(first);
     assert!(app.source_browser.document().is_some());
-    let stale_read = app.source_browser.open_source(file(&["a"], true));
+    let stale_read = app
+        .source_browser
+        .open_source(remote_source(file(&["a"], true)));
     let stale_search = app.source_explorer.open(true);
     app.apply_snapshot(v2::Snapshot {
         server_instance_id: "backend-b".into(),
@@ -264,16 +269,18 @@ fn backend_replacement_invalidates_source_handles_but_same_instance_refresh_pres
     assert!(app.source_browser.document().is_none());
     assert!(app.source_browser.history(false).is_none());
     assert!(!app.source_explorer.visible);
-    let new_read = app.source_browser.open_source(file(&["a"], true));
+    let new_read = app
+        .source_browser
+        .open_source(remote_source(file(&["a"], true)));
     let new_search = app.source_explorer.open(true);
     assert!(new_read.generation > stale_read.generation);
     assert!(new_search.generation > stale_search.generation);
     assert!(!app.source_browser.apply(
         stale_read.generation,
-        v2::SourceContent {
+        remote_content(v2::SourceContent {
             source: Some(file(&["a"], true)),
             ..Default::default()
-        }
+        })
     ));
     assert!(!app.source_explorer.apply(
         stale_search.generation,

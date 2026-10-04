@@ -1,6 +1,6 @@
 # Source workspace implementation
 
-Status: in progress. Branch: `codex/tui-next`.
+Status: implemented and verified on Linux. Branch: `codex/tui-next`.
 
 ## Requirements
 
@@ -275,3 +275,93 @@ request/response identity check.
   from their resource IDs. Rust SDK/types passed 20 tests. Code generation
   reproduced exactly. Redocly and AsyncAPI validation passed for 48 HTTP
   operations and two stream channels.
+
+### Local provider and final verification stage
+
+- Canonical session tags committed as `fdf540ba`.
+- Added `--source-workspace PATH` in managed, launch, attach, and connect modes.
+  The TUI parses only this local YAML, before starting a backend or entering the
+  terminal. Root paths are configuration-relative explicit directory grants.
+  Backend startup YAML still belongs to DDB. Unknown fields, duplicate names,
+  invalid prefixes, excessive roots/tags/config bytes, and non-regular config
+  files are rejected. No cwd-based implicit grant was added.
+- Separated local root/path identities from DDB instance/reference identities.
+  The provider module owns typed API resolution, instance validation, local
+  mapping selection, and directory pagination. Browser/explorer state no longer
+  performs transport calls or represents local documents with fabricated API
+  handles. Removed the old worker source reader and explorer network fetcher.
+- Explicit local mappings use the longest build prefix, then scoped-over-global
+  precedence. Equal-ranked mappings fail rather than probing file existence.
+  Mapped local failures never fall back to backend text. Source markers and
+  breakpoint drafts use the declared debugger path and current canonical tag
+  ownership; an untagged root opened manually remains unbound.
+- Local reads/listings reuse the shared confined filesystem and bounded caches.
+  Four blocking jobs share a semaphore whose permits survive UI cancellation.
+  Local directory tokens bind root, path, hidden state, revision, and offset.
+  A stalled backend can delay the initial mixed roots page by at most two
+  seconds, then local roots remain available with a refresh warning.
+- Local documents, cursor positions, local history, and local-directory
+  navigation survive backend replacement. Remote handles and ephemeral owner
+  hints do not. All five source operations validate response contexts before
+  accepting remote identities. Added first-snapshot race checks when source
+  discovery or a read completes before the initial state snapshot.
+- Added local/export variants of the distributed terminal workflow and the
+  no-session explorer workflow. The latter also opens a local file after DDB
+  shuts down. Tests cover conflicting mappings, same-path session isolation,
+  provider selection, history, large-file windows, revision-bound pagination,
+  symlink/traversal/FIFO rejection, file bounds, revoked permissions after cache
+  hits, stale/missing response context, wrong source references, and stalled
+  remote root discovery.
+- A repeated terminal run exposed a test synchronization error: retained beta
+  screen text was accepted while alpha was still displayed. A pinned prior-visit
+  scenario and current-screen assertion reproduced it in 1.5 seconds. The wait
+  now requires the current beta document with the explorer closed. That test
+  passed ten consecutive runs after correction. The pinned scenario also found
+  an ambiguous mouse helper that matched a group label instead of the session
+  row. A separate red/green regression now verifies its exact row selection.
+  No production source behavior was changed to accommodate either test bug.
+- Backend verification passed 331 unit tests with one pre-existing ignored test;
+  five integration tests covered HTTP/gRPC parity, source security, catalog
+  ownership, and configured session tags. Rust SDK/types passed 20 tests, the
+  shared filesystem passed 16, TypeScript passed seven, and Python passed five.
+  Generated contracts reproduce exactly and standards validation passed.
+
+Final TUI verification passed 134 application unit tests, one deterministic
+terminal-helper regression, and all 19 opt-in terminal workflows. Those include
+real GDB/LLDB, managed launch/attach, distributed local and DDB-host checkouts,
+source browsing without sessions, disconnect recovery, and backend lifecycle
+cleanup. Strict Clippy across all targets and formatting checks passed.
+`git diff --check` passed; obsolete source-reader/discovery code and temporary
+diagnostic instrumentation are absent. The dependency lock adds the shared
+filesystem and YAML parser dependencies without unrelated version upgrades.
+
+The local-provider commit includes its implementation, migrated tests, terminal
+regressions, README/user guide, and this audit record. No compatibility adapter
+or implicit filesystem fallback remains to be implemented. Verification is
+Linux-specific; it does not claim exhaustive behavior across every filesystem
+or platform.
+
+Commands used for the final gates, from the repository root:
+
+```bash
+cargo test --manifest-path ddb-tui/Cargo.toml --offline --locked
+cargo test --manifest-path ddb-tui/Cargo.toml --offline --locked \
+  --test e2e_mock -- --ignored --test-threads=1
+cargo clippy --manifest-path ddb-tui/Cargo.toml --offline --locked \
+  --all-targets -- -D warnings
+cargo fmt --manifest-path ddb-tui/Cargo.toml --check
+cargo test --manifest-path ddb/Cargo.toml --offline -p ddb --bin ddb
+cargo test --manifest-path ddb/Cargo.toml --offline -p ddb \
+  --features grpc-preview --test api_v2_grpc --test api_v2_sources \
+  --test api_v2_source_security
+cargo test --manifest-path ddb/Cargo.toml --offline \
+  -p ddb-api-types -p ddb-api-client -p ddb-source-workspace
+cargo run --manifest-path ddb/Cargo.toml -p ddb-api-codegen --offline -- --check
+npm --prefix ddb/docs-site run check
+npm --prefix ddb/sdk/typescript test
+git diff --check
+```
+
+Python SDK verification used `PYTHONPATH=src python3 -m unittest discover -s tests`
+from `ddb/sdk/python`. The terminal tests require the existing DDB and real-loop
+fixture binaries plus GDB, LLDB, and `script`, as documented in the TUI README.

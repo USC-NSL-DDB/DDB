@@ -570,9 +570,8 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
         .source_browser
         .document()
         .map(|source| {
-            let owner_names = source
-                .source
-                .owners
+            let source_owners = source.source.owners(&app.sessions);
+            let owner_names = source_owners
                 .iter()
                 .take(3)
                 .map(|owner| {
@@ -587,15 +586,20 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
                 .join(", ");
             let owners = if owner_names.is_empty() {
                 "unbound".to_owned()
-            } else if source.source.owners.len() > 3 {
-                format!("{owner_names}, +{}", source.source.owners.len() - 3)
+            } else if source_owners.len() > 3 {
+                format!("{owner_names}, +{}", source_owners.len() - 3)
             } else {
                 owner_names
             };
             format!(
-                "[{}] {} · {} · {} lines",
+                "[{}] {} · {} · {} · {} lines",
                 terminal_text(&owners),
                 terminal_text(&source.path),
+                if source.source.is_local() {
+                    "Local"
+                } else {
+                    "DDB"
+                },
                 if app.source_browser.following() {
                     "following"
                 } else {
@@ -629,7 +633,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
 
     let height = inner.height as usize;
     let start = source_start(app);
-    let binding = source.debugger_binding();
+    let binding = source.debugger_binding(&app.sessions);
     let end = (start + height).min(source.lines.len());
     let lines = source.lines[start..end]
         .iter()
@@ -638,7 +642,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
             let line_number = source.start_line + start + offset;
             let is_executing = app.execution_location.as_ref().is_some_and(|location| {
                 location.line == line_number
-                    && binding.is_some_and(|binding| {
+                    && binding.as_ref().is_some_and(|binding| {
                         binding.matches_location(&location.session_id, &location.source)
                     })
             });
@@ -647,14 +651,14 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
                     thread.state.eq_ignore_ascii_case("stopped")
                         && thread.line == Some(line_number as u64)
                         && thread.file.as_ref().is_some_and(|path| {
-                            binding.is_some_and(|binding| {
+                            binding.as_ref().is_some_and(|binding| {
                                 binding.matches_location(&thread.session_id, path)
                             })
                         })
                 });
             let is_cursor = source.cursor == line_number;
             let has_breakpoint = app.breakpoints.iter().any(|breakpoint| {
-                binding.is_some_and(|binding| {
+                binding.as_ref().is_some_and(|binding| {
                     binding.marks_breakpoint(breakpoint, line_number, &app.sessions)
                 })
             });

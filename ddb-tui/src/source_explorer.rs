@@ -2,10 +2,10 @@
 
 use std::collections::VecDeque;
 
-use anyhow::Context;
-use ddb_api_client::{v2, DdbClient};
+use crate::source_types::{Root, Source, SourceId};
+use std::borrow::Cow;
 
-const PAGE_SIZE: u32 = 100;
+pub const PAGE_SIZE: u32 = 100;
 const PAGE_HISTORY_LIMIT: usize = 100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,33 +21,59 @@ pub enum Control {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Place {
     Roots,
-    Directory { root: v2::SourceRoot, path: String },
+    Directory { root: Root, path: String },
     Catalog,
 }
 
 #[derive(Clone, Debug)]
 pub enum Entry {
-    Root(v2::SourceRoot),
-    Directory(v2::SourceEntry),
-    Source(v2::SourceFile),
-    Link(v2::SourceEntry),
-    Other(v2::SourceEntry),
+    Root(Root),
+    Directory(Node),
+    Source(Source),
+    Link(Node),
+    Other(Node),
+}
+
+#[derive(Clone, Debug)]
+pub struct Node {
+    pub name: String,
+    pub relative_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum EntryId {
+    Root(SourceId),
+    Source(SourceId),
+    Path(String),
 }
 
 impl Entry {
-    pub fn label(&self) -> &str {
+    fn instance(&self) -> Option<&str> {
         match self {
-            Self::Root(root) => &root.name,
-            Self::Source(source) => source.path.as_deref().unwrap_or(&source.name),
-            Self::Directory(entry) | Self::Link(entry) | Self::Other(entry) => &entry.name,
+            Self::Root(Root::Ddb { instance, .. }) | Self::Source(Source::Ddb { instance, .. }) => {
+                Some(instance)
+            }
+            _ => None,
         }
     }
 
-    fn identity(&self) -> &str {
+    pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Self::Root(root) => &root.root_reference,
-            Self::Source(source) => &source.source_reference,
-            Self::Directory(entry) | Self::Link(entry) | Self::Other(entry) => &entry.relative_path,
+            Self::Root(root) => Cow::Borrowed(root.name()),
+            Self::Source(source) => source.path(),
+            Self::Directory(entry) | Self::Link(entry) | Self::Other(entry) => {
+                Cow::Borrowed(&entry.name)
+            }
+        }
+    }
+
+    fn identity(&self) -> EntryId {
+        match self {
+            Self::Root(root) => EntryId::Root(root.id()),
+            Self::Source(source) => EntryId::Source(source.id()),
+            Self::Directory(entry) | Self::Link(entry) | Self::Other(entry) => {
+                EntryId::Path(entry.relative_path.clone())
+            }
         }
     }
 }
@@ -63,13 +89,14 @@ enum PageMove {
 #[derive(Clone, Debug)]
 pub struct Request {
     pub generation: u64,
+    pub instance: Option<String>,
     pub place: Place,
     pub query: String,
     pub include_hidden: bool,
     pub page_token: Option<String>,
-    refresh_catalog: bool,
+    pub refresh_catalog: bool,
     movement: PageMove,
-    selected_identity: Option<String>,
+    selected_identity: Option<EntryId>,
 }
 
 #[derive(Debug)]
@@ -82,11 +109,8 @@ pub struct Page {
 #[derive(Debug)]
 pub enum Action {
     Request(Request),
-    Open(v2::SourceFile),
-    Resolve {
-        root_reference: String,
-        path: String,
-    },
+    Open(Source),
+    Resolve { root: Root, path: String },
 }
 
 #[derive(Debug)]
@@ -100,6 +124,7 @@ pub struct Explorer {
     pub error: Option<String>,
     pub warnings: Vec<String>,
     generation: u64,
+    server_instance: Option<String>,
     pending: Option<Request>,
     next_token: Option<String>,
     current_token: Option<String>,
@@ -118,6 +143,7 @@ impl Default for Explorer {
             error: None,
             warnings: Vec::new(),
             generation: 0,
+            server_instance: None,
             pending: None,
             next_token: None,
             current_token: None,
@@ -127,7 +153,27 @@ impl Default for Explorer {
 }
 
 impl Explorer {
+    pub fn set_server_instance(&mut self, instance: String) {
+        if self
+            .server_instance
+            .as_ref()
+            .is_some_and(|previous| previous != &instance)
+        {
+            self.invalidate_server();
+        }
+        self.server_instance = Some(instance);
+    }
+
     pub fn invalidate_server(&mut self) {
+        if matches!(
+            self.place,
+            Place::Directory {
+                root: Root::Local(_),
+                ..
+            }
+        ) {
+            return;
+        }
         let generation = self.generation;
         *self = Self {
             generation,
@@ -279,7 +325,7 @@ impl Explorer {
     }
 
     /// Right tries a symlink as a directory; Enter opens it as a file. Both
-    /// operations remain confined to the backend's explicit root grant.
+    /// operations remain confined to the provider's explicit root grant.
     pub fn enter_directory(&mut self) -> Option<Action> {
         if !self.loading() {
             if let Some(Entry::Link(entry)) = self.selected_entry() {
@@ -337,7 +383,7 @@ impl Explorer {
                     return None;
                 };
                 Some(Action::Resolve {
-                    root_reference: root.root_reference.clone(),
+                    root: root.clone(),
                     path: entry.relative_path,
                 })
             }
@@ -360,6 +406,7 @@ impl Explorer {
             .map(|entry| entry.identity().to_owned());
         let request = Request {
             generation: self.generation,
+            instance: self.server_instance.clone(),
             place: self.place.clone(),
             query: self.query.clone(),
             include_hidden: self.include_hidden,
@@ -379,6 +426,23 @@ impl Explorer {
         {
             return false;
         }
+        let instance = self.server_instance.clone().or_else(|| {
+            page.entries
+                .iter()
+                .find_map(Entry::instance)
+                .map(str::to_owned)
+        });
+        if page
+            .entries
+            .iter()
+            .filter_map(Entry::instance)
+            .any(|entry| Some(entry) != instance.as_deref())
+        {
+            return self.fail(
+                generation,
+                "DDB instance changed during source discovery; refresh to retry".into(),
+            );
+        }
         let token = self
             .pending
             .as_ref()
@@ -391,10 +455,11 @@ impl Explorer {
         {
             return self.fail(
                 generation,
-                "DDB returned an invalid source page; refresh to retry".into(),
+                "Source provider returned an invalid page; refresh to retry".into(),
             );
         }
         let request = self.pending.take().expect("generation checked");
+        self.server_instance = instance;
         match request.movement {
             PageMove::Next => {
                 if self.previous_tokens.len() == PAGE_HISTORY_LIMIT {
@@ -434,94 +499,6 @@ impl Explorer {
         self.error = Some(error);
         true
     }
-}
-
-pub async fn fetch(client: &DdbClient, request: Request) -> anyhow::Result<Page> {
-    let page = Some(v2::PageRequest {
-        page_size: PAGE_SIZE,
-        page_token: request.page_token,
-    });
-    let (entries, next, warnings) = match request.place {
-        Place::Roots => {
-            let response = client
-                .list_source_roots(v2::ListSourceRootsRequest {
-                    page,
-                    ..Default::default()
-                })
-                .await?;
-            (
-                response.roots.into_iter().map(Entry::Root).collect(),
-                response.page,
-                Vec::new(),
-            )
-        }
-        Place::Catalog => {
-            // Cancelled keystrokes do no backend work. Source and inspection
-            // requests run on different lanes and do not wait for this debounce.
-            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            let response = client
-                .list_sources(v2::ListSourcesRequest {
-                    page,
-                    query: request.query,
-                    refresh: request.refresh_catalog,
-                    ..Default::default()
-                })
-                .await?;
-            (
-                response.sources.into_iter().map(Entry::Source).collect(),
-                response.page,
-                response
-                    .warnings
-                    .into_iter()
-                    .map(|warning| format!("{}: {}", warning.session_id, warning.message))
-                    .collect(),
-            )
-        }
-        Place::Directory { root, path } => {
-            let response = client
-                .list_source_entries(v2::ListSourceEntriesRequest {
-                    root_reference: root.root_reference,
-                    directory: path,
-                    include_hidden: request.include_hidden,
-                    page,
-                    ..Default::default()
-                })
-                .await?;
-            let warnings = (response.unsupported_names > 0)
-                .then(|| {
-                    format!(
-                        "{} unsupported filenames omitted",
-                        response.unsupported_names
-                    )
-                })
-                .into_iter()
-                .collect();
-            let entries = response
-                .entries
-                .into_iter()
-                .map(|entry| {
-                    match v2::SourceEntryKind::try_from(entry.kind)
-                        .context("unknown source entry kind")?
-                    {
-                        v2::SourceEntryKind::Directory => Ok(Entry::Directory(entry)),
-                        v2::SourceEntryKind::File => Ok(Entry::Source(
-                            entry
-                                .source
-                                .context("file entry omitted its source descriptor")?,
-                        )),
-                        v2::SourceEntryKind::Symlink => Ok(Entry::Link(entry)),
-                        _ => Ok(Entry::Other(entry)),
-                    }
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            (entries, response.page, warnings)
-        }
-    };
-    Ok(Page {
-        entries,
-        next_token: next.and_then(|page| page.next_page_token),
-        warnings,
-    })
 }
 
 #[cfg(test)]

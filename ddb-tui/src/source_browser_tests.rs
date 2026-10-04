@@ -1,11 +1,24 @@
 use super::*;
 
 pub(crate) fn show_source(browser: &mut SourceBrowser, content: v2::SourceContent, line: usize) {
+    show_content(browser, remote_content(content), line);
+}
+
+pub(crate) fn remote_source(file: v2::SourceFile) -> Source {
+    Source::Ddb {
+        instance: "test".into(),
+        file,
+    }
+}
+
+pub(crate) fn remote_content(content: v2::SourceContent) -> Content {
+    Content::from_ddb("test".into(), content).unwrap()
+}
+
+fn show_content(browser: &mut SourceBrowser, content: Content, line: usize) {
+    browser.set_server_instance("test".into());
     let location = v2::SourceLocation {
-        path: content
-            .source
-            .as_ref()
-            .and_then(|source| source.path.clone()),
+        path: Some(content.source.path().into_owned()),
         line: line as u32,
         ..Default::default()
     };
@@ -22,9 +35,9 @@ fn location(path: &str, line: u32) -> v2::SourceLocation {
     }
 }
 
-fn content(path: &str) -> v2::SourceContent {
-    v2::SourceContent {
-        source: Some(v2::SourceFile {
+fn content(path: &str) -> Content {
+    Content {
+        source: remote_source(v2::SourceFile {
             source_reference: format!("source/{path}"),
             path: Some(path.into()),
             name: path.into(),
@@ -33,7 +46,6 @@ fn content(path: &str) -> v2::SourceContent {
         start_line: 1,
         content: "one\ntwo\nthree\nfour".into(),
         line_count: 4,
-        has_more: false,
         total_lines: 4,
     }
 }
@@ -62,8 +74,7 @@ fn cursor_crosses_read_windows_without_creating_history_and_retries_after_failur
     let mut browser = SourceBrowser::default();
     let mut first = content("large.rs");
     first.total_lines = 1000;
-    first.has_more = true;
-    show_source(&mut browser, first, 4);
+    show_content(&mut browser, first, 4);
     let first = browser.move_cursor(1).unwrap();
     assert_eq!(first.line, 5);
     let second = browser.move_cursor(10).unwrap();
@@ -89,12 +100,15 @@ fn reopening_a_document_restores_its_cursor_by_opaque_identity() {
     open(&mut browser, "first.rs", 3);
     open(&mut browser, "second.rs", 2);
     let first = content("first.rs");
-    let request = browser.open_source(first.source.clone().unwrap());
+    let request = browser.open_source(first.source.clone());
     assert_eq!(request.line, 3);
     assert!(browser.apply(request.generation, first));
     assert_eq!(browser.document().unwrap().cursor, 3);
-    let mut other = content("first.rs").source.unwrap();
-    other.source_reference = "different-root/first.rs".into();
+    let mut other = content("first.rs").source;
+    let Source::Ddb { file, .. } = &mut other else {
+        unreachable!()
+    };
+    file.source_reference = "different-root/first.rs".into();
     let request = browser.open_source(other);
     assert_eq!(
         request.line, 1,
@@ -133,7 +147,7 @@ fn stale_successes_and_errors_do_not_replace_newer_navigation() {
 #[test]
 fn moving_the_cursor_cancels_a_pending_follow_response() {
     let mut browser = SourceBrowser::default();
-    show_source(&mut browser, content("main.rs"), 1);
+    show_content(&mut browser, content("main.rs"), 1);
     let request = browser
         .navigate(None, location("worker.rs", 2), Navigation::Follow)
         .unwrap();
@@ -149,10 +163,7 @@ fn history_restores_document_positions_and_can_go_forward() {
     browser.set_cursor(4);
     open(&mut browser, "worker.rs", 3);
     let back = browser.history(false).unwrap();
-    assert_eq!(
-        back.location.source_reference.as_deref(),
-        Some("source/main.rs")
-    );
+    assert_eq!(back.address.id(), Some(content("main.rs").source.id()));
     assert!(browser.apply(back.generation, content("main.rs")));
     assert_eq!(browser.cursor_location(), Some(("main.rs", 4)));
     let forward = browser.history(true).unwrap();
@@ -183,9 +194,16 @@ fn same_path_with_different_owners_remains_distinct_in_history() {
     let owner_a = Some(crate::api::session_target("a"));
     let owner_b = Some(crate::api::session_target("b"));
     let mut content_a = content("main.rs");
-    content_a.source.as_mut().unwrap().source_reference = "a/main.rs".into();
+    let Source::Ddb { file, .. } = &mut content_a.source else {
+        unreachable!()
+    };
+    file.source_reference = "a/main.rs".into();
     let mut content_b = content("main.rs");
-    content_b.source.as_mut().unwrap().source_reference = "b/main.rs".into();
+    let Source::Ddb { file, .. } = &mut content_b.source else {
+        unreachable!()
+    };
+    file.source_reference = "b/main.rs".into();
+    let id_b = content_b.source.id();
     let a = browser
         .navigate(owner_a, location("main.rs", 2), Navigation::Manual)
         .unwrap();
@@ -194,18 +212,12 @@ fn same_path_with_different_owners_remains_distinct_in_history() {
         .navigate(owner_b, location("main.rs", 2), Navigation::Manual)
         .unwrap();
     assert!(browser.apply(b.generation, content_b));
-    assert_eq!(
-        browser.document().unwrap().source.source_reference,
-        "b/main.rs"
-    );
+    assert_eq!(browser.document().unwrap().source.id(), id_b);
     let back = browser.history(false).unwrap();
-    assert!(back.target.is_none());
-    assert_eq!(back.location.source_reference.as_deref(), Some("a/main.rs"));
+    assert_eq!(back.address.id(), Some(content_a.source.id()));
+    let id_a = content_a.source.id();
     assert!(browser.apply(back.generation, content_a));
-    assert_eq!(
-        browser.document().unwrap().source.source_reference,
-        "a/main.rs"
-    );
+    assert_eq!(browser.document().unwrap().source.id(), id_a);
     assert_eq!(browser.document().unwrap().cursor, 2);
 }
 
@@ -220,7 +232,7 @@ fn reopening_a_frame_document_does_not_add_history_for_a_target_change() {
         )
         .unwrap();
     assert!(browser.apply(request.generation, content("main.rs")));
-    let request = browser.open_source(content("main.rs").source.unwrap());
+    let request = browser.open_source(content("main.rs").source);
     assert!(browser.apply(request.generation, content("main.rs")));
     assert!(browser.history(false).is_none());
 }
@@ -237,7 +249,7 @@ fn source_content_preserves_empty_and_blank_lines() {
         source.content = text.into();
         source.line_count = count;
         source.total_lines = count;
-        show_source(&mut browser, source, 1);
+        show_content(&mut browser, source, 1);
         assert_eq!(browser.document().unwrap().lines, expected);
     }
 }
@@ -251,4 +263,25 @@ fn selecting_a_frame_reveals_it_without_enabling_follow() {
     assert!(browser.apply(request.generation, content("caller.rs")));
     assert_eq!(browser.cursor_location(), Some(("caller.rs", 3)));
     assert!(!browser.following());
+}
+
+#[test]
+fn initial_source_lookup_cannot_overwrite_a_different_instance_snapshot() {
+    let mut browser = SourceBrowser::default();
+    let request = browser
+        .navigate(None, location("main.rs", 1), Navigation::Manual)
+        .unwrap();
+    browser.set_server_instance("new".into());
+    assert!(!browser.apply(request.generation, content("main.rs")));
+    assert!(browser.document().is_none());
+    assert!(browser.pending_generation().is_none());
+}
+
+#[test]
+fn first_snapshot_discards_a_document_loaded_from_an_earlier_instance() {
+    let mut browser = SourceBrowser::default();
+    open(&mut browser, "main.rs", 2);
+    browser.set_server_instance("new".into());
+    assert!(browser.document().is_none());
+    assert!(browser.history(false).is_none());
 }

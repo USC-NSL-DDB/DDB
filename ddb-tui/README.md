@@ -103,7 +103,7 @@ the backend and frontend together when the API contract changes.
 | `e` | Evaluate an expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `g` | Go to a source line (loads another source window when needed) |
-| `o` | Open the source explorer at DDB's exported workspace roots |
+| `o` | Open the source explorer at local and DDB-exported roots |
 | `Ctrl+P` | Search debugger-known files across DDB sessions |
 | `f` in Source | Resume following the selected thread's execution location |
 | `Alt+Left` / `Alt+Right` | Navigate source history without changing debugger selection |
@@ -117,9 +117,9 @@ the backend and frontend together when the API contract changes.
 
 ### Source explorer
 
-`o` or the source panel's Open button lists the roots explicitly exported by
-DDB. Add them to the DDB startup
-configuration, including when using `ddb tui debug.yaml`:
+`o` or the source panel's Open button lists explicitly configured roots, marked
+`[Local]` or `[DDB]` by their host. To browse directories on the DDB host, add
+exports to the DDB startup configuration, including with `ddb tui debug.yaml`:
 
 ```yaml
 SourceRoots:
@@ -134,12 +134,47 @@ SourceRoots:
 select the sessions using that mapping. These tags do not restrict readers'
 permissions. See [source workspaces](../ddb/docs/api/source-workspaces.md).
 
+To browse a checkout on the **TUI host**, create a separate `workspace.yaml`:
+
+```yaml
+roots:
+  - name: api-checkout
+    path: ./checkout
+    debugger_path: /build/application
+    session_tags: [api]
+  - name: notes
+    path: ./notes
+```
+
+```bash
+ddb tui --source-workspace ./workspace.yaml ./debug.yaml
+# Or connect to an existing backend:
+ddb-tui --source-workspace ./workspace.yaml connect --api http://127.0.0.1:5000
+```
+
+Local `path` values are relative to `workspace.yaml`, never the backend config
+or debugger working directory. Nothing is implicitly exported from the current
+directory. `debugger_path` is an optional absolute slash-separated build prefix;
+without it, files can be read but cannot create source breakpoints. Optional
+`session_tags` select configured DDB tags through the canonical `Session.tag`
+field, not session labels. Use separate roots with distinct tags for different
+distributed checkouts of the same build path.
+
+Explicit local mappings take precedence over DDB content reads. The longest
+matching path prefix wins; a tagged mapping wins over an untagged peer; ties are
+errors. A missing or denied mapped file is an error, never a reason to silently
+switch to DDB content. Opening an untagged mapped root manually requires choosing
+breakpoint targets; opening it through an owned debugger descriptor retains that
+descriptor's owner. Local configuration is not sent to DDB and does not modify
+debugger-host source mappings.
+
 Browse directories with arrows and Enter, or click a row. Left/right-click goes
 to the parent, Tab switches between roots and debugger files, F5 refreshes, and
 Ctrl-H shows dotfiles. Type to search the debugger catalog or filter the current
 directory page; Ctrl-U clears the query. Previous/next rows navigate bounded
 100-entry pages. For a symlink, Enter/click tries a file and Right tries a
-directory. DDB rejects links that escape the exported root. Esc or Close exits.
+directory. Both providers reject links that escape their configured root.
+Esc or Close exits.
 
 The debugger catalog identifies session owners and keeps unavailable sources
 visible with their error reason. Workspace folders also contain files absent
@@ -154,9 +189,20 @@ equal filenames or path suffixes do not establish a relationship. A mapped
 workspace file uses `debugger_path` for breakpoints, never its display path.
 Without that mapping, source breakpoint placement is rejected.
 
-TUI-local checkout configuration is still being implemented. An exported
-DDB-host root is not a TUI-local root. A backend-instance change invalidates
-DDB source references and history; an ordinary refresh preserves browsing.
+A backend-instance change invalidates DDB source references and remote history.
+Local documents, cursor positions, and local history remain available, including
+after disconnection. Old frame-owner hints are discarded; tagged roots bind to
+the new session projection. Source responses must match their expected server
+instance even before a replacement state snapshot arrives.
+
+Local reads share bounded caches across roots: at most 32 roots, 2 MiB per file,
+240 lines per read, and 100 displayed directory entries per page. Directory
+enumeration is nonrecursive and bounded at 100,000 entries/16 MiB. Content and
+directory caches each hold at most 32 entries/32 MiB. Four filesystem jobs may
+run at once, including jobs whose UI request was cancelled. First-page refresh
+invalidates stale pagination; cache hits recheck filesystem access. Root discovery
+waits at most two seconds for DDB when local roots are available, then shows
+those roots with a warning and an explicit refresh action.
 
 The distributed call stack is the primary stack view. Selecting a stopped thread
 requests DDB's cross-session backtrace automatically; `d` is only an explicit
@@ -221,8 +267,8 @@ backend availability changes.
 - Top: capability-gated controls, current execution scope, and connection state
 - Bottom: status, command palette, and contextual key hints
 
-Source content is read through DDB, so the TUI also works when it is running on
-a different host from the backend (provided the API endpoint is reachable).
+DDB-host sources are read through the typed API. Explicit local checkouts are
+read on the TUI host. The frontend and backend need not share a filesystem.
 
 The source gutter keeps three locations distinct: `▶` is the stopped
 execution location from stack frame 0, `▸` is the source cursor used for

@@ -33,7 +33,7 @@ ddb-tui ./debug.yaml
 
 The TUI starts `ddb serve`, uses authenticated loopback port `0`, waits for its
 atomic startup report, verifies API v2 and schema compatibility, and shuts down
-only that owned backend. DDB is the only configuration parser. Local, remote-
+only that owned backend. DDB alone parses the backend configuration. Local, remote-
 target, and distributed configurations all use this one-command form.
 
 `--config ./debug.yaml` is equivalent to the positional path. Use `--ddb-path`
@@ -116,13 +116,21 @@ knowledge. The complete keyboard, mouse, and gutter reference is in the
 `ddb-tui` README.
 
 Source browsing is independent of frame inspection. Use `o` or the source
-panel's Open button for configured DDB `SourceRoots`, and `Ctrl-P` for the
+panel's Open button for local roots and configured DDB `SourceRoots`, and `Ctrl-P` for the
 debugger catalog. The source title identifies its owners; `f` returns to the
 selected thread's execution location. A breakpoint uses the document's declared
 debugger path, and its target picker defaults to the document's single owner,
 not whichever thread is selected. Unmapped files cannot create source
 breakpoints. Multiple matching logical breakpoints require a choice in the
 breakpoint manager before deletion.
+
+Pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
+directories on the frontend host. This separate file contains a `roots` list of
+`name`, `path`, optional `debugger_path`, and optional `session_tags`. Paths are
+relative to that file. DDB exports and local directories are labelled separately;
+the backend never receives the local grants. Local documents and history survive
+backend replacement. See the [source explorer configuration](../../ddb-tui/README.md#source-explorer)
+for examples, mapping precedence, resource bounds, and keyboard/mouse controls.
 
 The existing global policy remains the compatibility default:
 

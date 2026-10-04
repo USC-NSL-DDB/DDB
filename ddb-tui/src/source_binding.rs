@@ -2,31 +2,32 @@
 //! debugger path, and equal filenames never imply equal session ownership.
 
 use crate::model::Breakpoint;
+use crate::source_types::Source;
 use ddb_api_client::v2::{self, target};
+use std::borrow::Cow;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct DebuggerBinding<'a> {
-    pub path: &'a str,
-    pub owners: &'a [v2::SourceOwner],
+    pub path: Cow<'a, str>,
+    pub owners: Cow<'a, [v2::SourceOwner]>,
 }
 
 impl<'a> DebuggerBinding<'a> {
-    pub fn from_source(source: &'a v2::SourceFile) -> Option<Self> {
+    pub fn from_source(source: &'a Source, sessions: &'a [v2::Session]) -> Option<Self> {
         Some(Self {
-            path: source
-                .debugger_path
-                .as_deref()
-                .filter(|path| !path.is_empty())?,
-            owners: &source.owners,
+            path: source.debugger_path()?,
+            owners: source.owners(sessions),
         })
     }
 
-    pub fn single_owner(self) -> Option<&'a str> {
-        let [owner] = self.owners else { return None };
+    pub fn single_owner(&self) -> Option<&str> {
+        let [owner] = self.owners.as_ref() else {
+            return None;
+        };
         Some(&owner.session_id)
     }
 
-    pub fn matches_location(self, session_id: &str, path: &str) -> bool {
+    pub fn matches_location(&self, session_id: &str, path: &str) -> bool {
         self.path == path
             && self
                 .owners
@@ -35,7 +36,7 @@ impl<'a> DebuggerBinding<'a> {
     }
 
     pub fn marks_breakpoint(
-        self,
+        &self,
         breakpoint: &Breakpoint,
         line: usize,
         sessions: &[v2::Session],

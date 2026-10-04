@@ -35,6 +35,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub ddb_path: Option<PathBuf>,
 
+    /// Explicit local source roots and debugger-path mappings (YAML).
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
+    pub source_workspace: Option<PathBuf>,
+
     /// Maximum seconds to wait for a managed DDB service to become ready.
     #[arg(
         long = "startup-timeout",
@@ -278,5 +282,43 @@ mod tests {
 
         let alias = Args::try_parse_from(["ddb-tui", "--startup-timeout-secs", "9"]).unwrap();
         assert_eq!(alias.startup_timeout(), Duration::from_secs(9));
+    }
+
+    #[test]
+    fn local_workspace_is_independent_of_backend_startup_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace.yaml");
+        fs::write(&workspace, "roots: []\n").unwrap();
+        let path = workspace.to_str().unwrap();
+        for args in [
+            vec![
+                "ddb-tui",
+                "--source-workspace",
+                path,
+                "connect",
+                "--api",
+                "http://127.0.0.1:5000",
+            ],
+            vec![
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://127.0.0.1:5000",
+                "--source-workspace",
+                path,
+            ],
+            vec![
+                "ddb-tui",
+                "--source-workspace",
+                path,
+                "launch",
+                "--",
+                "/bin/true",
+            ],
+        ] {
+            let args = Args::try_parse_from(args).unwrap();
+            assert_eq!(args.source_workspace.as_deref(), Some(workspace.as_path()));
+            args.parse_mode().unwrap();
+        }
     }
 }

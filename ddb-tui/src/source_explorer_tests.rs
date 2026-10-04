@@ -1,7 +1,9 @@
 use super::*;
+use crate::source_browser::tests::remote_source;
+use ddb_api_client::v2;
 
 fn file(name: &str, owner: &str) -> Entry {
-    Entry::Source(v2::SourceFile {
+    Entry::Source(remote_source(v2::SourceFile {
         source_reference: format!("{owner}/{name}"),
         path: Some(name.into()),
         owners: vec![v2::SourceOwner {
@@ -9,7 +11,7 @@ fn file(name: &str, owner: &str) -> Entry {
             ..Default::default()
         }],
         ..Default::default()
-    })
+    }))
 }
 
 fn page(entries: Vec<Entry>, next: Option<&str>) -> Page {
@@ -32,8 +34,14 @@ fn catalog_retains_distinct_owners_of_identical_paths() {
     let Some(Action::Open(source)) = explorer.activate() else {
         panic!("source should open")
     };
-    assert_eq!(source.source_reference, "b/main.rs");
-    assert_eq!(source.owners[0].session_id, "b");
+    assert_eq!(
+        source.id(),
+        SourceId::Ddb {
+            instance: "test".into(),
+            reference: "b/main.rs".into()
+        }
+    );
+    assert_eq!(source.owners(&[])[0].session_id, "b");
 }
 
 #[test]
@@ -55,10 +63,13 @@ fn directory_navigation_is_lazy_and_parent_returns_to_roots() {
     explorer.apply(
         request.generation,
         page(
-            vec![Entry::Root(v2::SourceRoot {
-                root_reference: "root-a".into(),
-                name: "project".into(),
-                ..Default::default()
+            vec![Entry::Root(Root::Ddb {
+                instance: "test".into(),
+                root: v2::SourceRoot {
+                    root_reference: "root-a".into(),
+                    name: "project".into(),
+                    ..Default::default()
+                },
             })],
             None,
         ),
@@ -70,10 +81,9 @@ fn directory_navigation_is_lazy_and_parent_returns_to_roots() {
     explorer.apply(
         request.generation,
         page(
-            vec![Entry::Directory(v2::SourceEntry {
+            vec![Entry::Directory(Node {
                 name: "src".into(),
                 relative_path: "src".into(),
-                ..Default::default()
             })],
             None,
         ),
@@ -172,11 +182,7 @@ fn invalid_pages_release_loading_without_committing_page_history() {
         page(vec![file("bad", "a")], Some("next")),
     );
     assert!(!explorer.loading());
-    assert!(explorer
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("invalid source page"));
+    assert!(explorer.error.as_ref().unwrap().contains("invalid page"));
     assert!(!explorer.has_previous());
     assert_eq!(explorer.entries[0].label(), "first");
     let request = explorer.refresh();
@@ -196,21 +202,23 @@ fn symlinks_have_explicit_file_and_directory_actions() {
     let mut explorer = Explorer {
         visible: true,
         place: Place::Directory {
-            root: v2::SourceRoot {
-                root_reference: "root".into(),
-                ..Default::default()
+            root: Root::Ddb {
+                instance: "test".into(),
+                root: v2::SourceRoot {
+                    root_reference: "root".into(),
+                    ..Default::default()
+                },
             },
             path: String::new(),
         },
         ..Default::default()
     };
-    explorer.entries.push(Entry::Link(v2::SourceEntry {
+    explorer.entries.push(Entry::Link(Node {
         name: "link".into(),
         relative_path: "link".into(),
-        ..Default::default()
     }));
     assert!(
-        matches!(explorer.activate(), Some(Action::Resolve { root_reference, path }) if root_reference == "root" && path == "link")
+        matches!(explorer.activate(), Some(Action::Resolve { root: Root::Ddb { root, .. }, path }) if root.root_reference == "root" && path == "link")
     );
     let Some(Action::Request(request)) = explorer.enter_directory() else {
         panic!("directory request")
@@ -219,4 +227,26 @@ fn symlinks_have_explicit_file_and_directory_actions() {
     explorer.fail(request.generation, "escaped or broken link".into());
     assert!(explorer.error.is_some());
     assert!(explorer.parent().is_some());
+}
+
+#[test]
+fn discovery_and_first_snapshot_races_never_keep_foreign_handles() {
+    let mut explorer = Explorer::default();
+    let request = explorer.open(true);
+    explorer.set_server_instance("new".into());
+    explorer.apply(request.generation, page(vec![file("main.rs", "a")], None));
+    assert!(explorer.entries.is_empty());
+    assert!(!explorer.loading());
+    assert!(explorer
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("instance changed"));
+
+    let mut explorer = Explorer::default();
+    let request = explorer.open(true);
+    explorer.apply(request.generation, page(vec![file("main.rs", "a")], None));
+    explorer.set_server_instance("new".into());
+    assert!(explorer.entries.is_empty());
+    assert!(!explorer.visible);
 }

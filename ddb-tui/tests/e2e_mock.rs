@@ -22,9 +22,38 @@ const POLL: Duration = Duration::from_millis(50);
 static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
 static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
+fn topology_thread_row(frame: &str, session_label: &str) -> Option<usize> {
+    let mut under_session = false;
+    frame.lines().enumerate().find_map(|(row, line)| {
+        let topology = line.chars().take(33).collect::<String>();
+        if topology.contains('◇') {
+            under_session = topology.contains(session_label);
+            return None;
+        }
+        (under_session && topology.contains('•')).then_some(row + 1)
+    })
+}
+
+#[test]
+fn topology_mouse_target_does_not_confuse_a_group_label_with_a_session() {
+    let frame = "│  ▾ beta-worker  2 sessions\n│    ◇ alpha-worker (alpha)\n│      • 1 stopped\n│    ◇ beta-worker (beta)\n│      • 1 stopped";
+    assert_eq!(topology_thread_row(frame, "beta-worker"), Some(5));
+    assert_eq!(topology_thread_row(frame, "alpha-worker"), Some(3));
+}
+
 #[test]
 #[ignore = "requires the sibling DDB binary and a PTY"]
 fn distributed_source_ownership_terminal_workflow() {
+    distributed_source_ownership_workflow(false);
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn local_distributed_source_ownership_terminal_workflow() {
+    distributed_source_ownership_workflow(true);
+}
+
+fn distributed_source_ownership_workflow(local_workspace: bool) {
     let directory = tempfile::tempdir().unwrap();
     for owner in ["alpha", "beta"] {
         let root = directory.path().join(owner);
@@ -37,6 +66,14 @@ fn distributed_source_ownership_terminal_workflow() {
         )
         .unwrap();
     }
+    let roots = "  - name: alpha-checkout\n    path: ./alpha\n    debugger_path: /build/app\n    session_tags: [alpha]\n  - name: beta-checkout\n    path: ./beta\n    debugger_path: /build/app\n    session_tags: [beta]\n";
+    let workspace_path = directory.path().join("workspace.yaml");
+    let exports = if local_workspace {
+        fs::write(&workspace_path, format!("roots:\n{roots}")).unwrap();
+        String::new()
+    } else {
+        format!("SourceRoots:\n{roots}")
+    };
     let mut ddb = {
         let _guard = ddb_start_guard();
         let port = reserve_port();
@@ -50,16 +87,7 @@ Conf:
   log_dir: "{}/logs"
   Debugger:
     backend: mock
-SourceRoots:
-  - name: alpha-checkout
-    path: ./alpha
-    debugger_path: /build/app
-    session_tags: [alpha]
-  - name: beta-checkout
-    path: ./beta
-    debugger_path: /build/app
-    session_tags: [beta]
-StaticSessions:
+{exports}StaticSessions:
 "#,
             directory.path().display(),
             directory.path().display()
@@ -119,19 +147,42 @@ StaticSessions:
         .unwrap()
         .thread_id
         .clone();
-    let mut tui = Tui::spawn(&ddb.base_url());
+    let mut tui = if local_workspace {
+        Tui::spawn_with_workspace(&ddb.base_url(), &workspace_path)
+    } else {
+        Tui::spawn(&ddb.base_url())
+    };
+    let root_kind = if local_workspace { "Local" } else { "DDB" };
+    let file_kind = if local_workspace { "local" } else { "file" };
     tui.wait_for("2 sessions");
+    // Exercise a prior visit: later waits must not accept beta's old content.
+    tui.click_topology_thread("beta-worker");
+    tui.wait_for_frame(|frame| {
+        frame
+            .lines()
+            .any(|line| line.contains("9 │ beta_CHECKOUT line 9") && line.contains('▶'))
+    });
     tui.click_topology_thread("alpha-worker");
     tui.wait_for("alpha_CHECKOUT line 9");
     tui.wait_for_source_marker('▶', 9);
 
     // Open beta's independently configured root while alpha remains selected.
     tui.send(b"o");
-    tui.wait_for("[root] beta-checkout");
+    tui.wait_for(&format!("[{root_kind}] beta-checkout"));
     tui.send(b"beta-checkout\r");
-    tui.wait_for("[file] beta-checkout/main.rs");
+    tui.wait_for(&format!("[{file_kind}] beta-checkout/main.rs"));
     tui.send(b"\r");
-    tui.wait_for("beta_CHECKOUT line 1");
+    tui.wait_for_current_frame(|frame| {
+        frame.contains("beta_CHECKOUT line 1") && !frame.contains("Source explorer")
+    });
+    assert!(
+        tui.frames
+            .lock()
+            .unwrap()
+            .back()
+            .is_some_and(|frame| frame.contains("beta_CHECKOUT line 1")),
+        "retained terminal text was mistaken for the currently displayed beta document"
+    );
     tui.clear_capture();
     tui.send(b"g9\r");
     tui.wait_for_frame(|frame| {
@@ -181,6 +232,16 @@ StaticSessions:
 #[test]
 #[ignore = "requires the sibling DDB binary and a PTY"]
 fn source_explorer_terminal_workflow_without_sessions() {
+    source_explorer_workflow_without_sessions(false);
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn local_source_explorer_terminal_workflow_without_sessions() {
+    source_explorer_workflow_without_sessions(true);
+}
+
+fn source_explorer_workflow_without_sessions(local_workspace: bool) {
     let directory = tempfile::tempdir().unwrap();
     let checkout = directory.path().join("checkout");
     fs::create_dir_all(checkout.join("src")).unwrap();
@@ -197,6 +258,14 @@ fn source_explorer_terminal_workflow_without_sessions() {
             .collect::<String>(),
     )
     .unwrap();
+    let workspace_path = directory.path().join("workspace.yaml");
+    let roots = "  - name: checkout\n    path: ./checkout\n";
+    let exports = if local_workspace {
+        fs::write(&workspace_path, format!("roots:\n{roots}")).unwrap();
+        String::new()
+    } else {
+        format!("SourceRoots:\n{roots}")
+    };
     let mut ddb = {
         let _guard = ddb_start_guard();
         let port = reserve_port();
@@ -210,10 +279,7 @@ Conf:
   log_dir: "{}/logs"
   Debugger:
     backend: mock
-SourceRoots:
-  - name: checkout
-    path: ./checkout
-StaticSessions: []
+{exports}StaticSessions: []
 "#,
             directory.path().display(),
             directory.path().display()
@@ -226,10 +292,16 @@ StaticSessions: []
             &[],
         )
     };
-    let mut tui = Tui::spawn(&ddb.base_url());
+    let mut tui = if local_workspace {
+        Tui::spawn_with_workspace(&ddb.base_url(), &workspace_path)
+    } else {
+        Tui::spawn(&ddb.base_url())
+    };
+    let root_kind = if local_workspace { "Local" } else { "DDB" };
+    let file_kind = if local_workspace { "local" } else { "file" };
     tui.wait_for("connected");
     tui.send(b"o");
-    tui.wait_for("[root] checkout");
+    tui.wait_for(&format!("[{root_kind}] checkout"));
     tui.send(b"\r");
     tui.wait_for("[dir] src");
     tui.send(b"\r");
@@ -241,12 +313,12 @@ StaticSessions: []
     tui.wait_for_source_marker('▸', 2);
     tui.clear_capture();
     tui.send(b"o");
-    tui.wait_for("[root] checkout");
+    tui.wait_for(&format!("[{root_kind}] checkout"));
     tui.send(b"\r");
     tui.wait_for("[dir] src");
     // Ctrl-H toggles dotfiles; typing filters the loaded directory page.
     tui.send(b"\x08.hidden");
-    tui.wait_for("[file] checkout/.hidden");
+    tui.wait_for(&format!("[{file_kind}] checkout/.hidden"));
     tui.send(b"\r");
     tui.wait_for("hidden workspace file");
     tui.clear_capture();
@@ -263,7 +335,7 @@ StaticSessions: []
     });
     tui.clear_capture();
     tui.send(b"o");
-    tui.wait_for("[root] checkout");
+    tui.wait_for(&format!("[{root_kind}] checkout"));
     tui.send(b"\r");
     tui.wait_for("[dir] src");
     tui.send(b"\r");
@@ -276,13 +348,26 @@ StaticSessions: []
     tui.send(b"\x1b[1;3D");
     tui.wait_for("outside debug symbols");
     tui.wait_for_source_marker('▸', 2);
-    let output = tui.quit();
-    assert!(output.contains("\u{1b}[?1049l"));
     assert!(ddb
         .wait_for_snapshot(|snapshot| snapshot.sessions.is_empty())
         .sessions
         .is_empty());
     ddb.shutdown();
+    if local_workspace {
+        // Local discovery and reads remain usable after the backend is gone.
+        tui.clear_capture();
+        tui.send(b"o");
+        tui.wait_for("[Local] checkout");
+        tui.send(b"\r");
+        tui.wait_for("[dir] src");
+        tui.send(b"\r");
+        tui.wait_for("zlong.txt");
+        tui.send(b"zlong\r");
+        tui.wait_for("large file line 241");
+        tui.wait_for_source_marker('▸', 241);
+    }
+    let output = tui.quit();
+    assert!(output.contains("\u{1b}[?1049l"));
 }
 
 #[test]
@@ -1312,6 +1397,14 @@ impl Tui {
         Self::spawn_shell(&command)
     }
 
+    fn spawn_with_workspace(api: &str, workspace: &Path) -> Self {
+        let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
+        Self::spawn_shell(&format!(
+            "stty rows 40 cols 140; exec {} --source-workspace {} connect --api {} --refresh-ms 10000",
+            shell_quote(&tui_binary), shell_quote(workspace), shell_quote(Path::new(api))
+        ))
+    }
+
     fn spawn_managed(config: &Path, backend_log: &Path, via_dispatcher: bool) -> Self {
         let ddb_binary = ddb_e2e_binary();
         Self::spawn_managed_with_ddb(config, backend_log, via_dispatcher, &ddb_binary)
@@ -1437,17 +1530,12 @@ impl Tui {
         let deadline = Instant::now() + TIMEOUT;
         loop {
             self.assert_running();
-            let row = self.frames.lock().unwrap().back().and_then(|frame| {
-                let mut under_session = false;
-                frame.lines().enumerate().find_map(|(row, line)| {
-                    let topology = line.chars().take(33).collect::<String>();
-                    if topology.contains(session_label) {
-                        under_session = true;
-                        return None;
-                    }
-                    (under_session && topology.contains('•')).then_some(row + 1)
-                })
-            });
+            let row = self
+                .frames
+                .lock()
+                .unwrap()
+                .back()
+                .and_then(|frame| topology_thread_row(frame, session_label));
             if let Some(row) = row {
                 self.clear_capture();
                 self.send(format!("\x1b[<0;12;{row}M\x1b[<0;12;{row}m").as_bytes());
@@ -1500,6 +1588,28 @@ impl Tui {
             assert!(
                 Instant::now() < deadline,
                 "expandable variable {name:?} not visible:\n{}",
+                self.output_text()
+            );
+            thread::sleep(POLL);
+        }
+    }
+
+    fn wait_for_current_frame(&mut self, predicate: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            self.assert_running();
+            if self
+                .frames
+                .lock()
+                .unwrap()
+                .back()
+                .is_some_and(|frame| predicate(frame))
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected current terminal frame not rendered:\n{}",
                 self.output_text()
             );
             thread::sleep(POLL);
