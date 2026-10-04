@@ -173,6 +173,19 @@ fn captured_runtime_payloads_match_generated_openapi_and_asyncapi_schemas() {
         .expect("snapshot should expose a thread")
         .to_string();
 
+    for method in ["ListSources", "ListSourceRoots"] {
+        let path = rpc("DebuggerService", method);
+        let (status, body) = ddb.api_post_json_with_bearer(&path, &json!({}), V2_TEST_READ_TOKEN);
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_openapi_response(
+            &openapi,
+            &path,
+            status,
+            &body,
+            &format!("{method} runtime response"),
+        );
+    }
+
     let resolve_path = rpc("DebuggerService", "ResolveSource");
     let (status, not_found) = ddb.api_post_json_with_bearer(
         &resolve_path,

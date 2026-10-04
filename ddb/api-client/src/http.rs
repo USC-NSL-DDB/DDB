@@ -77,6 +77,13 @@ impl<T> PageCollector<T> {
     }
 }
 
+/// A complete bounded catalog, including warnings from every discovery page.
+#[derive(Clone, Debug)]
+pub struct SourceCatalog {
+    pub sources: Vec<v2::SourceFile>,
+    pub warnings: Vec<v2::SourceDiscoveryWarning>,
+}
+
 /// Runtime bounds and credentials for one reusable HTTP/ProtoJSON client.
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -516,6 +523,46 @@ impl DdbClient {
         false
     );
 
+    /// Collects sources without discarding partial-discovery warnings. Refresh
+    /// applies only to the first page; expired revisions remain explicit errors.
+    /// The item bound independently limits sources and distinct warnings.
+    pub async fn collect_sources(
+        &self,
+        mut request: v2::ListSourcesRequest,
+        max_items: usize,
+    ) -> Result<SourceCatalog> {
+        let page_size = request.page.as_ref().map_or(0, |page| page.page_size);
+        let first_token = request
+            .page
+            .as_ref()
+            .and_then(|page| page.page_token.clone());
+        let mut collector = PageCollector::new(first_token, max_items);
+        let mut warnings = Vec::new();
+        let mut seen_warnings = HashSet::new();
+        loop {
+            request.page = Some(v2::PageRequest {
+                page_size,
+                page_token: collector.next_token().cloned(),
+            });
+            let response = self.list_sources(request.clone()).await?;
+            request.refresh = false;
+            for warning in response.warnings {
+                if seen_warnings.insert((warning.session_id.clone(), warning.message.clone())) {
+                    if warnings.len() >= max_items {
+                        return Err(ClientError::CollectionTooLarge { limit: max_items });
+                    }
+                    warnings.push(warning);
+                }
+            }
+            if collector.push_page(response.sources, response.page)? {
+                return Ok(SourceCatalog {
+                    sources: collector.finish(),
+                    warnings,
+                });
+            }
+        }
+    }
+
     collect_pages_method!(
         collect_sessions,
         list_sessions,
@@ -772,6 +819,47 @@ impl DdbClient {
         "ReadMemory",
         true
     );
+    unary_method!(
+        list_sources,
+        v2::ListSourcesRequest,
+        v2::ListSourcesResponse,
+        DEBUGGER_SERVICE,
+        "ListSources",
+        true
+    );
+    unary_method!(
+        list_source_roots,
+        v2::ListSourceRootsRequest,
+        v2::ListSourceRootsResponse,
+        DEBUGGER_SERVICE,
+        "ListSourceRoots",
+        true
+    );
+    unary_method!(
+        list_source_entries,
+        v2::ListSourceEntriesRequest,
+        v2::ListSourceEntriesResponse,
+        DEBUGGER_SERVICE,
+        "ListSourceEntries",
+        true
+    );
+    collect_pages_method!(
+        collect_source_roots,
+        list_source_roots,
+        v2::ListSourceRootsRequest,
+        v2::ListSourceRootsResponse,
+        v2::SourceRoot,
+        roots
+    );
+    collect_pages_method!(
+        collect_source_entries,
+        list_source_entries,
+        v2::ListSourceEntriesRequest,
+        v2::ListSourceEntriesResponse,
+        v2::SourceEntry,
+        entries
+    );
+
     unary_method!(
         resolve_source,
         v2::ResolveSourceRequest,

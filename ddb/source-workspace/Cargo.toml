@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Confined source workspaces and bounded source content caching for DDB"
 license = "Apache-2.0"
+repository = "https://github.com/USC-NSL-DDB/DDB"
+readme = "README.md"
+keywords = ["debugger", "source", "filesystem"]
+categories = ["development-tools::debugging", "filesystem"]
 
 [dependencies]
 cap-std = "4.0.3"

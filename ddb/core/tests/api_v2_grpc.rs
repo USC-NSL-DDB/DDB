@@ -119,6 +119,81 @@ async fn run_grpc_conformance(ddb: &DdbProcess, http_session_id: &str, http_disp
     let channel = connect(&ddb.grpc_endpoint()).await;
     let mut debugger = DebuggerServiceClient::new(channel.clone());
 
+    let http = ddb_api_client::DdbClient::new(
+        ddb_api_client::ClientConfig::new(ddb.api_endpoint()).with_bearer_token(V2_TEST_READ_TOKEN),
+    )
+    .unwrap();
+    let grpc_sources = debugger
+        .list_sources(authorized(
+            ddb_api_types::v2::ListSourcesRequest::default(),
+            V2_TEST_READ_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let http_sources = http.list_sources(Default::default()).await.unwrap();
+    assert_eq!(grpc_sources.sources, http_sources.sources);
+    assert_eq!(grpc_sources.warnings, http_sources.warnings);
+    assert!(!grpc_sources.sources.is_empty());
+    let source = &grpc_sources.sources[0];
+    let resolve = ddb_api_types::v2::ResolveSourceRequest {
+        location: Some(ddb_api_types::v2::SourceLocation {
+            source_reference: Some(source.source_reference.clone()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let grpc_resolved = debugger
+        .resolve_source(authorized(resolve.clone(), V2_TEST_READ_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        grpc_resolved.source,
+        http.resolve_source(resolve).await.unwrap().source
+    );
+    let read = ddb_api_types::v2::ReadSourceRequest {
+        source_reference: source.source_reference.clone(),
+        start_line: 1,
+        max_lines: 4,
+        ..Default::default()
+    };
+    let grpc_content = debugger
+        .read_source(authorized(read.clone(), V2_TEST_READ_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        grpc_content.source,
+        http.read_source(read).await.unwrap().source
+    );
+    let roots = debugger
+        .list_source_roots(authorized(
+            ddb_api_types::v2::ListSourceRootsRequest::default(),
+            V2_TEST_READ_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        roots.roots,
+        http.list_source_roots(Default::default())
+            .await
+            .unwrap()
+            .roots
+    );
+    let status = debugger
+        .list_source_entries(authorized(
+            ddb_api_types::v2::ListSourceEntriesRequest {
+                root_reference: "not-a-root".into(),
+                ..Default::default()
+            },
+            V2_TEST_READ_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(typed_error(&status).code, DdbErrorCode::NotFound as i32);
+
     let info = debugger
         .get_server_info(Request::new(GetServerInfoRequest::default()))
         .await

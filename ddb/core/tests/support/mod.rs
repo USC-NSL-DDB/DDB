@@ -108,6 +108,12 @@ impl DdbProcess {
         Self::spawn_with_config("ddb-v2-integration.yaml", config_contents)
     }
 
+    pub fn spawn_with_source_roots(sessions: &[SessionSpec<'_>], roots_yaml: &str) -> Self {
+        let mut config = with_v2_auth(render_mock_config(sessions, false));
+        config.push_str(roots_yaml);
+        Self::spawn_with_config("ddb-source-integration.yaml", config)
+    }
+
     /// Starts an authenticated v2 server with additional `Conf` entries.
     ///
     /// This is intentionally limited to integration tests so deployment-policy

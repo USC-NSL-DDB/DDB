@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -23,9 +22,8 @@ use ddb_api_types::v2::{
     ListSessionsResponse, ListSignalsRequest, ListSignalsResponse, ListThreadsRequest,
     ListThreadsResponse, ListVariablesRequest, ListVariablesResponse, MemoryBlock, OperationKind,
     OperationState, OutputEvent, OutputGap, OutputStreamKind, ReadMemoryRequest,
-    ReadMemoryResponse, ReadSourceRequest, ReadSourceResponse, Register, RegisterFormat,
-    ResolveSourceRequest, ResolveSourceResponse, ResourceKind, Selection, ServerInfo, Snapshot,
-    SnapshotSection, SourceContent, SourceFile, StateEvent, StateEventKind, SubscribeOutputRequest,
+    ReadMemoryResponse, Register, RegisterFormat, ResourceKind, Selection, ServerInfo, Snapshot,
+    SnapshotSection, StateEvent, StateEventKind, SubscribeOutputRequest,
     SubscribeStateEventsRequest, TransportEndpoint, TransportKind, WireEncoding,
 };
 use prost::Message;
@@ -64,7 +62,6 @@ use super::{
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 200;
 const MAX_EXTENSION_PAYLOAD_BYTES: usize = 1024 * 1024;
-const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_REGISTER_NAMES: usize = 4_096;
 const MAX_SIGNAL_COUNT: usize = 4_096;
 const MAX_ADDRESS_BYTES: usize = 1_024;
@@ -348,7 +345,7 @@ impl DdbApplicationConfig {
             max_operation_bytes: resource_limits.operation_bytes as u64,
             max_operation_record_bytes: resource_limits.operation_record_bytes as u64,
             max_output_event_bytes: resource_limits.output_event_bytes as u64,
-            max_source_bytes: MAX_SOURCE_BYTES,
+            max_source_bytes: ddb_source_workspace::Limits::default().max_file_bytes as u64,
         };
         Self {
             transports: vec![TransportEndpoint {
@@ -385,13 +382,14 @@ pub(crate) struct DdbApplicationService {
     pub(super) config: Arc<Config>,
     runtime_status: Arc<RuntimeStatus>,
     pub(super) shutdown_ctrl: Arc<ShutdownCtrl>,
-    server_instance_id: String,
+    pub(super) server_instance_id: String,
     started_at: ddb_api_types::wkt::Timestamp,
     pub(super) api_config: DdbApplicationConfig,
     pub(super) ids: Arc<OpaqueIdRegistry>,
     pub(super) resources: ResourceCatalog,
     pub(super) variable_objects: super::variable_objects::VariableObjects,
-    pages: PageCodec,
+    pub(super) pages: PageCodec,
+    pub(super) sources: Arc<super::sources::SourceStore>,
     pub(super) operations: OperationStore,
     pub(super) journal: StateJournal,
     output: Arc<OutputHub>,
@@ -407,7 +405,8 @@ impl DdbApplicationService {
         runtime_status: Arc<RuntimeStatus>,
         shutdown_ctrl: Arc<ShutdownCtrl>,
         api_config: DdbApplicationConfig,
-    ) -> Arc<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
+        let sources = Arc::new(super::sources::SourceStore::new(&config.source_roots)?);
         let runtime_changes = queries.subscribe_runtime_changes();
         let pending_changes = queries.subscribe_pending_changes();
         let server_instance_id = format!("ddb_{}", uuid::Uuid::new_v4().simple());
@@ -430,6 +429,7 @@ impl DdbApplicationService {
             max_subscribers: api_config.limits.max_subscribers as usize,
         };
         let service = Arc::new(Self {
+            sources,
             queries,
             command_port,
             config,
@@ -455,7 +455,7 @@ impl DdbApplicationService {
             .runtime_event_tasks
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = tasks;
-        service
+        Ok(service)
     }
 
     pub(crate) fn validate_response_bytes(
@@ -1839,165 +1839,6 @@ impl DdbApplicationService {
         }
     }
 
-    pub(crate) async fn resolve_source(
-        &self,
-        request: ResolveSourceRequest,
-    ) -> Result<ResolveSourceResponse, ApplicationError> {
-        let scope = RequestScope::begin(request.context.as_ref())?;
-        let location = request
-            .location
-            .as_ref()
-            .ok_or_else(|| ApplicationError::invalid("location", "is required"))?;
-        if let Some(reference) = location.source_reference.as_deref() {
-            let path = self.ids.decode(ResourceIdKind::Source, reference)?;
-            let source = self.source_file(reference.to_string(), path, None).await?;
-            return Ok(ResolveSourceResponse {
-                context: Some(scope.response_context(&self.server_instance_id)),
-                source: Some(source),
-            });
-        }
-        let reported_path = location
-            .path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .ok_or_else(|| ApplicationError::invalid("location.path", "is required"))?;
-
-        let source_group_ids = self
-            .queries
-            .group_ids_for_source(reported_path)
-            .await
-            .map_err(|_| ApplicationError::backend("debugger source resolution failed"))?;
-        if source_group_ids.is_empty() {
-            return Err(ApplicationError::not_found("source"));
-        }
-        if request.target.is_some() {
-            let resolved = TargetResolver::new(self.queries.as_ref(), &self.ids)
-                .resolve(request.target.as_ref(), TargetPurpose::Command)
-                .await?;
-            let belongs_to_target = self.queries.groups().into_iter().any(|group| {
-                source_group_ids.contains(&group.id)
-                    && group
-                        .sids
-                        .iter()
-                        .any(|sid| resolved.session_ids.contains(sid))
-            });
-            if !belongs_to_target {
-                return Err(ApplicationError::not_found("source for target"));
-            }
-        }
-
-        let canonical = tokio::fs::canonicalize(reported_path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        let canonical = canonical
-            .to_str()
-            .ok_or_else(|| ApplicationError::not_found("UTF-8 source path"))?
-            .to_string();
-        let source_reference = self.ids.encode(ResourceIdKind::Source, &canonical)?;
-        let source = self.source_file(source_reference, canonical, None).await?;
-        Ok(ResolveSourceResponse {
-            context: Some(scope.response_context(&self.server_instance_id)),
-            source: Some(source),
-        })
-    }
-
-    pub(crate) async fn read_source(
-        &self,
-        request: ReadSourceRequest,
-    ) -> Result<ReadSourceResponse, ApplicationError> {
-        let scope = RequestScope::begin(request.context.as_ref())?;
-        if request.start_line == 0 {
-            return Err(ApplicationError::invalid(
-                "start_line",
-                "must be greater than zero",
-            ));
-        }
-        if request.max_lines == 0 || request.max_lines > self.api_config.limits.max_source_lines {
-            return Err(ApplicationError::invalid(
-                "max_lines",
-                format!(
-                    "must be between 1 and {}",
-                    self.api_config.limits.max_source_lines
-                ),
-            ));
-        }
-        let path = self
-            .ids
-            .decode(ResourceIdKind::Source, &request.source_reference)?;
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("UTF-8 source content"))?;
-        if contents.len() as u64 > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let lines = contents.lines().collect::<Vec<_>>();
-        let start = request.start_line.saturating_sub(1) as usize;
-        let end = start
-            .saturating_add(request.max_lines as usize)
-            .min(lines.len());
-        let selected = if start < lines.len() {
-            &lines[start..end]
-        } else {
-            &[]
-        };
-        let content = selected.join("\n");
-        let content_hash = format!("sha256:{:x}", Sha256::digest(contents.as_bytes()));
-        let source = self
-            .source_file(request.source_reference, path, Some(content_hash))
-            .await?;
-        Ok(ReadSourceResponse {
-            context: Some(scope.response_context(&self.server_instance_id)),
-            source: Some(SourceContent {
-                source: Some(source),
-                start_line: request.start_line,
-                content,
-                line_count: selected.len() as u32,
-                has_more: end < lines.len(),
-            }),
-        })
-    }
-
-    async fn source_file(
-        &self,
-        source_reference: String,
-        path: String,
-        content_hash: Option<String>,
-    ) -> Result<SourceFile, ApplicationError> {
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let name = Path::new(&path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| ApplicationError::not_found("source name"))?
-            .to_string();
-        Ok(SourceFile {
-            source_reference,
-            path: Some(path),
-            name,
-            media_type: "text/plain; charset=utf-8".to_string(),
-            content_hash,
-        })
-    }
-
     pub(crate) async fn list_groups(
         &self,
         request: ListGroupsRequest,
@@ -3050,6 +2891,7 @@ mod tests {
                 &resource_limits,
             ),
         )
+        .unwrap()
     }
 
     fn session_target(session_id: impl Into<String>) -> PublicTarget {

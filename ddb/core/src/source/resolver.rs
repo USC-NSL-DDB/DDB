@@ -68,14 +68,15 @@ impl SourceListingProvider for DebuggerSourceListingProvider {
             .execute(&command, Target::Session(sid))
             .await
             .with_context(|| format!("failed to list sources from session {sid}"))?;
-        Ok(SourceFiles::decode(&completion)?.paths)
+        let paths = SourceFiles::decode(&completion)?.paths;
+        if paths.len() > 100_000 || paths.iter().map(String::len).sum::<usize>() > 16 * 1024 * 1024
+        {
+            return Err(anyhow!(
+                "debugger source catalog exceeds its resource bound"
+            ));
+        }
+        Ok(paths)
     }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct ResolutionKey {
-    group_id: GroupId,
-    path: String,
 }
 
 /// Read-only view of group membership used during source resolution.
@@ -110,8 +111,7 @@ pub(crate) struct SourceResolver {
     catalog: Arc<SourceCatalog>,
     groups: Arc<dyn GroupResolutionView>,
     provider: Arc<dyn SourceListingProvider>,
-    path_gates: DashMap<ResolutionKey, Arc<AsyncMutex<()>>>,
-    full_gates: DashMap<GroupId, Arc<AsyncMutex<()>>>,
+    discovery_gates: DashMap<(GroupId, u64), Arc<AsyncMutex<()>>>,
     background: Mutex<HashMap<u64, JoinHandle<()>>>,
     lifecycle: AsyncRwLock<()>,
     slots: Arc<Semaphore>,
@@ -161,8 +161,7 @@ impl SourceResolver {
             catalog,
             groups,
             provider,
-            path_gates: DashMap::new(),
-            full_gates: DashMap::new(),
+            discovery_gates: DashMap::new(),
             background: Mutex::new(HashMap::new()),
             lifecycle: AsyncRwLock::new(()),
             slots: Arc::new(Semaphore::new(concurrency)),
@@ -191,7 +190,10 @@ impl SourceResolver {
         self.ensure_accepting()?;
 
         let unresolved = self.groups.matching_groups(&|group| {
-            !group.session_ids().is_empty() && !self.catalog.is_checked(path, group.id())
+            group
+                .session_ids()
+                .iter()
+                .any(|sid| !self.catalog.is_checked(path, *sid))
         });
         if unresolved.is_empty() {
             return Ok(());
@@ -204,10 +206,20 @@ impl SourceResolver {
             .ok_or_else(|| anyhow!("source path is not valid UTF-8: {path}"))?
             .to_owned();
 
-        let jobs = unresolved.into_iter().filter_map(|group| {
-            let sid = group.session_ids().iter().copied().min()?;
-            Some(self.resolve_group_path(path, &dirname, group.id(), sid))
-        });
+        let sessions = unresolved
+            .iter()
+            .flat_map(|group| {
+                group
+                    .session_ids()
+                    .iter()
+                    .copied()
+                    .map(|sid| (group.id(), sid))
+            })
+            .filter(|(_, sid)| !self.catalog.is_checked(path, *sid))
+            .collect::<Vec<_>>();
+        let jobs = sessions
+            .into_iter()
+            .map(|(group_id, sid)| self.resolve_session_path(path, &dirname, group_id, sid));
         let failures = join_all(jobs)
             .await
             .into_iter()
@@ -219,32 +231,28 @@ impl SourceResolver {
             Ok(())
         } else {
             Err(anyhow!(
-                "source resolution failed for {} group(s): {}",
+                "source resolution failed for {} session(s): {}",
                 failures.len(),
                 failures.join("; ")
             ))
         }
     }
 
-    async fn resolve_group_path(
+    async fn resolve_session_path(
         &self,
         path: &str,
         dirname: &str,
         group_id: GroupId,
         sid: u64,
     ) -> Result<()> {
-        let key = ResolutionKey {
-            group_id,
-            path: path.to_owned(),
-        };
         let gate = self
-            .path_gates
-            .entry(key)
+            .discovery_gates
+            .entry((group_id, sid))
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone();
         let _single_flight = gate.lock().await;
 
-        if self.catalog.is_checked(path, group_id) {
+        if self.catalog.is_checked(path, sid) {
             return Ok(());
         }
 
@@ -256,27 +264,32 @@ impl SourceResolver {
         let sources = self.provider.list_sources(sid, Some(dirname)).await?;
 
         let _lifecycle = self.lifecycle.read().await;
-        if self.groups.group_by_id(group_id).is_some() {
-            self.catalog.record_path_listing(path, group_id, sources);
+        if self.discovery_is_current(group_id, sid, &gate) {
+            self.catalog
+                .record_path_listing(path, sid, group_id, sources)?;
         }
         Ok(())
     }
 
-    async fn resolve_session(&self, sid: u64) -> Result<()> {
+    pub(crate) fn cached_sources(&self, sid: u64) -> Vec<String> {
+        self.catalog.session_listing(sid)
+    }
+
+    pub(crate) async fn resolve_session(&self, sid: u64, refresh: bool) -> Result<Vec<String>> {
         self.ensure_accepting()?;
         let group_id = self
             .groups
             .group_id_by_session(sid)
             .ok_or_else(|| anyhow!("session {sid} has no source group"))?;
         let gate = self
-            .full_gates
-            .entry(group_id)
+            .discovery_gates
+            .entry((group_id, sid))
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone();
         let _single_flight = gate.lock().await;
 
-        if self.catalog.has_full_listing(group_id) {
-            return Ok(());
+        if !refresh && self.catalog.has_full_listing(sid) {
+            return Ok(self.catalog.session_listing(sid));
         }
 
         debug!(sid, group_id = %group_id, "resolving complete debugger source listing");
@@ -288,10 +301,26 @@ impl SourceResolver {
         let sources = self.provider.list_sources(sid, None).await?;
 
         let _lifecycle = self.lifecycle.read().await;
-        if self.groups.group_by_id(group_id).is_some() {
-            self.catalog.record_full_listing(group_id, sources);
+        if self.discovery_is_current(group_id, sid, &gate) {
+            self.catalog.record_full_listing(sid, group_id, sources)?;
         }
-        Ok(())
+        Ok(self.catalog.session_listing(sid))
+    }
+
+    // A retired session/group removes its gate. In-flight discovery must not
+    // publish after that invalidation, even before topology retirement finishes.
+    fn discovery_is_current(
+        &self,
+        group_id: GroupId,
+        sid: u64,
+        gate: &Arc<AsyncMutex<()>>,
+    ) -> bool {
+        self.accepting.load(Ordering::Acquire)
+            && self.groups.group_id_by_session(sid) == Some(group_id)
+            && self
+                .discovery_gates
+                .get(&(group_id, sid))
+                .is_some_and(|current| Arc::ptr_eq(&current, gate))
     }
 
     pub(crate) fn session_activated(self: &Arc<Self>, sid: u64) {
@@ -301,7 +330,7 @@ impl SourceResolver {
 
         let resolver = Arc::clone(self);
         let task = tokio::spawn(async move {
-            if let Err(error) = resolver.resolve_session(sid).await {
+            if let Err(error) = resolver.resolve_session(sid, false).await {
                 warn!(sid, error = ?error, "failed to eagerly resolve debugger sources");
             }
         });
@@ -316,13 +345,17 @@ impl SourceResolver {
             task.abort();
             let _ = task.await;
         }
+        let _lifecycle = self.lifecycle.write().await;
+        self.catalog.remove_session(sid);
+        self.discovery_gates
+            .retain(|(_, candidate), _| *candidate != sid);
     }
 
     pub(crate) async fn remove_group(&self, group_id: GroupId) {
         let _lifecycle = self.lifecycle.write().await;
         self.catalog.remove_group(group_id);
-        self.path_gates.retain(|key, _| key.group_id != group_id);
-        self.full_gates.remove(&group_id);
+        self.discovery_gates
+            .retain(|(candidate, _), _| *candidate != group_id);
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -535,7 +568,6 @@ mod tests {
     async fn eager_resolution_task_is_owned_and_cancellable() {
         let groups = RuntimeModel::new();
         register_group(&groups, 11, "binary-a").await;
-        let group_id = groups.group_id_by_session(11).unwrap();
         let release = Arc::new(Notify::new());
         let provider = FakeProvider::blocked(vec!["/src/main.rs".to_owned()], release);
         let started = Arc::clone(&provider.started);
@@ -551,7 +583,27 @@ mod tests {
         resolver.cancel_session(11).await;
 
         assert_eq!(provider.in_flight.load(Ordering::Acquire), 0);
-        assert!(!catalog.has_full_listing(group_id));
+        assert!(!catalog.has_full_listing(11));
+    }
+
+    #[tokio::test]
+    async fn cancelled_session_does_not_publish_late_requested_discovery() {
+        let groups = RuntimeModel::new();
+        register_group(&groups, 11, "binary-a").await;
+        let release = Arc::new(Notify::new());
+        let provider = FakeProvider::blocked(vec!["/src/main.rs".to_owned()], Arc::clone(&release));
+        let started = Arc::clone(&provider.started);
+        let (resolver, catalog) =
+            resolver_with(groups, provider, SourceResolutionPolicy::OnDemand, 8);
+        let resolution = tokio::spawn({
+            let resolver = Arc::clone(&resolver);
+            async move { resolver.resolve_session(11, false).await }
+        });
+        started.notified().await;
+        resolver.cancel_session(11).await;
+        release.notify_one();
+        assert!(resolution.await.unwrap().unwrap().is_empty());
+        assert!(!catalog.has_full_listing(11));
     }
 
     #[tokio::test]

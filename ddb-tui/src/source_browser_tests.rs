@@ -34,6 +34,7 @@ fn content(path: &str) -> v2::SourceContent {
         content: "one\ntwo\nthree\nfour".into(),
         line_count: 4,
         has_more: false,
+        total_lines: 4,
     }
 }
 
@@ -163,6 +164,7 @@ fn source_content_preserves_empty_and_blank_lines() {
         let mut source = content("main.rs");
         source.content = text.into();
         source.line_count = count;
+        source.total_lines = count;
         show_source(&mut browser, source, 1);
         assert_eq!(browser.document().unwrap().lines, expected);
     }

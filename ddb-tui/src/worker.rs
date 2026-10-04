@@ -689,6 +689,7 @@ async fn source_content(
             client
                 .resolve_source(v2::ResolveSourceRequest {
                     context: None,
+                    root_reference: None,
                     target: request.target,
                     location: Some(request.location),
                 })
@@ -698,16 +699,26 @@ async fn source_content(
                 .source_reference
         }
     };
-    client
-        .read_source(v2::ReadSourceRequest {
-            context: None,
-            source_reference: reference,
-            start_line: line.saturating_sub(100).max(1),
-            max_lines: 240,
-        })
+    let mut read = v2::ReadSourceRequest {
+        context: None,
+        source_reference: reference,
+        start_line: line.saturating_sub(100).max(1),
+        max_lines: 240,
+    };
+    let content = client
+        .read_source(read.clone())
         .await?
         .source
-        .context("ReadSource omitted source")
+        .context("ReadSource omitted source")?;
+    if content.line_count == 0 && content.total_lines > 0 && read.start_line > content.total_lines {
+        read.start_line = content.total_lines.saturating_sub(239).max(1);
+        return client
+            .read_source(read)
+            .await?
+            .source
+            .context("ReadSource omitted source");
+    }
+    Ok(content)
 }
 
 async fn complete_operation(
@@ -1013,6 +1024,71 @@ fn short_enum(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn source_navigation_beyond_eof_loads_the_last_window_without_a_frame() {
+        use axum::{extract::State, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        type Calls = Arc<Mutex<Vec<u32>>>;
+        async fn read(
+            State(calls): State<Calls>,
+            Json(request): Json<v2::ReadSourceRequest>,
+        ) -> Json<v2::ReadSourceResponse> {
+            calls.lock().unwrap().push(request.start_line);
+            assert_eq!(request.source_reference, "src-workspace");
+            let beyond = request.start_line > 3;
+            Json(v2::ReadSourceResponse {
+                source: Some(v2::SourceContent {
+                    source: Some(v2::SourceFile {
+                        source_reference: request.source_reference,
+                        path: Some("project/main.rs".into()),
+                        ..Default::default()
+                    }),
+                    start_line: request.start_line,
+                    content: if beyond {
+                        String::new()
+                    } else {
+                        "one\ntwo\nthree".into()
+                    },
+                    line_count: if beyond { 0 } else { 3 },
+                    total_lines: 3,
+                    has_more: false,
+                }),
+                ..Default::default()
+            })
+        }
+        let calls = Calls::default();
+        let router = Router::new()
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource",
+                post(read),
+            )
+            .with_state(Arc::clone(&calls));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+        let mut browser = crate::source_browser::SourceBrowser::default();
+        let request = browser
+            .navigate(
+                None,
+                v2::SourceLocation {
+                    source_reference: Some("src-workspace".into()),
+                    line: 999,
+                    ..Default::default()
+                },
+                crate::source_browser::Navigation::Manual,
+            )
+            .unwrap();
+        let generation = request.generation;
+        let content = source_content(&client, request).await.unwrap();
+        assert!(browser.apply(generation, content));
+        assert_eq!(browser.document().unwrap().cursor, 3);
+        assert_eq!(browser.document().unwrap().lines, ["one", "two", "three"]);
+        assert_eq!(*calls.lock().unwrap(), [899, 1]);
+        server.abort();
+        let _ = server.await;
+    }
 
     #[tokio::test]
     async fn typed_scope_loading_defers_expensive_reads_and_pages_variable_children() {

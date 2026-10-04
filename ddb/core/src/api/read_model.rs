@@ -233,6 +233,14 @@ impl ApiQueries {
         self.model.group_by_hash(hash).as_ref().map(GroupView::from)
     }
 
+    pub(crate) async fn source_listing(&self, sid: u64, refresh: bool) -> Result<Vec<String>> {
+        self.source_resolver.resolve_session(sid, refresh).await
+    }
+
+    pub(crate) fn cached_sources(&self, sid: u64) -> Vec<String> {
+        self.source_resolver.cached_sources(sid)
+    }
+
     pub(crate) async fn group_ids_for_source(&self, source: &str) -> Result<Vec<u64>> {
         let mut group_ids = self
             .source_resolver

@@ -2412,6 +2412,7 @@ mod v2_tests {
                 name: path.to_string(),
                 media_type: "text/plain".to_string(),
                 content_hash: None,
+                ..Default::default()
             }),
             start_line,
             content: (0..line_count)
@@ -2420,6 +2421,7 @@ mod v2_tests {
                 .join("\n"),
             line_count: line_count as u32,
             has_more: false,
+            total_lines: start_line.saturating_sub(1) + line_count as u32,
         }
     }
 

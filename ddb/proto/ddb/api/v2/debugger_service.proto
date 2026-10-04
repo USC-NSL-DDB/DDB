@@ -383,6 +383,82 @@ message ReadMemoryResponse {
   MemoryBlock memory = 2;
 }
 
+// ListSourcesRequest discovers sources from debug information without selecting a frame.
+message ListSourcesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional owner filter. Absence selects all sessions.
+  optional Target target = 2;
+  // Stable, revision-bound pagination; changed catalogs expire old tokens.
+  optional PageRequest page = 3;
+  // Case-insensitive substring matched against debugger source paths.
+  string query = 4;
+  // Refresh debugger catalogs on the first page. Never interrupts running targets.
+  // Later pages must leave this false. Per-session failures are reported as warnings.
+  bool refresh = 5;
+}
+
+// ListSourcesResponse retains unavailable files and session-qualified identities.
+message ListSourcesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Debugger-known sources in stable session/path order.
+  repeated SourceFile sources = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+  // Discovery failures. A successful response with warnings is not exhaustive.
+  repeated SourceDiscoveryWarning warnings = 4;
+}
+
+// ListSourceRootsRequest pages configured read-only directory exports.
+message ListSourceRootsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional collection page.
+  optional PageRequest page = 2;
+}
+
+// ListSourceRootsResponse describes roots, not their host filesystem paths.
+message ListSourceRootsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Configured roots in stable name order.
+  repeated SourceRoot roots = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListSourceEntriesRequest lists one directory, never an implicit recursive scan.
+message ListSourceEntriesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque exported root identity.
+  string root_reference = 2;
+  // Root-relative directory path; empty selects the root. Parent traversal is invalid.
+  string directory = 3;
+  // Revision-bound pagination. First pages always refresh the entry set.
+  // Continuations may reuse a snapshot for up to 30 seconds, rechecking access.
+  // Observed metadata changes or a fresh listing invalidate that snapshot;
+  // a changed entry set then expires old page tokens. No recursive scan occurs.
+  optional PageRequest page = 4;
+  // Includes dot-prefixed entries. This does not bypass export permissions.
+  bool include_hidden = 5;
+}
+
+// ListSourceEntriesResponse returns immediate children of one exported directory.
+message ListSourceEntriesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Bounded child entry page, directories first and names sorted within each kind.
+  repeated SourceEntry entries = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+  // Revision of the complete directory entry set.
+  string revision = 4;
+  // Entries omitted because their names are not representable safe UTF-8 paths.
+  uint32 unsupported_names = 5;
+}
+
 // ResolveSourceRequest maps a backend source location to a readable reference.
 message ResolveSourceRequest {
   // Request controls; READ permission is required.
@@ -391,6 +467,9 @@ message ResolveSourceRequest {
   optional Target target = 2;
   // Backend-reported source location.
   SourceLocation location = 3;
+  // When present, location.path is relative to this exported root, not a debugger
+  // path. A source_reference and root_reference cannot be supplied together.
+  optional string root_reference = 4;
 }
 
 // ResolveSourceResponse returns a stable source reference.
@@ -812,6 +891,12 @@ service DebuggerService {
   rpc ListSignals(ListSignalsRequest) returns (ListSignalsResponse);
   // Reads bounded memory. Requires CONTROL permission and backend capability.
   rpc ReadMemory(ReadMemoryRequest) returns (ReadMemoryResponse);
+  // Lists debugger-known sources without requiring a selected or stopped frame.
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+  // Lists explicitly configured source directory exports. Requires READ permission.
+  rpc ListSourceRoots(ListSourceRootsRequest) returns (ListSourceRootsResponse);
+  // Lists one exported directory with bounded, revision-bound pagination.
+  rpc ListSourceEntries(ListSourceEntriesRequest) returns (ListSourceEntriesResponse);
   // Resolves a backend location to a stable source reference.
   rpc ResolveSource(ResolveSourceRequest) returns (ResolveSourceResponse);
   // Reads a bounded source window. Requires READ permission.

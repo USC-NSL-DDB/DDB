@@ -2162,6 +2162,129 @@
         },
         "type": "object"
       },
+      "ListSourceEntriesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "includeHidden": {
+            "type": "boolean"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "rootReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListSourceEntriesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SourceEntry"
+            },
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "unsupportedNames": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ListSourceRootsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        },
+        "type": "object"
+      },
+      "ListSourceRootsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRoot"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListSourcesRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          },
+          "query": {
+            "type": "string"
+          },
+          "refresh": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ListSourcesResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceFile"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SourceDiscoveryWarning"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "ListThreadsRequest": {
         "additionalProperties": true,
         "properties": {
@@ -2798,6 +2921,9 @@
           "location": {
             "$ref": "#/components/schemas/SourceLocation"
           },
+          "rootReference": {
+            "type": "string"
+          },
           "target": {
             "$ref": "#/components/schemas/Target"
           }
@@ -3283,6 +3409,15 @@
           "SORT_DIRECTION_DESCENDING"
         ]
       },
+      "SourceAvailability": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SOURCE_AVAILABILITY_UNSPECIFIED",
+          "SOURCE_AVAILABILITY_AVAILABLE",
+          "SOURCE_AVAILABILITY_UNAVAILABLE"
+        ]
+      },
       "SourceBreakpointLocation": {
         "additionalProperties": true,
         "properties": {
@@ -3327,14 +3462,67 @@
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "totalLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "type": "object"
       },
+      "SourceDiscoveryWarning": {
+        "additionalProperties": true,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceEntry": {
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SourceEntryKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "relativePath": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceFile"
+          }
+        },
+        "type": "object"
+      },
+      "SourceEntryKind": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SOURCE_ENTRY_KIND_UNSPECIFIED",
+          "SOURCE_ENTRY_KIND_DIRECTORY",
+          "SOURCE_ENTRY_KIND_FILE",
+          "SOURCE_ENTRY_KIND_SYMLINK",
+          "SOURCE_ENTRY_KIND_OTHER"
+        ]
+      },
       "SourceFile": {
         "additionalProperties": true,
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/SourceAvailability"
+          },
           "contentHash": {
+            "type": "string"
+          },
+          "debuggerPath": {
             "type": "string"
           },
           "mediaType": {
@@ -3343,10 +3531,28 @@
           "name": {
             "type": "string"
           },
+          "origin": {
+            "$ref": "#/components/schemas/SourceOrigin"
+          },
+          "owners": {
+            "items": {
+              "$ref": "#/components/schemas/SourceOwner"
+            },
+            "type": "array"
+          },
           "path": {
             "type": "string"
           },
+          "relativePath": {
+            "type": "string"
+          },
+          "rootReference": {
+            "type": "string"
+          },
           "sourceReference": {
+            "type": "string"
+          },
+          "unavailableReason": {
             "type": "string"
           }
         },
@@ -3382,6 +3588,27 @@
         },
         "type": "object"
       },
+      "SourceOrigin": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SOURCE_ORIGIN_UNSPECIFIED",
+          "SOURCE_ORIGIN_DEBUGGER",
+          "SOURCE_ORIGIN_WORKSPACE"
+        ]
+      },
+      "SourceOwner": {
+        "additionalProperties": true,
+        "properties": {
+          "groupId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "SourcePathMapping": {
         "additionalProperties": true,
         "properties": {
@@ -3389,6 +3616,27 @@
             "type": "string"
           },
           "to": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceRoot": {
+        "additionalProperties": true,
+        "properties": {
+          "debuggerPath": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owners": {
+            "items": {
+              "$ref": "#/components/schemas/SourceOwner"
+            },
+            "type": "array"
+          },
+          "rootReference": {
             "type": "string"
           }
         },

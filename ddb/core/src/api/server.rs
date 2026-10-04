@@ -582,6 +582,25 @@ v2_async_handler!(
     read_memory
 );
 v2_async_handler!(
+    v2_list_sources,
+    v2::ListSourcesRequest,
+    v2::ListSourcesResponse,
+    list_sources
+);
+v2_async_handler!(
+    v2_list_source_roots,
+    v2::ListSourceRootsRequest,
+    v2::ListSourceRootsResponse,
+    list_source_roots
+);
+v2_async_handler!(
+    v2_list_source_entries,
+    v2::ListSourceEntriesRequest,
+    v2::ListSourceEntriesResponse,
+    list_source_entries
+);
+
+v2_async_handler!(
     v2_resolve_source,
     v2::ResolveSourceRequest,
     v2::ResolveSourceResponse,

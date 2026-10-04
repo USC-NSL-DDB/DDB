@@ -18,6 +18,7 @@ mod projection;
 mod resource_catalog;
 mod runtime_events;
 mod service;
+mod sources;
 mod target;
 mod variable_objects;
 pub(crate) use command_port::ApplicationCommandPort;

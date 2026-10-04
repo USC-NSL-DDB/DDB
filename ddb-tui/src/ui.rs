@@ -572,9 +572,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 } else {
                     "browsing · f: follow"
                 },
-                source
-                    .total_lines
-                    .map_or_else(|| "?".to_string(), |total| total.to_string())
+                source.total_lines
             )
         })
         .unwrap_or_else(|| "Source".to_string());
@@ -1610,11 +1608,13 @@ mod v2_tests {
                     name: "main.rs".to_string(),
                     media_type: "text/plain".to_string(),
                     content_hash: None,
+                    ..Default::default()
                 }),
                 start_line: 1,
                 content: "first\nexecuting\nselected\nlast".to_string(),
                 line_count: 4,
                 has_more: false,
+                total_lines: 4,
             },
             2,
         );

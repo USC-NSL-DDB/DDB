@@ -43,6 +43,12 @@ const V2_DEBUGGER_SERVICE_LIST_SIGNALS_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSignals";
 const V2_DEBUGGER_SERVICE_READ_MEMORY_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadMemory";
+const V2_DEBUGGER_SERVICE_LIST_SOURCES_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSources";
+const V2_DEBUGGER_SERVICE_LIST_SOURCE_ROOTS_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceRoots";
+const V2_DEBUGGER_SERVICE_LIST_SOURCE_ENTRIES_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries";
 const V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource";
 const V2_DEBUGGER_SERVICE_READ_SOURCE_PATH: &str =
@@ -194,6 +200,15 @@ fn v2_contract_router(authorization: &Arc<ApiAuthorization>) -> Router<ApiState>
             post(v2_list_registers),
         )
         .route(V2_DEBUGGER_SERVICE_LIST_SIGNALS_PATH, post(v2_list_signals))
+        .route(V2_DEBUGGER_SERVICE_LIST_SOURCES_PATH, post(v2_list_sources))
+        .route(
+            V2_DEBUGGER_SERVICE_LIST_SOURCE_ROOTS_PATH,
+            post(v2_list_source_roots),
+        )
+        .route(
+            V2_DEBUGGER_SERVICE_LIST_SOURCE_ENTRIES_PATH,
+            post(v2_list_source_entries),
+        )
         .route(
             V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH,
             post(v2_resolve_source),

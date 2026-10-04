@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Config {
@@ -48,6 +48,24 @@ pub struct Config {
 
     #[serde(rename = "StaticSessions", default)]
     pub static_sessions: Vec<StaticSessionConfig>,
+
+    /// Read-only directories deliberately exported to API clients.
+    #[serde(rename = "SourceRoots", default)]
+    pub source_roots: Vec<SourceRootConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRootConfig {
+    pub name: String,
+    /// Relative paths are anchored to the containing configuration file.
+    pub path: PathBuf,
+    /// Content mapping only; does not change GDB/LLDB debugger settings.
+    #[serde(default)]
+    pub debugger_path: Option<String>,
+    /// Empty applies to all sessions. Tags scope identical build prefixes.
+    #[serde(default)]
+    pub session_tags: Vec<String>,
 }
 
 impl Config {
@@ -576,8 +594,18 @@ impl Default for SshConfig {
 impl Config {
     /// Load configuration from a YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let contents = fs::read_to_string(path)?;
-        Self::from_str(&contents)
+        let path = fs::canonicalize(path)?;
+        let contents = fs::read_to_string(&path)?;
+        let mut config = Self::from_str(&contents)?;
+        let base = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("configuration path has no parent"))?;
+        for root in &mut config.source_roots {
+            if root.path.is_relative() {
+                root.path = base.join(&root.path);
+            }
+        }
+        Ok(config)
     }
 
     /// Parse configuration from a YAML string
@@ -629,6 +657,28 @@ mod tests {
             load_repo_config("pidconfig.yaml").framework,
             Framework::Unspecified
         );
+    }
+
+    #[test]
+    fn source_root_paths_are_relative_to_the_startup_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ddb.yaml");
+        std::fs::write(&path, "SourceRoots:\n  - name: app\n    path: checkout\n    debugger_path: /build/app\n    session_tags: [worker]\n").unwrap();
+        let config = Config::from_file(&path).unwrap();
+        assert_eq!(config.source_roots.len(), 1);
+        assert_eq!(
+            config.source_roots[0].path,
+            directory.path().canonicalize().unwrap().join("checkout")
+        );
+        assert_eq!(config.source_roots[0].session_tags, ["worker"]);
+    }
+
+    #[test]
+    fn source_root_configuration_rejects_unknown_fields() {
+        assert!(Config::from_str(
+            "SourceRoots:\n  - name: app\n    path: checkout\n    debugger_paths: /typo\n"
+        )
+        .is_err());
     }
 
     #[test]

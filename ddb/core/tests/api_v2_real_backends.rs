@@ -103,6 +103,38 @@ fn assert_typed_inspection_on_backend(backend: &str) {
         .as_str()
         .expect("session id should be present");
     let session_target = json!({"session": {"sessionId": session_id}});
+    let (status, sources) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSources"),
+        &json!({"target": session_target, "query": "real_loop/src/main.rs", "refresh": true}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{backend}: {sources:?}");
+    assert!(
+        sources
+            .get("warnings")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "{backend}: {sources:?}"
+    );
+    let source = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| {
+            source["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("real_loop/src/main.rs"))
+        })
+        .expect("fixture must be discoverable without selecting a frame");
+    assert_eq!(source["owners"][0]["sessionId"], session_id);
+    let (status, content) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ReadSource"),
+        &json!({"sourceReference": source["sourceReference"], "startLine": 1, "maxLines": 4}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{backend}: {content:?}");
+    assert_eq!(content["source"]["lineCount"], 4);
+    assert!(content["source"]["totalLines"].as_u64().unwrap() > 4);
     let (status, capabilities) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "GetCapabilities"),
         &json!({"target": session_target}),
@@ -1088,6 +1120,13 @@ fn assert_continue_with_running_peer(backend: &str) {
     let outcomes = operation["targetOutcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes.iter().all(|outcome| outcome["succeeded"] == true));
+    let (status, sources) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSources"),
+        &json!({"refresh": true}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{backend}: {sources:?}");
+    assert_eq!(sources["warnings"].as_array().unwrap().len(), 2);
     for session in sessions["sessions"].as_array().unwrap() {
         let target = json!({"session": {"sessionId": session["sessionId"]}});
         let (status, threads) = ddb.api_post_json_with_bearer(

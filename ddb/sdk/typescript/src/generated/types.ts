@@ -238,6 +238,29 @@ export const SortDirectionValues = {
 } as const;
 export type SortDirection = (typeof SortDirectionValues)[keyof typeof SortDirectionValues] | (string & {});
 
+export const SourceAvailabilityValues = {
+  SOURCE_AVAILABILITY_UNSPECIFIED: "SOURCE_AVAILABILITY_UNSPECIFIED",
+  SOURCE_AVAILABILITY_AVAILABLE: "SOURCE_AVAILABILITY_AVAILABLE",
+  SOURCE_AVAILABILITY_UNAVAILABLE: "SOURCE_AVAILABILITY_UNAVAILABLE",
+} as const;
+export type SourceAvailability = (typeof SourceAvailabilityValues)[keyof typeof SourceAvailabilityValues] | (string & {});
+
+export const SourceEntryKindValues = {
+  SOURCE_ENTRY_KIND_UNSPECIFIED: "SOURCE_ENTRY_KIND_UNSPECIFIED",
+  SOURCE_ENTRY_KIND_DIRECTORY: "SOURCE_ENTRY_KIND_DIRECTORY",
+  SOURCE_ENTRY_KIND_FILE: "SOURCE_ENTRY_KIND_FILE",
+  SOURCE_ENTRY_KIND_SYMLINK: "SOURCE_ENTRY_KIND_SYMLINK",
+  SOURCE_ENTRY_KIND_OTHER: "SOURCE_ENTRY_KIND_OTHER",
+} as const;
+export type SourceEntryKind = (typeof SourceEntryKindValues)[keyof typeof SourceEntryKindValues] | (string & {});
+
+export const SourceOriginValues = {
+  SOURCE_ORIGIN_UNSPECIFIED: "SOURCE_ORIGIN_UNSPECIFIED",
+  SOURCE_ORIGIN_DEBUGGER: "SOURCE_ORIGIN_DEBUGGER",
+  SOURCE_ORIGIN_WORKSPACE: "SOURCE_ORIGIN_WORKSPACE",
+} as const;
+export type SourceOrigin = (typeof SourceOriginValues)[keyof typeof SourceOriginValues] | (string & {});
+
 export const StateEventKindValues = {
   STATE_EVENT_KIND_UNSPECIFIED: "STATE_EVENT_KIND_UNSPECIFIED",
   STATE_EVENT_KIND_RESOURCE_UPSERTED: "STATE_EVENT_KIND_RESOURCE_UPSERTED",
@@ -957,6 +980,48 @@ export interface ListSignalsResponse {
   "page"?: PageInfo;
 }
 
+export interface ListSourceEntriesRequest {
+  "context"?: RequestContext;
+  "rootReference"?: string;
+  "directory"?: string;
+  "page"?: PageRequest;
+  "includeHidden"?: boolean;
+}
+
+export interface ListSourceEntriesResponse {
+  "context"?: ResponseContext;
+  "entries"?: SourceEntry[];
+  "page"?: PageInfo;
+  "revision"?: string;
+  "unsupportedNames"?: number;
+}
+
+export interface ListSourceRootsRequest {
+  "context"?: RequestContext;
+  "page"?: PageRequest;
+}
+
+export interface ListSourceRootsResponse {
+  "context"?: ResponseContext;
+  "roots"?: SourceRoot[];
+  "page"?: PageInfo;
+}
+
+export interface ListSourcesRequest {
+  "context"?: RequestContext;
+  "target"?: Target;
+  "page"?: PageRequest;
+  "query"?: string;
+  "refresh"?: boolean;
+}
+
+export interface ListSourcesResponse {
+  "context"?: ResponseContext;
+  "sources"?: SourceFile[];
+  "page"?: PageInfo;
+  "warnings"?: SourceDiscoveryWarning[];
+}
+
 export interface ListThreadsRequest {
   "context"?: RequestContext;
   "target"?: Target;
@@ -1144,6 +1209,7 @@ export interface ResolveSourceRequest {
   "context"?: RequestContext;
   "target"?: Target;
   "location"?: SourceLocation;
+  "rootReference"?: string;
 }
 
 export interface ResolveSourceResponse {
@@ -1288,6 +1354,19 @@ export interface SourceContent {
   "content"?: string;
   "lineCount"?: number;
   "hasMore"?: boolean;
+  "totalLines"?: number;
+}
+
+export interface SourceDiscoveryWarning {
+  "sessionId"?: string;
+  "message"?: string;
+}
+
+export interface SourceEntry {
+  "name"?: string;
+  "relativePath"?: string;
+  "kind"?: SourceEntryKind;
+  "source"?: SourceFile;
 }
 
 export interface SourceFile {
@@ -1296,6 +1375,13 @@ export interface SourceFile {
   "name"?: string;
   "mediaType"?: string;
   "contentHash"?: string;
+  "origin"?: SourceOrigin;
+  "rootReference"?: string;
+  "relativePath"?: string;
+  "owners"?: SourceOwner[];
+  "availability"?: SourceAvailability;
+  "unavailableReason"?: string;
+  "debuggerPath"?: string;
 }
 
 export interface SourceLocation {
@@ -1307,9 +1393,21 @@ export interface SourceLocation {
   "functionName"?: string;
 }
 
+export interface SourceOwner {
+  "sessionId"?: string;
+  "groupId"?: string;
+}
+
 export interface SourcePathMapping {
   "from"?: string;
   "to"?: string;
+}
+
+export interface SourceRoot {
+  "rootReference"?: string;
+  "name"?: string;
+  "debuggerPath"?: string;
+  "owners"?: SourceOwner[];
 }
 
 export interface StateEvent {

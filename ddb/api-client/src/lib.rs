@@ -12,7 +12,7 @@ mod stream;
 mod sync;
 
 pub use error::{ClientError, Result};
-pub use http::{ClientConfig, DdbClient};
+pub use http::{ClientConfig, DdbClient, SourceCatalog};
 pub use output_sync::{OutputSync, OutputSyncItem, OutputSyncOptions};
 pub use projection::{ProjectionUpdate, StateProjection};
 pub use stream::NdjsonStream;

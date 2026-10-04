@@ -572,6 +572,87 @@ pub mod debugger_service_client {
                 .insert(GrpcMethod::new("ddb.api.v2.DebuggerService", "ReadMemory"));
             self.inner.unary(req, path, codec).await
         }
+        /// Lists debugger-known sources without requiring a selected or stopped frame.
+        pub async fn list_sources(
+            &mut self,
+            request: impl tonic::IntoRequest<::ddb_api_types::v2::ListSourcesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourcesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerService/ListSources",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ddb.api.v2.DebuggerService", "ListSources"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Lists explicitly configured source directory exports. Requires READ permission.
+        pub async fn list_source_roots(
+            &mut self,
+            request: impl tonic::IntoRequest<::ddb_api_types::v2::ListSourceRootsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourceRootsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerService/ListSourceRoots",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("ddb.api.v2.DebuggerService", "ListSourceRoots"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Lists one exported directory with bounded, revision-bound pagination.
+        pub async fn list_source_entries(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                ::ddb_api_types::v2::ListSourceEntriesRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourceEntriesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerService/ListSourceEntries",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("ddb.api.v2.DebuggerService", "ListSourceEntries"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Resolves a backend location to a stable source reference.
         pub async fn resolve_source(
             &mut self,
@@ -976,6 +1057,30 @@ pub mod debugger_service_server {
             request: tonic::Request<::ddb_api_types::v2::ReadMemoryRequest>,
         ) -> std::result::Result<
             tonic::Response<::ddb_api_types::v2::ReadMemoryResponse>,
+            tonic::Status,
+        >;
+        /// Lists debugger-known sources without requiring a selected or stopped frame.
+        async fn list_sources(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::ListSourcesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourcesResponse>,
+            tonic::Status,
+        >;
+        /// Lists explicitly configured source directory exports. Requires READ permission.
+        async fn list_source_roots(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::ListSourceRootsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourceRootsResponse>,
+            tonic::Status,
+        >;
+        /// Lists one exported directory with bounded, revision-bound pagination.
+        async fn list_source_entries(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::ListSourceEntriesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ListSourceEntriesResponse>,
             tonic::Status,
         >;
         /// Resolves a backend location to a stable source reference.
@@ -2022,6 +2127,152 @@ pub mod debugger_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ReadMemorySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerService/ListSources" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSourcesSvc<T: DebuggerService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::ListSourcesRequest,
+                    > for ListSourcesSvc<T> {
+                        type Response = ::ddb_api_types::v2::ListSourcesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::ListSourcesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerService>::list_sources(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSourcesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerService/ListSourceRoots" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSourceRootsSvc<T: DebuggerService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::ListSourceRootsRequest,
+                    > for ListSourceRootsSvc<T> {
+                        type Response = ::ddb_api_types::v2::ListSourceRootsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::ListSourceRootsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerService>::list_source_roots(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSourceRootsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerService/ListSourceEntries" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSourceEntriesSvc<T: DebuggerService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::ListSourceEntriesRequest,
+                    > for ListSourceEntriesSvc<T> {
+                        type Response = ::ddb_api_types::v2::ListSourceEntriesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::ListSourceEntriesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerService>::list_source_entries(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSourceEntriesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -1,20 +1,23 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::RwLock,
 };
 
 use crate::state::GroupId;
 
-#[derive(Debug, Default)]
-struct SourceIndex {
-    source_groups: HashMap<String, HashSet<GroupId>>,
-    checked_groups: HashMap<String, HashSet<GroupId>>,
-    loaded_groups: HashSet<GroupId>,
+#[derive(Clone, Debug)]
+struct SessionSources {
+    group_id: GroupId,
+    paths: BTreeSet<String>,
+    checked_paths: HashSet<String>,
+    complete: bool,
 }
 
+/// Source discovery is owned by sessions, not path strings or group representatives.
+/// Group membership is a projection of those session catalogs.
 #[derive(Debug, Default)]
 pub(crate) struct SourceCatalog {
-    state: RwLock<SourceIndex>,
+    sessions: RwLock<HashMap<u64, SessionSources>>,
 }
 
 impl SourceCatalog {
@@ -22,88 +25,137 @@ impl SourceCatalog {
         Self::default()
     }
 
-    pub(crate) fn has_full_listing(&self, group_id: GroupId) -> bool {
-        self.state.read().unwrap().loaded_groups.contains(&group_id)
-    }
-
-    pub(crate) fn is_checked(&self, path: &str, group_id: GroupId) -> bool {
-        self.state
+    pub(crate) fn has_full_listing(&self, sid: u64) -> bool {
+        self.sessions
             .read()
             .unwrap()
-            .checked_groups
-            .get(path)
-            .is_some_and(|groups| groups.contains(&group_id))
+            .get(&sid)
+            .is_some_and(|sources| sources.complete)
+    }
+
+    pub(crate) fn is_checked(&self, path: &str, sid: u64) -> bool {
+        self.sessions
+            .read()
+            .unwrap()
+            .get(&sid)
+            .is_some_and(|sources| {
+                sources.complete
+                    || sources.checked_paths.contains(path)
+                    || sources.paths.contains(path)
+            })
     }
 
     pub(crate) fn group_ids(&self, path: &str) -> HashSet<GroupId> {
-        self.state
+        self.sessions
             .read()
             .unwrap()
-            .source_groups
-            .get(path)
-            .cloned()
+            .values()
+            .filter(|sources| sources.paths.contains(path))
+            .map(|sources| sources.group_id)
+            .collect()
+    }
+
+    pub(crate) fn session_listing(&self, sid: u64) -> Vec<String> {
+        self.sessions
+            .read()
+            .unwrap()
+            .get(&sid)
+            .map(|sources| sources.paths.iter().cloned().collect())
             .unwrap_or_default()
     }
 
     pub(crate) fn record_full_listing(
         &self,
+        sid: u64,
         group_id: GroupId,
         sources: impl IntoIterator<Item = String>,
-    ) -> bool {
-        let mut state = self.state.write().unwrap();
-        if !state.loaded_groups.insert(group_id) {
-            return false;
-        }
-
-        for source in sources {
-            Self::record_source(&mut state, group_id, source);
-        }
-        true
+    ) -> anyhow::Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        let replacement = SessionSources {
+            group_id,
+            paths: sources.into_iter().collect(),
+            checked_paths: HashSet::new(),
+            complete: true,
+        };
+        ensure_budget(&sessions, sid, &replacement)?;
+        sessions.insert(sid, replacement);
+        Ok(())
     }
 
     pub(crate) fn record_path_listing(
         &self,
         requested_path: &str,
+        sid: u64,
         group_id: GroupId,
-        sources: impl IntoIterator<Item = String>,
-    ) {
-        let mut state = self.state.write().unwrap();
-        state
-            .checked_groups
-            .entry(requested_path.to_owned())
-            .or_default()
-            .insert(group_id);
-
-        for source in sources {
-            Self::record_source(&mut state, group_id, source);
+        paths: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        let mut sources = sessions
+            .get(&sid)
+            .cloned()
+            .unwrap_or_else(|| SessionSources {
+                group_id,
+                paths: BTreeSet::new(),
+                checked_paths: HashSet::new(),
+                complete: false,
+            });
+        if sources.group_id != group_id {
+            sources = SessionSources {
+                group_id,
+                paths: BTreeSet::new(),
+                checked_paths: HashSet::new(),
+                complete: false,
+            };
         }
+        sources.checked_paths.insert(requested_path.to_owned());
+        sources.paths.extend(paths);
+        ensure_budget(&sessions, sid, &sources)?;
+        sessions.insert(sid, sources);
+        Ok(())
+    }
+
+    pub(crate) fn remove_session(&self, sid: u64) {
+        self.sessions.write().unwrap().remove(&sid);
     }
 
     pub(crate) fn remove_group(&self, group_id: GroupId) {
-        let mut state = self.state.write().unwrap();
-        state.loaded_groups.remove(&group_id);
-        state.source_groups.retain(|_, groups| {
-            groups.remove(&group_id);
-            !groups.is_empty()
-        });
-        state.checked_groups.retain(|_, groups| {
-            groups.remove(&group_id);
-            !groups.is_empty()
-        });
+        self.sessions
+            .write()
+            .unwrap()
+            .retain(|_, sources| sources.group_id != group_id);
     }
+}
 
-    fn record_source(state: &mut SourceIndex, group_id: GroupId, source: String) {
-        state
-            .source_groups
-            .entry(source.clone())
-            .or_default()
-            .insert(group_id);
-        state
-            .checked_groups
-            .entry(source)
-            .or_default()
-            .insert(group_id);
+// Count positive and negative records across all sessions. A failed refresh
+// leaves the last usable catalog intact. Limits also bound repeated negative
+// path probes and accumulated partial-directory discovery.
+fn ensure_budget(
+    sessions: &HashMap<u64, SessionSources>,
+    replaced_sid: u64,
+    replacement: &SessionSources,
+) -> anyhow::Result<()> {
+    let mut entries = 0usize;
+    let mut bytes = 0usize;
+    for source in sessions
+        .iter()
+        .filter(|(sid, _)| **sid != replaced_sid)
+        .map(|(_, source)| source)
+        .chain(std::iter::once(replacement))
+    {
+        for path in source.paths.iter().chain(source.checked_paths.iter()) {
+            entries = entries.saturating_add(1);
+            bytes = bytes.saturating_add(path.len() + std::mem::size_of::<String>());
+            anyhow::ensure!(
+                entries <= 100_000 && bytes <= 16 * 1024 * 1024,
+                "cached debugger source catalog exceeds its global resource bound"
+            );
+        }
     }
+    anyhow::ensure!(
+        sessions.len() < 4096 || sessions.contains_key(&replaced_sid),
+        "cached debugger source session limit reached"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -111,47 +163,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn full_listing_is_applied_once() {
+    fn catalog_budget_is_global_and_failed_updates_preserve_existing_entries() {
         let catalog = SourceCatalog::new();
-
-        assert!(catalog.record_full_listing(
-            GroupId::new(7),
-            ["/src/main.rs".to_owned(), "/src/lib.rs".to_owned()]
-        ));
-        assert!(!catalog.record_full_listing(GroupId::new(7), ["/src/ignored.rs".to_owned()]));
-
-        assert_eq!(
-            catalog.group_ids("/src/main.rs"),
-            HashSet::from([GroupId::new(7)])
-        );
-        assert!(catalog.group_ids("/src/ignored.rs").is_empty());
+        let group = GroupId::new(7);
+        catalog
+            .record_full_listing(
+                1,
+                group,
+                (0..60_000).map(|index| format!("/source/{index}")),
+            )
+            .unwrap();
+        assert!(catalog
+            .record_full_listing(
+                2,
+                group,
+                (0..40_001).map(|index| format!("/source/{index}"))
+            )
+            .is_err());
+        assert_eq!(catalog.session_listing(1).len(), 60_000);
+        assert!(catalog.session_listing(2).is_empty());
+        assert!(catalog
+            .record_path_listing(&"x".repeat(16 * 1024 * 1024), 1, group, [])
+            .is_err());
+        assert_eq!(catalog.session_listing(1).len(), 60_000);
     }
 
     #[test]
-    fn empty_path_listing_is_remembered() {
+    fn sessions_in_one_group_keep_distinct_source_catalogs() {
         let catalog = SourceCatalog::new();
-
-        catalog.record_path_listing("/src/missing.rs", GroupId::new(3), []);
-
-        assert!(catalog.is_checked("/src/missing.rs", GroupId::new(3)));
-        assert!(catalog.group_ids("/src/missing.rs").is_empty());
+        let group = GroupId::new(7);
+        catalog
+            .record_full_listing(1, group, ["/host-a/main.rs".into()])
+            .unwrap();
+        catalog
+            .record_full_listing(2, group, ["/host-b/main.rs".into()])
+            .unwrap();
+        assert_eq!(catalog.session_listing(1), ["/host-a/main.rs"]);
+        assert_eq!(catalog.session_listing(2), ["/host-b/main.rs"]);
+        assert_eq!(catalog.group_ids("/host-b/main.rs"), HashSet::from([group]));
     }
 
     #[test]
-    fn removing_group_cleans_every_reverse_index() {
+    fn refreshing_a_session_removes_obsolete_source_ownership() {
         let catalog = SourceCatalog::new();
-        catalog.record_full_listing(GroupId::new(3), ["/src/main.rs".to_owned()]);
-        catalog.record_full_listing(GroupId::new(4), ["/src/main.rs".to_owned()]);
-        catalog.record_path_listing("/src/missing.rs", GroupId::new(3), []);
+        let group = GroupId::new(7);
+        catalog
+            .record_full_listing(1, group, ["/old.rs".into()])
+            .unwrap();
+        catalog
+            .record_full_listing(1, group, ["/new.rs".into()])
+            .unwrap();
+        assert!(catalog.group_ids("/old.rs").is_empty());
+        assert_eq!(catalog.session_listing(1), ["/new.rs"]);
+    }
 
-        catalog.remove_group(GroupId::new(3));
-
-        assert!(!catalog.has_full_listing(GroupId::new(3)));
-        assert!(!catalog.is_checked("/src/main.rs", GroupId::new(3)));
-        assert!(!catalog.is_checked("/src/missing.rs", GroupId::new(3)));
-        assert_eq!(
-            catalog.group_ids("/src/main.rs"),
-            HashSet::from([GroupId::new(4)])
-        );
+    #[test]
+    fn negative_lookups_and_cleanup_are_session_scoped() {
+        let catalog = SourceCatalog::new();
+        let group = GroupId::new(7);
+        catalog
+            .record_path_listing("/missing.rs", 1, group, [])
+            .unwrap();
+        assert!(catalog.is_checked("/missing.rs", 1));
+        assert!(!catalog.is_checked("/missing.rs", 2));
+        catalog
+            .record_full_listing(2, group, ["/main.rs".into()])
+            .unwrap();
+        catalog.remove_session(1);
+        assert!(!catalog.is_checked("/missing.rs", 1));
+        assert!(catalog.has_full_listing(2));
+        catalog.remove_group(group);
+        assert!(catalog.session_listing(2).is_empty());
+        assert!(catalog.group_ids("/main.rs").is_empty());
     }
 }

@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 ddb-api-types = { path = "../api-types" }
+ddb-source-workspace = { path = "../source-workspace" }
 ddb-api-extension = { path = "../api-extension" }
 ddb-api-grpc = { path = "../api-grpc", optional = true }
 russh = "=0.62.5" # ssh

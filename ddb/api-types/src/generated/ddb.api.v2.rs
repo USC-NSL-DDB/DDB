@@ -1357,8 +1357,61 @@ pub struct DebuggerSignal {
     #[prost(string, optional, tag = "5")]
     pub description: ::core::option::Option<::prost::alloc::string::String>,
 }
-/// SourceFile identifies resolved source independently of local filesystem access.
+/// SourceOwner associates a source identity with one session and its DDB group.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourceOwner {
+    /// Opaque session identity. Never infer ownership from a pathname alone.
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Opaque group identity when the session belongs to a group.
+    #[prost(string, optional, tag = "2")]
+    pub group_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// SourceRoot is an explicitly configured, read-only DDB-host directory export.
+/// The export's host filesystem pathname is intentionally not published.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SourceRoot {
+    /// Opaque root identity accepted by ListSourceEntries and ResolveSource.
+    #[prost(string, tag = "1")]
+    pub root_reference: ::prost::alloc::string::String,
+    /// Configured unique display name.
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    /// Optional debugger path prefix mapped to this root for source content.
+    #[prost(string, optional, tag = "3")]
+    pub debugger_path: ::core::option::Option<::prost::alloc::string::String>,
+    /// Sessions matched by this root's configured session tags. Empty is unscoped.
+    #[prost(message, repeated, tag = "4")]
+    pub owners: ::prost::alloc::vec::Vec<SourceOwner>,
+}
+/// SourceEntry is one immediate child of an exported directory.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SourceEntry {
+    /// Entry name, not a host-absolute path.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Path relative to the addressed root, accepted by ResolveSource.
+    #[prost(string, tag = "2")]
+    pub relative_path: ::prost::alloc::string::String,
+    /// Entry type. Symlink traversal remains confined to the root.
+    #[prost(enumeration = "SourceEntryKind", tag = "3")]
+    pub kind: i32,
+    /// Present for discoverable files; content can still be unavailable.
+    #[prost(message, optional, tag = "4")]
+    pub source: ::core::option::Option<SourceFile>,
+}
+/// SourceDiscoveryWarning reports incomplete discovery without hiding other sessions.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourceDiscoveryWarning {
+    /// Session whose debugger catalog could not be refreshed.
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Safe explanatory text. Existing cached entries can still be returned.
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+/// SourceFile identifies resolved source independently of local filesystem access.
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SourceFile {
     /// Stable source reference accepted by ReadSource.
     #[prost(string, tag = "1")]
@@ -1375,9 +1428,31 @@ pub struct SourceFile {
     /// Optional content hash for frontend caching.
     #[prost(string, optional, tag = "5")]
     pub content_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Origin of this identity. Equal paths from different origins are not aliases.
+    #[prost(enumeration = "SourceOrigin", tag = "6")]
+    pub origin: i32,
+    /// Exported root used for content, if one exists.
+    #[prost(string, optional, tag = "7")]
+    pub root_reference: ::core::option::Option<::prost::alloc::string::String>,
+    /// Path relative to the exported root, if one exists.
+    #[prost(string, optional, tag = "8")]
+    pub relative_path: ::core::option::Option<::prost::alloc::string::String>,
+    /// Explicit owners. An unbound workspace document can have no owners.
+    #[prost(message, repeated, tag = "9")]
+    pub owners: ::prost::alloc::vec::Vec<SourceOwner>,
+    /// Discovery-time accessibility hint. ReadSource performs authorization again.
+    #[prost(enumeration = "SourceAvailability", tag = "10")]
+    pub availability: i32,
+    /// Safe reason for unavailable content, when known.
+    #[prost(string, optional, tag = "11")]
+    pub unavailable_reason: ::core::option::Option<::prost::alloc::string::String>,
+    /// Backend source path for breakpoint placement, distinct from content location.
+    /// Absence means no debugger path mapping has been established.
+    #[prost(string, optional, tag = "12")]
+    pub debugger_path: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// SourceContent is one bounded source window.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SourceContent {
     /// Resolved source identity.
     #[prost(message, optional, tag = "1")]
@@ -1394,6 +1469,9 @@ pub struct SourceContent {
     /// True when more lines exist after this window.
     #[prost(bool, tag = "5")]
     pub has_more: bool,
+    /// Exact total lines in this content version, including zero for an empty file.
+    #[prost(uint32, tag = "6")]
+    pub total_lines: u32,
 }
 /// MemoryBlock is one bounded memory read.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2512,6 +2590,102 @@ impl DistributedBoundaryKind {
         }
     }
 }
+/// SourceOrigin distinguishes debugger identities from explicitly exported files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SourceOrigin {
+    Unspecified = 0,
+    Debugger = 1,
+    Workspace = 2,
+}
+impl SourceOrigin {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SOURCE_ORIGIN_UNSPECIFIED",
+            Self::Debugger => "SOURCE_ORIGIN_DEBUGGER",
+            Self::Workspace => "SOURCE_ORIGIN_WORKSPACE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SOURCE_ORIGIN_UNSPECIFIED" => Some(Self::Unspecified),
+            "SOURCE_ORIGIN_DEBUGGER" => Some(Self::Debugger),
+            "SOURCE_ORIGIN_WORKSPACE" => Some(Self::Workspace),
+            _ => None,
+        }
+    }
+}
+/// SourceAvailability is a discovery-time hint, not a guarantee of future access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SourceAvailability {
+    Unspecified = 0,
+    Available = 1,
+    Unavailable = 2,
+}
+impl SourceAvailability {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SOURCE_AVAILABILITY_UNSPECIFIED",
+            Self::Available => "SOURCE_AVAILABILITY_AVAILABLE",
+            Self::Unavailable => "SOURCE_AVAILABILITY_UNAVAILABLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SOURCE_AVAILABILITY_UNSPECIFIED" => Some(Self::Unspecified),
+            "SOURCE_AVAILABILITY_AVAILABLE" => Some(Self::Available),
+            "SOURCE_AVAILABILITY_UNAVAILABLE" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+/// SourceEntryKind describes a directory entry without dereferencing symlinks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SourceEntryKind {
+    Unspecified = 0,
+    Directory = 1,
+    File = 2,
+    Symlink = 3,
+    Other = 4,
+}
+impl SourceEntryKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SOURCE_ENTRY_KIND_UNSPECIFIED",
+            Self::Directory => "SOURCE_ENTRY_KIND_DIRECTORY",
+            Self::File => "SOURCE_ENTRY_KIND_FILE",
+            Self::Symlink => "SOURCE_ENTRY_KIND_SYMLINK",
+            Self::Other => "SOURCE_ENTRY_KIND_OTHER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SOURCE_ENTRY_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "SOURCE_ENTRY_KIND_DIRECTORY" => Some(Self::Directory),
+            "SOURCE_ENTRY_KIND_FILE" => Some(Self::File),
+            "SOURCE_ENTRY_KIND_SYMLINK" => Some(Self::Symlink),
+            "SOURCE_ENTRY_KIND_OTHER" => Some(Self::Other),
+            _ => None,
+        }
+    }
+}
 /// SnapshotSection selects bounded optional material in a state snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -3003,6 +3177,106 @@ pub struct ReadMemoryResponse {
     #[prost(message, optional, tag = "2")]
     pub memory: ::core::option::Option<MemoryBlock>,
 }
+/// ListSourcesRequest discovers sources from debug information without selecting a frame.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSourcesRequest {
+    /// Request controls; READ permission is required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Optional owner filter. Absence selects all sessions.
+    #[prost(message, optional, tag = "2")]
+    pub target: ::core::option::Option<Target>,
+    /// Stable, revision-bound pagination; changed catalogs expire old tokens.
+    #[prost(message, optional, tag = "3")]
+    pub page: ::core::option::Option<PageRequest>,
+    /// Case-insensitive substring matched against debugger source paths.
+    #[prost(string, tag = "4")]
+    pub query: ::prost::alloc::string::String,
+    /// Refresh debugger catalogs on the first page. Never interrupts running targets.
+    /// Later pages must leave this false. Per-session failures are reported as warnings.
+    #[prost(bool, tag = "5")]
+    pub refresh: bool,
+}
+/// ListSourcesResponse retains unavailable files and session-qualified identities.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSourcesResponse {
+    /// Common success metadata.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<ResponseContext>,
+    /// Debugger-known sources in stable session/path order.
+    #[prost(message, repeated, tag = "2")]
+    pub sources: ::prost::alloc::vec::Vec<SourceFile>,
+    /// Continuation metadata.
+    #[prost(message, optional, tag = "3")]
+    pub page: ::core::option::Option<PageInfo>,
+    /// Discovery failures. A successful response with warnings is not exhaustive.
+    #[prost(message, repeated, tag = "4")]
+    pub warnings: ::prost::alloc::vec::Vec<SourceDiscoveryWarning>,
+}
+/// ListSourceRootsRequest pages configured read-only directory exports.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSourceRootsRequest {
+    /// Request controls; READ permission is required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Optional collection page.
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<PageRequest>,
+}
+/// ListSourceRootsResponse describes roots, not their host filesystem paths.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSourceRootsResponse {
+    /// Common success metadata.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<ResponseContext>,
+    /// Configured roots in stable name order.
+    #[prost(message, repeated, tag = "2")]
+    pub roots: ::prost::alloc::vec::Vec<SourceRoot>,
+    /// Continuation metadata.
+    #[prost(message, optional, tag = "3")]
+    pub page: ::core::option::Option<PageInfo>,
+}
+/// ListSourceEntriesRequest lists one directory, never an implicit recursive scan.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSourceEntriesRequest {
+    /// Request controls; READ permission is required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Opaque exported root identity.
+    #[prost(string, tag = "2")]
+    pub root_reference: ::prost::alloc::string::String,
+    /// Root-relative directory path; empty selects the root. Parent traversal is invalid.
+    #[prost(string, tag = "3")]
+    pub directory: ::prost::alloc::string::String,
+    /// Revision-bound pagination. First pages always refresh the entry set.
+    /// Continuations may reuse a snapshot for up to 30 seconds, rechecking access.
+    /// Observed metadata changes or a fresh listing invalidate that snapshot;
+    /// a changed entry set then expires old page tokens. No recursive scan occurs.
+    #[prost(message, optional, tag = "4")]
+    pub page: ::core::option::Option<PageRequest>,
+    /// Includes dot-prefixed entries. This does not bypass export permissions.
+    #[prost(bool, tag = "5")]
+    pub include_hidden: bool,
+}
+/// ListSourceEntriesResponse returns immediate children of one exported directory.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSourceEntriesResponse {
+    /// Common success metadata.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<ResponseContext>,
+    /// Bounded child entry page, directories first and names sorted within each kind.
+    #[prost(message, repeated, tag = "2")]
+    pub entries: ::prost::alloc::vec::Vec<SourceEntry>,
+    /// Continuation metadata.
+    #[prost(message, optional, tag = "3")]
+    pub page: ::core::option::Option<PageInfo>,
+    /// Revision of the complete directory entry set.
+    #[prost(string, tag = "4")]
+    pub revision: ::prost::alloc::string::String,
+    /// Entries omitted because their names are not representable safe UTF-8 paths.
+    #[prost(uint32, tag = "5")]
+    pub unsupported_names: u32,
+}
 /// ResolveSourceRequest maps a backend source location to a readable reference.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResolveSourceRequest {
@@ -3015,9 +3289,13 @@ pub struct ResolveSourceRequest {
     /// Backend-reported source location.
     #[prost(message, optional, tag = "3")]
     pub location: ::core::option::Option<SourceLocation>,
+    /// When present, location.path is relative to this exported root, not a debugger
+    /// path. A source_reference and root_reference cannot be supplied together.
+    #[prost(string, optional, tag = "4")]
+    pub root_reference: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// ResolveSourceResponse returns a stable source reference.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResolveSourceResponse {
     /// Common success metadata.
     #[prost(message, optional, tag = "1")]
@@ -3043,7 +3321,7 @@ pub struct ReadSourceRequest {
     pub max_lines: u32,
 }
 /// ReadSourceResponse returns bounded UTF-8 source content.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadSourceResponse {
     /// Common success metadata.
     #[prost(message, optional, tag = "1")]

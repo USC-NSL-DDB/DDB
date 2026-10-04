@@ -17,7 +17,7 @@ pub struct SourceDocument {
     pub path: String,
     pub start_line: usize,
     pub end_line: usize,
-    pub total_lines: Option<usize>,
+    pub total_lines: usize,
     pub lines: Vec<String>,
     pub cursor: usize,
     pub scroll: usize,
@@ -157,7 +157,11 @@ impl SourceBrowser {
                 }
             }
         }
-        let first = (content.start_line as usize).max(1);
+        let first = if content.total_lines == 0 {
+            1
+        } else {
+            (content.start_line as usize).max(1)
+        };
         let mut lines = content
             .content
             .split('\n')
@@ -172,7 +176,7 @@ impl SourceBrowser {
             target: request.target,
             start_line: first,
             end_line: last,
-            total_lines: (!content.has_more).then_some(last),
+            total_lines: content.total_lines as usize,
             lines,
             cursor,
             scroll: self

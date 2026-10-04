@@ -879,6 +879,7 @@ async fn inspect_stopped_thread(
                 context: None,
                 target: Some(thread_target(&thread.thread_id)),
                 location: Some(location),
+                root_reference: None,
             })
             .await?
             .source

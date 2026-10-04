@@ -127,3 +127,42 @@ Required behavior checks:
   verification is still running; these results do not establish TUI completion.
 - Explorer/quick-open UI, local-root handling, frontend ownership-aware markers
   and breakpoints, and complete terminal verification remain unfinished.
+
+### Canonical source API stage
+
+- Shared filesystem commit: `04267e85`. Package documentation and complete
+  metadata accompany the API commit.
+- Added `ListSources`, `ListSourceRoots`, and `ListSourceEntries` to Protobuf,
+  both transports, SDKs, and generated contracts. `SourceFile` identifies its
+  origin and session owners; `ReadSource` returns exact total line counts.
+  Removed the old path-only source reader rather than retaining a fallback.
+- `SourceRoots` exports are explicit and config-relative. Session tags and build
+  prefixes select content mappings. Debugger catalogs are session-owned,
+  refreshable, globally bounded, and protected against late publication after
+  session cancellation. Missing sources remain visible with availability hints.
+- Rust catalog collection preserves per-session warnings and refreshes only the
+  first page. TUI source loading uses the new content shape and reloads the final
+  window for beyond-EOF navigation. This is contract adoption, not explorer UI.
+- Verified `cargo test -p ddb --features grpc-preview` with `--bin ddb` and test
+  targets `api_v2`, `api_v2_sources`, `api_v2_source_security`, `api_v2_grpc`,
+  `api_v2_spec_conformance`, and `source_resolution`: 333 unit tests passed,
+  one existing test ignored, and all 11 selected integration tests passed.
+- Real GDB and LLDB tests passed for `typed_v2_inspection` and
+  `continue_with_running_peer`: four tests. These now assert source discovery,
+  source content, and that refresh does not interrupt running sessions.
+- TUI unit tests: 91 passed. The three selected `terminal_workflow` PTY tests
+  passed for mock, GDB, and LLDB. The other 12 PTY workflows were not run in this
+  stage; new explorer/distributed-source workflows are still required.
+- Rust SDK/types tests: 20 passed. TypeScript type checks and seven tests passed;
+  Python's five tests passed. `ddb-api-codegen --check` reproduces all artifacts.
+  The established OpenAPI and AsyncAPI validators passed with 48 HTTP operations
+  and two stream channels. `git diff --check` passed.
+- Strict Clippy passed for TUI, source-workspace, and the Rust SDK. Backend
+  strict Clippy passed with `--all-targets --no-deps` and only
+  `-A clippy::cargo_common_metadata`. Unrestricted backend linting still fails
+  on existing package metadata and legacy `gdbmi` warnings; no source lint
+  suppressions or unrelated dependency refactors were added.
+- An earlier overlapping build reported missing compiled extension crates.
+  The serial backend verification above rebuilt successfully without code
+  workarounds. An initial gRPC test expected the wrong unknown-ID error;
+  it now checks the existing `NotFound` contract and passes.

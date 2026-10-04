@@ -221,6 +221,26 @@ class SortDirectionValues:
     SORT_DIRECTION_ASCENDING = "SORT_DIRECTION_ASCENDING"
     SORT_DIRECTION_DESCENDING = "SORT_DIRECTION_DESCENDING"
 
+SourceAvailability: TypeAlias = str
+class SourceAvailabilityValues:
+    SOURCE_AVAILABILITY_UNSPECIFIED = "SOURCE_AVAILABILITY_UNSPECIFIED"
+    SOURCE_AVAILABILITY_AVAILABLE = "SOURCE_AVAILABILITY_AVAILABLE"
+    SOURCE_AVAILABILITY_UNAVAILABLE = "SOURCE_AVAILABILITY_UNAVAILABLE"
+
+SourceEntryKind: TypeAlias = str
+class SourceEntryKindValues:
+    SOURCE_ENTRY_KIND_UNSPECIFIED = "SOURCE_ENTRY_KIND_UNSPECIFIED"
+    SOURCE_ENTRY_KIND_DIRECTORY = "SOURCE_ENTRY_KIND_DIRECTORY"
+    SOURCE_ENTRY_KIND_FILE = "SOURCE_ENTRY_KIND_FILE"
+    SOURCE_ENTRY_KIND_SYMLINK = "SOURCE_ENTRY_KIND_SYMLINK"
+    SOURCE_ENTRY_KIND_OTHER = "SOURCE_ENTRY_KIND_OTHER"
+
+SourceOrigin: TypeAlias = str
+class SourceOriginValues:
+    SOURCE_ORIGIN_UNSPECIFIED = "SOURCE_ORIGIN_UNSPECIFIED"
+    SOURCE_ORIGIN_DEBUGGER = "SOURCE_ORIGIN_DEBUGGER"
+    SOURCE_ORIGIN_WORKSPACE = "SOURCE_ORIGIN_WORKSPACE"
+
 StateEventKind: TypeAlias = str
 class StateEventKindValues:
     STATE_EVENT_KIND_UNSPECIFIED = "STATE_EVENT_KIND_UNSPECIFIED"
@@ -1235,6 +1255,66 @@ ListSignalsResponse = TypedDict(
     },
 )
 
+ListSourceEntriesRequest = TypedDict(
+    "ListSourceEntriesRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "rootReference": NotRequired["str"],
+        "directory": NotRequired["str"],
+        "page": NotRequired["PageRequest"],
+        "includeHidden": NotRequired["bool"],
+    },
+)
+
+ListSourceEntriesResponse = TypedDict(
+    "ListSourceEntriesResponse",
+    {
+        "context": NotRequired["ResponseContext"],
+        "entries": NotRequired["list[SourceEntry]"],
+        "page": NotRequired["PageInfo"],
+        "revision": NotRequired["str"],
+        "unsupportedNames": NotRequired["int"],
+    },
+)
+
+ListSourceRootsRequest = TypedDict(
+    "ListSourceRootsRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "page": NotRequired["PageRequest"],
+    },
+)
+
+ListSourceRootsResponse = TypedDict(
+    "ListSourceRootsResponse",
+    {
+        "context": NotRequired["ResponseContext"],
+        "roots": NotRequired["list[SourceRoot]"],
+        "page": NotRequired["PageInfo"],
+    },
+)
+
+ListSourcesRequest = TypedDict(
+    "ListSourcesRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "target": NotRequired["Target"],
+        "page": NotRequired["PageRequest"],
+        "query": NotRequired["str"],
+        "refresh": NotRequired["bool"],
+    },
+)
+
+ListSourcesResponse = TypedDict(
+    "ListSourcesResponse",
+    {
+        "context": NotRequired["ResponseContext"],
+        "sources": NotRequired["list[SourceFile]"],
+        "page": NotRequired["PageInfo"],
+        "warnings": NotRequired["list[SourceDiscoveryWarning]"],
+    },
+)
+
 ListThreadsRequest = TypedDict(
     "ListThreadsRequest",
     {
@@ -1502,6 +1582,7 @@ ResolveSourceRequest = TypedDict(
         "context": NotRequired["RequestContext"],
         "target": NotRequired["Target"],
         "location": NotRequired["SourceLocation"],
+        "rootReference": NotRequired["str"],
     },
 )
 
@@ -1700,6 +1781,25 @@ SourceContent = TypedDict(
         "content": NotRequired["str"],
         "lineCount": NotRequired["int"],
         "hasMore": NotRequired["bool"],
+        "totalLines": NotRequired["int"],
+    },
+)
+
+SourceDiscoveryWarning = TypedDict(
+    "SourceDiscoveryWarning",
+    {
+        "sessionId": NotRequired["str"],
+        "message": NotRequired["str"],
+    },
+)
+
+SourceEntry = TypedDict(
+    "SourceEntry",
+    {
+        "name": NotRequired["str"],
+        "relativePath": NotRequired["str"],
+        "kind": NotRequired["SourceEntryKind"],
+        "source": NotRequired["SourceFile"],
     },
 )
 
@@ -1711,6 +1811,13 @@ SourceFile = TypedDict(
         "name": NotRequired["str"],
         "mediaType": NotRequired["str"],
         "contentHash": NotRequired["str"],
+        "origin": NotRequired["SourceOrigin"],
+        "rootReference": NotRequired["str"],
+        "relativePath": NotRequired["str"],
+        "owners": NotRequired["list[SourceOwner]"],
+        "availability": NotRequired["SourceAvailability"],
+        "unavailableReason": NotRequired["str"],
+        "debuggerPath": NotRequired["str"],
     },
 )
 
@@ -1726,11 +1833,29 @@ SourceLocation = TypedDict(
     },
 )
 
+SourceOwner = TypedDict(
+    "SourceOwner",
+    {
+        "sessionId": NotRequired["str"],
+        "groupId": NotRequired["str"],
+    },
+)
+
 SourcePathMapping = TypedDict(
     "SourcePathMapping",
     {
         "from": NotRequired["str"],
         "to": NotRequired["str"],
+    },
+)
+
+SourceRoot = TypedDict(
+    "SourceRoot",
+    {
+        "rootReference": NotRequired["str"],
+        "name": NotRequired["str"],
+        "debuggerPath": NotRequired["str"],
+        "owners": NotRequired["list[SourceOwner]"],
     },
 )
 
