@@ -23,6 +23,113 @@ static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
 static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn source_explorer_terminal_workflow_without_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let checkout = directory.path().join("checkout");
+    fs::create_dir_all(checkout.join("src")).unwrap();
+    fs::write(
+        checkout.join("src/notes.txt"),
+        "outside debug symbols\nsecond line\n",
+    )
+    .unwrap();
+    fs::write(checkout.join(".hidden"), "hidden workspace file\n").unwrap();
+    fs::write(
+        checkout.join("src/zlong.txt"),
+        (1..=1000)
+            .map(|line| format!("large file line {line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let port = reserve_port();
+        let config = format!(
+            r#"Framework: unspecified
+Conf:
+  auto_shutdown: false
+  api_server_port: {port}
+  api_insecure_allow_unauthenticated_v2: true
+  base_dir: "{}/state"
+  log_dir: "{}/logs"
+  Debugger:
+    backend: mock
+SourceRoots:
+  - name: checkout
+    path: ./checkout
+StaticSessions: []
+"#,
+            directory.path().display(),
+            directory.path().display()
+        );
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("connected");
+    tui.send(b"o");
+    tui.wait_for("[root] checkout");
+    tui.send(b"\r");
+    tui.wait_for("[dir] src");
+    tui.send(b"\r");
+    tui.wait_for("notes.txt");
+    tui.send(b"\r");
+    tui.wait_for("outside debug symbols");
+    tui.wait_for_source_marker('▸', 1);
+    tui.send(b"g2\r");
+    tui.wait_for_source_marker('▸', 2);
+    tui.clear_capture();
+    tui.send(b"o");
+    tui.wait_for("[root] checkout");
+    tui.send(b"\r");
+    tui.wait_for("[dir] src");
+    // Ctrl-H toggles dotfiles; typing filters the loaded directory page.
+    tui.send(b"\x08.hidden");
+    tui.wait_for("[file] checkout/.hidden");
+    tui.send(b"\r");
+    tui.wait_for("hidden workspace file");
+    tui.clear_capture();
+    tui.send(b"\x1b[1;3D");
+    tui.wait_for("outside debug symbols");
+    tui.wait_for_source_marker('▸', 2);
+    tui.send(b"\x10");
+    tui.wait_for("Debugger source catalog");
+    tui.wait_for("No matching debugger sources");
+    tui.clear_capture();
+    tui.send(b"\x1b");
+    tui.wait_for_frame(|frame| {
+        frame.contains("outside debug symbols") && !frame.contains("Source explorer")
+    });
+    tui.clear_capture();
+    tui.send(b"o");
+    tui.wait_for("[root] checkout");
+    tui.send(b"\r");
+    tui.wait_for("[dir] src");
+    tui.send(b"\r");
+    tui.wait_for("zlong.txt");
+    tui.send(b"zlong\r");
+    tui.wait_for("large file line 1");
+    tui.send(&b"\x1b[6~".repeat(24));
+    tui.wait_for_source_marker('▸', 241);
+    tui.clear_capture();
+    tui.send(b"\x1b[1;3D");
+    tui.wait_for("outside debug symbols");
+    tui.wait_for_source_marker('▸', 2);
+    let output = tui.quit();
+    assert!(output.contains("\u{1b}[?1049l"));
+    assert!(ddb
+        .wait_for_snapshot(|snapshot| snapshot.sessions.is_empty())
+        .sessions
+        .is_empty());
+    ddb.shutdown();
+}
+
+#[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn mock_backend_full_terminal_workflow() {
     let mut ddb = Ddb::spawn_mock();
@@ -471,7 +578,7 @@ fn managed_real_launch_workflow(backend: &str) {
     tui.wait_for("#0");
     tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
-    // Source navigation is valid only after the toolbar has a thread target.
+    // The breakpoint and execution checks below need a projected thread.
     tui.wait_for("◎ thread");
 
     let goto_breakpoint = format!(
@@ -633,8 +740,26 @@ fn real_debugger_workflow(backend: &str) {
     // to the fixture; the breakpoint below asserts the exact Rust function.
     tui.wait_for("#0");
     // Session stop output may precede the API thread projection on LLDB.
-    // Source navigation is valid only after the toolbar has a thread target.
+    // The breakpoint and execution checks below need a projected thread.
     tui.wait_for("◎ thread");
+
+    // Query the real debugger's catalog through the explorer before using a
+    // breakpoint. No frame/source response is injected by this PTY workflow.
+    tui.send(format!("g{}:2\r", fixture.source.display()).as_bytes());
+    tui.wait_for_source_marker('▸', 2);
+    tui.clear_capture();
+    tui.send(b"\x10");
+    tui.wait_for("Debugger source catalog");
+    tui.send(b"fixtures/real_loop/src/main.rs");
+    tui.wait_for_frame(|frame| {
+        frame.contains("search: fixtures/real_loop/src/main.rs")
+            && frame.contains("[debug]")
+            && !frame.contains("Loading sources")
+    });
+    tui.clear_capture();
+    tui.send(b"\r");
+    tui.wait_for_frame(|frame| !frame.contains("Source explorer") && frame.contains("use std::{"));
+    tui.wait_for_source_marker('▸', 2);
 
     let goto_breakpoint = format!(
         "g{}:{}\r",

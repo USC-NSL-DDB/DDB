@@ -20,6 +20,10 @@ const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const OPERATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_COLLECTION_ITEMS: usize = 10_000;
 
+#[cfg(test)]
+#[path = "source_explorer_worker_tests.rs"]
+mod source_explorer_tests;
+
 pub async fn run(
     client: ApiClient,
     mut requests: mpsc::Receiver<BackendRequest>,
@@ -27,6 +31,7 @@ pub async fn run(
 ) {
     let mut inspections = JoinSet::new();
     let mut sources = JoinSet::new();
+    let mut discoveries = JoinSet::new();
     let mut deferred = VecDeque::new();
     let mut inspection_generation = None;
     loop {
@@ -66,6 +71,24 @@ pub async fn run(
                 };
                 let _ = messages.send(update).await;
             });
+        } else if let BackendRequest::ExploreSources(request) = request {
+            discoveries.abort_all();
+            while let Some(result) = discoveries.try_join_next() {
+                report_inspection_failure(result, &messages).await;
+            }
+            let client = client.clone();
+            let messages = messages.clone();
+            discoveries.spawn(async move {
+                let generation = request.generation;
+                let result = crate::source_explorer::fetch(&client, request)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = messages
+                    .send(UiMessage::SourceDiscovery { generation, result })
+                    .await;
+            });
+        } else if matches!(request, BackendRequest::CancelSourceDiscovery) {
+            discoveries.abort_all();
         } else if let Some((generation, thread_id)) = inspection_context(&request) {
             if inspection_generation.is_some_and(|active| active != generation) {
                 inspections.abort_all();
@@ -117,6 +140,7 @@ pub async fn run(
     }
     inspections.shutdown().await;
     sources.shutdown().await;
+    discoveries.shutdown().await;
 }
 
 async fn report_inspection_failure(
@@ -201,7 +225,11 @@ async fn handle(
                 })
                 .await?;
         }
-        BackendRequest::LoadSource(_) => unreachable!("source requests have their own task lane"),
+        BackendRequest::LoadSource(_)
+        | BackendRequest::ExploreSources(_)
+        | BackendRequest::CancelSourceDiscovery => {
+            unreachable!("source requests have their own task lanes")
+        }
         BackendRequest::ListSignals { target } => {
             let signals = client
                 .collect_signals(
@@ -689,7 +717,7 @@ async fn source_content(
             client
                 .resolve_source(v2::ResolveSourceRequest {
                     context: None,
-                    root_reference: None,
+                    root_reference: request.root_reference,
                     target: request.target,
                     location: Some(request.location),
                 })

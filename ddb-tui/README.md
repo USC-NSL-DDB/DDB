@@ -103,6 +103,8 @@ the backend and frontend together when the API contract changes.
 | `e` | Evaluate an expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `g` | Go to a source line (loads another source window when needed) |
+| `o` | Open the source explorer at DDB's exported workspace roots |
+| `Ctrl+P` | Search debugger-known files across DDB sessions |
 | `f` in Source | Resume following the selected thread's execution location |
 | `Alt+Left` / `Alt+Right` | Navigate source history without changing debugger selection |
 | `j` | Jump execution to a debugger location |
@@ -112,6 +114,42 @@ the backend and frontend together when the API contract changes.
 | `r` | Refresh all state |
 | `?` | Toggle the in-app help overlay |
 | `q` / `Ctrl+C` | Quit |
+
+### Source explorer
+
+`o` or the source panel's Open button lists the roots explicitly exported by
+DDB. Add them to the DDB startup
+configuration, including when using `ddb tui debug.yaml`:
+
+```yaml
+SourceRoots:
+  - name: application
+    path: ./checkout
+    debugger_path: /build/application
+    session_tags: [api, worker]
+```
+
+`path` is on the DDB host, relative to the configuration file. The optional
+`debugger_path` maps a build prefix to that export; optional `session_tags`
+select the sessions using that mapping. These tags do not restrict readers'
+permissions. See [source workspaces](../ddb/docs/api/source-workspaces.md).
+
+Browse directories with arrows and Enter, or click a row. Left/right-click goes
+to the parent, Tab switches between roots and debugger files, F5 refreshes, and
+Ctrl-H shows dotfiles. Type to search the debugger catalog or filter the current
+directory page; Ctrl-U clears the query. Previous/next rows navigate bounded
+100-entry pages. For a symlink, Enter/click tries a file and Right tries a
+directory. DDB rejects links that escape the exported root. Esc or Close exits.
+
+The debugger catalog identifies session owners and keeps unavailable sources
+visible with their error reason. Workspace folders also contain files absent
+from debug symbols and work without any selected frame or running session.
+Opening a file does not change debugger selection, evaluation context, or the
+execution target. It disables following until `f` is pressed in Source.
+Alt-Left/Right restores document history and cursor positions.
+
+TUI-local checkout configuration and ownership-aware breakpoint routing are
+still being implemented. An exported DDB-host root is not a TUI-local root.
 
 The distributed call stack is the primary stack view. Selecting a stopped thread
 requests DDB's cross-session backtrace automatically; `d` is only an explicit

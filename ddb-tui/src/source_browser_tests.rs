@@ -58,6 +58,51 @@ fn manual_open_needs_no_thread_and_disables_following() {
 }
 
 #[test]
+fn cursor_crosses_read_windows_without_creating_history_and_retries_after_failure() {
+    let mut browser = SourceBrowser::default();
+    let mut first = content("large.rs");
+    first.total_lines = 1000;
+    first.has_more = true;
+    show_source(&mut browser, first, 4);
+    let first = browser.move_cursor(1).unwrap();
+    assert_eq!(first.line, 5);
+    let second = browser.move_cursor(10).unwrap();
+    assert_eq!(second.line, 15);
+    assert!(!browser.apply(first.generation, content("large.rs")));
+    assert!(browser.fail(second.generation));
+    assert_eq!(browser.document().unwrap().cursor, 4);
+    let retry = browser.move_cursor(1).unwrap();
+    let mut window = content("large.rs");
+    window.start_line = 5;
+    window.total_lines = 1000;
+    assert!(browser.apply(retry.generation, window));
+    assert_eq!(browser.document().unwrap().cursor, 5);
+    assert!(browser.history(false).is_none());
+    let previous = browser.move_cursor(-1).unwrap();
+    assert_eq!(previous.line, 4);
+    assert!(!browser.following());
+}
+
+#[test]
+fn reopening_a_document_restores_its_cursor_by_opaque_identity() {
+    let mut browser = SourceBrowser::default();
+    open(&mut browser, "first.rs", 3);
+    open(&mut browser, "second.rs", 2);
+    let first = content("first.rs");
+    let request = browser.open_source(first.source.clone().unwrap());
+    assert_eq!(request.line, 3);
+    assert!(browser.apply(request.generation, first));
+    assert_eq!(browser.document().unwrap().cursor, 3);
+    let mut other = content("first.rs").source.unwrap();
+    other.source_reference = "different-root/first.rs".into();
+    let request = browser.open_source(other);
+    assert_eq!(
+        request.line, 1,
+        "equal display paths cannot share cursor state"
+    );
+}
+
+#[test]
 fn explicit_follow_resumes_at_the_requested_stop() {
     let mut browser = SourceBrowser::default();
     open(&mut browser, "main.rs", 2);

@@ -28,6 +28,7 @@ pub struct SourceRequest {
     pub generation: u64,
     pub target: Option<v2::Target>,
     pub location: v2::SourceLocation,
+    pub root_reference: Option<String>,
     pub line: usize,
 }
 
@@ -53,6 +54,7 @@ pub struct SourceBrowser {
     pending: Option<SourceRequest>,
     back: VecDeque<Position>,
     forward: VecDeque<Position>,
+    positions: VecDeque<Position>,
     restore_scroll: Option<usize>,
     record_history: bool,
     history_direction: Option<bool>,
@@ -67,6 +69,7 @@ impl Default for SourceBrowser {
             pending: None,
             back: VecDeque::new(),
             forward: VecDeque::new(),
+            positions: VecDeque::new(),
             restore_scroll: None,
             record_history: false,
             history_direction: None,
@@ -111,6 +114,82 @@ impl SourceBrowser {
         Some(self.request(target, location))
     }
 
+    pub fn open_export(&mut self, root_reference: String, path: String) -> SourceRequest {
+        let mut request = self
+            .navigate(
+                None,
+                v2::SourceLocation {
+                    path: Some(path),
+                    line: 1,
+                    ..Default::default()
+                },
+                Navigation::Manual,
+            )
+            .expect("manual navigation is always accepted");
+        request.root_reference = Some(root_reference);
+        self.pending = Some(request.clone());
+        request
+    }
+
+    pub fn open_source(&mut self, source: v2::SourceFile) -> SourceRequest {
+        let current = self.position();
+        let saved = current
+            .as_ref()
+            .into_iter()
+            .chain(self.positions.iter().rev())
+            .find(|position| {
+                position.location.source_reference.as_deref()
+                    == Some(source.source_reference.as_str())
+            });
+        let line = saved.map_or(1, |position| position.location.line);
+        let scroll = saved.map(|position| position.scroll);
+        let request = self
+            .navigate(
+                None,
+                v2::SourceLocation {
+                    source_reference: Some(source.source_reference),
+                    path: source.path,
+                    line,
+                    ..Default::default()
+                },
+                Navigation::Manual,
+            )
+            .expect("manual navigation is accepted");
+        self.restore_scroll = scroll;
+        request
+    }
+
+    /// Move across read windows without adding history entries. Until a new
+    /// window arrives, keep the displayed document and cursor transactional.
+    /// Repeated keys accumulate against the pending destination, not the old
+    /// window edge.
+    pub fn move_cursor(&mut self, delta: isize) -> Option<SourceRequest> {
+        let document = self.document.as_ref()?;
+        let mut line = document.cursor;
+        if !self.following && !self.record_history && self.history_direction.is_none() {
+            if let Some(pending) = &self.pending {
+                if pending.location.source_reference.as_deref()
+                    == Some(document.source.source_reference.as_str())
+                {
+                    line = pending.line;
+                }
+            }
+        }
+        let line = line
+            .saturating_add_signed(delta)
+            .clamp(1, document.total_lines.max(1));
+        if (document.start_line..=document.end_line).contains(&line) {
+            self.set_cursor(line);
+            return None;
+        }
+        let (target, location) = self.current_location(line)?;
+        self.following = false;
+        self.record_history = false;
+        self.history_direction = None;
+        self.restore_scroll = None;
+        Some(self.request(target, location))
+    }
+
     pub fn history(&mut self, forward: bool) -> Option<SourceRequest> {
         let destination = if forward {
             self.forward.back()?.clone()
@@ -133,6 +212,12 @@ impl SourceBrowser {
             return false;
         };
         let request = self.pending.take().expect("generation checked above");
+        if let Some(current) = self.position() {
+            self.positions.retain(|position| {
+                position.location.source_reference != current.location.source_reference
+            });
+            push_bounded(&mut self.positions, current);
+        }
         if let Some(forward) = self.history_direction.take() {
             let current = self.position();
             if forward {
@@ -248,6 +333,7 @@ impl SourceBrowser {
     ) -> SourceRequest {
         self.generation = self.generation.wrapping_add(1).max(1);
         let request = SourceRequest {
+            root_reference: None,
             generation: self.generation,
             line: location.line as usize,
             target,

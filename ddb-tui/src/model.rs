@@ -78,6 +78,9 @@ pub struct UiAreas {
     pub breakpoint_target_cancel: Option<Rect>,
     pub signal_rows: Vec<(usize, Rect)>,
     pub signal_cancel: Option<Rect>,
+    pub source_explorer_rows: Vec<(usize, Rect)>,
+    pub source_explorer_controls: Vec<(crate::source_explorer::Control, Rect)>,
+    pub source_explorer_open: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +144,27 @@ impl UiAreas {
         self.extension_action_rows
             .iter()
             .find_map(|(index, area)| contains(*area, column, row).then_some(*index))
+    }
+
+    pub fn source_explorer_at(&self, column: u16, row: u16) -> Option<usize> {
+        self.source_explorer_rows
+            .iter()
+            .find_map(|(index, area)| contains(*area, column, row).then_some(*index))
+    }
+
+    pub fn source_explorer_open_at(&self, column: u16, row: u16) -> bool {
+        self.source_explorer_open
+            .is_some_and(|area| contains(area, column, row))
+    }
+
+    pub fn source_explorer_control_at(
+        &self,
+        column: u16,
+        row: u16,
+    ) -> Option<crate::source_explorer::Control> {
+        self.source_explorer_controls
+            .iter()
+            .find_map(|(control, area)| contains(*area, column, row).then_some(*control))
     }
 
     pub fn signal_at(&self, column: u16, row: u16) -> Option<usize> {
@@ -375,6 +399,7 @@ pub struct App {
     pub inspection_generation: u64,
     inspected_thread_id: Option<String>,
     pub source_browser: SourceBrowser,
+    pub source_explorer: crate::source_explorer::Explorer,
     pub execution_location: Option<SourceLocation>,
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
@@ -426,6 +451,7 @@ impl App {
             inspection_generation: 0,
             inspected_thread_id: None,
             source_browser: SourceBrowser::default(),
+            source_explorer: crate::source_explorer::Explorer::default(),
             execution_location: None,
             timeline_scroll: 0,
             extension_scroll: 0,
@@ -1644,19 +1670,9 @@ impl App {
             Focus::Stack => {
                 self.selected_frame = move_index(self.selected_frame, self.frames.len(), delta)
             }
-            Focus::Source => {
-                let line = self
-                    .source_browser
-                    .cursor_location()
-                    .map(|(_, line)| line)
-                    .or_else(|| {
-                        self.source_browser
-                            .document()
-                            .map(|source| source.start_line)
-                    })
-                    .unwrap_or(1);
-                self.source_browser.set_cursor(move_line(line, delta));
-            }
+            // Source navigation can need asynchronous reads and is handled by
+            // SourceBrowser::move_cursor through the input dispatcher.
+            Focus::Source => {}
             Focus::Timeline => {
                 self.timeline_scroll = move_line(self.timeline_scroll, delta);
             }
@@ -2209,6 +2225,8 @@ pub enum BackendRequest {
         frame_id: String,
     },
     LoadSource(SourceRequest),
+    ExploreSources(crate::source_explorer::Request),
+    CancelSourceDiscovery,
     Control(Control, v2::Target),
     Jump {
         location: String,
@@ -2312,6 +2330,10 @@ pub enum UiMessage {
         generation: u64,
         thread_id: String,
         memory: v2::MemoryBlock,
+    },
+    SourceDiscovery {
+        generation: u64,
+        result: Result<crate::source_explorer::Page, String>,
     },
     Source {
         generation: u64,

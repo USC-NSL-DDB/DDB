@@ -166,3 +166,51 @@ Required behavior checks:
   The serial backend verification above rebuilt successfully without code
   workarounds. An initial gRPC test expected the wrong unknown-ID error;
   it now checks the existing `NotFound` contract and passes.
+
+### Backend-connected explorer stage
+
+Stage 4 is split for review. This commit connects the explorer to DDB's current
+typed source operations. TUI-local roots and ownership-aware breakpoint/marker
+routing remain a separate, unfinished implementation step. The existing suffix
+path matching must still be removed before claiming source identity correctness.
+
+- Added `o` and a clickable source-panel Open button for exported workspace
+  folders, and `Ctrl-P` for debugger-known sources across sessions. The popup
+  supports directory descent/parent navigation, search, explicit refresh,
+  dotfiles, keyboard selection, mouse opening, and a compact-layout Close button.
+- Catalog rows preserve opaque identities and session owners, including missing
+  source descriptors. Unavailable reasons and catalog warnings stay visible.
+  Root/directory filtering is explicitly limited to the current 100-entry page;
+  catalog filtering is server-side. Page entries replace rather than accumulate.
+  Pagination rejects oversized pages and empty/repeated continuation tokens.
+- Discovery has its own cancellable worker lane and a 120 ms catalog debounce.
+  Closing or replacing a search cannot cancel document reads or inspections.
+  Stale responses and queue-full errors do not leave the explorer loading.
+- Removed the remaining selected-thread guard on `g`. Opening an explorer file
+  does not change inspection selection, evaluation context, or execution target.
+  Reopening an opaque source identity restores its cursor. Arrow/page/wheel
+  movement crosses read windows without creating navigation-history entries.
+- Symlink type is not guessed. Enter/click attempts a file, Right attempts a
+  directory, and the backend applies the same root grant to both. Failed links
+  leave parent navigation available.
+- Unit verification: 107 tests passed, including compact mouse hit testing,
+  no-thread input, inspection preservation, stale search, pagination, symlinks,
+  long-file movement, cursor restoration, and worker cancellation/debounce.
+  Strict `cargo clippy --all-targets -- -D warnings` passed for the TUI.
+- Four selected PTY workflows passed with mock, real GDB, real LLDB, and zero
+  sessions. The new zero-session workflow opens non-debug files through folders,
+  toggles dotfiles, restores history, and crosses the 240-line content window in
+  a 1,000-line file. Both real-debugger workflows now exercise quick-open through
+  the backend catalog and verify the restored cursor before existing stepping
+  and breakpoint assertions. The other 12 PTY tests were not run in this stage.
+- Initial verification exposed two test assumptions: Escape and quit must wait
+  for the popup to close rather than form an Alt-key sequence, and reopening a
+  known document must preserve its cursor rather than assume line 1. The tests
+  now synchronize on rendered state and assert the intended behavior. A source
+  rendering unit test was moved from the removed App cursor path to the browser
+  interface. A test-only Clippy initializer warning was fixed without suppression.
+
+Remaining acceptance work: explicit frontend-local roots and mappings, origin-
+and owner-aware execution/breakpoint markers, source-aware breakpoint placement,
+and distributed terminal regressions for same-path/different-owner checkouts.
+No end-to-end completion claim is made for these requirements.

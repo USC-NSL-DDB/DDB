@@ -2,6 +2,10 @@ mod api;
 mod cli;
 mod model;
 mod source_browser;
+mod source_explorer;
+mod source_explorer_input;
+#[cfg(test)]
+mod source_explorer_interaction_tests;
 mod supervisor;
 mod ui;
 mod worker;
@@ -32,6 +36,9 @@ use model::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use source_browser::Navigation;
+use source_explorer_input::{
+    handle_key as handle_explorer_key, handle_mouse as handle_explorer_mouse,
+};
 use supervisor::ManagedBackend;
 use tokio::sync::mpsc;
 
@@ -331,6 +338,9 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => handle_key(app, key, requests),
         Event::Mouse(mouse) => handle_mouse(app, mouse, requests),
+        Event::Paste(text) if app.source_explorer.visible => {
+            source_explorer_input::edit_query(app, requests, &text)
+        }
         Event::Paste(text) if app.input_mode != InputMode::Normal => app.insert_input(&text),
         Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Paste(_) => {}
         _ => {}
@@ -340,6 +350,10 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
+        return;
+    }
+    if app.source_explorer.visible {
+        handle_explorer_key(app, key, requests);
         return;
     }
     if app.show_help {
@@ -365,6 +379,12 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
     }
 
     match key.code {
+        KeyCode::Char('o') | KeyCode::Char('p')
+            if key.code == KeyCode::Char('o') || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            let request = app.source_explorer.open(key.code == KeyCode::Char('p'));
+            queue_request(app, requests, BackendRequest::ExploreSources(request));
+        }
         KeyCode::Left | KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
             if let Some(request) = app.source_browser.history(key.code == KeyCode::Right) {
                 queue_request(app, requests, BackendRequest::LoadSource(request));
@@ -404,13 +424,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Char('B') => start_breakpoint_prompt(app),
         KeyCode::Char('j') => start_execution_prompt(app, "jump", InputMode::Jump),
         KeyCode::Char('s') => request_signal_picker(app, requests),
-        KeyCode::Char('g') => {
-            if app.current_thread().is_some() {
-                app.start_input(InputMode::GotoLine);
-            } else {
-                app.status = "select a DDB thread before opening source".to_string();
-            }
-        }
+        KeyCode::Char('g') => app.start_input(InputMode::GotoLine),
         KeyCode::Char('d') => refresh_stack(app, requests),
         KeyCode::Delete | KeyCode::Backspace if app.focus == Focus::Breakpoints => {
             if !app.capabilities.supports_breakpoint_action("delete") {
@@ -434,19 +448,19 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         }
         KeyCode::BackTab => app.cycle_focus(true),
         KeyCode::Up => {
-            app.move_selection(-1);
+            move_selection(app, requests, -1);
             inspect_selection(app, requests);
         }
         KeyCode::Down => {
-            app.move_selection(1);
+            move_selection(app, requests, 1);
             inspect_selection(app, requests);
         }
         KeyCode::PageUp => {
-            app.move_selection(-10);
+            move_selection(app, requests, -10);
             inspect_selection(app, requests);
         }
         KeyCode::PageDown => {
-            app.move_selection(10);
+            move_selection(app, requests, 10);
             inspect_selection(app, requests);
         }
         KeyCode::Enter if app.focus == Focus::Extensions => {
@@ -708,6 +722,10 @@ fn submit_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>) 
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if app.source_explorer.visible {
+        handle_explorer_mouse(app, mouse, requests);
+        return;
+    }
     if app.breakpoint_target_picker.is_some() {
         match mouse.kind {
             MouseEventKind::Down(_) => {
@@ -750,6 +768,13 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.source_explorer_open_at(mouse.column, mouse.row)
+            {
+                let request = app.source_explorer.open(false);
+                queue_request(app, requests, BackendRequest::ExploreSources(request));
+                return;
+            }
             if let Some(control) = app.areas.control_at(mouse.column, mouse.row) {
                 match control {
                     Control::Refresh => queue_recovery(app, requests),
@@ -791,14 +816,14 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
             if let Some(focus) = app.areas.panel_at(mouse.column, mouse.row) {
                 app.focus = focus;
             }
-            app.move_selection(-3);
+            move_selection(app, requests, -3);
             inspect_selection(app, requests);
         }
         MouseEventKind::ScrollDown => {
             if let Some(focus) = app.areas.panel_at(mouse.column, mouse.row) {
                 app.focus = focus;
             }
-            app.move_selection(3);
+            move_selection(app, requests, 3);
             inspect_selection(app, requests);
         }
         _ => {}
@@ -868,6 +893,16 @@ fn toggle_selected_variable(app: &mut App, requests: &mpsc::Sender<BackendReques
                 }
             }
         }
+    }
+}
+
+fn move_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>, delta: isize) {
+    if app.focus == Focus::Source {
+        if let Some(request) = app.source_browser.move_cursor(delta) {
+            queue_request(app, requests, BackendRequest::LoadSource(request));
+        }
+    } else {
+        app.move_selection(delta);
     }
 }
 
@@ -1346,6 +1381,14 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                 app.apply_memory(memory);
             }
         }
+        UiMessage::SourceDiscovery { generation, result } => match result {
+            Ok(page) => {
+                app.source_explorer.apply(generation, page);
+            }
+            Err(error) => {
+                app.source_explorer.fail(generation, error);
+            }
+        },
         UiMessage::Source { generation, source } => {
             app.source_browser.apply(generation, source);
         }
@@ -1434,13 +1477,23 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
         Err(mpsc::error::TrySendError::Full(request)) => {
-            if let BackendRequest::LoadSource(request) = request {
+            if let BackendRequest::ExploreSources(request) = &request {
+                app.source_explorer.fail(
+                    request.generation,
+                    "DDB request queue is full; retry the source request".into(),
+                );
+            } else if let BackendRequest::LoadSource(request) = request {
                 app.source_browser.fail(request.generation);
             }
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
         Err(mpsc::error::TrySendError::Closed(request)) => {
-            if let BackendRequest::LoadSource(request) = request {
+            if let BackendRequest::ExploreSources(request) = &request {
+                app.source_explorer.fail(
+                    request.generation,
+                    "DDB request worker is unavailable".into(),
+                );
+            } else if let BackendRequest::LoadSource(request) = request {
                 app.source_browser.fail(request.generation);
             }
             app.backend_unavailable("DDB request worker is unavailable");

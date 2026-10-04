@@ -1,3 +1,6 @@
+#[path = "source_explorer_ui.rs"]
+mod explorer;
+
 use ddb_api_client::v2::{self, target};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -39,6 +42,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         }
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         draw_signal_picker(frame, app, root, &mut areas);
+        explorer::draw(frame, app, root, &mut areas);
         return areas;
     }
     let rows = Layout::default()
@@ -63,6 +67,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         }
         draw_signal_picker(frame, app, root, &mut areas);
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
+        explorer::draw(frame, app, root, &mut areas);
         return areas;
     }
 
@@ -95,7 +100,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
 
     draw_threads(frame, app, left[0]);
     draw_breakpoints(frame, app, left[1], &mut areas);
-    draw_source(frame, app, center[0]);
+    draw_source(frame, app, center[0], &mut areas);
     draw_stack(frame, app, center[1]);
     draw_variables(frame, app, right[0]);
     if app.extension_panels.is_empty() && app.extension_actions.is_empty() {
@@ -151,6 +156,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
     }
     draw_breakpoint_target_picker(frame, app, root, &mut areas);
     draw_signal_picker(frame, app, root, &mut areas);
+    explorer::draw(frame, app, root, &mut areas);
     areas
 }
 
@@ -276,7 +282,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut 
     match focus {
         Focus::Threads => draw_threads(frame, app, area),
         Focus::Breakpoints => draw_breakpoints(frame, app, area, areas),
-        Focus::Source => draw_source(frame, app, area),
+        Focus::Source => draw_source(frame, app, area, areas),
         Focus::Stack => draw_stack(frame, app, area),
         Focus::Variables => draw_variables(frame, app, area),
         Focus::Extensions => draw_extensions(frame, app, area, areas),
@@ -559,7 +565,7 @@ fn breakpoint_target_label(app: &App, value: Option<&v2::Target>) -> String {
     }
 }
 
-fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
     let source_label = app
         .source_browser
         .document()
@@ -580,9 +586,17 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = panel_block(&source_title, app.focus == Focus::Source);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if area.width >= 12 && area.height > 0 {
+        let open = Rect::new(area.right() - 11, area.y, 10, 1);
+        frame.render_widget(
+            Paragraph::new(" Open [o] ").style(Style::default().fg(ACCENT)),
+            open,
+        );
+        areas.source_explorer_open = Some(open);
+    }
     let Some(source) = app.source_browser.document() else {
         frame.render_widget(
-            Paragraph::new("Open source with g (path:line), or select a stopped frame")
+            Paragraph::new("o: source roots · Ctrl-P: debugger files · g: path:line")
                 .style(Style::default().fg(MUTED))
                 .alignment(Alignment::Center),
             inner,
@@ -1278,6 +1292,7 @@ fn draw_help(frame: &mut Frame<'_>, root: Rect) {
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
         Line::from("g open source: line or path:line   j jump execution   s signal"),
         Line::from("source: f follow execution   Alt+Left/Right navigation history"),
+        Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: arrows select; a/Enter/click invokes declared action"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),
         Line::from(": raw DDB/MI command            r refresh"),
@@ -1618,7 +1633,7 @@ mod v2_tests {
             },
             2,
         );
-        app.move_selection(1);
+        assert!(app.source_browser.move_cursor(1).is_none());
         app.breakpoints.push(Breakpoint {
             id: "breakpoint/1".to_string(),
             target: None,
