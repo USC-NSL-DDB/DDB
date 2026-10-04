@@ -48,11 +48,6 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH")]
     pub backend_log: Option<PathBuf>,
 
-    /// API negotiation policy. Fallback tries v2 first and uses v1 only when
-    /// the server explicitly reports that the v2 route is absent.
-    #[arg(long, global = true, value_enum, default_value_t = ApiVersion::V2)]
-    pub api_version: ApiVersion,
-
     /// Recovery refresh interval in milliseconds.
     #[arg(long, global = true, default_value_t = 2_000)]
     pub refresh_ms: u64,
@@ -97,12 +92,6 @@ enum Command {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..), required = true)]
         pid: u64,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum ApiVersion {
-    V2,
-    V1Fallback,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

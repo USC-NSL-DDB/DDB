@@ -10,7 +10,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use crate::{
     api::{
         thread_target, ApiClient, CapabilitiesExt, OutputSyncItem, OutputSyncOptions,
-        ProjectedStateSyncItem, StateSyncOptions, V2ApiClient,
+        ProjectedStateSyncItem, StateSyncOptions,
     },
     model::{BackendRequest, DebuggerActivity, DebuggerEvent, EventStreamStatus, UiMessage},
 };
@@ -46,9 +46,7 @@ pub async fn run(
             }
         }
 
-        if is_inspection(&request) {
-            let (generation, thread_id) = inspection_context(&request)
-                .expect("inspection requests always carry generation context");
+        if let Some((generation, thread_id)) = inspection_context(&request) {
             if inspection_generation.is_some_and(|active| active != generation) {
                 inspections.abort_all();
             }
@@ -61,14 +59,27 @@ pub async fn run(
             let client = client.clone();
             let messages = messages.clone();
             inspections.spawn(async move {
+                let parent_id = match &request {
+                    BackendRequest::ExpandVariable { variable_id, .. } => Some(variable_id.clone()),
+                    BackendRequest::ExpandScope { scope_id, .. } => Some(scope_id.clone()),
+                    _ => None,
+                };
                 if let Err(error) = handle(&client, &messages, request).await {
-                    let _ = messages
-                        .send(UiMessage::InspectionError {
+                    let error = format!("{error:#}");
+                    let update = match parent_id {
+                        Some(parent_id) => UiMessage::ExpansionError {
                             generation,
                             thread_id,
-                            error: format!("{error:#}"),
-                        })
-                        .await;
+                            parent_id,
+                            error,
+                        },
+                        None => UiMessage::InspectionError {
+                            generation,
+                            thread_id,
+                            error,
+                        },
+                    };
+                    let _ = messages.send(update).await;
                 }
             });
         } else {
@@ -107,17 +118,6 @@ fn is_recovery(request: &BackendRequest) -> bool {
     matches!(request, BackendRequest::Bootstrap | BackendRequest::Refresh)
 }
 
-fn is_inspection(request: &BackendRequest) -> bool {
-    matches!(
-        request,
-        BackendRequest::InspectThread { .. }
-            | BackendRequest::InspectFrame { .. }
-            | BackendRequest::LoadSource { .. }
-            | BackendRequest::ExpandVariable { .. }
-            | BackendRequest::ReadMemory { .. }
-    )
-}
-
 fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
     match request {
         BackendRequest::InspectThread {
@@ -134,6 +134,16 @@ fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
             generation,
             ..
         }
+        | BackendRequest::ExpandScope {
+            thread_id,
+            generation,
+            ..
+        }
+        | BackendRequest::ExpandVariable {
+            thread_id,
+            generation,
+            ..
+        }
         | BackendRequest::LoadSource {
             thread_id,
             generation,
@@ -145,20 +155,6 @@ fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
 
 async fn handle(
     client: &ApiClient,
-    messages: &mpsc::Sender<UiMessage>,
-    request: BackendRequest,
-) -> anyhow::Result<()> {
-    let ApiClient::V2(client) = client else {
-        let ApiClient::V1Fallback(client) = client else {
-            unreachable!()
-        };
-        return crate::legacy_v1::handle(client, messages, request).await;
-    };
-    handle_v2(client, messages, request).await
-}
-
-async fn handle_v2(
-    client: &V2ApiClient,
     messages: &mpsc::Sender<UiMessage>,
     request: BackendRequest,
 ) -> anyhow::Result<()> {
@@ -182,14 +178,7 @@ async fn handle_v2(
             source,
             line,
         } => {
-            let variables = list_frame_variables(client, &frame_id).await?;
-            messages
-                .send(UiMessage::Variables {
-                    generation,
-                    thread_id: thread_id.clone(),
-                    variables,
-                })
-                .await?;
+            inspect_scopes(client, messages, &frame_id, &thread_id, generation).await?;
             let registers = list_frame_registers(client, &frame_id).await?;
             messages
                 .send(UiMessage::Registers {
@@ -213,11 +202,12 @@ async fn handle_v2(
         }
         BackendRequest::LoadSource {
             thread_id,
+            owner_thread_id,
             generation,
             source,
             line,
         } => {
-            let content = source_content(client, &thread_id, &source, line).await?;
+            let content = source_content(client, &owner_thread_id, &source, line).await?;
             messages
                 .send(UiMessage::Source {
                     generation,
@@ -422,6 +412,21 @@ async fn handle_v2(
                 ))
                 .await?;
         }
+        BackendRequest::ExpandScope {
+            scope_id,
+            thread_id,
+            generation,
+        } => {
+            let variables = list_scope_variables(client, &scope_id).await?;
+            messages
+                .send(UiMessage::VariableChildren {
+                    generation,
+                    thread_id,
+                    parent_id: scope_id,
+                    variables,
+                })
+                .await?;
+        }
         BackendRequest::ExpandVariable {
             variable_id,
             thread_id,
@@ -533,7 +538,7 @@ async fn handle_v2(
     Ok(())
 }
 
-async fn refresh(client: &V2ApiClient, messages: &mpsc::Sender<UiMessage>) -> anyhow::Result<()> {
+async fn refresh(client: &ApiClient, messages: &mpsc::Sender<UiMessage>) -> anyhow::Result<()> {
     let snapshot = client
         .get_snapshot(v2::GetSnapshotRequest {
             context: None,
@@ -550,7 +555,7 @@ async fn refresh(client: &V2ApiClient, messages: &mpsc::Sender<UiMessage>) -> an
 }
 
 async fn inspect_thread(
-    client: &V2ApiClient,
+    client: &ApiClient,
     messages: &mpsc::Sender<UiMessage>,
     thread_id: String,
     generation: u64,
@@ -581,14 +586,7 @@ async fn inspect_thread(
         })
         .await?;
     if let Some((frame_thread_id, frame)) = first_frame {
-        let variables = list_frame_variables(client, &frame.frame_id).await?;
-        messages
-            .send(UiMessage::Variables {
-                generation,
-                thread_id: thread_id.clone(),
-                variables,
-            })
-            .await?;
+        inspect_scopes(client, messages, &frame.frame_id, &thread_id, generation).await?;
         let registers = list_frame_registers(client, &frame.frame_id).await?;
         messages
             .send(UiMessage::Registers {
@@ -618,7 +616,7 @@ async fn inspect_thread(
 }
 
 async fn distributed_frames(
-    client: &V2ApiClient,
+    client: &ApiClient,
     thread_id: &str,
 ) -> anyhow::Result<v2::DistributedBacktraceResult> {
     let operation = complete_operation(
@@ -640,7 +638,7 @@ async fn distributed_frames(
 }
 
 async fn list_frame_registers(
-    client: &V2ApiClient,
+    client: &ApiClient,
     frame_id: &str,
 ) -> anyhow::Result<Vec<v2::Register>> {
     Ok(client
@@ -656,10 +654,13 @@ async fn list_frame_registers(
         .await?)
 }
 
-async fn list_frame_variables(
-    client: &V2ApiClient,
+async fn inspect_scopes(
+    client: &ApiClient,
+    messages: &mpsc::Sender<UiMessage>,
     frame_id: &str,
-) -> anyhow::Result<Vec<v2::Variable>> {
+    thread_id: &str,
+    generation: u64,
+) -> anyhow::Result<()> {
     let scopes = client
         .collect_scopes(
             v2::ListScopesRequest {
@@ -670,26 +671,48 @@ async fn list_frame_variables(
             MAX_COLLECTION_ITEMS,
         )
         .await?;
-    let mut variables = Vec::new();
-    for scope in scopes {
-        let remaining = MAX_COLLECTION_ITEMS.saturating_sub(variables.len());
-        let page = client
-            .collect_variables(
-                v2::ListVariablesRequest {
-                    context: None,
-                    scope_id: scope.scope_id,
-                    page: None,
-                },
-                remaining,
-            )
+    messages
+        .send(UiMessage::Scopes {
+            generation,
+            thread_id: thread_id.to_string(),
+            scopes: scopes.clone(),
+        })
+        .await?;
+    for scope in scopes
+        .into_iter()
+        .filter(|scope| !scope.expensive && scope.variable_count != Some(0))
+    {
+        let variables = list_scope_variables(client, &scope.scope_id).await?;
+        messages
+            .send(UiMessage::VariableChildren {
+                generation,
+                thread_id: thread_id.to_string(),
+                parent_id: scope.scope_id,
+                variables,
+            })
             .await?;
-        variables.extend(page);
     }
-    Ok(variables)
+    Ok(())
+}
+
+async fn list_scope_variables(
+    client: &ApiClient,
+    scope_id: &str,
+) -> anyhow::Result<Vec<v2::Variable>> {
+    Ok(client
+        .collect_variables(
+            v2::ListVariablesRequest {
+                context: None,
+                scope_id: scope_id.to_string(),
+                page: None,
+            },
+            MAX_COLLECTION_ITEMS,
+        )
+        .await?)
 }
 
 async fn source_content(
-    client: &V2ApiClient,
+    client: &ApiClient,
     thread_id: &str,
     path: &str,
     line: usize,
@@ -721,7 +744,7 @@ async fn source_content(
 }
 
 async fn complete_operation(
-    client: &V2ApiClient,
+    client: &ApiClient,
     admission: v2::OperationAdmissionResponse,
 ) -> anyhow::Result<v2::Operation> {
     let operation = admission
@@ -792,13 +815,6 @@ fn parse_jump_location(value: &str) -> anyhow::Result<v2::SourceLocation> {
 /// Runs the SDK-owned snapshot/replay convergence loop. The UI receives only
 /// detached, already-converged public snapshots.
 pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) {
-    let ApiClient::V2(client) = client else {
-        let ApiClient::V1Fallback(client) = client else {
-            unreachable!()
-        };
-        crate::legacy_v1::watch_events(client, messages).await;
-        return;
-    };
     let mut sync = match client.projected_state_sync(StateSyncOptions::default()) {
         Ok(sync) => sync,
         Err(error) => {
@@ -888,10 +904,6 @@ pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) 
 }
 
 pub async fn watch_output(client: ApiClient, messages: mpsc::Sender<UiMessage>) {
-    let ApiClient::V2(client) = client else {
-        std::future::pending::<()>().await;
-        return;
-    };
     let mut sync = match client.output_sync(OutputSyncOptions::default()) {
         Ok(sync) => sync,
         Err(error) => {
@@ -1034,6 +1046,183 @@ fn short_enum(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn typed_scope_loading_defers_expensive_reads_and_pages_variable_children() {
+        use axum::{extract::State, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        type Calls = Arc<Mutex<Vec<String>>>;
+        async fn scopes(
+            Json(request): Json<v2::ListScopesRequest>,
+        ) -> Json<v2::ListScopesResponse> {
+            assert_eq!(request.frame_id, "frame/parent");
+            Json(v2::ListScopesResponse {
+                scopes: vec![
+                    v2::Scope {
+                        scope_id: "locals".into(),
+                        name: "Locals".into(),
+                        variable_count: Some(1),
+                        ..Default::default()
+                    },
+                    v2::Scope {
+                        scope_id: "globals".into(),
+                        name: "Globals".into(),
+                        expensive: true,
+                        ..Default::default()
+                    },
+                    v2::Scope {
+                        scope_id: "empty".into(),
+                        name: "Arguments".into(),
+                        variable_count: Some(0),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+        }
+        async fn variables(
+            State(calls): State<Calls>,
+            Json(request): Json<v2::ListVariablesRequest>,
+        ) -> Json<v2::ListVariablesResponse> {
+            calls.lock().unwrap().push(request.scope_id.clone());
+            Json(v2::ListVariablesResponse {
+                variables: vec![v2::Variable {
+                    variable_id: format!("{}/value", request.scope_id),
+                    name: "value".into(),
+                    has_children: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        }
+        async fn expand(
+            State(calls): State<Calls>,
+            Json(request): Json<v2::ExpandVariableRequest>,
+        ) -> Json<v2::ExpandVariableResponse> {
+            assert_eq!(request.variable_id, "globals/value");
+            let second = request
+                .page
+                .as_ref()
+                .and_then(|page| page.page_token.as_deref())
+                == Some("next");
+            calls.lock().unwrap().push(format!("expand/{second}"));
+            Json(v2::ExpandVariableResponse {
+                variables: vec![v2::Variable {
+                    variable_id: format!("child/{second}"),
+                    name: format!("child/{second}"),
+                    ..Default::default()
+                }],
+                page: if second {
+                    None
+                } else {
+                    Some(v2::PageInfo {
+                        next_page_token: Some("next".into()),
+                    })
+                },
+                ..Default::default()
+            })
+        }
+        let calls = Calls::default();
+        let router = Router::new()
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/ListScopes",
+                post(scopes),
+            )
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/ListVariables",
+                post(variables),
+            )
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/ExpandVariable",
+                post(expand),
+            )
+            .with_state(calls.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+        let (messages, mut updates) = mpsc::channel(8);
+        inspect_scopes(&client, &messages, "frame/parent", "thread/child", 9)
+            .await
+            .unwrap();
+        assert!(
+            matches!(updates.recv().await.unwrap(), UiMessage::Scopes { generation: 9, thread_id, scopes }
+            if thread_id == "thread/child" && scopes.len() == 3)
+        );
+        assert!(
+            matches!(updates.recv().await.unwrap(), UiMessage::VariableChildren { parent_id, .. } if parent_id == "locals")
+        );
+        assert_eq!(*calls.lock().unwrap(), ["locals"]);
+        assert!(updates.try_recv().is_err());
+
+        let (requests, request_rx) = mpsc::channel(4);
+        let worker = tokio::spawn(run(client, request_rx, messages));
+        requests
+            .send(BackendRequest::ExpandScope {
+                scope_id: "globals".into(),
+                thread_id: "thread/child".into(),
+                generation: 9,
+            })
+            .await
+            .unwrap();
+        let update = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(update, UiMessage::VariableChildren { generation: 9, parent_id, variables, .. }
+            if parent_id == "globals" && variables[0].variable_id == "globals/value")
+        );
+        requests
+            .send(BackendRequest::ExpandVariable {
+                variable_id: "globals/value".into(),
+                thread_id: "thread/child".into(),
+                generation: 9,
+            })
+            .await
+            .unwrap();
+        let update = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(update, UiMessage::VariableChildren { generation: 9, parent_id, variables, .. }
+            if parent_id == "globals/value" && variables.len() == 2)
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["locals", "globals", "expand/false", "expand/true"]
+        );
+        drop(requests);
+        worker.await.unwrap();
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn expanding_a_variable_keeps_the_worker_alive() {
+        let client = ApiClient::new(crate::api::ClientConfig::new("http://127.0.0.1:1")).unwrap();
+        let (requests, request_rx) = mpsc::channel(4);
+        let (messages, mut message_rx) = mpsc::channel(4);
+        let worker = tokio::spawn(run(client, request_rx, messages));
+        requests
+            .send(BackendRequest::ExpandVariable {
+                variable_id: "value".into(),
+                thread_id: "thread".into(),
+                generation: 7,
+            })
+            .await
+            .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(5), message_rx.recv())
+            .await
+            .unwrap();
+        assert!(matches!(message, Some(UiMessage::ExpansionError {
+            generation: 7, thread_id, ..
+        }) if thread_id == "thread"));
+        assert!(!worker.is_finished());
+        drop(requests);
+        worker.await.unwrap();
+    }
 
     #[test]
     fn jump_parser_accepts_source_and_address_forms() {

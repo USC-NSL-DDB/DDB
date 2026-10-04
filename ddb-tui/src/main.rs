@@ -1,6 +1,5 @@
 mod api;
 mod cli;
-mod legacy_v1;
 mod model;
 mod supervisor;
 mod ui;
@@ -10,11 +9,11 @@ use std::{io, time::Duration};
 
 use anyhow::{Context, Result};
 use api::{
-    thread_target, ApiClient, BreakpointTarget, CapabilitiesExt, ClientConfig, V2ApiClient,
+    thread_target, ApiClient, BreakpointTarget, CapabilitiesExt, ClientConfig,
     TUI_API_COMPATIBILITY,
 };
 use clap::Parser;
-use cli::{ApiVersion, Args, Mode};
+use cli::{Args, Mode};
 use crossterm::{
     cursor::Show,
     event::{
@@ -55,7 +54,6 @@ async fn main() -> Result<()> {
     let primary = run_frontend(
         &endpoint,
         token.as_deref(),
-        args.api_version,
         args.refresh_ms,
         managed.as_ref(),
     )
@@ -70,11 +68,10 @@ async fn main() -> Result<()> {
 async fn run_frontend(
     endpoint: &str,
     token: Option<&str>,
-    api_version: ApiVersion,
     refresh_ms: u64,
     managed: Option<&ManagedBackend>,
 ) -> Result<()> {
-    let client = negotiate_client(endpoint, token, api_version, managed).await?;
+    let client = negotiate_client(endpoint, token, managed).await?;
     let mut app = App::new(endpoint.to_string());
     if let Some(backend) = managed {
         app.push_timeline(format!(
@@ -107,14 +104,13 @@ async fn run_frontend(
 async fn negotiate_client(
     endpoint: &str,
     token: Option<&str>,
-    api_version: ApiVersion,
     managed: Option<&ManagedBackend>,
 ) -> Result<ApiClient> {
     let mut client_config = ClientConfig::new(endpoint);
     if let Some(token) = token {
         client_config = client_config.with_bearer_token(token.to_string());
     }
-    let v2_client = V2ApiClient::new(client_config)?;
+    let v2_client = ApiClient::new(client_config)?;
     match v2_client.handshake().await {
         Ok((server, capabilities)) => {
             capabilities.validate_for_tui()?;
@@ -139,21 +135,10 @@ async fn negotiate_client(
                     );
                 }
             }
-            Ok(ApiClient::V2(v2_client))
+            Ok(v2_client)
         }
-        Err(error) if api_version == ApiVersion::V2 && managed.is_none() && error.is_retryable() => {
-            Ok(ApiClient::V2(v2_client))
-        }
-        Err(error)
-            if api_version == ApiVersion::V1Fallback
-                && managed.is_none()
-                && error.is_api_version_unavailable() =>
-        {
-            let client = legacy_v1::Client::new(endpoint, token)?;
-            client.handshake().await.with_context(|| {
-                format!("v2 is unavailable and the explicit v1 fallback failed: {error}")
-            })?;
-            Ok(ApiClient::V1Fallback(client))
+        Err(error) if managed.is_none() && error.is_retryable() => {
+            Ok(v2_client)
         }
         Err(error) => Err(error).context(format!(
             "DDB API v2 negotiation failed; ddb-tui {} supports {}. For a version mismatch, install the paired package or choose a compatible frontend; refusing to downgrade for this error",
@@ -537,10 +522,11 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         }
                     }
                     InputMode::Evaluate => {
-                        if let Some(thread_id) =
-                            app.current_thread().map(|thread| thread.id.clone())
+                        if let Some(frame) =
+                            app.current_frame().filter(|frame| !frame.boundary).cloned()
                         {
-                            let frame_id = app.current_frame().map(|frame| frame.id.clone());
+                            let thread_id = frame.thread_id;
+                            let frame_id = Some(frame.id);
                             queue_request(
                                 app,
                                 requests,
@@ -551,7 +537,8 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                                 },
                             );
                         } else {
-                            app.status = "select a thread before evaluating".to_string();
+                            app.status =
+                                "select an inspectable frame before evaluating".to_string();
                         }
                     }
                     InputMode::Memory => {
@@ -678,10 +665,6 @@ fn request_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
             "send_signal is not available for {}",
             app.execution_scope_label()
         );
-        return;
-    }
-    if app.api_protocol.starts_with("v1/") {
-        app.start_input(InputMode::Signal);
         return;
     }
     app.status = format!("loading signals for {}…", app.execution_scope_label());
@@ -850,15 +833,30 @@ fn toggle_selected_variable(app: &mut App, requests: &mpsc::Sender<BackendReques
     };
     let generation = app.inspection_generation;
     if let Some(variable_id) = app.toggle_selected_variable() {
-        queue_request(
-            app,
-            requests,
+        let request = if app.variables[app.selected_variable].scope {
+            BackendRequest::ExpandScope {
+                scope_id: variable_id,
+                thread_id,
+                generation,
+            }
+        } else {
             BackendRequest::ExpandVariable {
                 variable_id,
                 thread_id,
                 generation,
-            },
-        );
+            }
+        };
+        if let Err(error) = requests.try_send(request) {
+            app.variables[app.selected_variable].loading = false;
+            match error {
+                mpsc::error::TrySendError::Full(_) => {
+                    app.error("DDB request queue is full; retry expansion")
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    app.backend_unavailable("DDB request worker is unavailable")
+                }
+            }
+        }
     }
 }
 
@@ -1086,6 +1084,11 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
         app.status = "select a thread before loading source".to_string();
         return;
     };
+    let owner_thread_id = app
+        .current_frame()
+        .filter(|frame| !frame.boundary)
+        .map(|frame| frame.thread_id.clone())
+        .unwrap_or_else(|| thread_id.clone());
     let Some((source, line, generation)) = app.prepare_source_navigation(requested_source, line)
     else {
         app.status = "enter path:line when no source file is loaded".to_string();
@@ -1096,6 +1099,7 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
         requests,
         BackendRequest::LoadSource {
             thread_id,
+            owner_thread_id,
             generation,
             source,
             line,
@@ -1190,6 +1194,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
     match message {
         UiMessage::Capabilities(capabilities) => app.apply_capabilities(capabilities),
         UiMessage::Snapshot(snapshot) => {
+            let new_stop = app.has_new_inspection_stop(&snapshot);
             let session_membership_changed = app.sessions.len() != snapshot.sessions.len()
                 || app.sessions.iter().any(|current| {
                     !snapshot
@@ -1198,7 +1203,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                         .any(|next| next.session_id == current.session_id)
                 });
             app.apply_snapshot(snapshot);
-            if session_membership_changed
+            if (session_membership_changed || new_stop)
                 && app
                     .current_thread()
                     .is_some_and(|thread| thread.state.contains("stop"))
@@ -1238,15 +1243,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                 }
             }
         }
-        UiMessage::Frames {
-            generation,
-            thread_id,
-            frames,
-        } => {
-            if app.inspection_is_current(generation, &thread_id) {
-                app.apply_frames(frames);
-            }
-        }
         UiMessage::DistributedFrames {
             generation,
             thread_id,
@@ -1270,13 +1266,13 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                 }
             }
         }
-        UiMessage::Variables {
+        UiMessage::Scopes {
             generation,
             thread_id,
-            variables,
+            scopes,
         } => {
             if app.inspection_is_current(generation, &thread_id) {
-                app.apply_variables(variables);
+                app.apply_scopes(scopes);
             }
         }
         UiMessage::VariableChildren {
@@ -1315,6 +1311,23 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         } => {
             if app.inspection_is_current(generation, &thread_id) {
                 app.apply_source(source, line);
+            }
+        }
+        UiMessage::ExpansionError {
+            generation,
+            thread_id,
+            parent_id,
+            error,
+        } => {
+            if app.inspection_is_current(generation, &thread_id) {
+                if let Some(variable) = app
+                    .variables
+                    .iter_mut()
+                    .find(|variable| variable.id == parent_id)
+                {
+                    variable.loading = false;
+                }
+                app.error(error);
             }
         }
         UiMessage::InspectionError {
@@ -1401,6 +1414,261 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    fn distributed_caller_app() -> App {
+        let mut app = App::new("http://127.0.0.1:5000".into());
+        app.threads.push(ThreadItem {
+            id: "thread/child".into(),
+            session_id: "session/child".into(),
+            name: "child".into(),
+            state: "stopped".into(),
+            function: "leaf".into(),
+            file: None,
+            line: None,
+        });
+        app.begin_inspection();
+        app.frames.push(model::StackFrame {
+            id: "frame/parent".into(),
+            distributed_index: 2,
+            session_id: "session/parent".into(),
+            thread_id: "thread/parent".into(),
+            level: 0,
+            address: String::new(),
+            function: "caller".into(),
+            file: Some("parent.rs".into()),
+            line: Some(10),
+            boundary: false,
+        });
+        app
+    }
+
+    #[test]
+    fn a_new_stop_revision_refreshes_inspection_without_a_running_event() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(4);
+        let mut snapshot = v2::Snapshot {
+            sessions: vec![v2::Session {
+                session_id: "session/child".into(),
+                ..Default::default()
+            }],
+            execution_states: vec![v2::ExecutionState {
+                execution_state_id: "execution/child".into(),
+                target: Some(thread_target("thread/child")),
+                running: false,
+                revision: 10,
+                location: Some(v2::SourceLocation {
+                    path: Some("child.rs".into()),
+                    line: 37,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        app.apply_snapshot(snapshot.clone());
+        let generation = app.inspection_generation;
+        // Same source location: comparing lines alone would miss new variable values.
+        snapshot.execution_states[0].revision = 12;
+        apply_message(&mut app, UiMessage::Snapshot(snapshot.clone()), &requests);
+        assert!(
+            matches!(receiver.try_recv().unwrap(), BackendRequest::InspectThread {
+            thread_id, generation: next,
+        } if thread_id == "thread/child" && next > generation)
+        );
+        assert!(app.frames.is_empty());
+        apply_message(&mut app, UiMessage::Snapshot(snapshot), &requests);
+        assert!(
+            receiver.try_recv().is_err(),
+            "duplicate stop snapshots must not restart inspection"
+        );
+    }
+
+    #[test]
+    fn an_uninspected_threads_stop_revision_does_not_restart_inspection() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(1);
+        let mut snapshot = v2::Snapshot {
+            sessions: vec![v2::Session {
+                session_id: "session/child".into(),
+                ..Default::default()
+            }],
+            execution_states: vec![v2::ExecutionState {
+                execution_state_id: "execution/other".into(),
+                target: Some(thread_target("thread/other")),
+                revision: 10,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        app.apply_snapshot(snapshot.clone());
+        let generation = app.inspection_generation;
+        snapshot.execution_states[0].revision = 12;
+        apply_message(&mut app, UiMessage::Snapshot(snapshot), &requests);
+        assert_eq!(app.inspection_generation, generation);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn refreshed_stack_selection_matches_the_workers_inspected_frame() {
+        let mut app = distributed_caller_app();
+        app.selected_frame = 2;
+        app.apply_distributed_frames(vec![
+            v2::DistributedFrame::default(),
+            v2::DistributedFrame {
+                frame: Some(v2::Frame {
+                    frame_id: "first".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            v2::DistributedFrame {
+                frame: Some(v2::Frame {
+                    frame_id: "second".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(app.current_frame().unwrap().id, "first");
+    }
+
+    #[test]
+    fn a_running_distributed_caller_invalidates_its_inspection_handles() {
+        let mut app = distributed_caller_app();
+        let generation = app.inspection_generation;
+        app.mark_running(Some("thread/parent"));
+        assert!(app.frames.is_empty());
+        assert!(app.inspection_generation > generation);
+    }
+
+    #[test]
+    fn source_navigation_releases_cancelled_expansion_loading_state() {
+        let mut app = distributed_caller_app();
+        app.apply_scopes(vec![v2::Scope {
+            scope_id: "locals".into(),
+            ..Default::default()
+        }]);
+        assert!(app.variables[0].loading);
+        app.prepare_source_navigation(Some("parent.rs".into()), 500)
+            .unwrap();
+        assert!(!app.variables[0].loading);
+        assert_eq!(app.toggle_selected_variable().as_deref(), Some("locals"));
+    }
+
+    #[test]
+    fn evaluation_targets_the_distributed_frames_owner() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(1);
+        app.start_input(InputMode::Evaluate);
+        app.input = "value".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &requests,
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), BackendRequest::Evaluate {
+            thread_id, frame_id: Some(frame_id), expression,
+        } if thread_id == "thread/parent" && frame_id == "frame/parent" && expression == "value")
+        );
+
+        app.frames[0].boundary = true;
+        app.start_input(InputMode::Evaluate);
+        app.input = "value".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &requests,
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(app.status.contains("inspectable frame"));
+    }
+
+    #[test]
+    fn source_navigation_uses_frame_owner_but_retains_inspection_identity() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(1);
+        goto_source_line(&mut app, &requests, "parent.rs:500");
+        assert!(
+            matches!(receiver.try_recv().unwrap(), BackendRequest::LoadSource {
+            thread_id, owner_thread_id, generation, source, line: 500,
+        } if thread_id == "thread/child" && owner_thread_id == "thread/parent"
+            && generation == app.inspection_generation && source == "parent.rs")
+        );
+    }
+
+    #[test]
+    fn a_full_request_queue_does_not_leave_a_scope_loading_forever() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(1);
+        requests.try_send(BackendRequest::Refresh).unwrap();
+        app.apply_scopes(vec![v2::Scope {
+            scope_id: "globals".into(),
+            expensive: true,
+            ..Default::default()
+        }]);
+        toggle_selected_variable(&mut app, &requests);
+        assert!(!app.variables[0].loading);
+        receiver.try_recv().unwrap();
+        toggle_selected_variable(&mut app, &requests);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::ExpandScope { .. }
+        ));
+    }
+
+    #[test]
+    fn scope_expansion_is_lazy_retryable_and_generation_scoped() {
+        let mut app = distributed_caller_app();
+        let (requests, mut receiver) = mpsc::channel(1);
+        app.apply_scopes(vec![v2::Scope {
+            scope_id: "scope/globals".into(),
+            name: "Globals".into(),
+            expensive: true,
+            ..Default::default()
+        }]);
+        toggle_selected_variable(&mut app, &requests);
+        assert!(
+            matches!(receiver.try_recv().unwrap(), BackendRequest::ExpandScope {
+            scope_id, generation, thread_id,
+        } if scope_id == "scope/globals" && generation == app.inspection_generation && thread_id == "thread/child")
+        );
+        toggle_selected_variable(&mut app, &requests);
+        assert!(
+            receiver.try_recv().is_err(),
+            "do not duplicate an in-flight request"
+        );
+
+        let generation = app.inspection_generation;
+        apply_message(
+            &mut app,
+            UiMessage::ExpansionError {
+                generation: generation - 1,
+                thread_id: "thread/child".into(),
+                parent_id: "scope/globals".into(),
+                error: "stale".into(),
+            },
+            &requests,
+        );
+        assert!(app.variables[0].loading);
+        apply_message(
+            &mut app,
+            UiMessage::ExpansionError {
+                generation,
+                thread_id: "thread/child".into(),
+                parent_id: "scope/globals".into(),
+                error: "unavailable".into(),
+            },
+            &requests,
+        );
+        assert!(!app.variables[0].loading);
+        assert_eq!(app.inspection_generation, generation);
+        toggle_selected_variable(&mut app, &requests);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::ExpandScope { .. }
+        ));
+    }
 
     #[tokio::test]
     async fn non_stop_debugger_events_do_not_restart_thread_inspection() {

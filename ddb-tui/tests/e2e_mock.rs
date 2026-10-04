@@ -4,18 +4,15 @@ use std::{
     collections::VecDeque,
     fs,
     io::{Read, Write},
-    net::{Shutdown, TcpListener, TcpStream},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
-use reqwest::blocking::Client;
+use ddb_api_client::{v2, ClientConfig, DdbClient};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -29,11 +26,7 @@ static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn mock_backend_full_terminal_workflow() {
     let mut ddb = Ddb::spawn_mock();
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/sessions")
-            .and_then(Value::as_array)
-            .is_some_and(|sessions| sessions.len() == 1)
-    });
+    ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);
 
     let mut tui = Tui::spawn(&ddb.base_url());
     tui.wait_for("DDB Debugger");
@@ -45,13 +38,13 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
     tui.wait_for("✓ breakpoint");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints")
-            .and_then(Value::as_array)
-            .is_some_and(|breakpoints| {
-                breakpoints.len() == 1
-                    && breakpoints[0]["condition"].as_str() == Some("counter == 42")
-            })
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot.breakpoints.len() == 1
+            && snapshot.breakpoints[0]
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.condition.as_deref())
+                == Some("counter == 42")
     });
 
     // Source -> Stack -> Variables -> Timeline -> Threads -> Breakpoints.
@@ -59,16 +52,22 @@ fn mock_backend_full_terminal_workflow() {
     tui.send(b"\t\t\t\t\t");
     tui.wait_for("\u{25c6} DDB Breakpoints");
     tui.send(b"x");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints/0/enabled")
-            .and_then(Value::as_bool)
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .breakpoints
+            .first()
+            .and_then(|breakpoint| breakpoint.spec.as_ref())
+            .and_then(|spec| spec.enabled)
             == Some(false)
     });
     tui.wait_for("○ ");
     tui.send(b"x");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints/0/enabled")
-            .and_then(Value::as_bool)
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .breakpoints
+            .first()
+            .and_then(|breakpoint| breakpoint.spec.as_ref())
+            .and_then(|spec| spec.enabled)
             == Some(true)
     });
     tui.send(b"\t");
@@ -110,11 +109,7 @@ fn mock_backend_full_terminal_workflow() {
 
     tui.send(b"b");
     tui.wait_for("delete breakpoint");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-    });
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.is_empty());
 
     tui.send(b"g11\r");
     tui.wait_for_source_marker('▸', 11);
@@ -373,37 +368,6 @@ fn reconnects_and_bootstraps_when_ddb_starts_late() {
 }
 
 #[test]
-#[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
-fn explicit_v1_fallback_uses_the_real_legacy_api() {
-    let mut ddb = Ddb::spawn_mock();
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/sessions")
-            .and_then(Value::as_array)
-            .is_some_and(|sessions| sessions.len() == 1)
-    });
-    let proxy = V1OnlyProxy::spawn(&ddb.base_url());
-
-    let mut tui = Tui::spawn_v1_fallback(&proxy.base_url());
-    // The 140-column toolbar clips the full protocol diagnostic after this
-    // unambiguous prefix; the model-level test covers the complete label.
-    tui.wait_for("v1/http+");
-    tui.wait_for("mock_session");
-    tui.wait_for("counter");
-    tui.wait_for_source_marker('▶', 9);
-
-    tui.clear_capture();
-    tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
-    tui.wait_for("exec · stopped");
-    tui.wait_for_source_marker('▶', 10);
-
-    let output = tui.quit();
-    assert!(output.contains("\u{1b}[?1049l"));
-    drop(proxy);
-    ddb.shutdown();
-}
-
-#[test]
 #[ignore = "requires the sibling DDB/fixture binaries and GDB; see ddb-tui/README.md#end-to-end-tests"]
 fn real_gdb_terminal_workflow() {
     let _guard = REAL_DEBUGGER_LOCK
@@ -644,10 +608,11 @@ fn wait_for_process_exit(pid: u32) {
 
 fn real_debugger_workflow(backend: &str) {
     let (mut ddb, fixture) = Ddb::spawn_real(backend);
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/sessions/0/all_threads_stopped")
-            .and_then(Value::as_bool)
-            == Some(true)
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .sessions
+            .first()
+            .is_some_and(|session| session.status == v2::SessionStatus::Stopped as i32)
     });
 
     let mut tui = Tui::spawn(&ddb.base_url());
@@ -655,10 +620,10 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("connected");
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
-    // Startup symbol names vary across debugger and linker versions; assert the
-    // stable frame index and executable identity rendered by both backends.
+    // LLDB may stop in the C main wrapper, without a source path or a
+    // Rust-qualified symbol. Verify the stopped frame, then navigate explicitly
+    // to the fixture; the breakpoint below asserts the exact Rust function.
     tui.wait_for("#0");
-    tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
     // Source navigation is valid only after the toolbar has a thread target.
     tui.wait_for("◎ thread");
@@ -674,11 +639,7 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
     tui.wait_for("1 breakpoints");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints")
-            .and_then(Value::as_array)
-            .is_some_and(|breakpoints| breakpoints.len() == 1)
-    });
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.len() == 1);
 
     tui.clear_capture();
     tui.send(b"\x1b[15~");
@@ -688,24 +649,29 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("counter");
     tui.wait_for("std::hint::black_box");
     tui.wait_for("hits:1");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints/0/times")
-            .and_then(Value::as_u64)
-            == Some(1)
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .breakpoints
+            .first()
+            .is_some_and(|breakpoint| breakpoint.hit_count == 1)
     });
     let thread_id = ddb.global_thread_id();
-    let before_step_line = ddb.top_frame_line(thread_id);
+    let before_step_line = ddb.top_frame_line(&thread_id);
     assert_eq!(before_step_line, fixture.breakpoint_line);
     tui.wait_for_source_marker('▶', before_step_line);
+
+    // Drive lazy expansion through the real SDK/backend, not only the model.
+    tui.expand_visible_variable("request");
+    tui.wait_for("▾ request");
+    tui.expand_visible_variable("headers");
+    tui.wait_for("▾ headers");
+    // Variables -> Stack -> Source; subsequent breakpoint commands use the source cursor.
+    tui.send(b"\x1b[Z\x1b[Z");
 
     tui.clear_capture();
     tui.send(b"b");
     tui.wait_for("delete breakpoint");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-    });
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.is_empty());
     tui.wait_for("0 breakpoints");
 
     tui.clear_capture();
@@ -713,16 +679,12 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
     tui.wait_for("1 breakpoints");
-    ddb.wait_for_json("/api/v1/state", |body| {
-        body.pointer("/data/breakpoints")
-            .and_then(Value::as_array)
-            .is_some_and(|breakpoints| breakpoints.len() == 1)
-    });
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.len() == 1);
     tui.clear_capture();
     tui.send(b"\x1b[21~");
     tui.wait_for("next:");
     tui.wait_for("exec · stopped");
-    let after_step_line = ddb.wait_for_top_frame_line_change(thread_id, before_step_line);
+    let after_step_line = ddb.wait_for_top_frame_line_change(&thread_id, before_step_line);
     tui.wait_for_source_marker('▶', after_step_line);
     assert_ne!(after_step_line, before_step_line);
 
@@ -740,7 +702,8 @@ struct Ddb {
     _tempdir: TempDir,
     child: Child,
     stdin: ChildStdin,
-    client: Client,
+    client: DdbClient,
+    runtime: tokio::runtime::Runtime,
     base_url: String,
     output: Arc<Mutex<Vec<u8>>>,
     stopped: bool,
@@ -896,24 +859,24 @@ StaticSessions:
             child.stderr.take().expect("DDB stderr should be piped"),
             output.clone(),
         );
-        let client = Client::builder()
-            .timeout(Duration::from_millis(500))
-            .build()
-            .expect("HTTP client should build");
+        let mut config = ClientConfig::new(format!("http://127.0.0.1:{port}"));
+        config.request_timeout = Duration::from_secs(5);
+        let client = DdbClient::new(config).expect("SDK client should build");
+        let runtime = tokio::runtime::Runtime::new().expect("SDK runtime should build");
         let mut ddb = Self {
             _tempdir: tempdir,
             child,
             stdin,
             client,
+            runtime,
             base_url: format!("http://127.0.0.1:{port}"),
             output,
             stopped: false,
         };
         ddb.wait_until("DDB readiness", |ddb| {
-            ddb.client
-                .get(format!("{}/api/v1/health/ready", ddb.base_url))
-                .send()
-                .is_ok_and(|response| response.status().is_success())
+            ddb.runtime
+                .block_on(ddb.client.get_readiness(v2::GetReadinessRequest::default()))
+                .is_ok()
         });
         ddb
     }
@@ -922,68 +885,57 @@ StaticSessions:
         self.base_url.clone()
     }
 
-    fn wait_for_json(&mut self, path: &str, predicate: impl Fn(&Value) -> bool) -> Value {
+    fn wait_for_snapshot(&mut self, predicate: impl Fn(&v2::Snapshot) -> bool) -> v2::Snapshot {
         let deadline = Instant::now() + TIMEOUT;
-        let mut last_response = "no response".to_string();
         loop {
             self.assert_running();
-            if let Ok(response) = self.client.get(format!("{}{}", self.base_url, path)).send() {
-                let status = response.status();
-                if let Ok(text) = response.text() {
-                    last_response = format!("HTTP {status}: {text}");
-                    if let Ok(body) = serde_json::from_str::<Value>(&text) {
-                        let matches = predicate(&body);
-                        if matches {
-                            return body;
-                        }
-                        last_response.push_str(&format!(
-                            "\nParsed sessions: {:?}; predicate: {matches}",
-                            body.pointer("/data/sessions")
-                        ));
+            let response = self
+                .runtime
+                .block_on(self.client.get_snapshot(v2::GetSnapshotRequest::default()));
+            if let Ok(response) = &response {
+                if let Some(snapshot) = &response.snapshot {
+                    if predicate(snapshot) {
+                        return snapshot.clone();
                     }
                 }
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {path}\nLast response: {last_response}\nDDB output:\n{}",
+                "timed out waiting for v2 snapshot: {response:?}\nDDB output:\n{}",
                 self.output_text()
             );
             thread::sleep(POLL);
         }
     }
 
-    fn api_post_json(&self, path: &str, body: &Value) -> Value {
-        self.client
-            .post(format!("{}{}", self.base_url, path))
-            .json(body)
-            .send()
-            .expect("API request should succeed")
-            .error_for_status()
-            .expect("API status should be successful")
-            .json()
-            .expect("API response should be JSON")
+    fn global_thread_id(&self) -> String {
+        self.runtime
+            .block_on(self.client.get_snapshot(v2::GetSnapshotRequest::default()))
+            .expect("GetSnapshot should succeed")
+            .snapshot
+            .expect("GetSnapshot should return a snapshot")
+            .threads
+            .into_iter()
+            .find(|thread| thread.state == v2::ThreadState::Stopped as i32)
+            .expect("a stopped thread should exist")
+            .thread_id
     }
 
-    fn global_thread_id(&self) -> u64 {
-        let body = self.api_post_json("/api/v1/threads/query", &serde_json::json!({}));
-        body.pointer("/data/result/responses/0/payload/threads/0/id")
-            .and_then(Value::as_str)
-            .and_then(|id| id.parse().ok())
-            .expect("thread query should return a global thread id")
+    fn top_frame_line(&self, thread_id: &str) -> usize {
+        self.runtime
+            .block_on(self.client.list_frames(v2::ListFramesRequest {
+                thread_id: thread_id.to_string(),
+                ..Default::default()
+            }))
+            .expect("ListFrames should succeed")
+            .frames
+            .first()
+            .and_then(|frame| frame.location.as_ref())
+            .expect("top frame should have a location")
+            .line as usize
     }
 
-    fn top_frame_line(&self, thread_id: u64) -> usize {
-        let body = self.api_post_json(
-            "/api/v1/stack/frames",
-            &serde_json::json!({"thread_id": thread_id, "low": 0, "high": 1}),
-        );
-        body.pointer("/data/result/responses/0/payload/stack/0/line")
-            .and_then(Value::as_str)
-            .and_then(|line| line.parse().ok())
-            .expect("stack query should return a top-frame source line")
-    }
-
-    fn wait_for_top_frame_line_change(&mut self, thread_id: u64, previous: usize) -> usize {
+    fn wait_for_top_frame_line_change(&mut self, thread_id: &str, previous: usize) -> usize {
         let mut changed = None;
         self.wait_until("top frame line to change", |ddb| {
             let line = ddb.top_frame_line(thread_id);
@@ -1062,20 +1014,9 @@ impl Tui {
     }
 
     fn spawn_with_refresh(api: &str, refresh_ms: u64) -> Self {
-        Self::spawn_with_options(api, refresh_ms, None)
-    }
-
-    fn spawn_v1_fallback(api: &str) -> Self {
-        Self::spawn_with_options(api, 10_000, Some("v1-fallback"))
-    }
-
-    fn spawn_with_options(api: &str, refresh_ms: u64, api_version: Option<&str>) -> Self {
         let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
-        let api_version = api_version
-            .map(|version| format!(" --api-version {version}"))
-            .unwrap_or_default();
         let command = format!(
-            "stty rows 40 cols 140; exec {} --api {} --refresh-ms {refresh_ms}{api_version}",
+            "stty rows 40 cols 140; exec {} --api {} --refresh-ms {refresh_ms}",
             shell_quote(&tui_binary),
             shell_quote(Path::new(api)),
         );
@@ -1213,6 +1154,34 @@ impl Tui {
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for {needle:?}\nTUI output:\n{}",
+                self.output_text()
+            );
+            thread::sleep(POLL);
+        }
+    }
+
+    fn expand_visible_variable(&mut self, name: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            self.assert_running();
+            // The fixed 140-column test terminal places inspection in the
+            // rightmost 25%; exclude source text with the same variable name.
+            let row = self.frames.lock().unwrap().back().and_then(|frame| {
+                frame.lines().enumerate().find_map(|(row, line)| {
+                    line.chars()
+                        .skip(105)
+                        .collect::<String>()
+                        .contains(&format!("▸ {name}"))
+                        .then_some(row + 1)
+                })
+            });
+            if let Some(row) = row {
+                self.send(format!("\x1b[<2;112;{row}M\x1b[<2;112;{row}m").as_bytes());
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expandable variable {name:?} not visible:\n{}",
                 self.output_text()
             );
             thread::sleep(POLL);
@@ -1385,117 +1354,6 @@ impl Drop for Tui {
             self.stopped = true;
         }
     }
-}
-
-struct V1OnlyProxy {
-    base_url: String,
-    running: Arc<AtomicBool>,
-    listener: Option<thread::JoinHandle<()>>,
-}
-
-impl V1OnlyProxy {
-    fn spawn(upstream_url: &str) -> Self {
-        let upstream = upstream_url
-            .strip_prefix("http://")
-            .expect("test DDB endpoint should use HTTP")
-            .to_string();
-        let listener =
-            TcpListener::bind("127.0.0.1:0").expect("v1-only proxy listener should bind");
-        listener
-            .set_nonblocking(true)
-            .expect("v1-only proxy should become nonblocking");
-        let address = listener
-            .local_addr()
-            .expect("v1-only proxy address should be available");
-        let running = Arc::new(AtomicBool::new(true));
-        let thread_running = running.clone();
-        let listener_thread = thread::spawn(move || {
-            while thread_running.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((client, _)) => {
-                        let upstream = upstream.clone();
-                        thread::spawn(move || proxy_connection(client, &upstream));
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(POLL);
-                    }
-                    Err(_) => return,
-                }
-            }
-        });
-        Self {
-            base_url: format!("http://{address}"),
-            running,
-            listener: Some(listener_thread),
-        }
-    }
-
-    fn base_url(&self) -> String {
-        self.base_url.clone()
-    }
-}
-
-impl Drop for V1OnlyProxy {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::Release);
-        if let Some(address) = self.base_url.strip_prefix("http://") {
-            let _ = TcpStream::connect(address);
-        }
-        if let Some(listener) = self.listener.take() {
-            let _ = listener.join();
-        }
-    }
-}
-
-fn proxy_connection(mut client: TcpStream, upstream_address: &str) {
-    const MAX_HEADER_BYTES: usize = 64 * 1024;
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-        let Ok(read) = client.read(&mut buffer) else {
-            return;
-        };
-        if read == 0 || request.len().saturating_add(read) > MAX_HEADER_BYTES {
-            return;
-        }
-        request.extend_from_slice(&buffer[..read]);
-    }
-    let request_line = request
-        .split(|byte| *byte == b'\n')
-        .next()
-        .and_then(|line| std::str::from_utf8(line).ok())
-        .unwrap_or_default();
-    let path = request_line.split_ascii_whitespace().nth(1).unwrap_or("");
-    if path == "/api/v2" || path.starts_with("/api/v2/") {
-        let body = b"DDB API v2 is unavailable in this migration fixture";
-        let response = format!(
-            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        let _ = client.write_all(response.as_bytes());
-        let _ = client.write_all(body);
-        return;
-    }
-
-    let Ok(mut upstream) = TcpStream::connect(upstream_address) else {
-        return;
-    };
-    if upstream.write_all(&request).is_err() {
-        return;
-    }
-    let Ok(mut upstream_reader) = upstream.try_clone() else {
-        return;
-    };
-    let Ok(mut client_writer) = client.try_clone() else {
-        return;
-    };
-    let response = thread::spawn(move || {
-        let _ = std::io::copy(&mut upstream_reader, &mut client_writer);
-        let _ = client_writer.shutdown(Shutdown::Write);
-    });
-    let _ = std::io::copy(&mut client, &mut upstream);
-    let _ = upstream.shutdown(Shutdown::Write);
-    let _ = response.join();
 }
 
 #[cfg(target_os = "linux")]

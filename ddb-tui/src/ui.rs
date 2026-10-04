@@ -725,8 +725,6 @@ fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .collect::<Vec<_>>();
     let stack_title = if app.distributed_stack_truncation.is_some() {
         "DDB Distributed Call Stack · TRUNCATED"
-    } else if app.capabilities.api_version == "v1" {
-        "Local Call Stack · v1 fallback"
     } else {
         "DDB Distributed Call Stack"
     };
@@ -747,7 +745,9 @@ fn draw_variables(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .iter()
         .map(|variable| {
             let indent = "  ".repeat(variable.depth);
-            let disclosure = if variable.has_children {
+            let disclosure = if variable.loading {
+                "… "
+            } else if variable.has_children {
                 if variable.expanded {
                     "▾ "
                 } else {
@@ -788,7 +788,7 @@ fn draw_variables(frame: &mut Frame<'_>, app: &App, area: Rect) {
     draw_selectable_list(
         frame,
         variables_area,
-        title(app, Focus::Variables, "Variables / Locals · Enter expand"),
+        title(app, Focus::Variables, "Variables / Scopes · Enter expand"),
         items,
         app.selected_variable,
         app.focus == Focus::Variables,
@@ -1548,18 +1548,6 @@ mod v2_tests {
         let screen = render(&mut app, 140, 40);
         assert!(
             screen.contains("DDB Distributed Call Stack · TRUNCATED"),
-            "{screen}"
-        );
-    }
-
-    #[test]
-    fn explicit_v1_fallback_labels_its_non_distributed_stack() {
-        let mut app = App::new("http://127.0.0.1:5000".to_string());
-        app.capabilities.api_version = "v1".to_string();
-
-        let screen = render(&mut app, 140, 40);
-        assert!(
-            screen.contains("Local Call Stack · v1 fallback"),
             "{screen}"
         );
     }

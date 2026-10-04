@@ -2,17 +2,11 @@ use anyhow::{bail, Result};
 use ddb_api_client::v2::{self, target};
 
 pub use ddb_api_client::{
-    ClientConfig, DdbClient as V2ApiClient, OutputSyncItem, OutputSyncOptions,
+    ClientConfig, DdbClient as ApiClient, OutputSyncItem, OutputSyncOptions,
     ProjectedStateSyncItem, StateSyncOptions,
 };
 
 pub const TUI_API_COMPATIBILITY: &str = "API versions [v2], schema >=2.0.0 and <3.0.0";
-
-#[derive(Clone, Debug)]
-pub enum ApiClient {
-    V2(V2ApiClient),
-    V1Fallback(crate::legacy_v1::Client),
-}
 
 /// UI intent for the installation scope of a logical breakpoint.
 ///
@@ -159,7 +153,7 @@ impl CapabilitiesExt for v2::Capabilities {
             .iter()
             .find(|capability| capability.action == action as i32)
         else {
-            return true;
+            return false;
         };
         let Some(scope) = execution_scope(target) else {
             return false;
@@ -282,6 +276,16 @@ mod tests {
         assert!(!capabilities.supports_breakpoint_action("hardware"));
         assert!(capabilities.supports_inspection("evaluate"));
         assert!(!capabilities.supports_execution("continue"));
+    }
+
+    #[test]
+    fn execution_requires_an_advertised_action_scope() {
+        let capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Next as i32],
+            ..Default::default()
+        };
+        assert!(!capabilities.supports_execution_target("next", &thread_target("thread/a")));
+        assert!(!capabilities.supports_execution_target("next", &group_target("group/a")));
     }
 
     #[test]

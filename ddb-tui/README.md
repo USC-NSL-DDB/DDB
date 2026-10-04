@@ -46,7 +46,7 @@ ddb-tui connect --api https://debug.example.com --token "$DDB_API_TOKEN"
 ```
 
 Quitting connect mode never shuts down that backend. `ddb-tui --api URL` remains
-a supported compatibility alias. The no-argument form still connects to
+a supported shorthand. The no-argument form still connects to
 `http://127.0.0.1:5000` for existing development workflows.
 
 Useful managed options are:
@@ -77,21 +77,9 @@ cargo run -- \
   ../ddb/examples/managed/mock.yaml
 ```
 
-API v2 is the default and no silent downgrade occurs. During a controlled
-migration from an older externally owned DDB deployment only, opt into:
-
-```bash
-ddb-tui connect \
-  --api http://127.0.0.1:5000 \
-  --api-version v1-fallback
-```
-
-Fallback still negotiates v2 first and occurs only when the v2 discovery route
-is explicitly absent. Authentication, permission, connectivity, malformed
-protocol, or managed-startup failures never cause a downgrade. V1 lacks
-cursor-based state/output replay, so reconnects force a refresh and warn that
-console output may have been lost. New frontend development should use the typed
-v2 SDK.
+The TUI requires the current API v2 and uses the typed Rust SDK for every
+backend request. There is no v1 fallback or alternate protocol mode. Upgrade
+the backend and frontend together when the API contract changes.
 
 ## Interaction
 
@@ -111,7 +99,7 @@ v2 SDK.
 | `x` / `Space` | Enable or disable the selected breakpoint |
 | `Delete` | Remove the selected breakpoint |
 | `d` | Refresh the DDB distributed stack (normally refreshed automatically) |
-| `Enter` in Variables | Expand or collapse lazy variable children |
+| `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
 | `e` | Evaluate an expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `g` | Go to a source line (loads another source window when needed) |
@@ -152,11 +140,21 @@ introduced by `if`, `-c`, or `--condition`. For example:
 The prompt and all breakpoint mutations are capability-gated; unsupported
 options are rejected before any request is sent to DDB.
 
+The variables panel preserves the scopes returned by DDB. Non-expensive scopes
+load automatically; expensive scopes (such as globals and file statics) load
+only when expanded. Scope and variable handles are valid for the current stop
+and are discarded when the inspection changes. Evaluation and source navigation
+use the owning thread of the selected distributed frame, not the thread where
+the backtrace began. The expression prompt uses the API's REPL context; it does
+not create retained watch values.
+
 Memory reads default to 128 bytes. Add `; BYTE_COUNT` to choose a bounded
 size, for example `$sp + 16 ; 256`.
 
 The SDK hydrates a bounded snapshot, applies revisioned state events, and
-replays from its acknowledged cursor after a disconnect. Output uses a
+replays from its acknowledged cursor after a disconnect. Execution-state
+revisions refresh stop-scoped inspection even when a fast step has no visible
+running transition or stops again on the same line. Output uses a
 separate stream so a slow console cannot starve stopped-state delivery. The UI
 shows replay gaps explicitly. A low-frequency refresh remains as recovery for
 backend availability changes.
@@ -165,7 +163,7 @@ backend availability changes.
 
 - Left: DDB group/session/thread topology and aggregate distributed breakpoints
 - Center: source view and the DDB distributed call stack
-- Right: lazy locals/arguments, registers, memory, extensions, and DDB timeline
+- Right: named variable scopes and lazy children, registers, memory, extensions, and DDB timeline
 - Top: capability-gated controls, current execution scope, and connection state
 - Bottom: status, command palette, and contextual key hints
 
@@ -208,14 +206,14 @@ cargo build --release
 ### End-to-end tests
 
 The ignored PTY suite starts real DDB processes and drives the compiled TUI as
-a user would. It includes deterministic mock, late-backend recovery, and
-v1-only migration-proxy cases, plus real GDB and LLDB sessions. The tests
+a user would. It includes deterministic mock and late-backend recovery cases,
+plus real GDB and LLDB sessions. Backend assertions use the same typed v2 SDK. The tests
 validate rendered terminal state with a VT100 screen model and verify
 backend-visible distributed breakpoint changes, group/session/thread topology
 and execution scopes, event-driven stops, distributed stack boundaries and
 inspectable frames, lazy variables/registers, evaluation, memory reads,
 capability-gated controls, exact post-step execution-line markers, independent
-source-cursor movement, explicit v1 negotiation, mouse input, and terminal
+source-cursor movement, mouse input, and terminal
 restoration.
 
 Managed PTY cases additionally cover direct and dispatched one-command startup,

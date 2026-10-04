@@ -229,6 +229,9 @@ pub struct StackFrame {
 #[derive(Clone, Debug)]
 pub struct Variable {
     pub id: String,
+    /// Scope rows dispatch ListVariables; value rows dispatch ExpandVariable.
+    pub scope: bool,
+    pub loading: bool,
     pub name: String,
     pub type_name: String,
     pub value: String,
@@ -360,6 +363,7 @@ pub struct App {
     pub sessions: Vec<v2::Session>,
     pub groups: Vec<v2::Group>,
     pub threads: Vec<ThreadItem>,
+    execution_states: Vec<v2::ExecutionState>,
     pub frames: Vec<StackFrame>,
     pub distributed_stack_truncation: Option<String>,
     pub variables: Vec<Variable>,
@@ -413,6 +417,7 @@ impl App {
             sessions: Vec::new(),
             groups: Vec::new(),
             threads: Vec::new(),
+            execution_states: Vec::new(),
             extension_actions: Vec::new(),
             selected_extension_action: 0,
             pending_extension_action: None,
@@ -466,6 +471,33 @@ impl App {
         Ok(())
     }
 
+    /// A fast step may stop before a running projection reaches the frontend.
+    /// Execution-state revisions, unlike source lines, identify repeated stops
+    /// at the same location and invalidate stop-scoped inspection handles.
+    pub fn has_new_inspection_stop(&self, snapshot: &v2::Snapshot) -> bool {
+        let selected = self.current_thread().map(|thread| thread.id.as_str());
+        let owner = self
+            .current_frame()
+            .filter(|frame| !frame.boundary)
+            .map(|frame| frame.thread_id.as_str());
+        snapshot.execution_states.iter().any(|next| {
+            let Some(target::Selector::Thread(thread)) = next
+                .target
+                .as_ref()
+                .and_then(|target| target.selector.as_ref())
+            else {
+                return false;
+            };
+            if next.running || ![selected, owner].contains(&Some(thread.thread_id.as_str())) {
+                return false;
+            }
+            self.execution_states
+                .iter()
+                .find(|previous| previous.execution_state_id == next.execution_state_id)
+                .is_some_and(|previous| next.revision > previous.revision)
+        })
+    }
+
     pub fn apply_snapshot(&mut self, snapshot: v2::Snapshot) {
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         if let Some(capabilities) = snapshot.capabilities.clone() {
@@ -473,6 +505,7 @@ impl App {
         }
         self.sessions = snapshot.sessions;
         self.groups = snapshot.groups;
+        self.execution_states = snapshot.execution_states;
         self.breakpoints = snapshot
             .breakpoints
             .into_iter()
@@ -607,6 +640,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     pub fn apply_frames(&mut self, items: Vec<v2::Frame>) {
         self.distributed_stack_truncation = None;
         let session_id = self
@@ -682,7 +716,12 @@ impl App {
     fn apply_stack_frames(&mut self, frames: Vec<StackFrame>) {
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         self.frames = frames;
-        self.selected_frame = bounded(self.selected_frame, self.frames.len());
+        // The worker loads details for the first inspectable distributed frame.
+        self.selected_frame = self
+            .frames
+            .iter()
+            .position(|frame| !frame.boundary)
+            .unwrap_or_default();
         self.execution_location = self
             .frames
             .iter()
@@ -701,10 +740,35 @@ impl App {
             });
     }
 
+    #[cfg(test)]
     pub fn apply_variables(&mut self, items: Vec<v2::Variable>) {
         self.variables = items
             .into_iter()
             .map(|variable| variable_view(variable, 0))
+            .collect();
+        self.selected_variable = bounded(self.selected_variable, self.variables.len());
+    }
+
+    pub fn apply_scopes(&mut self, scopes: Vec<v2::Scope>) {
+        self.variables = scopes
+            .into_iter()
+            .map(|scope| Variable {
+                id: scope.scope_id,
+                scope: true,
+                loading: !scope.expensive && scope.variable_count != Some(0),
+                name: scope.name,
+                type_name: "scope".to_string(),
+                value: if scope.expensive {
+                    "Load on demand"
+                } else {
+                    ""
+                }
+                .to_string(),
+                has_children: scope.variable_count != Some(0),
+                children: scope.variable_count.unwrap_or_default() as usize,
+                depth: 0,
+                expanded: false,
+            })
             .collect();
         self.selected_variable = bounded(self.selected_variable, self.variables.len());
     }
@@ -728,16 +792,22 @@ impl App {
             .into_iter()
             .map(|variable| variable_view(variable, depth + 1))
             .collect::<Vec<_>>();
+        if self.variables[parent_index].scope {
+            self.variables[parent_index].value.clear();
+        }
+        self.variables[parent_index].children = children.len();
+        self.variables[parent_index].has_children = !children.is_empty();
         self.variables
             .splice(parent_index + 1..parent_index + 1, children);
         self.variables[parent_index].expanded = true;
+        self.variables[parent_index].loading = false;
         self.selected_variable = bounded(self.selected_variable, self.variables.len());
     }
 
     pub fn toggle_selected_variable(&mut self) -> Option<String> {
         let index = self.selected_variable;
         let variable = self.variables.get(index)?;
-        if !variable.has_children {
+        if !variable.has_children || variable.loading {
             return None;
         }
         let id = variable.id.clone();
@@ -752,6 +822,7 @@ impl App {
             self.variables[index].expanded = false;
             None
         } else {
+            self.variables[index].loading = true;
             Some(id)
         }
     }
@@ -1420,7 +1491,12 @@ impl App {
     pub fn mark_running(&mut self, thread_id: Option<&str>) {
         let affects_current = match (thread_id, self.current_thread()) {
             (None, Some(_)) => true,
-            (Some(running), Some(current)) => running == current.id,
+            (Some(running), Some(current)) => {
+                running == current.id
+                    || self
+                        .current_frame()
+                        .is_some_and(|frame| frame.thread_id == running)
+            }
             _ => false,
         };
         for thread in &mut self.threads {
@@ -1570,6 +1646,10 @@ impl App {
             line,
         });
         self.source_cursor_pinned = true;
+        // Advancing the generation cancels in-flight expansion requests.
+        for variable in &mut self.variables {
+            variable.loading = false;
+        }
         self.inspection_generation = self.inspection_generation.wrapping_add(1).max(1);
         self.inspected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         Some((path, line, self.inspection_generation))
@@ -1605,6 +1685,9 @@ impl App {
             return false;
         }
         self.inspected_thread_id = None;
+        for variable in &mut self.variables {
+            variable.loading = false;
+        }
         true
     }
 
@@ -1794,11 +1877,7 @@ fn decode_source_lines(content: &str, line_count: u32) -> Vec<String> {
 }
 
 fn protocol_label(capabilities: &v2::Capabilities) -> String {
-    if capabilities.api_version == "v1" {
-        "v1/http+websocket fallback".to_string()
-    } else {
-        format!("v2/http+json {}", capabilities.schema_version)
-    }
+    format!("v2/http+json {}", capabilities.schema_version)
 }
 
 fn compact_json(value: &Value) -> String {
@@ -1913,6 +1992,8 @@ fn target_matches_sub_breakpoint(target: &BreakpointTarget, member: &v2::SubBrea
 fn variable_view(variable: v2::Variable, depth: usize) -> Variable {
     Variable {
         id: variable.variable_id,
+        scope: false,
+        loading: false,
         name: variable.name,
         type_name: variable.type_name.unwrap_or_default(),
         value: variable.value,
@@ -2156,19 +2237,7 @@ fn presentation_content(
 }
 
 fn presentation_data<'a>(value: &'a Value, presentation_id: &str) -> Option<&'a Value> {
-    if let Some(data) = value
-        .get("presentations")
-        .and_then(|presentations| presentations.get(presentation_id))
-    {
-        return Some(data);
-    }
-    // v1 built-ins used a table-only `panels` array. Keep this one-way
-    // translation isolated while canonical providers use `presentations`.
-    value
-        .get("panels")?
-        .as_array()?
-        .iter()
-        .find(|panel| panel.get("id").and_then(Value::as_str) == Some(presentation_id))
+    value.get("presentations")?.get(presentation_id)
 }
 
 fn table_rows(data: &Value) -> Option<Vec<Vec<String>>> {
@@ -2262,6 +2331,7 @@ pub enum BackendRequest {
     },
     LoadSource {
         thread_id: String,
+        owner_thread_id: String,
         generation: u64,
         source: String,
         line: usize,
@@ -2297,6 +2367,11 @@ pub enum BackendRequest {
         expression: String,
         thread_id: String,
         frame_id: Option<String>,
+    },
+    ExpandScope {
+        scope_id: String,
+        thread_id: String,
+        generation: u64,
     },
     ExpandVariable {
         variable_id: String,
@@ -2339,11 +2414,6 @@ pub enum UiMessage {
         target: v2::Target,
         signals: Vec<v2::DebuggerSignal>,
     },
-    Frames {
-        generation: u64,
-        thread_id: String,
-        frames: Vec<v2::Frame>,
-    },
     DistributedFrames {
         generation: u64,
         thread_id: String,
@@ -2360,10 +2430,10 @@ pub enum UiMessage {
         thread_id: String,
         registers: Vec<v2::Register>,
     },
-    Variables {
+    Scopes {
         generation: u64,
         thread_id: String,
-        variables: Vec<v2::Variable>,
+        scopes: Vec<v2::Scope>,
     },
     Memory {
         generation: u64,
@@ -2375,6 +2445,12 @@ pub enum UiMessage {
         thread_id: String,
         source: v2::SourceContent,
         line: usize,
+    },
+    ExpansionError {
+        generation: u64,
+        thread_id: String,
+        parent_id: String,
+        error: String,
     },
     InspectionError {
         generation: u64,

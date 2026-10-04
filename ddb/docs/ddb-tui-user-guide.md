@@ -70,15 +70,9 @@ ddb-tui connect --api https://debug.example.com --token "$DDB_API_TOKEN"
 
 Use connect only when a service manager, container, Kubernetes workload, shared
 team service, or automation owns DDB. Quitting does not stop that backend. The
-legacy `ddb-tui --api URL` form remains supported. Explicit v1 fallback is for a
-controlled migration of an external deployment only:
-
-```bash
-ddb-tui connect --api URL --api-version v1-fallback
-```
-
-Managed startup never falls back to v1. Authentication, permission, network,
-malformed-protocol, or version errors also never trigger a downgrade.
+`ddb-tui --api URL` shorthand remains supported. Both managed and external
+connections require the current API v2. There is no v1 fallback; upgrade paired
+backend/frontend binaries together when the contract changes.
 
 ### Headless backend
 
