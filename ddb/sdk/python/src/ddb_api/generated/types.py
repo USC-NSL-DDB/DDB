@@ -1705,6 +1705,7 @@ Session = TypedDict(
         "selectedThreadId": NotRequired["str"],
         "createdAt": NotRequired["str"],
         "revision": NotRequired["str"],
+        "tag": NotRequired["str"],
     },
 )
 

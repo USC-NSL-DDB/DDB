@@ -65,6 +65,13 @@ sources include their root and relative path. Do not compare filenames, suffixes
 or equal path strings to infer document identity. A path shared by multiple
 sessions requires an explicit owner or source reference when resolving it.
 
+`Session.tag` is the configured session tag. Use it to associate explicit
+frontend-local source mappings with `SourceOwner.session_id` through the current
+session projection. Do not parse `display_name` or assume tags are opaque API
+resource IDs. A session recreated after restart can have the same tag and a new
+ID. Pair remote source/root references with `ResponseContext.server_instance_id`
+and reject mismatched response contexts before using their contents.
+
 `SourceFile.availability` is a discovery-time hint, not a promise that a later
 read will succeed. Missing debugger files remain in the catalog with a reason.
 Reads recheck current filesystem access; directories, binary/non-UTF-8 files,

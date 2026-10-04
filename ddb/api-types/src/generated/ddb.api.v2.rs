@@ -1127,6 +1127,10 @@ pub struct Session {
     /// Resource revision for idempotent event application.
     #[prost(uint64, tag = "10")]
     pub revision: u64,
+    /// Configured session tag, distinct from the display label and opaque ID.
+    /// Frontends may use it for explicit workspace/source-map selection.
+    #[prost(string, tag = "11")]
+    pub tag: ::prost::alloc::string::String,
 }
 /// Group describes a DDB logical session group.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

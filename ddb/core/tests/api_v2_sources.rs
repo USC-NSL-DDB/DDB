@@ -199,6 +199,17 @@ fn distributed_catalog_keeps_session_ownership_and_applies_session_mappings() {
     ddb.wait_for_stdout_count("*stopped", 2);
     let client = client(&ddb);
     runtime().block_on(async {
+        let sessions = client
+            .collect_sessions(Default::default(), 10)
+            .await
+            .unwrap();
+        let mut tags = sessions
+            .iter()
+            .map(|session| session.tag.as_str())
+            .collect::<Vec<_>>();
+        tags.sort_unstable();
+        assert_eq!(tags, ["a", "b"]);
+        assert!(sessions.iter().all(|session| session.session_id != session.tag));
         let catalog = client
             .collect_sources(
                 v2::ListSourcesRequest {

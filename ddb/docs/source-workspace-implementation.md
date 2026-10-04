@@ -261,3 +261,17 @@ remote handles must include their server instance and check source-response
 contexts, including replacement detected by a source read before a new state
 snapshot arrives. The snapshot invalidation in this stage is not that full
 request/response identity check.
+
+### Canonical session tag prerequisite
+
+- Source ownership implementation committed as `f0f138c0`.
+- Added `Session.tag` as Protobuf field 11 and populated it from the configured
+  session tag. Local mapping selection needs this structured field; display
+  labels and opaque resource IDs are not configuration identifiers.
+- Regenerated Rust, TypeScript, Python, OpenAPI, AsyncAPI, and the descriptor.
+  No handwritten duplicate contract or display-name parsing was introduced.
+- Three source API integration tests passed, including a public SDK assertion
+  that the two distributed sessions expose their configured tags separately
+  from their resource IDs. Rust SDK/types passed 20 tests. Code generation
+  reproduced exactly. Redocly and AsyncAPI validation passed for 48 HTTP
+  operations and two stream channels.

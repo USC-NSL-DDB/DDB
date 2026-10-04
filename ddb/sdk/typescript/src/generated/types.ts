@@ -1299,6 +1299,7 @@ export interface Session {
   "selectedThreadId"?: string;
   "createdAt"?: string;
   "revision"?: string;
+  "tag"?: string;
 }
 
 export interface SessionSetTarget {

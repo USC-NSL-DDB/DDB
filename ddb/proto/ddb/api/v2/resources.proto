@@ -412,6 +412,9 @@ message Session {
   google.protobuf.Timestamp created_at = 9;
   // Resource revision for idempotent event application.
   uint64 revision = 10;
+  // Configured session tag, distinct from the display label and opaque ID.
+  // Frontends may use it for explicit workspace/source-map selection.
+  string tag = 11;
 }
 
 // Group describes a DDB logical session group.

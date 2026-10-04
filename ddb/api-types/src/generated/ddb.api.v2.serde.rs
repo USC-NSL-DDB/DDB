@@ -22384,6 +22384,9 @@ impl serde::Serialize for Session {
         if self.revision != 0 {
             len += 1;
         }
+        if !self.tag.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.Session", len)?;
         if !self.session_id.is_empty() {
             struct_ser.serialize_field("sessionId", &self.session_id)?;
@@ -22419,6 +22422,9 @@ impl serde::Serialize for Session {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("revision", ToString::to_string(&self.revision).as_str())?;
         }
+        if !self.tag.is_empty() {
+            struct_ser.serialize_field("tag", &self.tag)?;
+        }
         struct_ser.end()
     }
 }
@@ -22446,6 +22452,7 @@ impl<'de> serde::Deserialize<'de> for Session {
             "created_at",
             "createdAt",
             "revision",
+            "tag",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22460,6 +22467,7 @@ impl<'de> serde::Deserialize<'de> for Session {
             SelectedThreadId,
             CreatedAt,
             Revision,
+            Tag,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -22492,6 +22500,7 @@ impl<'de> serde::Deserialize<'de> for Session {
                             "selectedThreadId" | "selected_thread_id" => Ok(GeneratedField::SelectedThreadId),
                             "createdAt" | "created_at" => Ok(GeneratedField::CreatedAt),
                             "revision" => Ok(GeneratedField::Revision),
+                            "tag" => Ok(GeneratedField::Tag),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -22521,6 +22530,7 @@ impl<'de> serde::Deserialize<'de> for Session {
                 let mut selected_thread_id__ = None;
                 let mut created_at__ = None;
                 let mut revision__ = None;
+                let mut tag__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::SessionId => {
@@ -22585,6 +22595,12 @@ impl<'de> serde::Deserialize<'de> for Session {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Tag => {
+                            if tag__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tag"));
+                            }
+                            tag__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -22601,6 +22617,7 @@ impl<'de> serde::Deserialize<'de> for Session {
                     selected_thread_id: selected_thread_id__,
                     created_at: created_at__,
                     revision: revision__.unwrap_or_default(),
+                    tag: tag__.unwrap_or_default(),
                 })
             }
         }

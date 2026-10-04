@@ -71,6 +71,7 @@ impl<'a> ProjectionContext<'a> {
             .then(|| "ddb custom distributed context is active".to_string());
         let mut session = Session {
             session_id,
+            tag: view.tag.clone(),
             display_name: if view.alias == "UNKNOWN" {
                 view.tag.clone()
             } else {
