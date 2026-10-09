@@ -22,8 +22,12 @@ pub(super) fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<B
         }
         KeyCode::Up => app.source_explorer.move_selection(-1),
         KeyCode::Down => app.source_explorer.move_selection(1),
-        KeyCode::PageUp => app.source_explorer.move_selection(-10),
-        KeyCode::PageDown => app.source_explorer.move_selection(10),
+        KeyCode::PageUp => app
+            .source_explorer
+            .move_selection(-(app.areas.source_explorer_rows.len().max(1) as isize)),
+        KeyCode::PageDown => app
+            .source_explorer
+            .move_selection(app.areas.source_explorer_rows.len().max(1) as isize),
         KeyCode::Home => app.source_explorer.select(0),
         KeyCode::End => app.source_explorer.select(usize::MAX),
         KeyCode::Backspace => {
@@ -110,4 +114,48 @@ fn activate(app: &mut App, requests: &mpsc::Sender<BackendRequest>, directory: b
     app.source_explorer.close();
     app.focus = Focus::Source;
     queue_request(app, requests, BackendRequest::LoadSource(request));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source_browser::tests::remote_source;
+    use crate::source_explorer::{Entry, Page};
+
+    #[test]
+    fn paging_uses_visible_rows_after_resize_without_backend_requests() {
+        let mut app = App::new("http://localhost".into());
+        let request = app.source_explorer.open(true);
+        app.source_explorer.apply(
+            request.generation,
+            Page {
+                entries: (0..30)
+                    .map(|index| {
+                        Entry::Source(remote_source(v2::SourceFile {
+                            source_reference: format!("source/{index}"),
+                            name: format!("file{index}.rs"),
+                            ..Default::default()
+                        }))
+                    })
+                    .collect(),
+                next_token: None,
+                warnings: Vec::new(),
+            },
+        );
+        app.source_explorer.select(10);
+        let (tx, mut rx) = mpsc::channel(1);
+        for (rows, code, expected) in [
+            (3, KeyCode::PageDown, 13),
+            (3, KeyCode::PageUp, 10),
+            (7, KeyCode::PageDown, 17),
+            (0, KeyCode::PageDown, 18),
+        ] {
+            app.areas.source_explorer_rows = (0..rows)
+                .map(|index| (index, ratatui::layout::Rect::new(0, index as u16, 20, 1)))
+                .collect();
+            handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &tx);
+            assert_eq!(app.source_explorer.selected, expected);
+        }
+        assert!(rx.try_recv().is_err());
+    }
 }
