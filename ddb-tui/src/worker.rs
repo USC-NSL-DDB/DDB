@@ -969,12 +969,21 @@ fn state_event_activity(event: &v2::StateEvent) -> DebuggerActivity {
             DebuggerActivity::Running(target_thread_id(state.target.as_ref()))
         }
         Some(resource_upsert::Resource::ExecutionState(state)) => {
-            let thread_id = state
+            let Some(thread_id) = target_thread_id(state.target.as_ref()) else {
+                return DebuggerActivity::None;
+            };
+            // A process-wide stop can project the same cause onto its peer
+            // threads. Only the cause thread may trigger inspection or
+            // automatic control; the preceding snapshot still updates peers.
+            if state
                 .stop_reason
                 .as_ref()
-                .and_then(|reason| reason.thread_id.clone())
-                .or_else(|| target_thread_id(state.target.as_ref()));
-            DebuggerActivity::Stopped(thread_id)
+                .and_then(|reason| reason.thread_id.as_deref())
+                .is_some_and(|owner| owner != thread_id)
+            {
+                return DebuggerActivity::None;
+            }
+            DebuggerActivity::Stopped(Some(thread_id))
         }
         _ => DebuggerActivity::None,
     }
@@ -1278,6 +1287,51 @@ mod tests {
         let address = parse_jump_location("*0x401000").unwrap();
         assert_eq!(address.address.as_deref(), Some("0x401000"));
         assert!(parse_jump_location("42").is_err());
+    }
+
+    #[test]
+    fn process_wide_stop_projections_do_not_repeat_the_originating_stop() {
+        let event_for = |target: v2::Target, origin: Option<&str>| v2::StateEvent {
+            payload: Some(state_event::Payload::Upsert(v2::ResourceUpsert {
+                resource: Some(resource_upsert::Resource::ExecutionState(
+                    v2::ExecutionState {
+                        target: Some(target),
+                        stop_reason: Some(v2::StopReason {
+                            thread_id: origin.map(str::to_owned),
+                            kind: v2::StopReasonKind::Breakpoint as i32,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+            })),
+            ..Default::default()
+        };
+        let owner = "thread/server:rpc";
+        assert_eq!(
+            state_event_activity(&event_for(thread_target(owner), Some(owner))),
+            DebuggerActivity::Stopped(Some(owner.into()))
+        );
+        assert_eq!(
+            state_event_activity(&event_for(
+                thread_target("thread/server:worker"),
+                Some(owner)
+            )),
+            DebuggerActivity::None
+        );
+        assert_eq!(
+            state_event_activity(&event_for(
+                crate::api::session_target("session/server"),
+                Some(owner)
+            )),
+            DebuggerActivity::None
+        );
+        // Backends may omit the cause thread. The canonical target still owns
+        // this stop, so stepping and explicit interruption must keep working.
+        assert_eq!(
+            state_event_activity(&event_for(thread_target(owner), None)),
+            DebuggerActivity::Stopped(Some(owner.into()))
+        );
     }
 
     #[test]
