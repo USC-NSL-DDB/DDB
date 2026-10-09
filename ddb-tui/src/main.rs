@@ -1,6 +1,8 @@
 mod api;
 mod cli;
+mod display_text;
 mod model;
+mod output;
 mod source_binding;
 #[cfg(test)]
 mod source_binding_tests;
@@ -75,6 +77,7 @@ async fn main() -> Result<()> {
         args.refresh_ms,
         managed.as_ref(),
         workspace,
+        args.values_formatting,
     )
     .await;
     let cleanup = match managed.as_mut() {
@@ -90,10 +93,12 @@ async fn run_frontend(
     refresh_ms: u64,
     managed: Option<&ManagedBackend>,
     workspace: std::sync::Arc<source_workspace::Workspace>,
+    values_formatting: cli::ValuesFormatting,
 ) -> Result<()> {
     let client = negotiate_client(endpoint, token, managed).await?;
     let mut app = App::new(endpoint.to_string());
     app.source_workspace = workspace;
+    app.values_formatting = values_formatting;
     if let Some(backend) = managed {
         app.push_timeline(format!(
             "managed DDB {} ready (instance {}, log {})",
@@ -374,11 +379,24 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         return;
     }
     if app.show_help {
-        if matches!(
-            key.code,
-            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-        ) {
-            app.show_help = false;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.show_help = false,
+            KeyCode::Up | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.help_scroll = app.help_scroll.saturating_add(1).min(app.help_max_scroll)
+            }
+            KeyCode::PageUp => {
+                app.help_scroll = app.help_scroll.saturating_sub(app.help_page_height)
+            }
+            KeyCode::PageDown => {
+                app.help_scroll = app
+                    .help_scroll
+                    .saturating_add(app.help_page_height)
+                    .min(app.help_max_scroll)
+            }
+            KeyCode::Home => app.help_scroll = 0,
+            KeyCode::End => app.help_scroll = app.help_max_scroll,
+            _ => {}
         }
         return;
     }
@@ -390,12 +408,59 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         handle_signal_picker_key(app, key, requests);
         return;
     }
+    if app.breakpoint_hit_picker.is_some() {
+        match key.code {
+            KeyCode::Esc => app.breakpoint_hit_picker = None,
+            KeyCode::Up | KeyCode::Char('k') => app.move_breakpoint_hit(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.move_breakpoint_hit(1),
+            KeyCode::Home => app.move_breakpoint_hit(isize::MIN),
+            KeyCode::End => app.move_breakpoint_hit(isize::MAX),
+            KeyCode::PageUp => {
+                app.move_breakpoint_hit(-(app.areas.breakpoint_hit_rows.len().max(1) as isize))
+            }
+            KeyCode::PageDown => {
+                app.move_breakpoint_hit(app.areas.breakpoint_hit_rows.len().max(1) as isize)
+            }
+            KeyCode::Enter => reveal_breakpoint_hit(app, requests),
+            _ => {}
+        }
+        return;
+    }
     if app.input_mode != InputMode::Normal {
         handle_prompt_key(app, key, requests);
         return;
     }
 
     match key.code {
+        KeyCode::Char('z') => app.expanded_pane = !app.expanded_pane,
+        KeyCode::Char('O') => {
+            app.show_output = !app.show_output;
+            if app.show_output {
+                app.focus = Focus::Output;
+            } else if app.focus == Focus::Output {
+                app.focus = Focus::Source;
+            }
+        }
+        KeyCode::Left | KeyCode::Right
+            if app.focus == Focus::Output && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.output
+                .scroll_horizontal(if key.code == KeyCode::Left { -8 } else { 8 });
+        }
+        KeyCode::Home if app.focus == Focus::Output => {
+            app.output.scroll(isize::MIN);
+            app.output.scroll_horizontal(isize::MIN);
+        }
+        KeyCode::End if app.focus == Focus::Output => app.output.follow(),
+        KeyCode::Esc if app.expanded_pane => app.expanded_pane = false,
+        KeyCode::Char('t') => {
+            app.show_timeline = !app.show_timeline;
+            if app.show_timeline {
+                app.focus = Focus::Timeline;
+            } else if app.focus == Focus::Timeline {
+                app.focus = Focus::Source;
+            }
+        }
         KeyCode::Char('o') | KeyCode::Char('p')
             if key.code == KeyCode::Char('o') || key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
@@ -407,12 +472,48 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 queue_request(app, requests, BackendRequest::LoadSource(request));
             }
         }
+        KeyCode::Left | KeyCode::Right if app.focus == Focus::Source => {
+            app.source_browser
+                .scroll_horizontal(if key.code == KeyCode::Left { -8 } else { 8 });
+        }
+        KeyCode::Home if app.focus == Focus::Source => {
+            app.source_browser.scroll_horizontal(isize::MIN);
+        }
+        KeyCode::Left | KeyCode::Right | KeyCode::Home
+            if matches!(
+                app.focus,
+                Focus::Stack
+                    | Focus::Variables
+                    | Focus::Threads
+                    | Focus::Breakpoints
+                    | Focus::Registers
+                    | Focus::Memory
+            ) =>
+        {
+            let delta = match key.code {
+                KeyCode::Left => -8,
+                KeyCode::Right => 8,
+                _ => isize::MIN,
+            };
+            match app.focus {
+                Focus::Stack => app.stack_viewport.scroll(delta),
+                Focus::Variables => app.variable_viewport.scroll(delta),
+                Focus::Threads => app.topology_viewport.scroll(delta),
+                Focus::Breakpoints => app.breakpoint_viewport.scroll(delta),
+                Focus::Registers => app.register_viewport.scroll(delta),
+                Focus::Memory => app.memory_viewport.scroll(delta),
+                _ => unreachable!(),
+            }
+        }
         KeyCode::Char('f') if app.focus == Focus::Source => {
             app.source_browser.set_following(true);
             reveal_frame(app, requests, Navigation::Follow);
         }
         KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char('?') => app.show_help = true,
+        KeyCode::Char('?') => {
+            app.show_help = true;
+            app.help_scroll = 0;
+        }
         KeyCode::Char(':') => {
             app.start_input(InputMode::Command);
         }
@@ -421,6 +522,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 app.start_input(InputMode::Evaluate);
             } else {
                 app.status = "the connected DDB backend does not support evaluation".to_string();
+            }
+        }
+        KeyCode::Char('=') if app.focus == Focus::Variables => start_variable_edit(app),
+        KeyCode::Char('w') => app.start_input(InputMode::Watch),
+        KeyCode::Delete | KeyCode::Backspace if app.focus == Focus::Variables => {
+            if !app.remove_selected_watch() {
+                app.status = "Select a watch expression to remove it".into();
             }
         }
         KeyCode::Char('m') => {
@@ -439,7 +547,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         }
         KeyCode::Char('b') => toggle_breakpoint(app, requests),
         KeyCode::Char('B') => start_breakpoint_prompt(app),
-        KeyCode::Char('j') => start_execution_prompt(app, "jump", InputMode::Jump),
+        KeyCode::Char('P') if app.focus == Focus::Breakpoints => {
+            if let Err(error) = app.open_breakpoint_hits() {
+                app.error(error);
+            }
+        }
+        KeyCode::Char('F') => app.start_input(InputMode::FunctionBreakpoint),
+        KeyCode::Char('J') => start_execution_prompt(app, "jump", InputMode::Jump),
         KeyCode::Char('s') => request_signal_picker(app, requests),
         KeyCode::Char('g') => app.start_input(InputMode::GotoLine),
         KeyCode::Char('d') => refresh_stack(app, requests),
@@ -464,20 +578,20 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             app.cycle_focus(key.modifiers.contains(KeyModifiers::SHIFT));
         }
         KeyCode::BackTab => app.cycle_focus(true),
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             move_selection(app, requests, -1);
             inspect_selection(app, requests);
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             move_selection(app, requests, 1);
             inspect_selection(app, requests);
         }
         KeyCode::PageUp => {
-            move_selection(app, requests, -10);
+            move_selection(app, requests, -page_size(app));
             inspect_selection(app, requests);
         }
         KeyCode::PageDown => {
-            move_selection(app, requests, 10);
+            move_selection(app, requests, page_size(app));
             inspect_selection(app, requests);
         }
         KeyCode::Enter if app.focus == Focus::Extensions => {
@@ -485,12 +599,14 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 app.error(error);
             }
         }
+        KeyCode::Enter if app.focus == Focus::Breakpoints => reveal_breakpoint(app, requests),
         KeyCode::Enter | KeyCode::Right if app.focus == Focus::Variables => {
             toggle_selected_variable(app, requests)
         }
         KeyCode::Enter => inspect_selection(app, requests),
         KeyCode::F(5) => dispatch_control(app, requests, Control::Continue),
         KeyCode::F(6) => dispatch_control(app, requests, Control::Interrupt),
+        KeyCode::F(8) => reveal_selected_frame(app, requests),
         KeyCode::F(10) => dispatch_control(app, requests, Control::Next),
         KeyCode::F(11) if key.modifiers.contains(KeyModifiers::SHIFT) => {
             dispatch_control(app, requests, Control::StepOut)
@@ -507,10 +623,13 @@ fn handle_breakpoint_target_key(
 ) {
     match key.code {
         KeyCode::Esc => app.cancel_breakpoint_target_picker(),
-        KeyCode::Up => app.move_breakpoint_target_picker(-1),
-        KeyCode::Down => app.move_breakpoint_target_picker(1),
-        KeyCode::PageUp => app.move_breakpoint_target_picker(-5),
-        KeyCode::PageDown => app.move_breakpoint_target_picker(5),
+        KeyCode::Up | KeyCode::Char('k') => app.move_breakpoint_target_picker(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_breakpoint_target_picker(1),
+        KeyCode::PageUp => app.move_breakpoint_target_picker(
+            -(app.areas.breakpoint_target_rows.len().max(1) as isize),
+        ),
+        KeyCode::PageDown => app
+            .move_breakpoint_target_picker(app.areas.breakpoint_target_rows.len().max(1) as isize),
         KeyCode::Char(' ') => app.toggle_breakpoint_target_choice(),
         KeyCode::Enter => submit_breakpoint_target_picker(app, requests),
         _ => {}
@@ -523,8 +642,7 @@ fn submit_breakpoint_target_picker(app: &mut App, requests: &mpsc::Sender<Backen
             app,
             requests,
             BackendRequest::CreateBreakpoint {
-                source: draft.source,
-                line: draft.line,
+                location: draft.location,
                 target,
                 options: draft.options,
             },
@@ -541,26 +659,55 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
             let input = app.commit_input();
             if !input.is_empty() || mode == InputMode::Breakpoint {
                 match mode {
+                    InputMode::AssignVariable => {
+                        if let Some(edit) = app.variable_edit.take() {
+                            if app.inspection_is_current(edit.generation, &edit.origin_thread)
+                                && app.current_frame().is_some_and(|f| f.id == edit.frame_id)
+                            {
+                                queue_request(
+                                    app,
+                                    requests,
+                                    BackendRequest::AssignVariable { edit, value: input },
+                                );
+                            } else {
+                                app.error("The variable's inspection context changed. Select it again before editing.");
+                            }
+                        }
+                    }
                     InputMode::Command => {
-                        if is_raw_breakpoint_insert(&input) {
-                            app.status = "use b/B for typed DDB breakpoint targeting".to_string();
+                        if app.current_frame().is_some_and(|frame| frame.boundary) {
+                            app.status =
+                                "select an inspectable frame before sending a native command"
+                                    .into();
                             return;
                         }
-                        if let Some(target) = app
-                            .current_thread()
-                            .map(|thread| thread_target(thread.id.clone()))
-                        {
+                        let context = app
+                            .current_frame()
+                            .map(|frame| {
+                                (
+                                    thread_target(frame.thread_id.clone()),
+                                    Some(frame.id.clone()),
+                                )
+                            })
+                            .or_else(|| {
+                                app.current_thread()
+                                    .map(|thread| (thread_target(thread.id.clone()), None))
+                            });
+                        if let Some((target, frame_id)) = context {
+                            app.show_output = true;
+                            app.focus = Focus::Output;
                             queue_request(
                                 app,
                                 requests,
                                 BackendRequest::RawCommand {
                                     command: input,
                                     target,
+                                    frame_id,
                                 },
                             );
                         } else {
-                            app.status =
-                                "select a thread before sending a raw DDB/MI command".to_string();
+                            app.status = "select a thread before sending a native debugger command"
+                                .to_string();
                         }
                     }
                     InputMode::Evaluate => {
@@ -569,6 +716,8 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         {
                             let thread_id = frame.thread_id;
                             let frame_id = Some(frame.id);
+                            app.show_output = true;
+                            app.focus = Focus::Output;
                             queue_request(
                                 app,
                                 requests,
@@ -583,21 +732,36 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                                 "select an inspectable frame before evaluating".to_string();
                         }
                     }
+                    InputMode::Watch => match app.add_watch(input) {
+                        Ok(()) => refresh_watches(app, requests),
+                        Err(error) => app.error(error),
+                    },
                     InputMode::Memory => {
+                        if app.current_frame().is_some_and(|frame| frame.boundary) {
+                            app.error("Select an inspectable frame before reading memory");
+                            return;
+                        }
                         if let Some(thread_id) =
                             app.current_thread().map(|thread| thread.id.clone())
                         {
+                            let owner_thread = app
+                                .current_frame()
+                                .map_or_else(|| thread_id.clone(), |frame| frame.thread_id.clone());
                             match parse_memory_request(&input) {
-                                Ok((address, count)) => queue_request(
-                                    app,
-                                    requests,
-                                    BackendRequest::ReadMemory {
-                                        address,
-                                        count,
-                                        thread_id,
-                                        generation: app.inspection_generation,
-                                    },
-                                ),
+                                Ok((address, count)) => {
+                                    app.focus = Focus::Memory;
+                                    queue_request(
+                                        app,
+                                        requests,
+                                        BackendRequest::ReadMemory {
+                                            address,
+                                            count,
+                                            thread_id,
+                                            owner_thread,
+                                            generation: app.inspection_generation,
+                                        },
+                                    );
+                                }
                                 Err(error) => app.error(error),
                             }
                         } else {
@@ -625,6 +789,15 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         Ok(options) => create_breakpoint(app, requests, options),
                         Err(error) => app.error(error),
                     },
+                    InputMode::FunctionBreakpoint => {
+                        let result =
+                            parse_function_breakpoint(&input).and_then(|(name, options)| {
+                                app.start_function_breakpoint_picker(name, options)
+                            });
+                        if let Err(error) = result {
+                            app.error(error);
+                        }
+                    }
                     InputMode::ExtensionAction => {
                         let payload = match serde_json::from_str::<serde_json::Value>(&input) {
                             Ok(payload) => payload,
@@ -684,14 +857,6 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
 /// DDB's MI facade treats logical breakpoint insertion as a session/group
 /// operation. Other raw commands retain the selected thread as their precise
 /// execution context.
-fn is_raw_breakpoint_insert(command: &str) -> bool {
-    command
-        .trim_start_matches(|character: char| character.is_ascii_digit())
-        .split_whitespace()
-        .next()
-        == Some("-break-insert")
-}
-
 fn request_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
     let action = "send_signal";
     if !app.capabilities.supports_execution(action) {
@@ -716,10 +881,10 @@ fn request_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
 fn handle_signal_picker_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
     match key.code {
         KeyCode::Esc => app.cancel_signal_picker(),
-        KeyCode::Up => app.move_signal_picker(-1),
-        KeyCode::Down => app.move_signal_picker(1),
-        KeyCode::PageUp => app.move_signal_picker(-10),
-        KeyCode::PageDown => app.move_signal_picker(10),
+        KeyCode::Up | KeyCode::Char('k') => app.move_signal_picker(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_signal_picker(1),
+        KeyCode::PageUp => app.move_signal_picker(-(app.areas.signal_rows.len().max(1) as isize)),
+        KeyCode::PageDown => app.move_signal_picker(app.areas.signal_rows.len().max(1) as isize),
         KeyCode::Char('f') => {
             app.cancel_signal_picker();
             app.start_input(InputMode::Signal);
@@ -739,6 +904,16 @@ fn submit_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>) 
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if app.show_help {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => app.help_scroll = app.help_scroll.saturating_sub(3),
+            MouseEventKind::ScrollDown => {
+                app.help_scroll = app.help_scroll.saturating_add(3).min(app.help_max_scroll)
+            }
+            _ => {}
+        }
+        return;
+    }
     if app.source_explorer.visible {
         handle_explorer_mouse(app, mouse, requests);
         return;
@@ -783,8 +958,44 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
         return;
     }
 
+    if app.breakpoint_hit_picker.is_some() {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if app
+                    .areas
+                    .breakpoint_hit_cancel
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.breakpoint_hit_picker = None;
+                } else if let Some((index, _)) = app
+                    .areas
+                    .breakpoint_hit_rows
+                    .iter()
+                    .find(|(_, area)| area.contains(position))
+                {
+                    app.breakpoint_hit_picker.as_mut().unwrap().cursor = *index;
+                    reveal_breakpoint_hit(app, requests);
+                }
+            }
+            MouseEventKind::ScrollUp => app.move_breakpoint_hit(-3),
+            MouseEventKind::ScrollDown => app.move_breakpoint_hit(3),
+            _ => {}
+        }
+        return;
+    }
+
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left {
+                if let Some((focus, _)) = app.areas.pane_expanders.iter().find(|(_, area)| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                }) {
+                    app.expanded_pane = !app.expanded_pane || app.focus != *focus;
+                    app.focus = *focus;
+                    return;
+                }
+            }
             if button == MouseButton::Left
                 && app.areas.source_explorer_open_at(mouse.column, mouse.row)
             {
@@ -797,6 +1008,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     Control::Refresh => queue_recovery(app, requests),
                     Control::CycleScope => app.cycle_execution_scope(),
                     Control::RefreshStack => refresh_stack(app, requests),
+                    Control::RevealFrame => reveal_selected_frame(app, requests),
                     other => dispatch_control(app, requests, other),
                 }
                 return;
@@ -815,6 +1027,21 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
             if let Some(index) = app.areas.breakpoint_at(mouse.column, mouse.row) {
                 app.focus = Focus::Breakpoints;
                 app.selected_breakpoint = index.min(app.breakpoints.len().saturating_sub(1));
+                app.selected_breakpoint_site = app
+                    .areas
+                    .breakpoint_sites
+                    .iter()
+                    .find(|(_, _, area)| {
+                        area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                    })
+                    .and_then(|(_, site, _)| *site);
+                if button == MouseButton::Left {
+                    reveal_breakpoint(app, requests);
+                } else if button == MouseButton::Right {
+                    if let Err(error) = app.open_breakpoint_hits() {
+                        app.error(error);
+                    }
+                }
                 return;
             }
             if let Some((focus, item)) = app.areas.item_at(mouse.column, mouse.row) {
@@ -826,6 +1053,27 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     inspect_selection(app, requests);
                 }
             } else if let Some(focus) = app.areas.panel_at(mouse.column, mouse.row) {
+                app.focus = focus;
+            }
+        }
+        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+            if let Some(focus) = app.areas.panel_at(mouse.column, mouse.row) {
+                let delta = if mouse.kind == MouseEventKind::ScrollLeft {
+                    -8
+                } else {
+                    8
+                };
+                match focus {
+                    Focus::Source => app.source_browser.scroll_horizontal(delta),
+                    Focus::Stack => app.stack_viewport.scroll(delta),
+                    Focus::Variables => app.variable_viewport.scroll(delta),
+                    Focus::Threads => app.topology_viewport.scroll(delta),
+                    Focus::Breakpoints => app.breakpoint_viewport.scroll(delta),
+                    Focus::Registers => app.register_viewport.scroll(delta),
+                    Focus::Memory => app.memory_viewport.scroll(delta),
+                    Focus::Output => app.output.scroll_horizontal(delta),
+                    _ => return,
+                }
                 app.focus = focus;
             }
         }
@@ -869,12 +1117,21 @@ fn select_mouse_item(app: &mut App, focus: Focus, item: usize) -> bool {
             app.timeline_scroll = item.min(app.timeline.len().saturating_sub(1));
             true
         }
+        Focus::Output => false,
         Focus::Extensions => {
             app.extension_scroll = item;
             true
         }
         Focus::Variables => {
             app.selected_variable = item.min(app.variables.len().saturating_sub(1));
+            true
+        }
+        Focus::Registers => {
+            app.selected_register = item.min(app.registers.len().saturating_sub(1));
+            true
+        }
+        Focus::Memory => {
+            app.selected_memory_row = item.min(app.memory_row_count().saturating_sub(1));
             true
         }
     }
@@ -913,6 +1170,58 @@ fn toggle_selected_variable(app: &mut App, requests: &mpsc::Sender<BackendReques
     }
 }
 
+fn refresh_watches(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    for request in app.prepare_watches() {
+        if let Err(error) = requests.try_send(BackendRequest::EvaluateWatch(request.clone())) {
+            app.finish_watch(request, Err(format!("Could not queue evaluation: {error}")));
+        }
+    }
+}
+
+fn start_variable_edit(app: &mut App) {
+    let Some(variable) = app
+        .variables
+        .get(app.selected_variable)
+        .filter(|v| !v.scope && !v.id.is_empty())
+    else {
+        app.status = "Select a variable value, not a scope, to edit.".into();
+        return;
+    };
+    let Some(frame) = app.current_frame().filter(|f| !f.boundary) else {
+        app.status = "Select a stopped, inspectable frame to edit variables.".into();
+        return;
+    };
+    let Some(origin) = app.current_thread() else {
+        return;
+    };
+    let edit = model::VariableEdit {
+        variable_id: variable.id.clone(),
+        owner_thread: frame.thread_id.clone(),
+        origin_thread: origin.id.clone(),
+        frame_id: frame.id.clone(),
+        generation: app.inspection_generation,
+    };
+    let name = variable.name.clone();
+    app.start_input(InputMode::AssignVariable);
+    app.variable_edit = Some(edit);
+    app.status = format!("Assign {name}: enter a value in the debugger's assignment syntax");
+}
+
+fn page_size(app: &App) -> isize {
+    if app.focus == Focus::Breakpoints && !app.areas.breakpoint_sites.is_empty() {
+        return app.areas.breakpoint_sites.len() as isize;
+    }
+    app.areas
+        .panels
+        .iter()
+        .find(|panel| panel.focus == app.focus)
+        .map(|panel| {
+            (panel.area.height.saturating_sub(2) as usize / panel.item_height.max(1)).max(1)
+                as isize
+        })
+        .unwrap_or(10)
+}
+
 fn move_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>, delta: isize) {
     if app.focus == Focus::Source {
         if let Some(request) = app.source_browser.move_cursor(delta) {
@@ -927,6 +1236,13 @@ fn inspect_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
     match app.focus {
         Focus::Threads => {
             if let Some(thread_id) = app.selected_topology_thread_id().map(str::to_string) {
+                if app
+                    .threads
+                    .iter()
+                    .any(|t| t.id == thread_id && t.state == "stopped")
+                {
+                    app.source_browser.set_following(true);
+                }
                 inspect_thread(app, requests, thread_id);
             }
         }
@@ -935,11 +1251,15 @@ fn inspect_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
                 app.current_thread().map(|thread| thread.id.clone()),
                 app.current_frame().cloned(),
             ) {
+                let generation = app.begin_frame_inspection();
                 if frame.boundary {
-                    app.status = frame.function;
+                    app.status = format!(
+                        "Distributed boundary {} has no inspectable frame. Select an adjacent frame.",
+                        frame.function
+                    );
+                    app.source_browser.unavailable(app.status.clone());
                     return;
                 }
-                let generation = app.begin_frame_inspection();
                 reveal_frame(app, requests, Navigation::Frame);
                 queue_request(
                     app,
@@ -950,9 +1270,20 @@ fn inspect_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
                         frame_id: frame.id,
                     },
                 );
+                refresh_watches(app, requests);
             }
         }
         _ => {}
+    }
+}
+
+fn reveal_breakpoint_hit(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    match app.commit_breakpoint_hit() {
+        Ok(thread_id) => {
+            app.focus = Focus::Source;
+            inspect_thread(app, requests, thread_id);
+        }
+        Err(error) => app.error(error),
     }
 }
 
@@ -1071,7 +1402,7 @@ fn toggle_breakpoint(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 fn start_breakpoint_prompt(app: &mut App) {
     if !app.capabilities.supports_breakpoint_action("create") {
         app.status = "source breakpoint creation is not supported by this DDB API".to_string();
-    } else if !["conditional", "temporary", "hardware"]
+    } else if !["conditional", "temporary", "hardware", "ignore_count"]
         .into_iter()
         .any(|feature| app.capabilities.supports_breakpoint_action(feature))
     {
@@ -1162,13 +1493,103 @@ fn goto_source_line(app: &mut App, requests: &mpsc::Sender<BackendRequest>, inpu
         None => app.source_browser.go_to_line(line),
     };
     if let Some(request) = request {
+        app.focus = Focus::Source;
         queue_request(app, requests, BackendRequest::LoadSource(request));
     } else {
         app.status = "enter path:line when no source file is loaded".to_string();
     }
 }
 
+fn reveal_selected_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    match app.current_frame() {
+        None => app.status = "No stack frame selected. Select a stopped thread first.".into(),
+        Some(frame) if frame.boundary => {
+            app.status =
+                "This distributed boundary is not a source frame. Select an adjacent frame.".into();
+            app.source_browser.unavailable(app.status.clone());
+            app.focus = Focus::Source;
+        }
+        Some(frame) if frame.file.is_none() || frame.line.is_none() => {
+            app.status = format!(
+                "Source unavailable for {}: debugger supplied no file/line location.",
+                frame.function
+            );
+            app.source_browser.unavailable(app.status.clone());
+            app.focus = Focus::Source;
+        }
+        Some(_) => {
+            app.focus = Focus::Source;
+            reveal_frame(app, requests, Navigation::Frame);
+        }
+    }
+}
+
+fn reveal_breakpoint(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    let Some(bp) = app.current_breakpoint() else {
+        return;
+    };
+    let (target, location) = if let Some(site) = app.selected_breakpoint_site {
+        let Some(member) = bp.sub_breakpoints.get(site) else {
+            return;
+        };
+        let Some(location) = member
+            .location
+            .clone()
+            .filter(|l| l.line > 0 && (l.path.is_some() || l.source_reference.is_some()))
+        else {
+            app.status = "This breakpoint site has no resolved source location yet.".into();
+            return;
+        };
+        (
+            Some(crate::api::session_target(&member.session_id)),
+            location,
+        )
+    } else {
+        if bp.sub_breakpoints.len() > 1 {
+            app.status = "Select a session-specific breakpoint site with Down, then Enter to open its source.".into();
+            return;
+        }
+        if let Some(member) = bp.sub_breakpoints.first().filter(|s| {
+            s.location
+                .as_ref()
+                .is_some_and(|l| l.line > 0 && (l.path.is_some() || l.source_reference.is_some()))
+        }) {
+            (
+                Some(crate::api::session_target(&member.session_id)),
+                member.location.clone().unwrap(),
+            )
+        } else if let Some(line) = u32::try_from(bp.location.line)
+            .ok()
+            .filter(|line| *line > 0)
+        {
+            (
+                bp.target.clone(),
+                v2::SourceLocation {
+                    path: Some(bp.location.src.clone()),
+                    line,
+                    ..Default::default()
+                },
+            )
+        } else {
+            app.status =
+                "This breakpoint has no source location yet. Select a resolved session site."
+                    .into();
+            return;
+        }
+    };
+    if let Some(request) = app
+        .source_browser
+        .navigate(target, location, Navigation::Manual)
+    {
+        app.focus = Focus::Source;
+        queue_request(app, requests, BackendRequest::LoadSource(request));
+    }
+}
+
 fn reveal_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>, navigation: Navigation) {
+    if navigation == Navigation::Follow && !app.source_browser.following() {
+        return;
+    }
     let frame = if navigation == Navigation::Follow {
         app.frames
             .iter()
@@ -1184,6 +1605,10 @@ fn reveal_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>, navigati
     };
     let Some(frame) = frame.cloned() else { return };
     let (Some(path), Some(line)) = (frame.file, frame.line) else {
+        app.source_browser.unavailable(format!(
+            "Source unavailable for {}: debugger supplied no file/line location.",
+            frame.function
+        ));
         return;
     };
     let Ok(line) = u32::try_from(line) else {
@@ -1248,6 +1673,14 @@ fn parse_memory_request(input: &str) -> Result<(String, u64), String> {
     Ok((address.to_string(), count))
 }
 
+fn parse_function_breakpoint(input: &str) -> Result<(String, BreakpointOptions), String> {
+    let (name, options) = input.split_once(" -- ").unwrap_or((input, ""));
+    if name.trim().is_empty() {
+        return Err("Enter a function or symbol name".into());
+    }
+    Ok((name.trim().into(), parse_breakpoint_options(options)?))
+}
+
 fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
     let mut remaining = input.trim();
     let mut options = BreakpointOptions::default();
@@ -1266,6 +1699,25 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
         {
             options.hardware = true;
             remaining = rest.trim_start();
+        } else if let Some(rest) = remaining
+            .strip_prefix("--ignore-count")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            if options.ignore_count.is_some() {
+                return Err("Specify --ignore-count only once".into());
+            }
+            let rest = rest.trim_start();
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let count = &rest[..end];
+            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("--ignore-count requires a nonnegative integer".into());
+            }
+            options.ignore_count = Some(
+                count
+                    .parse()
+                    .map_err(|_| "Ignore count exceeds the unsigned 64-bit range")?,
+            );
+            remaining = rest[end..].trim_start();
         } else {
             break;
         }
@@ -1285,7 +1737,48 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
-        UiMessage::Capabilities(capabilities) => app.apply_capabilities(capabilities),
+        UiMessage::WatchEvaluated { request, result } => app.finish_watch(request, result),
+        UiMessage::VariableAssigned { edit, result } => {
+            if !app.inspection_is_current(edit.generation, &edit.origin_thread)
+                || !app.current_frame().is_some_and(|f| f.id == edit.frame_id)
+            {
+                return;
+            }
+            match result {
+                Ok(receipt) => {
+                    let completed = receipt.state == v2::OperationState::Completed as i32;
+                    app.push_receipt("assign variable", &receipt);
+                    if completed {
+                        let generation = app.begin_frame_inspection();
+                        queue_request(
+                            app,
+                            requests,
+                            BackendRequest::InspectFrame {
+                                thread_id: edit.origin_thread,
+                                generation,
+                                frame_id: edit.frame_id,
+                            },
+                        );
+                        refresh_watches(app, requests);
+                    }
+                }
+                Err(error) => app.error(error),
+            }
+        }
+        UiMessage::PeerPauseFailed {
+            session_id,
+            epoch,
+            error,
+        } => {
+            if app.control_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
+                app.peer_pauses.remove(&session_id);
+                app.error(format!("Could not pause DDB session {session_id}: {error}"));
+            }
+        }
+        UiMessage::Capabilities(capabilities) => {
+            app.apply_capabilities(capabilities);
+            configure_value_presentation(app, requests);
+        }
         UiMessage::Snapshot(snapshot) => {
             let new_stop = app.has_new_inspection_stop(&snapshot);
             let session_membership_changed = app.sessions.len() != snapshot.sessions.len()
@@ -1296,6 +1789,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                         .any(|next| next.session_id == current.session_id)
                 });
             app.apply_snapshot(snapshot);
+            configure_value_presentation(app, requests);
             if (session_membership_changed || new_stop)
                 && app
                     .current_thread()
@@ -1352,6 +1846,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     None
                 };
                 app.apply_distributed_frames(result.frames);
+                refresh_watches(app, requests);
                 reveal_frame(app, requests, Navigation::Follow);
                 app.distributed_stack_truncation = truncation;
                 if let Some(reason) = app.distributed_stack_truncation.clone() {
@@ -1409,7 +1904,10 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             app.source_browser.apply(generation, source);
         }
         UiMessage::SourceError { generation, error } => {
-            if app.source_browser.fail(generation) {
+            if app
+                .source_browser
+                .fail_with_error(generation, error.clone())
+            {
                 app.error(error);
             }
         }
@@ -1447,12 +1945,34 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             app.status = message.clone();
             app.push_timeline(format!("◆ {message}"));
         }
-        UiMessage::Output(output) => app.push_timeline(format!("│ {output}")),
+        UiMessage::Output(output) => app.output.push(&output),
         UiMessage::DebuggerEvent(event) => {
             app.push_timeline(format!("◆ {}", event.summary));
             match event.activity {
-                DebuggerActivity::Running(thread_id) => app.mark_running(thread_id.as_deref()),
+                DebuggerActivity::Running(thread_id) => {
+                    if let Some(thread) = app
+                        .threads
+                        .iter()
+                        .find(|t| Some(&t.id) == thread_id.as_ref())
+                    {
+                        app.peer_pauses.remove(&thread.session_id);
+                    }
+                    app.mark_running(thread_id.as_deref());
+                    if let Some(cause) = app.all_stop_cause.clone() {
+                        if app
+                            .threads
+                            .iter()
+                            .any(|t| t.id == cause && t.state == "stopped")
+                        {
+                            pause_running_peers(app, requests, &cause);
+                        } else {
+                            app.all_stop_cause = None;
+                        }
+                    }
+                }
                 DebuggerActivity::Stopped(Some(thread_id)) => {
+                    app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
+                    pause_running_peers(app, requests, &thread_id);
                     let active_thread_id = app.current_thread().map(|thread| thread.id.clone());
                     let should_inspect = match active_thread_id.as_deref() {
                         None => true,
@@ -1486,7 +2006,118 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
     }
 }
 
+fn pause_running_peers(
+    app: &mut App,
+    requests: &mpsc::Sender<BackendRequest>,
+    stopped_thread: &str,
+) {
+    let Some(owner) = app
+        .threads
+        .iter()
+        .find(|t| t.id == stopped_thread)
+        .map(|t| t.session_id.clone())
+    else {
+        return;
+    };
+    // Update the cause before considering peer stops so a later peer event
+    // cannot send an interrupt back to the original stopped process.
+    for thread in &mut app.threads {
+        if thread.id == stopped_thread {
+            thread.state = "stopped".into();
+        }
+    }
+    app.peer_pauses.insert(owner.clone());
+    let peers = app
+        .threads
+        .iter()
+        .filter(|t| t.state == "running" && t.session_id != owner)
+        .map(|t| t.session_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for session_id in peers {
+        if app.peer_pauses.contains(&session_id) {
+            continue;
+        }
+        let target = crate::api::session_target(&session_id);
+        if !app
+            .capabilities
+            .supports_execution_target("interrupt", &target)
+        {
+            app.error(format!(
+                "Cannot enforce all-stop for {session_id}: session interrupt is unsupported"
+            ));
+            continue;
+        }
+        let epoch = app.control_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        let request = BackendRequest::PausePeer {
+            session_id: session_id.clone(),
+            epoch,
+            current_epoch: app.control_epoch.clone(),
+        };
+        match requests.try_send(request) {
+            Ok(()) => {
+                app.peer_pauses.insert(session_id);
+            }
+            Err(error) => app.error(format!(
+                "Could not queue all-stop pause for {session_id}: {error}"
+            )),
+        }
+    }
+}
+
+fn configure_value_presentation(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    use cli::ValuesFormatting;
+    if app.values_formatting != ValuesFormatting::PrettyPrinters
+        || !app
+            .capabilities
+            .supported_operations
+            .contains(&(v2::OperationKind::ConfigureDebugger as i32))
+    {
+        return;
+    }
+    let sessions = app
+        .sessions
+        .iter()
+        .filter(|session| {
+            session
+                .backend
+                .as_ref()
+                .is_some_and(|backend| backend.kind == v2::BackendKind::Gdb as i32)
+                && matches!(
+                    v2::SessionStatus::try_from(session.status),
+                    Ok(v2::SessionStatus::Ready | v2::SessionStatus::Stopped)
+                )
+                && !app.pretty_printing_attempted.contains(&session.session_id)
+        })
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+    for session_id in sessions {
+        match requests.try_send(BackendRequest::EnablePrettyPrinting {
+            session_id: session_id.clone(),
+        }) {
+            Ok(()) => {
+                app.pretty_printing_attempted.insert(session_id);
+            }
+            Err(error) => app.error(format!(
+                "Could not queue pretty-printer setup for {session_id}: {error}"
+            )),
+        }
+    }
+}
+
 fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request: BackendRequest) {
+    // Explicit execution intent supersedes automatic work even if the queue is
+    // full. The user must never be resumed/paused by an older automatic task
+    // while retrying their command. Inspection and automatic peer pauses do not
+    // advance this epoch.
+    if matches!(
+        &request,
+        BackendRequest::Control(..)
+            | BackendRequest::Jump { .. }
+            | BackendRequest::SendSignal { .. }
+            | BackendRequest::RawCommand { .. }
+    ) {
+        app.supersede_automatic_control();
+    }
     match requests.try_send(request) {
         Ok(()) => {}
         Err(mpsc::error::TrySendError::Full(
@@ -1530,6 +2161,834 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn memory_navigation_is_local_and_read_uses_distributed_frame_owner() {
+        let mut app = distributed_caller_app();
+        let (tx, mut rx) = mpsc::channel(4);
+        app.start_input(InputMode::Memory);
+        app.input = "0x1000 ; 256".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::ReadMemory { thread_id, owner_thread, count: 256, .. } if thread_id == "thread/child" && owner_thread == "thread/parent")
+        );
+        assert_eq!(app.focus, Focus::Memory);
+        app.apply_memory(v2::MemoryBlock {
+            address: "0x1000".into(),
+            data: vec![0; 256],
+            ..Default::default()
+        });
+        app.areas.add_panel(
+            Focus::Memory,
+            ratatui::layout::Rect::new(10, 5, 30, 8),
+            0,
+            1,
+        );
+        app.memory_viewport.fit(85, 26);
+        for code in [KeyCode::PageDown, KeyCode::Right] {
+            handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &tx);
+        }
+        assert_eq!(app.selected_memory_row, 6);
+        assert_eq!(app.memory_viewport.column(), 8);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 15,
+                row: 8,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.memory_viewport.column(), 16);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.memory_viewport.column(), 0);
+        assert!(rx.try_recv().is_err());
+        app.frames[0].boundary = true;
+        app.start_input(InputMode::Memory);
+        app.input = "0x1000".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(app.status.contains("inspectable frame"));
+    }
+
+    #[test]
+    fn pretty_printer_setup_is_capability_gated_and_once_per_ready_gdb_session() {
+        let mut app = App::new("http://localhost".into());
+        let session = |id: &str, kind: v2::BackendKind, status: v2::SessionStatus| v2::Session {
+            session_id: id.into(),
+            backend: Some(v2::BackendDescriptor {
+                kind: kind as i32,
+                ..Default::default()
+            }),
+            status: status as i32,
+            ..Default::default()
+        };
+        app.sessions = vec![
+            session("gdb", v2::BackendKind::Gdb, v2::SessionStatus::Stopped),
+            session("lldb", v2::BackendKind::Lldb, v2::SessionStatus::Stopped),
+            session(
+                "starting",
+                v2::BackendKind::Gdb,
+                v2::SessionStatus::Starting,
+            ),
+        ];
+        let (tx, mut rx) = mpsc::channel(8);
+        configure_value_presentation(&mut app, &tx);
+        assert!(rx.try_recv().is_err());
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::ConfigureDebugger as i32);
+        configure_value_presentation(&mut app, &tx);
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::EnablePrettyPrinting { session_id } if session_id == "gdb")
+        );
+        configure_value_presentation(&mut app, &tx);
+        assert!(rx.try_recv().is_err());
+        app.sessions[2].status = v2::SessionStatus::Stopped as i32;
+        configure_value_presentation(&mut app, &tx);
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::EnablePrettyPrinting { session_id } if session_id == "starting")
+        );
+        assert!(rx.try_recv().is_err());
+        for mode in [cli::ValuesFormatting::Raw, cli::ValuesFormatting::Disabled] {
+            app.pretty_printing_attempted.clear();
+            app.values_formatting = mode;
+            configure_value_presentation(&mut app, &tx);
+            assert!(rx.try_recv().is_err());
+        }
+        app.values_formatting = cli::ValuesFormatting::PrettyPrinters;
+        let (full_tx, mut full_rx) = mpsc::channel(1);
+        full_tx.try_send(BackendRequest::Refresh).unwrap();
+        configure_value_presentation(&mut app, &full_tx);
+        assert!(app.pretty_printing_attempted.is_empty());
+        full_rx.try_recv().unwrap();
+        configure_value_presentation(&mut app, &full_tx);
+        assert!(matches!(
+            full_rx.try_recv().unwrap(),
+            BackendRequest::EnablePrettyPrinting { .. }
+        ));
+    }
+
+    #[test]
+    fn pretty_printer_setup_survives_refresh_but_resets_for_a_new_backend_instance() {
+        let mut app = App::new("http://localhost".into());
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::ConfigureDebugger as i32);
+        let snapshot = |instance: &str| v2::Snapshot {
+            server_instance_id: instance.into(),
+            sessions: vec![v2::Session {
+                session_id: "session/gdb".into(),
+                status: v2::SessionStatus::Stopped as i32,
+                backend: Some(v2::BackendDescriptor {
+                    kind: v2::BackendKind::Gdb as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(4);
+        app.apply_snapshot(snapshot("instance/one"));
+        configure_value_presentation(&mut app, &tx);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::EnablePrettyPrinting { .. }
+        ));
+        app.apply_snapshot(snapshot("instance/one"));
+        configure_value_presentation(&mut app, &tx);
+        assert!(rx.try_recv().is_err());
+        app.apply_snapshot(snapshot("instance/two"));
+        configure_value_presentation(&mut app, &tx);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::EnablePrettyPrinting { .. }
+        ));
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "instance/two".into(),
+            ..Default::default()
+        });
+        assert!(app.pretty_printing_attempted.is_empty());
+    }
+
+    #[test]
+    fn disabled_values_preserve_scope_loading_and_editable_variable_ids() {
+        for mode in [
+            cli::ValuesFormatting::PrettyPrinters,
+            cli::ValuesFormatting::Raw,
+            cli::ValuesFormatting::Disabled,
+        ] {
+            let mut app = App::new("http://localhost".into());
+            app.values_formatting = mode;
+            app.apply_scopes(vec![v2::Scope {
+                scope_id: "scope".into(),
+                expensive: true,
+                variable_count: Some(1),
+                ..Default::default()
+            }]);
+            assert_eq!(app.toggle_selected_variable().as_deref(), Some("scope"));
+            app.apply_variable_children(
+                "scope",
+                vec![v2::Variable {
+                    variable_id: "opaque/value".into(),
+                    name: "value".into(),
+                    value: "{field = 42}".into(),
+                    has_children: true,
+                    ..Default::default()
+                }],
+            );
+            app.selected_variable = 1;
+            assert_eq!(app.variables[1].id, "opaque/value");
+            assert_eq!(app.variables[1].value, "{field = 42}");
+            assert_eq!(app.toggle_selected_variable().is_some(), mode.expandable());
+            let mut app = distributed_caller_app();
+            app.values_formatting = mode;
+            app.add_watch("request".into()).unwrap();
+            let request = app.prepare_watches().pop().unwrap();
+            app.finish_watch(
+                request,
+                Ok(v2::EvaluationResult {
+                    value: "{field = 42}".into(),
+                    variable_id: Some("watch/value".into()),
+                    has_children: true,
+                    ..Default::default()
+                }),
+            );
+            assert_eq!(app.variables[0].id, "watch/value");
+            assert_eq!(app.variables[0].has_children, mode.expandable());
+        }
+    }
+
+    #[test]
+    fn source_vim_keys_navigate_and_paging_tracks_viewport_height() {
+        let mut app = App::new("http://localhost".into());
+        source_browser::tests::show_source(
+            &mut app.source_browser,
+            v2::SourceContent {
+                source: Some(v2::SourceFile {
+                    source_reference: "source/main".into(),
+                    path: Some("/src/main.rs".into()),
+                    ..Default::default()
+                }),
+                start_line: 1,
+                line_count: 40,
+                total_lines: 40,
+                content: (1..=40)
+                    .map(|n| format!("line {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ..Default::default()
+            },
+            1,
+        );
+        app.focus = Focus::Source;
+        app.areas
+            .add_panel(Focus::Source, ratatui::layout::Rect::new(0, 0, 80, 8), 0, 1);
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().cursor, 2);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().cursor, 1);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().cursor, 7);
+        app.areas.panels[0].area.height = 14;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().cursor, 19);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn page_size_accounts_for_variable_rows_and_tiny_panes() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Variables;
+        app.areas.add_panel(
+            Focus::Variables,
+            ratatui::layout::Rect::new(0, 0, 40, 16),
+            0,
+            2,
+        );
+        assert_eq!(page_size(&app), 7);
+        app.areas.panels[0].area.height = 1;
+        assert_eq!(page_size(&app), 1);
+    }
+
+    #[test]
+    fn execution_jump_uses_uppercase_key_and_prompt_text_keeps_navigation_letters() {
+        let mut app = distributed_caller_app();
+        app.capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Jump as i32],
+            execution_action_capabilities: vec![v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Jump as i32,
+                scopes: vec![v2::ExecutionScopeKind::Thread as i32],
+            }],
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::Jump);
+        for character in "junk.rs:12".chars() {
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &tx,
+            );
+        }
+        assert_eq!(app.input, "junk.rs:12");
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn source_horizontal_keys_and_mouse_do_not_change_debugger_selection() {
+        let mut app = App::new("http://localhost".into());
+        source_browser::tests::show_source(
+            &mut app.source_browser,
+            v2::SourceContent {
+                source: Some(v2::SourceFile {
+                    source_reference: "source/wide".into(),
+                    path: Some("/src/wide.rs".into()),
+                    ..Default::default()
+                }),
+                start_line: 1,
+                line_count: 1,
+                total_lines: 1,
+                content: "x".repeat(100),
+                ..Default::default()
+            },
+            1,
+        );
+        app.source_browser.fit_horizontal(20);
+        app.focus = Focus::Source;
+        app.areas.panels.push(model::PanelHitArea {
+            focus: Focus::Source,
+            area: ratatui::layout::Rect::new(10, 5, 30, 10),
+            first_item: 0,
+            item_height: 1,
+        });
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().column, 8);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 15,
+                row: 8,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().column, 16);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.source_browser.document().unwrap().column, 0);
+        assert_eq!(app.source_browser.document().unwrap().cursor, 1);
+        assert!(app.source_browser.following());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn every_explicit_execution_request_supersedes_automatic_control() {
+        let requests_to_test = [
+            BackendRequest::Control(Control::Continue, thread_target("thread/child")),
+            BackendRequest::Jump {
+                location: "main.rs:10".into(),
+                target: thread_target("thread/child"),
+            },
+            BackendRequest::SendSignal {
+                signal: "SIGUSR1".into(),
+                target: thread_target("thread/child"),
+            },
+            BackendRequest::RawCommand {
+                command: "continue".into(),
+                target: thread_target("thread/child"),
+                frame_id: None,
+            },
+        ];
+        for request in requests_to_test {
+            let mut app = distributed_caller_app();
+            app.peer_pauses.insert("session/peer".into());
+            app.all_stop_cause = Some("thread/child".into());
+            let epoch = app.control_epoch.load(std::sync::atomic::Ordering::SeqCst);
+            let (tx, mut rx) = mpsc::channel(1);
+            queue_request(&mut app, &tx, request);
+            assert_eq!(
+                app.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
+                epoch + 1
+            );
+            assert!(app.peer_pauses.is_empty());
+            assert!(app.all_stop_cause.is_none());
+            assert!(rx.try_recv().is_ok());
+        }
+    }
+
+    #[test]
+    fn inspection_preserves_automatic_control_but_full_queue_execution_cancels_it() {
+        let mut app = distributed_caller_app();
+        app.peer_pauses.insert("session/peer".into());
+        app.all_stop_cause = Some("thread/child".into());
+        let (tx, mut rx) = mpsc::channel(1);
+        queue_request(
+            &mut app,
+            &tx,
+            BackendRequest::InspectThread {
+                thread_id: "thread/child".into(),
+                generation: 1,
+            },
+        );
+        assert_eq!(
+            app.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(app.peer_pauses.len(), 1);
+        queue_request(
+            &mut app,
+            &tx,
+            BackendRequest::Jump {
+                location: "main.rs:10".into(),
+                target: thread_target("thread/child"),
+            },
+        );
+        assert_eq!(
+            app.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(app.peer_pauses.is_empty() && app.all_stop_cause.is_none());
+        assert!(app.status.contains("queue is full"));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::InspectThread { .. }
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn rejected_execution_capability_does_not_cancel_automatic_control() {
+        let mut app = distributed_caller_app();
+        app.peer_pauses.insert("session/peer".into());
+        let (tx, mut rx) = mpsc::channel(1);
+        dispatch_control(&mut app, &tx, Control::Continue);
+        assert_eq!(
+            app.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(app.peer_pauses.len(), 1);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn source_prompt_returns_focus_from_output_to_source() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Output;
+        let (tx, mut rx) = mpsc::channel(4);
+        goto_source_line(&mut app, &tx, "main.rs:11");
+        assert_eq!(app.focus, Focus::Source);
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::LoadSource(request) if request.line == 11)
+        );
+    }
+
+    #[test]
+    fn output_is_independent_of_timeline_and_keyboard_navigation_is_local() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, mut rx) = mpsc::channel(4);
+        app.output.fit(20, 2);
+        apply_message(&mut app, UiMessage::Output("one\ntwo\nthree".into()), &tx);
+        assert!(app.timeline.is_empty());
+        assert!(!app.show_output && !app.show_timeline);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.focus, Focus::Output);
+        assert!(app.show_output && !app.show_timeline);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(
+            app.output.visible_lines().collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        apply_message(&mut app, UiMessage::Output("four".into()), &tx);
+        assert_eq!(
+            app.output.visible_lines().collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(
+            app.output.visible_lines().collect::<Vec<_>>(),
+            ["three", "four"]
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(!app.show_output);
+        assert_eq!(app.focus, Focus::Source);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn horizontal_inspection_navigation_preserves_selection_and_sends_no_requests() {
+        let mut app = distributed_caller_app();
+        app.stack_viewport.fit(100, 20);
+        app.variable_viewport.fit(120, 20);
+        app.focus = Focus::Stack;
+        let generation = app.inspection_generation;
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.stack_viewport.column(), 8);
+        app.areas.add_panel(
+            Focus::Variables,
+            ratatui::layout::Rect::new(10, 5, 30, 10),
+            0,
+            2,
+        );
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 15,
+                row: 8,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.variable_viewport.column(), 8);
+        assert_eq!(app.stack_viewport.column(), 8);
+        assert_eq!(app.focus, Focus::Variables);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.variable_viewport.column(), 0);
+        app.topology_viewport.fit(100, 20);
+        app.breakpoint_viewport.fit(100, 20);
+        for focus in [Focus::Threads, Focus::Breakpoints] {
+            app.focus = focus;
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                &tx,
+            );
+        }
+        assert_eq!(app.topology_viewport.column(), 8);
+        assert_eq!(app.breakpoint_viewport.column(), 8);
+        assert_eq!(app.inspection_generation, generation);
+        assert_eq!(app.selected_frame, 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mouse_pane_expansion_is_local_and_help_remains_modal() {
+        let mut app = App::new("http://localhost".into());
+        app.areas
+            .pane_expanders
+            .push((Focus::Registers, ratatui::layout::Rect::new(10, 12, 9, 1)));
+        let (tx, mut rx) = mpsc::channel(4);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 12,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.show_help = true;
+        handle_mouse(&mut app, click, &tx);
+        assert!(!app.expanded_pane);
+        app.show_help = false;
+        handle_mouse(&mut app, click, &tx);
+        assert!(app.expanded_pane);
+        assert_eq!(app.focus, Focus::Registers);
+        handle_mouse(&mut app, click, &tx);
+        assert!(!app.expanded_pane);
+        assert_eq!(app.focus, Focus::Registers);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn pane_controls_preserve_focus_and_skip_hidden_timeline() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, _rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.expanded_pane);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(!app.expanded_pane);
+        assert_eq!(app.focus, Focus::Source);
+        for _ in 0..12 {
+            app.cycle_focus(false);
+            assert_ne!(app.focus, Focus::Timeline);
+        }
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.show_timeline);
+        assert_eq!(app.focus, Focus::Timeline);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(!app.show_timeline);
+        assert_eq!(app.focus, Focus::Source);
+    }
+
+    #[test]
+    fn register_keys_scroll_rows_and_values_without_inspection_requests() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_registers(
+            (0..50)
+                .map(|n| v2::Register {
+                    name: format!("r{n}"),
+                    value: "0123456789abcdef".repeat(8),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        app.focus = Focus::Registers;
+        app.register_viewport.fit(132, 40);
+        let (tx, mut rx) = mpsc::channel(8);
+        for code in [KeyCode::PageDown, KeyCode::Down, KeyCode::Right] {
+            handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &tx);
+        }
+        assert_eq!(app.selected_register, 11);
+        assert_eq!(app.register_viewport.column(), 8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.register_viewport.column(), 0);
+        app.areas.add_panel(
+            Focus::Registers,
+            ratatui::layout::Rect::new(10, 5, 30, 10),
+            0,
+            1,
+        );
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 15,
+                row: 8,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.register_viewport.column(), 8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.register_viewport.column(), 0);
+        assert_eq!(app.selected_register, 11);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn help_navigation_is_modal_for_keyboard_and_mouse() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, mut rx) = mpsc::channel(8);
+        app.show_help = true;
+        app.help_max_scroll = 30;
+        app.help_page_height = 5;
+        app.areas
+            .controls
+            .push((Control::Refresh, ratatui::layout::Rect::new(0, 0, 10, 3)));
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.help_scroll, 5);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "help must not activate the refresh control behind it"
+        );
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.help_scroll, 8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.help_scroll, 30);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(!app.show_help);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn stopped_client_requests_one_pause_for_running_server() {
+        let mut app = distributed_caller_app();
+        app.threads.push(ThreadItem {
+            id: "thread/server".into(),
+            session_id: "session/server".into(),
+            name: "server".into(),
+            state: "running".into(),
+            function: String::new(),
+            file: None,
+            line: None,
+        });
+        app.capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Interrupt as i32],
+            execution_action_capabilities: vec![v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Interrupt as i32,
+                scopes: vec![v2::ExecutionScopeKind::Session as i32],
+            }],
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(8);
+        for _ in 0..2 {
+            apply_message(
+                &mut app,
+                UiMessage::DebuggerEvent(DebuggerEvent {
+                    summary: "breakpoint".into(),
+                    refresh: false,
+                    activity: DebuggerActivity::Stopped(Some("thread/child".into())),
+                }),
+                &tx,
+            );
+        }
+        let mut controls = Vec::new();
+        while let Ok(request) = rx.try_recv() {
+            if !matches!(
+                request,
+                BackendRequest::InspectThread { .. } | BackendRequest::Refresh
+            ) {
+                controls.push(request);
+            }
+        }
+        assert_eq!(
+            controls.len(),
+            1,
+            "a client breakpoint must pause the running server exactly once"
+        );
+        assert!(
+            matches!(&controls[0], BackendRequest::PausePeer { session_id, .. } if session_id == "session/server")
+        );
+        let epoch = app.control_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        apply_message(
+            &mut app,
+            UiMessage::PeerPauseFailed {
+                session_id: "session/server".into(),
+                epoch,
+                error: "denied".into(),
+            },
+            &tx,
+        );
+        assert!(!app.peer_pauses.contains("session/server"));
+        assert!(app.status.contains("denied"));
+        app.threads
+            .iter_mut()
+            .find(|t| t.id == "thread/server")
+            .unwrap()
+            .state = "stopped".into();
+        apply_message(
+            &mut app,
+            UiMessage::DebuggerEvent(DebuggerEvent {
+                summary: "late peer resume".into(),
+                refresh: false,
+                activity: DebuggerActivity::Running(Some("thread/server".into())),
+            }),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::PausePeer { session_id, .. } if session_id == "session/server")
+        );
+    }
 
     fn distributed_caller_app() -> App {
         let mut app = App::new("http://127.0.0.1:5000".into());
@@ -1716,6 +3175,287 @@ mod tests {
                 if request.line == 500 && matches!(&request.address, source_types::Address::Resolve { target: None, location, .. } if location.path.as_deref() == Some("parent.rs")))
         );
         assert_eq!(app.inspection_generation, 0);
+    }
+
+    #[test]
+    fn selecting_a_stopped_thread_restores_source_following_after_manual_browsing() {
+        let mut app = distributed_caller_app();
+        app.source_browser.set_following(false);
+        app.focus = Focus::Threads;
+        let (tx, mut rx) = mpsc::channel(4);
+        inspect_selection(&mut app, &tx);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::InspectThread { .. }
+        ));
+        assert!(
+            app.source_browser.following(),
+            "explicit thread selection must reveal its next frame response"
+        );
+    }
+
+    #[test]
+    fn frame_shortcut_reveals_distributed_owner_without_changing_execution_target() {
+        let mut app = distributed_caller_app();
+        app.focus = Focus::Variables;
+        app.source_browser.set_following(false);
+        app.execution_target = Some(thread_target("thread/child"));
+        let target = app.execution_target.clone();
+        let generation = app.inspection_generation;
+        let (requests, mut receiver) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE),
+            &requests,
+        );
+        assert_eq!(app.focus, Focus::Source);
+        assert_eq!(app.execution_target, target);
+        assert_eq!(app.inspection_generation, generation);
+        assert!(
+            matches!(receiver.try_recv().unwrap(), BackendRequest::LoadSource(request)
+            if request.line == 10 && matches!(&request.address,
+                source_types::Address::Resolve { target: Some(target), location, .. }
+                if *target == thread_target("thread/parent") && location.path.as_deref() == Some("parent.rs")))
+        );
+        app.frames[0].file = None;
+        reveal_selected_frame(&mut app, &requests);
+        assert!(receiver.try_recv().is_err());
+        assert!(app.status.contains("Source unavailable"));
+        app.frames[0].boundary = true;
+        reveal_selected_frame(&mut app, &requests);
+        assert!(receiver.try_recv().is_err());
+        assert!(app.status.contains("boundary"));
+    }
+
+    #[test]
+    fn native_console_uses_selected_distributed_frame_and_preserves_command_text() {
+        let mut app = distributed_caller_app();
+        let (tx, mut rx) = mpsc::channel(4);
+        app.start_input(InputMode::Command);
+        app.input = "print value + 1".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::RawCommand { command, target, frame_id }
+            if command == "print value + 1" && target == thread_target("thread/parent") && frame_id.as_deref() == Some("frame/parent"))
+        );
+        app.frames[0].boundary = true;
+        app.start_input(InputMode::Command);
+        app.input = "print value".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(app.status.contains("inspectable frame"));
+    }
+
+    #[test]
+    fn boundary_selection_clears_inspection_and_rejects_late_replies() {
+        let mut app = distributed_caller_app();
+        app.add_watch("request".into()).unwrap();
+        let watch = app.prepare_watches().pop().unwrap();
+        app.finish_watch(
+            watch.clone(),
+            Ok(v2::EvaluationResult {
+                value: "old frame value".into(),
+                variable_id: Some("old/handle".into()),
+                ..Default::default()
+            }),
+        );
+        let generation = app.inspection_generation;
+        let (requests, mut receiver) = mpsc::channel(4);
+        let registers = || UiMessage::Registers {
+            generation,
+            thread_id: "thread/child".into(),
+            registers: vec![v2::Register::default()],
+        };
+        apply_message(&mut app, registers(), &requests);
+        assert_eq!(app.registers.len(), 1);
+        app.frames[0].boundary = true;
+        app.focus = Focus::Stack;
+        inspect_selection(&mut app, &requests);
+        assert!(app.registers.is_empty());
+        assert!(app.variables[0].id.is_empty());
+        assert_eq!(app.watches.len(), 1);
+        assert!(app.source_browser.error().unwrap().contains("boundary"));
+        assert_eq!(app.focus, Focus::Stack);
+        assert!(receiver.try_recv().is_err());
+        apply_message(&mut app, registers(), &requests);
+        app.finish_watch(
+            watch,
+            Ok(v2::EvaluationResult {
+                value: "late old value".into(),
+                ..Default::default()
+            }),
+        );
+        assert!(app.registers.is_empty());
+        assert_eq!(app.variables[0].value, "Waiting for a stopped frame");
+        app.frames[0].boundary = false;
+        inspect_selection(&mut app, &requests);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::LoadSource(_)
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::InspectFrame { .. }
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BackendRequest::EvaluateWatch { .. }
+        ));
+    }
+
+    #[test]
+    fn watches_keep_caller_ownership_and_reject_old_revisions_and_frames() {
+        let mut app = distributed_caller_app();
+        app.add_watch("request".into()).unwrap();
+        let first = app.prepare_watches().pop().unwrap();
+        assert_eq!(first.owner_thread, "thread/parent");
+        assert_eq!(first.origin_thread, "thread/child");
+        app.finish_watch(
+            first.clone(),
+            Ok(v2::EvaluationResult {
+                value: "request value".into(),
+                variable_id: Some("retained/request".into()),
+                has_children: true,
+                ..Default::default()
+            }),
+        );
+        app.apply_scopes(vec![]);
+        assert_eq!(app.variables[0].id, "retained/request");
+        assert_eq!(
+            app.toggle_selected_variable().as_deref(),
+            Some("retained/request")
+        );
+        app.apply_variable_children(
+            "retained/request",
+            vec![v2::Variable {
+                variable_id: "retained/child".into(),
+                name: "child".into(),
+                ..Default::default()
+            }],
+        );
+        // Scope responses can arrive after a retained watch has expanded.
+        app.apply_scopes(vec![]);
+        assert_eq!(app.variables.len(), 2);
+        let second = app.prepare_watches().pop().unwrap();
+        app.finish_watch(first, Err("old failure".into()));
+        assert_eq!(app.variables[0].value, "Evaluating…");
+        app.finish_watch(second.clone(), Err("not in scope".into()));
+        assert!(app.variables[0].value.contains("not in scope"));
+        app.begin_frame_inspection();
+        app.finish_watch(
+            second,
+            Ok(v2::EvaluationResult {
+                value: "stale".into(),
+                ..Default::default()
+            }),
+        );
+        assert!(app.variables[0].id.is_empty());
+        assert_eq!(app.variables[0].value, "Waiting for a stopped frame");
+        let third = app.prepare_watches().pop().unwrap();
+        assert!(app.remove_selected_watch());
+        app.finish_watch(third, Ok(v2::EvaluationResult::default()));
+        assert!(app.variables.is_empty());
+        assert!(app.watches.is_empty());
+    }
+
+    #[test]
+    fn variable_assignment_captures_owner_and_rejects_changed_inspection() {
+        let mut app = distributed_caller_app();
+        app.apply_variables(vec![v2::Variable {
+            variable_id: "var/parent".into(),
+            name: "value".into(),
+            value: "1".into(),
+            ..Default::default()
+        }]);
+        app.focus = Focus::Variables;
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE),
+            &tx,
+        );
+        app.input = "42".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::AssignVariable { edit, value }
+            if edit.variable_id == "var/parent" && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child" && value == "42")
+        );
+        start_variable_edit(&mut app);
+        app.inspection_generation += 1;
+        app.input = "99".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(app.status.contains("context changed"));
+    }
+
+    #[test]
+    fn variable_assignment_refreshes_its_frame_and_ignores_stale_results() {
+        let mut app = distributed_caller_app();
+        let edit = model::VariableEdit {
+            variable_id: "var/parent".into(),
+            owner_thread: "thread/parent".into(),
+            origin_thread: "thread/child".into(),
+            frame_id: app.current_frame().unwrap().id.clone(),
+            generation: app.inspection_generation,
+        };
+        let (tx, mut rx) = mpsc::channel(4);
+        apply_message(
+            &mut app,
+            UiMessage::VariableAssigned {
+                edit: edit.clone(),
+                result: Err("Variable is read-only".into()),
+            },
+            &tx,
+        );
+        assert!(app.status.contains("read-only"));
+        assert!(rx.try_recv().is_err());
+        assert_eq!(app.inspection_generation, edit.generation);
+
+        apply_message(
+            &mut app,
+            UiMessage::VariableAssigned {
+                edit: edit.clone(),
+                result: Ok(v2::Operation {
+                    state: v2::OperationState::Completed as i32,
+                    ..Default::default()
+                }),
+            },
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::InspectFrame {
+            thread_id, generation, frame_id
+        } if thread_id == edit.origin_thread && frame_id == edit.frame_id
+            && generation == app.inspection_generation && generation > edit.generation)
+        );
+        assert_eq!(app.current_frame().unwrap().id, edit.frame_id);
+        let status = app.status.clone();
+        apply_message(
+            &mut app,
+            UiMessage::VariableAssigned {
+                edit,
+                result: Err("stale failure".into()),
+            },
+            &tx,
+        );
+        assert_eq!(app.status, status);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -2259,11 +3999,44 @@ mod tests {
     }
 
     #[test]
+    fn breakpoint_ignore_counts_are_explicit_and_checked() {
+        let options = parse_breakpoint_options("--ignore-count 3 -t if x == 4").unwrap();
+        assert_eq!(options.ignore_count, Some(3));
+        assert!(options.temporary);
+        assert_eq!(options.condition.as_deref(), Some("x == 4"));
+        for invalid in ["", "-1", "+1", "1.5", "18446744073709551616"] {
+            assert!(parse_breakpoint_options(&format!("--ignore-count {invalid}")).is_err());
+        }
+        assert!(parse_breakpoint_options("--ignore-count 1 --ignore-count 2").is_err());
+        for count in [0, u64::MAX] {
+            assert_eq!(
+                parse_breakpoint_options(&format!("--ignore-count {count}"))
+                    .unwrap()
+                    .ignore_count,
+                Some(count)
+            );
+        }
+        let (name, options) =
+            parse_function_breakpoint("Widget::operator new(unsigned long) -- --ignore-count 2 -t")
+                .unwrap();
+        assert_eq!(name, "Widget::operator new(unsigned long)");
+        assert_eq!(options.ignore_count, Some(2));
+        assert!(options.temporary);
+        assert_eq!(
+            parse_function_breakpoint("Widget::operator new(unsigned long)")
+                .unwrap()
+                .1,
+            BreakpointOptions::default()
+        );
+    }
+
+    #[test]
     fn parses_advanced_breakpoint_options_and_condition() {
         assert_eq!(
             parse_breakpoint_options("-t if request.id == 42").unwrap(),
             BreakpointOptions {
                 condition: Some("request.id == 42".to_string()),
+                ignore_count: None,
                 temporary: true,
                 hardware: false,
             }
@@ -2272,6 +4045,7 @@ mod tests {
             parse_breakpoint_options("--hardware -c ptr == 0").unwrap(),
             BreakpointOptions {
                 condition: Some("ptr == 0".to_string()),
+                ignore_count: None,
                 temporary: false,
                 hardware: true,
             }
@@ -2280,16 +4054,10 @@ mod tests {
             parse_breakpoint_options("-t -h").unwrap(),
             BreakpointOptions {
                 condition: None,
+                ignore_count: None,
                 temporary: true,
                 hardware: true,
             }
         );
-    }
-
-    #[test]
-    fn recognizes_tokenized_and_untokenized_raw_breakpoint_insert_commands() {
-        assert!(is_raw_breakpoint_insert("23-break-insert /tmp/main.rs:7"));
-        assert!(is_raw_breakpoint_insert("-break-insert /tmp/main.rs:7"));
-        assert!(!is_raw_breakpoint_insert("-stack-list-frames"));
     }
 }

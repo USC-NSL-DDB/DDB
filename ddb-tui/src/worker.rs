@@ -168,6 +168,9 @@ fn is_recovery(request: &BackendRequest) -> bool {
 
 fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
     match request {
+        BackendRequest::EvaluateWatch(request) => {
+            Some((request.generation, request.origin_thread.clone()))
+        }
         BackendRequest::InspectThread {
             thread_id,
             generation,
@@ -202,6 +205,82 @@ async fn handle(
     request: BackendRequest,
 ) -> anyhow::Result<()> {
     match request {
+        BackendRequest::EnablePrettyPrinting { session_id } => {
+            let receipt = complete_operation(
+                client,
+                client
+                    .configure_debugger(v2::ConfigureDebuggerRequest {
+                        target: Some(crate::api::session_target(&session_id)),
+                        setting: Some(
+                            v2::configure_debugger_request::Setting::EnablePrettyPrinting(
+                                v2::Empty {},
+                            ),
+                        ),
+                        ..Default::default()
+                    })
+                    .await
+                    .with_context(|| {
+                        format!("could not enable pretty printers for {session_id}")
+                    })?,
+            )
+            .await?;
+            messages
+                .send(UiMessage::Receipt(
+                    format!("pretty printers for {session_id}"),
+                    receipt,
+                ))
+                .await?;
+        }
+        BackendRequest::EvaluateWatch(request) => {
+            let result = async {
+                let admission = client
+                    .evaluate(v2::EvaluateRequest {
+                        target: Some(thread_target(&request.owner_thread)),
+                        frame_id: Some(request.frame_id.clone()),
+                        expression: request.watch.expression.clone(),
+                        evaluation_context: v2::EvaluationContext::Watch as i32,
+                        ..Default::default()
+                    })
+                    .await?;
+                let receipt = complete_operation(client, admission).await?;
+                if receipt.state != v2::OperationState::Completed as i32 {
+                    anyhow::bail!(
+                        "{}",
+                        receipt.error.map_or_else(
+                            || "Evaluation did not complete".into(),
+                            |error| error.message
+                        )
+                    );
+                }
+                match receipt.result.and_then(|result| result.value) {
+                    Some(v2::operation_result::Value::Evaluation(value)) => Ok(value),
+                    _ => anyhow::bail!("DDB returned no evaluation value"),
+                }
+            }
+            .await
+            .map_err(|error: anyhow::Error| format!("{error:#}"));
+            messages
+                .send(UiMessage::WatchEvaluated { request, result })
+                .await?;
+        }
+        BackendRequest::AssignVariable { edit, value } => {
+            let result = async {
+                let admission = client
+                    .set_variable(v2::SetVariableRequest {
+                        target: Some(thread_target(&edit.owner_thread)),
+                        variable_id: edit.variable_id.clone(),
+                        value,
+                        ..Default::default()
+                    })
+                    .await?;
+                complete_operation(client, admission).await
+            }
+            .await
+            .map_err(|error| format!("{error:#}"));
+            messages
+                .send(UiMessage::VariableAssigned { edit, result })
+                .await?;
+        }
         BackendRequest::Bootstrap => {
             let (_, capabilities) = client.handshake().await?;
             capabilities.validate_for_tui()?;
@@ -249,6 +328,57 @@ async fn handle(
                 .await?;
         }
 
+        BackendRequest::PausePeer {
+            session_id,
+            epoch,
+            current_epoch,
+        } => {
+            if current_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
+                return Ok(());
+            }
+            let result = async {
+                let admission = client
+                    .execute(v2::ExecuteRequest {
+                        target: Some(crate::api::session_target(&session_id)),
+                        action: v2::ExecutionAction::Interrupt as i32,
+                        ..Default::default()
+                    })
+                    .await?;
+                complete_operation(client, admission).await
+            }
+            .await;
+            match result {
+                Ok(receipt) => {
+                    if receipt.state != v2::OperationState::Completed as i32 {
+                        messages
+                            .send(UiMessage::PeerPauseFailed {
+                                session_id: session_id.clone(),
+                                epoch,
+                                error: format!(
+                                    "interrupt operation {} did not complete successfully",
+                                    receipt.operation_id
+                                ),
+                            })
+                            .await?;
+                    }
+                    messages
+                        .send(UiMessage::Receipt(
+                            format!("all-stop pause {session_id}"),
+                            receipt,
+                        ))
+                        .await?;
+                }
+                Err(error) => {
+                    messages
+                        .send(UiMessage::PeerPauseFailed {
+                            session_id,
+                            epoch,
+                            error: format!("{error:#}"),
+                        })
+                        .await?;
+                }
+            }
+        }
         BackendRequest::Control(control, target) => {
             let action = execution_action(control)
                 .context("only execution controls reach the backend worker")?;
@@ -312,12 +442,17 @@ async fn handle(
                 .await?;
         }
         BackendRequest::CreateBreakpoint {
-            source,
-            line,
+            location,
             target,
             options,
         } => {
-            let line = u32::try_from(line).context("breakpoint line exceeds the API limit")?;
+            let label = match &location {
+                breakpoint_spec::Location::Source(source) => {
+                    format!("{}:{}", source.source, source.line)
+                }
+                breakpoint_spec::Location::Function(function) => function.function_name.clone(),
+                breakpoint_spec::Location::Address(address) => address.address.clone(),
+            };
             let receipt = complete_operation(
                 client,
                 client
@@ -325,16 +460,10 @@ async fn handle(
                         context: None,
                         target: Some(target.into_api_target()),
                         breakpoint: Some(v2::BreakpointSpec {
-                            location: Some(breakpoint_spec::Location::Source(
-                                v2::SourceBreakpointLocation {
-                                    source: source.clone(),
-                                    line,
-                                    column: 0,
-                                },
-                            )),
+                            location: Some(location),
                             enabled: Some(true),
                             condition: options.condition,
-                            ignore_count: None,
+                            ignore_count: options.ignore_count,
                             temporary: options.temporary,
                             hardware: options.hardware,
                         }),
@@ -344,10 +473,7 @@ async fn handle(
             )
             .await?;
             messages
-                .send(UiMessage::Receipt(
-                    format!("breakpoint {source}:{line}"),
-                    receipt,
-                ))
+                .send(UiMessage::Receipt(format!("breakpoint {label}"), receipt))
                 .await?;
         }
         BackendRequest::DeleteBreakpoint { id, target } => {
@@ -471,12 +597,13 @@ async fn handle(
             address,
             count,
             thread_id,
+            owner_thread,
             generation,
         } => {
             let memory = client
                 .read_memory(v2::ReadMemoryRequest {
                     context: None,
-                    target: Some(thread_target(thread_id.clone())),
+                    target: Some(thread_target(owner_thread)),
                     address: address.clone(),
                     byte_count: count,
                 })
@@ -529,21 +656,21 @@ async fn handle(
                 .send(UiMessage::Receipt(format!("extension {label}"), receipt))
                 .await?;
         }
-        BackendRequest::RawCommand { command, target } => {
+        BackendRequest::RawCommand {
+            command,
+            target,
+            frame_id,
+        } => {
             let receipt = complete_operation(
                 client,
                 client
                     .execute_raw_command(v2::ExecuteRawCommandRequest {
                         context: None,
                         target: Some(target),
-                        // DDB's public compatibility command language is its
-                        // GDB/MI-shaped facade, regardless of the selected
-                        // debugger backend. BackendNative is intentionally
-                        // reserved for a future true backend-native path.
-                        dialect: v2::RawCommandDialect::GdbMi as i32,
+                        dialect: v2::RawCommandDialect::BackendNative as i32,
                         command: command.clone(),
                         preconditions: None,
-                        frame_id: None,
+                        frame_id,
                     })
                     .await?,
             )
@@ -747,7 +874,8 @@ fn execution_action(control: crate::model::Control) -> Option<v2::ExecutionActio
         crate::model::Control::StepOut => Some(v2::ExecutionAction::StepOut),
         crate::model::Control::CycleScope
         | crate::model::Control::Refresh
-        | crate::model::Control::RefreshStack => None,
+        | crate::model::Control::RefreshStack
+        | crate::model::Control::RevealFrame => None,
     }
 }
 
@@ -997,8 +1125,11 @@ fn target_thread_id(target: Option<&v2::Target>) -> Option<String> {
 }
 
 fn output_event_summary(event: v2::OutputEvent) -> String {
-    if let Some(gap) = event.gap {
-        return format!("output gap: {}", gap.reason);
+    let gap = event.gap.map(|gap| format!("output gap: {}", gap.reason));
+    if event.content.is_none() {
+        if let Some(gap) = gap.as_ref() {
+            return gap.clone();
+        }
     }
     let stream = v2::OutputStreamKind::try_from(event.stream)
         .map(|stream| short_enum(stream.as_str_name()))
@@ -1011,7 +1142,17 @@ fn output_event_summary(event: v2::OutputEvent) -> String {
     if event.truncated {
         text.push_str(" …[truncated]");
     }
-    format!("{stream} · {}", text.trim_end())
+    let owner = match (event.session_id, event.thread_id) {
+        (Some(session), Some(thread)) => format!(" [{session}/{thread}]"),
+        (Some(session), None) => format!(" [{session}]"),
+        (None, Some(thread)) => format!(" [{thread}]"),
+        (None, None) => String::new(),
+    };
+    let output = format!("{stream}{owner} · {}", text.trim_end_matches('\n'));
+    match gap {
+        Some(gap) => format!("{gap}\n{output}"),
+        None => output,
+    }
 }
 
 fn short_enum(name: &str) -> String {
@@ -1021,6 +1162,145 @@ fn short_enum(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn memory_reads_target_the_frame_owner_but_replies_keep_origin_lifetime() {
+        use axum::{routing::post, Json, Router};
+        let router = Router::new().route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadMemory",
+            post(|Json(request): Json<v2::ReadMemoryRequest>| async move {
+                assert_eq!(request.target, Some(thread_target("thread/caller")));
+                assert_eq!(request.address, "0x1234");
+                assert_eq!(request.byte_count, 32);
+                Json(v2::ReadMemoryResponse {
+                    memory: Some(v2::MemoryBlock {
+                        address: request.address,
+                        data: vec![42; 32],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+        let (tx, mut rx) = mpsc::channel(2);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            handle(
+                &client,
+                &tx,
+                BackendRequest::ReadMemory {
+                    address: "0x1234".into(),
+                    count: 32,
+                    thread_id: "thread/origin".into(),
+                    owner_thread: "thread/caller".into(),
+                    generation: 9,
+                },
+            ),
+        )
+        .await
+        .expect("memory worker should finish after both replies")
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), UiMessage::Memory { thread_id, generation: 9, memory } if thread_id == "thread/origin" && memory.data == vec![42; 32])
+        );
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn pretty_printer_setup_uses_typed_session_configuration_and_preserves_failure() {
+        use axum::{routing::post, Json, Router};
+        for state in [v2::OperationState::Completed, v2::OperationState::Failed] {
+            let router = Router::new().route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerControlService/ConfigureDebugger",
+                post(
+                    move |Json(request): Json<v2::ConfigureDebuggerRequest>| async move {
+                        assert_eq!(
+                            request.target,
+                            Some(crate::api::session_target("session/gdb"))
+                        );
+                        assert!(matches!(
+                            request.setting,
+                            Some(v2::configure_debugger_request::Setting::EnablePrettyPrinting(_))
+                        ));
+                        Json(v2::OperationAdmissionResponse {
+                            operation: Some(v2::Operation {
+                                operation_id: "operation/configure".into(),
+                                state: state as i32,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })
+                    },
+                ),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+            let (tx, mut rx) = mpsc::channel(1);
+            handle(
+                &client,
+                &tx,
+                BackendRequest::EnablePrettyPrinting {
+                    session_id: "session/gdb".into(),
+                },
+            )
+            .await
+            .unwrap();
+            assert!(
+                matches!(rx.try_recv().unwrap(), UiMessage::Receipt(label, operation)
+                if label == "pretty printers for session/gdb" && operation.state == state as i32)
+            );
+            server.abort();
+            let _ = server.await;
+        }
+    }
+
+    #[test]
+    fn output_labels_owners_and_preserves_multiline_text_and_spaces() {
+        let summary = output_event_summary(v2::OutputEvent {
+            session_id: Some("session/server".into()),
+            thread_id: Some("thread/worker".into()),
+            content: Some(output_event::Content::Text("first\nsecond  \n".into())),
+            ..Default::default()
+        });
+        assert!(summary.contains("session/server/thread/worker"));
+        assert!(summary.ends_with("first\nsecond  "));
+        let summary = output_event_summary(v2::OutputEvent {
+            gap: Some(v2::OutputGap {
+                reason: "replay evicted".into(),
+                ..Default::default()
+            }),
+            content: Some(output_event::Content::Text("surviving output".into())),
+            ..Default::default()
+        });
+        assert!(summary.contains("output gap: replay evicted"));
+        assert!(summary.contains("surviving output"));
+    }
+
+    #[tokio::test]
+    async fn superseded_peer_pause_never_contacts_backend() {
+        let client = ApiClient::new(crate::api::ClientConfig::new("http://127.0.0.1:1")).unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let current_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(2));
+        handle(
+            &client,
+            &tx,
+            BackendRequest::PausePeer {
+                session_id: "server".into(),
+                epoch: 1,
+                current_epoch,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(rx.try_recv().is_err());
+    }
 
     #[tokio::test]
     async fn source_navigation_beyond_eof_loads_the_last_window_without_a_frame() {

@@ -137,6 +137,10 @@ impl CapabilitiesExt for v2::Capabilities {
                 v2::BreakpointFeature::Source,
                 Some(v2::OperationKind::CreateBreakpoint),
             ),
+            "create_function" => (
+                v2::BreakpointFeature::Function,
+                Some(v2::OperationKind::CreateBreakpoint),
+            ),
             "delete" => (
                 v2::BreakpointFeature::Source,
                 Some(v2::OperationKind::DeleteBreakpoint),
@@ -147,6 +151,7 @@ impl CapabilitiesExt for v2::Capabilities {
                 Some(v2::OperationKind::UpdateBreakpoint),
             ),
             "conditional" => (v2::BreakpointFeature::Condition, None),
+            "ignore_count" => (v2::BreakpointFeature::IgnoreCount, None),
             "temporary" => (v2::BreakpointFeature::Temporary, None),
             "hardware" => (v2::BreakpointFeature::Hardware, None),
             "distributed" => (v2::BreakpointFeature::Distributed, None),

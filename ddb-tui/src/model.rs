@@ -14,8 +14,11 @@ pub enum Focus {
     Source,
     Stack,
     Variables,
+    Registers,
+    Memory,
     Extensions,
     Timeline,
+    Output,
 }
 
 impl Focus {
@@ -34,12 +37,15 @@ pub enum InputMode {
     Normal,
     Command,
     Evaluate,
+    Watch,
     Memory,
     Jump,
     Signal,
     GotoLine,
     Breakpoint,
+    FunctionBreakpoint,
     ExtensionAction,
+    AssignVariable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +58,7 @@ pub enum Control {
     CycleScope,
     Refresh,
     RefreshStack,
+    RevealFrame,
 }
 
 impl Control {
@@ -62,7 +69,7 @@ impl Control {
             Self::Next => Some("next"),
             Self::StepIn => Some("step_in"),
             Self::StepOut => Some("step_out"),
-            Self::CycleScope | Self::Refresh | Self::RefreshStack => None,
+            Self::CycleScope | Self::Refresh | Self::RefreshStack | Self::RevealFrame => None,
         }
     }
 }
@@ -70,8 +77,12 @@ impl Control {
 #[derive(Clone, Debug, Default)]
 pub struct UiAreas {
     pub panels: Vec<PanelHitArea>,
+    pub pane_expanders: Vec<(Focus, Rect)>,
+    pub breakpoint_hit_rows: Vec<(usize, Rect)>,
+    pub breakpoint_hit_cancel: Option<Rect>,
     pub controls: Vec<(Control, Rect)>,
     pub breakpoint_rows: Vec<(usize, Rect)>,
+    pub breakpoint_sites: Vec<(usize, Option<usize>, Rect)>,
     pub extension_action_rows: Vec<(usize, Rect)>,
     pub breakpoint_target_rows: Vec<(usize, Rect)>,
     pub breakpoint_target_apply: Option<Rect>,
@@ -254,6 +265,7 @@ pub struct StackFrame {
 #[derive(Clone, Debug)]
 pub struct Variable {
     pub id: String,
+    pub watch_id: Option<u64>,
     /// Scope rows dispatch ListVariables; value rows dispatch ExpandVariable.
     pub scope: bool,
     pub loading: bool,
@@ -271,6 +283,31 @@ pub struct Register {
     pub name: String,
     pub value: String,
     pub unavailable: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct WatchExpression {
+    pub id: u64,
+    pub expression: String,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WatchEvaluation {
+    pub watch: WatchExpression,
+    pub generation: u64,
+    pub origin_thread: String,
+    pub owner_thread: String,
+    pub frame_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct VariableEdit {
+    pub variable_id: String,
+    pub owner_thread: String,
+    pub origin_thread: String,
+    pub frame_id: String,
+    pub generation: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -333,8 +370,7 @@ pub struct BreakpointLocation {
 
 #[derive(Clone, Debug)]
 pub struct BreakpointDraft {
-    pub source: String,
-    pub line: u64,
+    pub location: v2::breakpoint_spec::Location,
     pub options: BreakpointOptions,
 }
 
@@ -361,6 +397,8 @@ pub struct SignalPicker {
 }
 
 pub struct App {
+    pub watches: Vec<WatchExpression>,
+    next_watch_id: u64,
     pub api_endpoint: String,
     pub api_protocol: String,
     pub api_connected: bool,
@@ -371,11 +409,25 @@ pub struct App {
     pub input: String,
     pub signal_picker: Option<SignalPicker>,
     pub registers: Vec<Register>,
+    pub selected_register: usize,
+    pub register_viewport: crate::display_text::HorizontalViewport,
+    pub values_formatting: crate::cli::ValuesFormatting,
+    pub pretty_printing_attempted: std::collections::BTreeSet<String>,
+    pub stack_viewport: crate::display_text::HorizontalViewport,
+    pub variable_viewport: crate::display_text::HorizontalViewport,
+    pub topology_viewport: crate::display_text::HorizontalViewport,
+    pub breakpoint_viewport: crate::display_text::HorizontalViewport,
     pub input_cursor: usize,
+    pub variable_edit: Option<VariableEdit>,
     input_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
     pub show_help: bool,
+    pub help_scroll: usize,
+    pub help_max_scroll: usize,
+    pub help_page_height: usize,
+    pub expanded_pane: bool,
+    pub show_timeline: bool,
     pub should_quit: bool,
     pub sessions: Vec<v2::Session>,
     pub groups: Vec<v2::Group>,
@@ -385,6 +437,8 @@ pub struct App {
     pub distributed_stack_truncation: Option<String>,
     pub variables: Vec<Variable>,
     pub memory: Vec<MemoryBlock>,
+    pub selected_memory_row: usize,
+    pub memory_viewport: crate::display_text::HorizontalViewport,
     pub extension_actions: Vec<ExtensionActionView>,
     pub selected_extension_action: usize,
     pub pending_extension_action: Option<ExtensionActionView>,
@@ -397,6 +451,8 @@ pub struct App {
     selected_topology: Option<TopologyRowKind>,
     pub selected_variable: usize,
     pub selected_breakpoint: usize,
+    pub selected_breakpoint_site: Option<usize>,
+    pub breakpoint_hit_picker: Option<breakpoint_hits::BreakpointHitPicker>,
     pub inspection_generation: u64,
     inspected_thread_id: Option<String>,
     pub source_browser: SourceBrowser,
@@ -407,14 +463,21 @@ pub struct App {
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
     pub timeline: VecDeque<String>,
+    pub output: crate::output::OutputBuffer,
+    pub show_output: bool,
     pub status: String,
     pub pending_commands: usize,
+    pub control_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub peer_pauses: std::collections::BTreeSet<String>,
+    pub all_stop_cause: Option<String>,
     pub areas: UiAreas,
 }
 
 impl App {
     pub fn new(api_endpoint: String) -> Self {
         Self {
+            watches: Vec::new(),
+            next_watch_id: 1,
             api_endpoint,
             api_protocol: "negotiating".to_string(),
             api_connected: false,
@@ -424,12 +487,26 @@ impl App {
             signal_picker: None,
             input_mode: InputMode::Normal,
             registers: Vec::new(),
+            selected_register: 0,
+            register_viewport: Default::default(),
+            values_formatting: Default::default(),
+            pretty_printing_attempted: Default::default(),
+            stack_viewport: Default::default(),
+            variable_viewport: Default::default(),
+            topology_viewport: Default::default(),
+            breakpoint_viewport: Default::default(),
             input: String::new(),
             input_cursor: 0,
+            variable_edit: None,
             input_history: VecDeque::with_capacity(100),
             history_index: None,
             history_draft: String::new(),
             show_help: false,
+            help_scroll: 0,
+            help_max_scroll: 0,
+            help_page_height: 1,
+            expanded_pane: false,
+            show_timeline: false,
             should_quit: false,
             sessions: Vec::new(),
             groups: Vec::new(),
@@ -442,6 +519,8 @@ impl App {
             distributed_stack_truncation: None,
             variables: Vec::new(),
             memory: Vec::new(),
+            selected_memory_row: 0,
+            memory_viewport: Default::default(),
             extension_panels: Vec::new(),
             breakpoint_target_picker: None,
             execution_target: None,
@@ -451,6 +530,8 @@ impl App {
             selected_frame: 0,
             selected_variable: 0,
             selected_breakpoint: 0,
+            selected_breakpoint_site: None,
+            breakpoint_hit_picker: None,
             inspection_generation: 0,
             inspected_thread_id: None,
             source_browser: SourceBrowser::default(),
@@ -461,8 +542,13 @@ impl App {
             timeline_scroll: 0,
             extension_scroll: 0,
             timeline: VecDeque::with_capacity(500),
+            output: Default::default(),
+            show_output: false,
             status: "connecting to DDB…".to_string(),
             pending_commands: 0,
+            control_epoch: std::sync::Arc::default(),
+            peer_pauses: Default::default(),
+            all_stop_cause: None,
             areas: UiAreas::default(),
         }
     }
@@ -516,6 +602,14 @@ impl App {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: v2::Snapshot) {
+        let selected_breakpoint = self.current_breakpoint().map(|bp| {
+            (
+                bp.id.clone(),
+                self.selected_breakpoint_site
+                    .and_then(|site| bp.sub_breakpoints.get(site))
+                    .map(|site| site.sub_breakpoint_id.clone()),
+            )
+        });
         if !snapshot.server_instance_id.is_empty() {
             if self
                 .source_server_instance
@@ -523,8 +617,11 @@ impl App {
                 .is_some_and(|previous| previous != &snapshot.server_instance_id)
             {
                 self.source_browser.invalidate_server();
+                self.pretty_printing_attempted.clear();
+                self.supersede_automatic_control();
                 self.source_explorer.invalidate_server();
                 self.breakpoint_target_picker = None;
+                self.breakpoint_hit_picker = None;
                 self.signal_picker = None;
                 self.invalidate_inspection();
                 self.push_timeline("DDB instance changed; discarded remote source handles, retained local documents");
@@ -541,6 +638,11 @@ impl App {
         }
         self.sessions = snapshot.sessions;
         self.source_workspace.update_sessions(&self.sessions);
+        self.pretty_printing_attempted.retain(|id| {
+            self.sessions
+                .iter()
+                .any(|session| &session.session_id == id)
+        });
         self.groups = snapshot.groups;
         self.execution_states = snapshot.execution_states;
         self.breakpoints = snapshot
@@ -565,6 +667,18 @@ impl App {
             self.breakpoints.len()
         );
         self.selected_breakpoint = bounded(self.selected_breakpoint, self.breakpoints.len());
+        self.selected_breakpoint_site = None;
+        if let Some((id, site)) = selected_breakpoint {
+            if let Some(index) = self.breakpoints.iter().position(|bp| bp.id == id) {
+                self.selected_breakpoint = index;
+                self.selected_breakpoint_site = site.filter(|id| !id.is_empty()).and_then(|id| {
+                    self.breakpoints[index]
+                        .sub_breakpoints
+                        .iter()
+                        .position(|site| site.sub_breakpoint_id == id)
+                });
+            }
+        }
         self.threads.retain(|thread| {
             self.sessions
                 .iter()
@@ -583,6 +697,8 @@ impl App {
             self.variables.clear();
             self.registers.clear();
             self.memory.clear();
+            self.selected_memory_row = 0;
+            self.memory_viewport = Default::default();
             self.distributed_stack_truncation = None;
             self.execution_location = None;
             self.selected_thread = 0;
@@ -779,15 +895,20 @@ impl App {
     pub fn apply_variables(&mut self, items: Vec<v2::Variable>) {
         self.variables = items
             .into_iter()
-            .map(|variable| variable_view(variable, 0))
+            .map(|variable| {
+                let mut view = variable_view(variable, 0);
+                view.has_children &= self.values_formatting.expandable();
+                view
+            })
             .collect();
         self.selected_variable = bounded(self.selected_variable, self.variables.len());
     }
 
     pub fn apply_scopes(&mut self, scopes: Vec<v2::Scope>) {
-        self.variables = scopes
+        let scopes = scopes
             .into_iter()
             .map(|scope| Variable {
+                watch_id: None,
                 id: scope.scope_id,
                 scope: true,
                 loading: !scope.expensive && scope.variable_count != Some(0),
@@ -804,7 +925,15 @@ impl App {
                 depth: 0,
                 expanded: false,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mut in_watch = false;
+        self.variables.retain(|variable| {
+            if variable.depth == 0 {
+                in_watch = variable.watch_id.is_some();
+            }
+            in_watch
+        });
+        self.variables.extend(scopes);
         self.selected_variable = bounded(self.selected_variable, self.variables.len());
     }
 
@@ -825,7 +954,11 @@ impl App {
         self.variables.drain(parent_index + 1..end);
         let children = items
             .into_iter()
-            .map(|variable| variable_view(variable, depth + 1))
+            .map(|variable| {
+                let mut view = variable_view(variable, depth + 1);
+                view.has_children &= self.values_formatting.expandable();
+                view
+            })
             .collect::<Vec<_>>();
         if self.variables[parent_index].scope {
             self.variables[parent_index].value.clear();
@@ -863,6 +996,7 @@ impl App {
     }
 
     pub fn apply_registers(&mut self, items: Vec<v2::Register>) {
+        self.selected_register = self.selected_register.min(items.len().saturating_sub(1));
         self.registers = items
             .into_iter()
             .map(|register| Register {
@@ -874,10 +1008,19 @@ impl App {
     }
 
     pub fn apply_memory(&mut self, block: v2::MemoryBlock) {
+        self.selected_memory_row = 0;
+        self.memory_viewport = Default::default();
         self.memory = vec![MemoryBlock {
             begin: block.address,
             bytes: block.data,
         }];
+    }
+
+    pub fn memory_row_count(&self) -> usize {
+        self.memory
+            .iter()
+            .map(|block| block.bytes.len().div_ceil(16))
+            .sum()
     }
 
     pub fn current_thread(&self) -> Option<&ThreadItem> {
@@ -1247,8 +1390,55 @@ impl App {
         &mut self,
         options: BreakpointOptions,
     ) -> Result<(), String> {
-        if !self.capabilities.supports_breakpoint_action("create") {
-            return Err("source breakpoint creation is not supported by this DDB API".to_string());
+        let (source, line) = self.source_breakpoint_location()?;
+        let line = u32::try_from(line).map_err(|_| "breakpoint line exceeds the API limit")?;
+        let selected_session_id = self
+            .source_browser
+            .document()
+            .and_then(|document| document.debugger_binding(&self.sessions))
+            .and_then(|binding| binding.single_owner().map(str::to_owned));
+        self.start_location_breakpoint_picker(
+            v2::breakpoint_spec::Location::Source(v2::SourceBreakpointLocation {
+                source,
+                line,
+                column: 0,
+            }),
+            options,
+            selected_session_id,
+        )
+    }
+
+    pub fn start_function_breakpoint_picker(
+        &mut self,
+        name: String,
+        options: BreakpointOptions,
+    ) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Enter a function or symbol name".into());
+        }
+        self.start_location_breakpoint_picker(
+            v2::breakpoint_spec::Location::Function(v2::FunctionBreakpointLocation {
+                function_name: name.into(),
+            }),
+            options,
+            None,
+        )
+    }
+
+    fn start_location_breakpoint_picker(
+        &mut self,
+        location: v2::breakpoint_spec::Location,
+        options: BreakpointOptions,
+        selected_session_id: Option<String>,
+    ) -> Result<(), String> {
+        let action = if matches!(location, v2::breakpoint_spec::Location::Function(_)) {
+            "create_function"
+        } else {
+            "create"
+        };
+        if !self.capabilities.supports_breakpoint_action(action) {
+            return Err("breakpoint creation is not supported by this DDB API".to_string());
         }
         if options.condition.is_some()
             && !self.capabilities.supports_breakpoint_action("conditional")
@@ -1258,19 +1448,18 @@ impl App {
         if options.temporary && !self.capabilities.supports_breakpoint_action("temporary") {
             return Err("temporary breakpoints are not supported by this DDB API".to_string());
         }
+        if options.ignore_count.is_some()
+            && !self.capabilities.supports_breakpoint_action("ignore_count")
+        {
+            return Err("ignore-count breakpoints are not supported by this DDB API".into());
+        }
         if options.hardware && !self.capabilities.supports_breakpoint_action("hardware") {
             return Err("hardware breakpoints are not supported by this DDB API".to_string());
         }
-        let (source, line) = self.source_breakpoint_location()?;
         if self.sessions.is_empty() {
             return Err("DDB has no sessions eligible for a breakpoint".to_string());
         }
 
-        let selected_session_id = self
-            .source_browser
-            .document()
-            .and_then(|document| document.debugger_binding(&self.sessions))
-            .and_then(|binding| binding.single_owner().map(str::to_owned));
         let mut choices = Vec::new();
         if self.capabilities.supports_breakpoint_action("distributed") {
             choices.push(BreakpointTargetChoice {
@@ -1351,11 +1540,7 @@ impl App {
             .position(|choice| choice.selected)
             .unwrap_or(0);
         self.breakpoint_target_picker = Some(BreakpointTargetPicker {
-            draft: BreakpointDraft {
-                source,
-                line,
-                options,
-            },
+            draft: BreakpointDraft { location, options },
             choices,
             cursor,
         });
@@ -1488,6 +1673,21 @@ impl App {
     }
 
     pub fn mark_running(&mut self, thread_id: Option<&str>) {
+        // Do not reuse an old breakpoint reason if a stop event or thread list
+        // arrives before the next execution-state snapshot.
+        for execution in &mut self.execution_states {
+            let Some(target::Selector::Thread(target)) = execution
+                .target
+                .as_ref()
+                .and_then(|target| target.selector.as_ref())
+            else {
+                continue;
+            };
+            if thread_id.is_none_or(|running| running == target.thread_id) {
+                execution.running = true;
+                execution.stop_reason = None;
+            }
+        }
         let affects_current = match (thread_id, self.current_thread()) {
             (None, Some(_)) => true,
             (Some(running), Some(current)) => {
@@ -1517,6 +1717,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
+        self.variable_edit = None;
         if self.input_mode == InputMode::ExtensionAction {
             self.pending_extension_action = None;
         }
@@ -1633,8 +1834,13 @@ impl App {
 
     fn clear_inspection_details(&mut self) {
         self.variables.clear();
+        self.reset_watch_rows();
         self.registers.clear();
+        self.selected_register = 0;
+        self.register_viewport = Default::default();
         self.memory.clear();
+        self.selected_memory_row = 0;
+        self.memory_viewport = Default::default();
     }
 
     pub fn inspection_is_current(&self, generation: u64, thread_id: &str) -> bool {
@@ -1688,8 +1894,26 @@ impl App {
         match self.focus {
             Focus::Threads => self.move_topology_selection(delta),
             Focus::Breakpoints => {
-                self.selected_breakpoint =
-                    move_index(self.selected_breakpoint, self.breakpoints.len(), delta)
+                let rows = self
+                    .breakpoints
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, bp)| {
+                        std::iter::once((index, None)).chain(
+                            (0..bp.sub_breakpoints.len()).map(move |site| (index, Some(site))),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let selected = rows
+                    .iter()
+                    .position(|row| {
+                        *row == (self.selected_breakpoint, self.selected_breakpoint_site)
+                    })
+                    .unwrap_or(0);
+                if let Some(&(index, site)) = rows.get(move_index(selected, rows.len(), delta)) {
+                    self.selected_breakpoint = index;
+                    self.selected_breakpoint_site = site;
+                }
             }
             Focus::Stack => {
                 self.selected_frame = move_index(self.selected_frame, self.frames.len(), delta)
@@ -1700,6 +1924,7 @@ impl App {
             Focus::Timeline => {
                 self.timeline_scroll = move_line(self.timeline_scroll, delta);
             }
+            Focus::Output => self.output.scroll(delta),
             Focus::Extensions => {
                 if self.extension_actions.is_empty() {
                     self.extension_scroll = move_line(self.extension_scroll, delta);
@@ -1721,11 +1946,32 @@ impl App {
                 self.selected_variable =
                     move_index(self.selected_variable, self.variables.len(), delta)
             }
+            Focus::Registers => {
+                self.selected_register =
+                    move_index(self.selected_register, self.registers.len(), delta);
+            }
+            Focus::Memory => {
+                self.selected_memory_row =
+                    move_index(self.selected_memory_row, self.memory_row_count(), delta);
+            }
         }
     }
 
     pub fn cycle_focus(&mut self, reverse: bool) {
         let mut visible = Focus::CORE.to_vec();
+        if self.show_output {
+            visible.push(Focus::Output);
+        }
+        if !self.registers.is_empty() {
+            visible.insert(5, Focus::Registers);
+        }
+        if !self.memory.is_empty() {
+            let index = if self.registers.is_empty() { 5 } else { 6 };
+            visible.insert(index, Focus::Memory);
+        }
+        if !self.show_timeline {
+            visible.retain(|focus| *focus != Focus::Timeline);
+        }
         if !self.extension_panels.is_empty() || !self.extension_actions.is_empty() {
             visible.insert(5, Focus::Extensions);
         }
@@ -1749,6 +1995,16 @@ impl App {
     }
 
     pub fn push_receipt(&mut self, label: &str, receipt: &v2::Operation) {
+        let interactive = matches!(
+            v2::OperationKind::try_from(receipt.kind),
+            Ok(v2::OperationKind::RawCommand | v2::OperationKind::Evaluate)
+        );
+        if interactive {
+            if let Some(error) = &receipt.error {
+                self.output
+                    .push(&format!("{label} failed: {}", error.message));
+            }
+        }
         let state = operation_state_name(receipt.state);
         self.status = format!("{label}: {state}");
         let icon = if receipt.error.is_some() {
@@ -1761,7 +2017,19 @@ impl App {
             self.push_timeline(format!("  {}", error.message));
         }
         if let Some(summary) = receipt.result.as_ref().and_then(operation_result_summary) {
-            self.push_timeline(format!("  {summary}"));
+            if matches!(
+                receipt
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.value.as_ref()),
+                Some(
+                    operation_result::Value::RawCommand(_) | operation_result::Value::Evaluation(_)
+                )
+            ) {
+                self.output.push(&format!("{label} · {summary}"));
+            } else {
+                self.push_timeline(format!("  {summary}"));
+            }
         }
         if !receipt.target_outcomes.is_empty() {
             let succeeded = receipt
@@ -1792,7 +2060,15 @@ impl App {
         self.push_timeline(format!("✗ {}", self.status));
     }
 
+    pub fn supersede_automatic_control(&mut self) {
+        self.control_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.peer_pauses.clear();
+        self.all_stop_cause = None;
+    }
+
     pub fn backend_unavailable(&mut self, error: impl ToString) {
+        self.supersede_automatic_control();
         self.api_connected = false;
         self.error(error);
     }
@@ -1855,6 +2131,7 @@ fn session_status_name(status: i32) -> &'static str {
 
 fn variable_view(variable: v2::Variable, depth: usize) -> Variable {
     Variable {
+        watch_id: None,
         id: variable.variable_id,
         scope: false,
         loading: false,
@@ -2179,6 +2456,14 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    EnablePrettyPrinting {
+        session_id: String,
+    },
+    EvaluateWatch(WatchEvaluation),
+    AssignVariable {
+        edit: VariableEdit,
+        value: String,
+    },
     Bootstrap,
     Refresh,
     InspectThread {
@@ -2194,6 +2479,11 @@ pub enum BackendRequest {
     ExploreSources(crate::source_explorer::Request),
     CancelSourceDiscovery,
     Control(Control, v2::Target),
+    PausePeer {
+        session_id: String,
+        epoch: u64,
+        current_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    },
     Jump {
         location: String,
         target: v2::Target,
@@ -2206,8 +2496,7 @@ pub enum BackendRequest {
         target: v2::Target,
     },
     CreateBreakpoint {
-        source: String,
-        line: u64,
+        location: v2::breakpoint_spec::Location,
         target: BreakpointTarget,
         options: BreakpointOptions,
     },
@@ -2239,6 +2528,7 @@ pub enum BackendRequest {
         address: String,
         count: u64,
         thread_id: String,
+        owner_thread: String,
         generation: u64,
     },
     InvokeExtensionAction {
@@ -2252,18 +2542,33 @@ pub enum BackendRequest {
     RawCommand {
         command: String,
         target: v2::Target,
+        frame_id: Option<String>,
     },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BreakpointOptions {
     pub condition: Option<String>,
+    pub ignore_count: Option<u64>,
     pub temporary: bool,
     pub hardware: bool,
 }
 
 #[derive(Debug)]
 pub enum UiMessage {
+    WatchEvaluated {
+        request: WatchEvaluation,
+        result: Result<v2::EvaluationResult, String>,
+    },
+    VariableAssigned {
+        edit: VariableEdit,
+        result: Result<v2::Operation, String>,
+    },
+    PeerPauseFailed {
+        session_id: String,
+        epoch: u64,
+        error: String,
+    },
     Capabilities(v2::Capabilities),
     Snapshot(v2::Snapshot),
     Threads(Vec<v2::Thread>),
@@ -2659,7 +2964,7 @@ mod v2_tests {
     }
 
     #[test]
-    fn typed_unicode_operation_results_are_safe_for_the_timeline() {
+    fn typed_unicode_evaluation_results_go_to_output_not_diagnostics() {
         let mut app = App::new("http://localhost".to_string());
         app.push_receipt(
             "evaluate",
@@ -2675,7 +2980,12 @@ mod v2_tests {
                 ..Default::default()
             },
         );
-        assert!(app.timeline.back().unwrap().contains("变量"));
+        assert!(app.output.visible_lines().last().unwrap().contains("变量"));
+        assert!(!app.timeline.back().unwrap().contains("变量"));
+        assert!(
+            !app.show_output,
+            "late results must not reopen a pane the user hid"
+        );
     }
 
     #[test]
@@ -2872,9 +3182,81 @@ mod v2_tests {
         app.select_breakpoint_target_choice(beta_index);
 
         let (draft, target) = app.commit_breakpoint_target_picker().unwrap();
-        assert_eq!(draft.source, "/src/main.rs");
-        assert_eq!(draft.line, 12);
+        assert!(
+            matches!(draft.location, v2::breakpoint_spec::Location::Source(source)
+            if source.source == "/src/main.rs" && source.line == 12)
+        );
         assert_eq!(target, BreakpointTarget::Group("group/a".to_string()));
+    }
+
+    #[test]
+    fn function_breakpoints_do_not_require_source_and_keep_explicit_scope() {
+        let mut app = populated_app(v2::ThreadState::Stopped);
+        app.apply_capabilities(v2::Capabilities {
+            breakpoint_features: vec![v2::BreakpointFeature::Function as i32],
+            supported_operations: vec![v2::OperationKind::CreateBreakpoint as i32],
+            ..Default::default()
+        });
+        app.source_browser = Default::default();
+        app.start_function_breakpoint_picker(
+            " Greeter::SayHello ".into(),
+            BreakpointOptions::default(),
+        )
+        .unwrap();
+        let picker = app.breakpoint_target_picker.as_ref().unwrap();
+        assert!(picker.choices.iter().all(|choice| !choice.selected));
+        let session = picker
+            .choices
+            .iter()
+            .position(|choice| matches!(choice.target, BreakpointTarget::Session(_)))
+            .unwrap();
+        app.select_breakpoint_target_choice(session);
+        let (draft, target) = app.commit_breakpoint_target_picker().unwrap();
+        assert!(
+            matches!(draft.location, v2::breakpoint_spec::Location::Function(function)
+            if function.function_name == "Greeter::SayHello")
+        );
+        assert!(matches!(target, BreakpointTarget::Session(_)));
+        assert!(app
+            .start_function_breakpoint_picker(" ".into(), BreakpointOptions::default())
+            .is_err());
+        app.apply_capabilities(v2::Capabilities {
+            breakpoint_features: vec![v2::BreakpointFeature::Source as i32],
+            supported_operations: vec![v2::OperationKind::CreateBreakpoint as i32],
+            ..Default::default()
+        });
+        assert!(app
+            .start_function_breakpoint_picker("main".into(), BreakpointOptions::default())
+            .is_err());
+    }
+
+    #[test]
+    fn function_breakpoint_picker_preserves_ignore_count_and_checks_capability() {
+        let mut app = populated_app(v2::ThreadState::Stopped);
+        let options = BreakpointOptions {
+            ignore_count: Some(3),
+            ..Default::default()
+        };
+        let mut capabilities = v2::Capabilities {
+            breakpoint_features: vec![v2::BreakpointFeature::Function as i32],
+            supported_operations: vec![v2::OperationKind::CreateBreakpoint as i32],
+            ..Default::default()
+        };
+        app.apply_capabilities(capabilities.clone());
+        assert!(app
+            .start_function_breakpoint_picker("main".into(), options.clone())
+            .unwrap_err()
+            .contains("ignore-count"));
+        assert!(app.breakpoint_target_picker.is_none());
+        capabilities
+            .breakpoint_features
+            .push(v2::BreakpointFeature::IgnoreCount as i32);
+        app.apply_capabilities(capabilities);
+        app.start_function_breakpoint_picker("main".into(), options.clone())
+            .unwrap();
+        app.select_breakpoint_target_choice(0);
+        let (draft, _) = app.commit_breakpoint_target_picker().unwrap();
+        assert_eq!(draft.options, options);
     }
 
     #[test]
@@ -2899,6 +3281,13 @@ mod v2_tests {
             })
             .unwrap_err();
         assert!(error.contains("hardware breakpoints are not supported"));
+        let error = app
+            .start_breakpoint_target_picker(BreakpointOptions {
+                ignore_count: Some(2),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(error.contains("ignore-count breakpoints are not supported"));
 
         app.start_breakpoint_target_picker(BreakpointOptions::default())
             .unwrap();
@@ -3037,3 +3426,8 @@ mod v2_tests {
         );
     }
 }
+#[path = "watches.rs"]
+mod watches;
+
+#[path = "breakpoint_hits.rs"]
+mod breakpoint_hits;

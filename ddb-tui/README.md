@@ -56,7 +56,21 @@ Useful managed options are:
 --startup-timeout SECS   bound startup and readiness waiting (default: 20)
 --backend-log PATH       retain backend stdout/stderr at a new private path
 --config PATH            explicit alternative to the positional config
+--values-formatting MODE pretty-printers (default), raw, or disabled
 ```
+
+Value presentation applies to locals and watches. `pretty-printers` enables
+installed GDB visualizers through DDB's typed `ConfigureDebugger` API when a
+session becomes ready or stopped, including auto-attached sessions. LLDB uses
+its existing formatters. `raw` keeps canonical child expansion without enabling
+GDB visualizers. `disabled` hides child expansion while retaining scope loading,
+values, and editable variable identities. These last two modes do not disable
+formatters already enabled by another frontend or debugger configuration.
+
+The default also enables GDB visualizers when connecting to an externally owned
+DDB backend. Use `--values-formatting raw` to avoid that configuration change.
+Setup is attempted once per eligible session and backend instance; failures are
+shown in status and the diagnostic timeline, without repeated automatic retries.
 
 Managed credentials are independent random control/admin tokens stored only in a
 private temporary file. Token values are never placed in argv, child environment,
@@ -86,7 +100,8 @@ the backend and frontend together when the API contract changes.
 | Input | Action |
 |---|---|
 | `Tab` / `Shift+Tab` | Move panel focus |
-| Arrow keys / mouse wheel | Navigate the focused panel |
+| `j` / `k`, Up/Down, mouse wheel | Navigate the focused panel |
+| Page Up / Page Down | Move by the focused pane's visible page size |
 | `Enter` / click | Select a DDB group/session/thread target, inspect a thread/frame, expand a variable, or activate a row |
 | `F5` | Continue |
 | `F6` | Interrupt/pause |
@@ -98,24 +113,101 @@ the backend and frontend together when the API contract changes.
 | `Space` in the target picker | Select one or more session/group targets, or server-resolved broadcast |
 | `x` / `Space` | Enable or disable the selected breakpoint |
 | `Delete` | Remove the selected breakpoint |
+| `F` | Add a function/symbol breakpoint, then choose session/group targets |
 | `d` | Refresh the DDB distributed stack (normally refreshed automatically) |
 | `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
 | `e` | Evaluate an expression |
+| `w` | Add a retained watch expression in Variables |
+| `Delete` in Variables | Remove the selected watch expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `g` | Go to a source line (loads another source window when needed) |
+| `Left` / `Right` in Source | Scroll long source lines horizontally, keeping the gutter fixed |
+| `Home` in Source | Return to the left edge of the source text |
 | `o` | Open the source explorer at local and DDB-exported roots |
 | `Ctrl+P` | Search debugger-known files across DDB sessions |
 | `f` in Source | Resume following the selected thread's execution location |
 | `Alt+Left` / `Alt+Right` | Navigate source history without changing debugger selection |
-| `j` | Jump execution to a debugger location |
+| `J` | Open the execution-jump prompt |
 | `s` | Send a signal to the selected thread |
 | `a` / `Enter` in Extensions | Invoke an action declared by the active DDB extension |
-| `:` | Open the raw DDB command palette |
+| `:` | Run a native GDB/LLDB command in the selected frame |
 | `r` | Refresh all state |
 | `?` | Toggle the in-app help overlay |
 | `q` / `Ctrl+C` | Quit |
 
 ### Source explorer
+
+In Variables, select a value and press `=` to assign it using the debugger's
+value syntax. Scope headings cannot be edited. The request uses the variable's
+opaque identity and owning frame, not its display name. A changed inspection
+context cancels submission; backend read-only/stale-handle errors are reported.
+
+Watches refresh for the selected stopped frame, including distributed caller
+frames and after variable assignment. Enter expands retained values through
+DDB's variable API. Errors appear on the watch row. Expressions survive resume
+and reconnect within this TUI process, but old values and handles do not.
+Watches are not saved across TUI restarts. Expressions use debugger syntax and
+may have side effects; prefer expressions that only read state.
+
+The `:` console accepts the selected session's native debugger CLI, such as
+`print counter` in GDB or `frame variable` in LLDB. It uses the selected stack
+frame's canonical ownership, including distributed callers. It does not accept
+GDB/MI as a compatibility command language. Use `b`/`B` for DDB-managed
+breakpoints with session or group targeting. `F` accepts a backend-supported
+function or symbol expression without requiring an open source file. Its target
+picker requires an explicit selection, including broadcast or inherited groups.
+
+In Breakpoints, press Enter or click a row to open its source. Up/Down visits
+the logical breakpoint and its session-specific sites. If a logical breakpoint
+has multiple sites, select a child row to choose the source owner explicitly.
+Opening breakpoint source does not change the execution target.
+
+Source horizontal scrolling also accepts horizontal mouse-wheel events. It
+preserves the source cursor and execution-following mode. Navigation history
+restores each file's horizontal offset; resizing clamps it to the content width.
+Vertical movement keeps the viewport stable until the cursor reaches an edge.
+Loading another source window preserves that edge instead of recentering the
+cursor; pending loads use the current pane height if the terminal is resized.
+
+`?` opens scrollable help. Use Up/Down, `j`/`k`, Page Up/Down, Home/End,
+or the mouse wheel; `Esc` or `?` closes it. Help wraps to the terminal width
+and blocks clicks on debugger controls underneath it.
+
+Click `[Expand]` on a pane's bottom border or press `z` to expand the focused
+pane; click `[Restore]`, press `z` again, or press `Esc` to restore
+the layout. `Tab` still changes the focused pane while expanded. The diagnostic
+timeline is hidden by default. Press `t` to show and focus it, or hide it again.
+Timeline events continue to be collected while the pane is hidden.
+Registers have their own focus and selection: click the register pane or use
+`Tab`, then use arrows, Page Up/Down, or the mouse wheel to browse rows. Left/Right
+scroll long register values horizontally; `z` expands the register pane alone.
+
+`m` reads memory and focuses its pane. Memory has independent row selection;
+Up/Down, Page Up/Down, and the mouse wheel reach every returned row. Left/Right
+reveals the hex and ASCII columns without wrapping them. Use `z` or the pane's
+Expand button for a full-width view. New reads reset the view; changing frames
+or resuming execution clears stale memory. Distributed-frame reads target that
+frame's owning thread, not the thread where the distributed stack began.
+
+In Topology, Breakpoints, Stack, Variables, Registers, and Memory, Left/Right or a horizontal mouse wheel reveals clipped
+names and values. Home returns to the start. Each pane remembers its position;
+resizing clamps scrolling to the available content. Horizontal navigation does
+not select another frame or issue debugger commands.
+
+Press `O` to show/hide the Output pane. Native console and one-shot evaluation
+results open it automatically. Program output is collected there even while it
+is hidden; the optional timeline remains for state/operation diagnostics.
+Up/Down, PageUp/PageDown and the mouse wheel browse history. Home goes to the
+oldest retained line; End resumes following new output. Left/Right or horizontal
+wheel scrolling reveals long lines. Scrolling back prevents new output from
+moving your view. The buffer retains 1,000 lines of at most 4,096 characters each;
+evicted-line counts and line truncation are shown explicitly. Terminal control
+characters are displayed safely rather than executed.
+Press `F8` from any pane, or click `Frame F8` in the toolbar, to reveal the
+selected stack frame's source without changing the execution target. Unlike
+`f` in Source, this reveals the selected frame rather than enabling execution
+following. Missing source locations and non-source boundary rows report why
+they cannot be opened.
 
 `o` or the source panel's Open button lists explicitly configured roots, marked
 `[Local]` or `[DDB]` by their host. To browse directories on the DDB host, add
@@ -228,16 +320,35 @@ thread. Unbound and multi-owner documents require an explicit target choice.
 focuses the breakpoint manager so you can select which one to delete. Session,
 group, broadcast, and multi-target scopes remain available explicitly.
 
-The `B` prompt accepts `-t`/`--temporary`, `-h`/`--hardware`, and a condition
+The `B` prompt accepts `-t`/`--temporary`, `-h`/`--hardware`, `--ignore-count N`, and a condition
 introduced by `if`, `-c`, or `--condition`. For example:
 
 ```text
 -t if request.id == 42
 --hardware --condition ptr != 0
+--ignore-count 3 -t
 ```
+
+`--ignore-count N` skips the next N hits. Without `-t`, the breakpoint keeps
+stopping afterward; with `-t`, it stops once and is removed. Counts must fit an
+unsigned 64-bit integer. Put options before the condition expression.
+The `F` function prompt accepts the same options after a space-delimited `--`,
+for example `Greeter::SayHello -- --ignore-count 3 -t`. Function names may contain
+spaces, including C++ operator names and signatures.
 
 The prompt and all breakpoint mutations are capability-gated; unsupported
 options are rejected before any request is sent to DDB.
+
+Breakpoint rows show `▶ N paused` for threads currently stopped at that
+breakpoint. This is separate from the cumulative `hits:N` counter. Automatically
+paused all-stop peers are not counted. Member rows show current hits only when
+DDB identifies that member or there is a single member in the hitting session.
+Markers disappear when the thread resumes or the backend disconnects.
+Press `P` in Breakpoints, or right-click a breakpoint row, to choose a currently
+paused hitting thread. Enter or a click loads that thread's stack, source and
+variables. Esc or Cancel closes the picker. The picker validates the stop revision
+before navigating and rejects hits that resumed or changed while it was open.
+This navigation does not change the execution-control target.
 
 The variables panel preserves the scopes returned by DDB. Non-expensive scopes
 load automatically; expensive scopes (such as globals and file statics) load
@@ -326,8 +437,21 @@ From `ddb-tui/`:
 ```bash
 cargo build -p ddb --manifest-path ../ddb/Cargo.toml
 cargo build --manifest-path ../ddb/core/tests/fixtures/real_loop/Cargo.toml
-cargo test --test e2e_mock -- --ignored
+cargo test --test e2e_mock -- --ignored --skip greeter_auto_attach --test-threads=1
 ```
 
 The PTY suite currently targets Unix and requires `script`, GDB, and LLDB.
 `DDB_E2E_BIN` may be set to test a different DDB executable.
+
+The opt-in auto-attach greeter regression additionally requires an instrumented
+gRPC helloworld checkout, `ddb_runapp`, Mosquitto, and an existing
+`/tmp/ddb/service_discovery/config` pointing at a free loopback broker port with
+topic `service_discovery/report`. It refuses an occupied port and does not rewrite
+the discovery file. It owns its broker and applications; do not run another
+discovery session while this test runs.
+
+```bash
+DDB_GREETER_WORKSPACE=/absolute/path/to/grpc/examples/cpp/helloworld \
+  cargo test --test e2e_mock greeter_auto_attach_all_stop_terminal_workflow \
+  -- --ignored --test-threads=1
+```

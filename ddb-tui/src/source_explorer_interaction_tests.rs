@@ -134,7 +134,7 @@ fn explorer_rows_and_close_are_mouse_addressable_in_compact_layouts() {
         app.source_explorer.apply(request.generation, source_page());
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| app.areas = ui::draw(frame, &app))
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
             .unwrap();
         let screen = terminal
             .backend()
@@ -180,7 +180,7 @@ fn explorer_rows_and_close_are_mouse_addressable_in_compact_layouts() {
         let request = app.source_explorer.open(true);
         app.source_explorer.apply(request.generation, source_page());
         terminal
-            .draw(|frame| app.areas = ui::draw(frame, &app))
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
             .unwrap();
         let (_, row) = app.areas.source_explorer_rows[0];
         handle_mouse(
@@ -206,7 +206,7 @@ fn source_panel_has_a_mouse_entry_point_without_a_loaded_document() {
         let mut app = App::new("http://localhost".into());
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| app.areas = ui::draw(frame, &app))
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
             .unwrap();
         let open = app
             .areas

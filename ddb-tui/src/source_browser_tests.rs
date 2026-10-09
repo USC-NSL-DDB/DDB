@@ -58,6 +58,37 @@ fn open(browser: &mut SourceBrowser, path: &str, line: u32) {
 }
 
 #[test]
+fn horizontal_scroll_preserves_cursor_following_and_file_history() {
+    let mut browser = SourceBrowser::default();
+    let mut long = content("wide.rs");
+    long.content = format!("{}\nsecond\nthird\nfourth", "abcdef".repeat(20));
+    let request = browser
+        .navigate(None, location("wide.rs", 1), Navigation::Follow)
+        .unwrap();
+    assert!(browser.apply(request.generation, long.clone()));
+    browser.fit_horizontal(20);
+    browser.scroll_horizontal(8);
+    assert_eq!(browser.document().unwrap().column, 8);
+    assert_eq!(browser.cursor_location(), Some(("wide.rs", 1)));
+    assert!(browser.following());
+    assert!(browser.pending_generation().is_none());
+    open(&mut browser, "other.rs", 1);
+    assert_eq!(browser.document().unwrap().column, 0);
+    let request = browser.history(false).unwrap();
+    assert!(browser.apply(request.generation, long.clone()));
+    assert_eq!(browser.document().unwrap().column, 8);
+    let request = browser.go_to_line(3).unwrap();
+    assert!(browser.apply(request.generation, long));
+    assert_eq!(browser.document().unwrap().column, 8);
+    browser.scroll_horizontal(isize::MAX);
+    assert_eq!(browser.document().unwrap().column, 100);
+    browser.fit_horizontal(110);
+    assert_eq!(browser.document().unwrap().column, 10);
+    browser.scroll_horizontal(-100);
+    assert_eq!(browser.document().unwrap().column, 0);
+}
+
+#[test]
 fn manual_open_needs_no_thread_and_disables_following() {
     let mut browser = SourceBrowser::default();
     open(&mut browser, "main.rs", 2);
@@ -67,6 +98,51 @@ fn manual_open_needs_no_thread_and_disables_following() {
         .navigate(None, location("worker.rs", 1), Navigation::Follow)
         .is_none());
     assert_eq!(browser.cursor_location(), Some(("main.rs", 2)));
+}
+
+#[test]
+fn crossing_source_windows_keeps_cursor_at_the_scrolling_edge() {
+    fn window(first: u32) -> Content {
+        let mut data = content("large.rs");
+        data.start_line = first;
+        data.line_count = 100;
+        data.total_lines = 1000;
+        data.content = (first..first + 100)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        data
+    }
+    let mut browser = SourceBrowser::default();
+    let request = browser
+        .navigate(None, location("large.rs", 100), Navigation::Manual)
+        .unwrap();
+    assert!(browser.apply(request.generation, window(1)));
+    browser.fit_viewport(20);
+    let request = browser.move_cursor(1).unwrap();
+    assert!(browser.apply(request.generation, window(81)));
+    browser.fit_viewport(20);
+    let document = browser.document().unwrap();
+    assert_eq!(document.cursor - document.start_line - document.scroll, 19);
+
+    browser.set_cursor(81);
+    browser.fit_viewport(20);
+    let request = browser.move_cursor(-1).unwrap();
+    assert!(browser.apply(request.generation, window(61)));
+    browser.fit_viewport(20);
+    let document = browser.document().unwrap();
+    assert_eq!(document.cursor - document.start_line - document.scroll, 0);
+    browser.set_cursor(160);
+    browser.fit_viewport(20);
+    let obsolete = browser.move_cursor(1).unwrap();
+    let latest = browser.move_cursor(1).unwrap();
+    browser.fit_viewport(10);
+    assert!(!browser.apply(obsolete.generation, window(141)));
+    assert!(browser.apply(latest.generation, window(141)));
+    browser.fit_viewport(10);
+    let document = browser.document().unwrap();
+    assert_eq!(document.cursor, 162);
+    assert_eq!(document.cursor - document.start_line - document.scroll, 9);
 }
 
 #[test]
@@ -92,6 +168,39 @@ fn cursor_crosses_read_windows_without_creating_history_and_retries_after_failur
     let previous = browser.move_cursor(-1).unwrap();
     assert_eq!(previous.line, 4);
     assert!(!browser.following());
+}
+
+#[test]
+fn moving_cursor_within_visible_page_does_not_scroll_document() {
+    let mut browser = SourceBrowser::default();
+    let mut file = content("large.rs");
+    file.content = (1..=100)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    file.line_count = 100;
+    file.total_lines = 100;
+    show_content(&mut browser, file, 1);
+    // Cursor movement within a page must not pin the cursor to row nine.
+    for _ in 0..15 {
+        assert!(browser.move_cursor(1).is_none());
+        browser.fit_viewport(20);
+    }
+    assert_eq!(browser.document().unwrap().cursor, 16);
+    assert_eq!(browser.document().unwrap().scroll, 0);
+    browser.move_cursor(5);
+    browser.fit_viewport(20);
+    assert_eq!(browser.document().unwrap().scroll, 1);
+    browser.move_cursor(-1);
+    browser.fit_viewport(20);
+    assert_eq!(browser.document().unwrap().scroll, 1);
+    browser.fit_viewport(5);
+    assert_eq!(browser.document().unwrap().scroll, 15);
+    browser.move_cursor(-10);
+    browser.fit_viewport(5);
+    assert_eq!(browser.document().unwrap().scroll, 9);
+    browser.fit_viewport(200);
+    assert_eq!(browser.document().unwrap().scroll, 0);
 }
 
 #[test]
@@ -186,6 +295,34 @@ fn failed_navigation_does_not_corrupt_history() {
     let retry = browser.history(false).unwrap();
     assert!(browser.apply(retry.generation, content("main.rs")));
     assert_eq!(browser.cursor_location(), Some(("main.rs", 2)));
+}
+
+#[test]
+fn source_errors_hide_stale_document_and_new_navigation_recovers() {
+    let mut browser = SourceBrowser::default();
+    open(&mut browser, "old.rs", 2);
+    let missing = browser
+        .navigate(None, location("missing.rs", 3), Navigation::Frame)
+        .unwrap();
+    assert!(browser.fail_with_error(missing.generation, "missing.rs: permission denied".into()));
+    assert!(
+        browser.document().is_none(),
+        "stale source must not be actionable behind an error"
+    );
+    assert!(browser.error().unwrap().contains("permission denied"));
+    assert!(browser.move_cursor(1).is_none());
+    let newer = browser
+        .navigate(None, location("new.rs", 1), Navigation::Frame)
+        .unwrap();
+    assert!(!browser.fail_with_error(missing.generation, "stale failure".into()));
+    assert!(browser.error().is_none());
+    assert!(browser.apply(newer.generation, content("new.rs")));
+    assert_eq!(browser.document().unwrap().path, "new.rs");
+    let back = browser.history(false).unwrap();
+    assert_eq!(
+        back.line, 2,
+        "failed navigation must preserve the prior document's position"
+    );
 }
 
 #[test]

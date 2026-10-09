@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::{
     api::CapabilitiesExt,
+    display_text::{horizontal_line, horizontal_text, terminal_text},
     model::{App, Control, Focus, InputMode, TopologyRowKind, UiAreas},
 };
 
@@ -24,7 +25,7 @@ const YELLOW: Color = Color::Rgb(220, 220, 170);
 const RED: Color = Color::Rgb(244, 71, 71);
 const MUTED: Color = Color::Rgb(128, 128, 128);
 
-pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
+pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
     let root = frame.area();
     if root.height < 19 {
         let rows = Layout::vertical([
@@ -36,12 +37,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         let mut areas = UiAreas::default();
         draw_mini_toolbar(frame, app, rows[0]);
         draw_compact_panel(frame, app, rows[1], &mut areas);
+        draw_pane_expanders(frame, app, &mut areas);
         draw_mini_status(frame, app, rows[2]);
         if app.show_help {
-            draw_help(frame, root);
+            draw_help(frame, app, root);
         }
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         draw_signal_picker(frame, app, root, &mut areas);
+        draw_breakpoint_hits(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         return areas;
     }
@@ -58,19 +61,29 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
     let mut areas = UiAreas::default();
     draw_toolbar(frame, app, rows[0], &mut areas);
 
-    if root.width < 100 || root.height < 28 {
+    if app.expanded_pane || root.width < 100 || root.height < 28 {
         draw_compact_panel(frame, app, rows[1], &mut areas);
+        draw_pane_expanders(frame, app, &mut areas);
         draw_prompt(frame, app, rows[2]);
         draw_hints(frame, rows[3]);
         if app.show_help {
-            draw_help(frame, root);
+            draw_help(frame, app, root);
         }
         draw_signal_picker(frame, app, root, &mut areas);
+        draw_breakpoint_hits(frame, app, root, &mut areas);
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         return areas;
     }
 
+    let body = if app.show_output {
+        let split = Layout::vertical([Constraint::Min(6), Constraint::Length(9)]).split(rows[1]);
+        draw_output(frame, app, split[1]);
+        areas.add_focus_panel(Focus::Output, split[1]);
+        split[0]
+    } else {
+        rows[1]
+    };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -78,7 +91,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
             Constraint::Percentage(51),
             Constraint::Percentage(25),
         ])
-        .split(rows[1]);
+        .split(body);
     let left = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
@@ -88,12 +101,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(columns[1]);
     let right = if app.extension_panels.is_empty() && app.extension_actions.is_empty() {
-        Layout::vertical([Constraint::Percentage(65), Constraint::Percentage(35)]).split(columns[2])
+        Layout::vertical([
+            Constraint::Percentage(if app.show_timeline { 65 } else { 100 }),
+            Constraint::Percentage(if app.show_timeline { 35 } else { 0 }),
+        ])
+        .split(columns[2])
     } else {
         Layout::vertical([
-            Constraint::Percentage(48),
-            Constraint::Percentage(32),
-            Constraint::Percentage(20),
+            Constraint::Percentage(if app.show_timeline { 48 } else { 65 }),
+            Constraint::Percentage(if app.show_timeline { 32 } else { 35 }),
+            Constraint::Percentage(if app.show_timeline { 20 } else { 0 }),
         ])
         .split(columns[2])
     };
@@ -104,10 +121,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
     draw_stack(frame, app, center[1]);
     draw_variables(frame, app, right[0]);
     if app.extension_panels.is_empty() && app.extension_actions.is_empty() {
-        draw_timeline(frame, app, right[1]);
+        if app.show_timeline {
+            draw_timeline(frame, app, right[1]);
+        }
     } else {
         draw_extensions(frame, app, right[1], &mut areas);
-        draw_timeline(frame, app, right[2]);
+        if app.show_timeline {
+            draw_timeline(frame, app, right[2]);
+        }
     }
     areas.add_panel(
         Focus::Threads,
@@ -128,9 +149,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         1,
     );
     let variables_area = variable_list_area(app, right[0]);
-    if variables_area != right[0] {
-        areas.add_focus_panel(Focus::Variables, right[0]);
-    }
+    register_hit_area(app, right[0], &mut areas);
     areas.add_panel(
         Focus::Variables,
         variables_area,
@@ -143,21 +162,119 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) -> UiAreas {
         2,
     );
     if app.extension_panels.is_empty() && app.extension_actions.is_empty() {
-        areas.add_focus_panel(Focus::Timeline, right[1]);
+        if app.show_timeline {
+            areas.add_focus_panel(Focus::Timeline, right[1]);
+        }
     } else {
         areas.add_focus_panel(Focus::Extensions, right[1]);
-        areas.add_focus_panel(Focus::Timeline, right[2]);
+        if app.show_timeline {
+            areas.add_focus_panel(Focus::Timeline, right[2]);
+        }
     }
 
+    draw_pane_expanders(frame, app, &mut areas);
     draw_prompt(frame, app, rows[2]);
     draw_hints(frame, rows[3]);
     if app.show_help {
-        draw_help(frame, root);
+        draw_help(frame, app, root);
     }
     draw_breakpoint_target_picker(frame, app, root, &mut areas);
     draw_signal_picker(frame, app, root, &mut areas);
+    draw_breakpoint_hits(frame, app, root, &mut areas);
     explorer::draw(frame, app, root, &mut areas);
     areas
+}
+
+fn draw_pane_expanders(frame: &mut Frame<'_>, app: &App, areas: &mut UiAreas) {
+    for panel in &areas.panels {
+        let label = if app.expanded_pane && app.focus == panel.focus {
+            "[Restore]"
+        } else {
+            "[Expand]"
+        };
+        let width = label.len() as u16;
+        if panel.area.width < width + 4 || panel.area.height < 3 {
+            continue;
+        }
+        let button = Rect::new(
+            panel.area.right() - width - 1,
+            panel.area.bottom() - 1,
+            width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(label).style(Style::default().fg(ACCENT)),
+            button,
+        );
+        areas.pane_expanders.push((panel.focus, button));
+    }
+}
+
+fn draw_breakpoint_hits(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiAreas) {
+    let Some(picker) = app.breakpoint_hit_picker.as_ref() else {
+        return;
+    };
+    let area = centered(root, 94, 80);
+    frame.render_widget(Clear, area);
+    let block = panel_block("Paused breakpoint hits · select a thread", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let height = rows[0].height as usize;
+    let first = picker.cursor.saturating_sub(height.saturating_sub(1));
+    let items = picker
+        .hits
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, hit)| {
+            let name = app
+                .threads
+                .iter()
+                .find(|thread| thread.id == hit.thread_id)
+                .map(|thread| thread.name.as_str())
+                .unwrap_or(&hit.thread_id);
+            let label = format!(
+                "{} · {} · {} · stop {}",
+                session_display_name(app, &hit.session_id),
+                name,
+                hit.thread_id,
+                hit.revision
+            );
+            areas.breakpoint_hit_rows.push((
+                index,
+                Rect::new(
+                    rows[0].x,
+                    rows[0].y + (index - first) as u16,
+                    rows[0].width,
+                    1,
+                ),
+            ));
+            ListItem::new(terminal_text(&label))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    if !items.is_empty() {
+        state.select(Some(picker.cursor - first));
+    }
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_symbol("▸ ")
+            .highlight_style(Style::default().bg(Color::Rgb(38, 79, 120))),
+        rows[0],
+        &mut state,
+    );
+    frame.render_widget(
+        Paragraph::new("[Cancel]  Enter/click opens frame · arrows/j/k select"),
+        rows[1],
+    );
+    areas.breakpoint_hit_cancel = Some(Rect::new(
+        rows[1].x,
+        rows[1].y,
+        rows[1].width.min(8),
+        rows[1].height,
+    ));
 }
 
 fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -199,6 +316,7 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
         (Control::Next, "↷ Next".to_string(), 8),
         (Control::StepIn, "↓ Into".to_string(), 8),
         (Control::StepOut, "↑ Out".to_string(), 7),
+        (Control::RevealFrame, "Frame F8".to_string(), 10),
         (Control::RefreshStack, "↻ DDB stack".to_string(), 12),
         (
             Control::CycleScope,
@@ -212,7 +330,7 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
         Control::RefreshStack => app
             .capabilities
             .supports_ddb_feature("distributed_backtrace"),
-        Control::CycleScope | Control::Refresh => true,
+        Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
         control => control
             .action_name()
             .is_some_and(|action| app.capabilities.supports_execution(action)),
@@ -270,7 +388,7 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
     );
 }
 
-fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let focus = if app.focus == Focus::Extensions
         && app.extension_panels.is_empty()
         && app.extension_actions.is_empty()
@@ -285,8 +403,11 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut 
         Focus::Source => draw_source(frame, app, area, areas),
         Focus::Stack => draw_stack(frame, app, area),
         Focus::Variables => draw_variables(frame, app, area),
+        Focus::Registers => draw_registers(frame, app, area),
+        Focus::Memory => draw_memory(frame, app, area),
         Focus::Extensions => draw_extensions(frame, app, area, areas),
         Focus::Timeline => draw_timeline(frame, app, area),
+        Focus::Output => draw_output(frame, app, area),
     }
     let (hit_area, first_item, item_height) = match focus {
         Focus::Threads => (
@@ -300,6 +421,16 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut 
             1,
         ),
         Focus::Breakpoints => (area, 0, 0),
+        Focus::Registers => (
+            area,
+            list_first(app.selected_register, app.registers.len(), area, 1),
+            1,
+        ),
+        Focus::Memory => (
+            area,
+            list_first(app.selected_memory_row, app.memory_row_count(), area, 1),
+            1,
+        ),
         Focus::Source => (area, source_start(app), 1),
         Focus::Stack => (
             area,
@@ -319,7 +450,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut 
                 2,
             )
         }
-        Focus::Extensions | Focus::Timeline => (area, 0, 0),
+        Focus::Extensions | Focus::Timeline | Focus::Output => (area, 0, 0),
     };
     if focus == Focus::Breakpoints {
         // Hierarchical breakpoint hit rows are registered by draw_breakpoints.
@@ -328,15 +459,15 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut 
     } else {
         areas.add_panel(focus, hit_area, first_item, item_height);
         if focus == Focus::Variables && hit_area != area {
-            areas.add_focus_panel(focus, area);
+            register_hit_area(app, area, areas);
         }
     }
 }
 
-fn draw_threads(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let rows = app.topology_rows();
     let selected = app.selected_topology_row();
-    let items = rows
+    let lines = rows
         .iter()
         .map(|row| {
             let (icon, label_color) = match row.kind {
@@ -350,7 +481,7 @@ fn draw_threads(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Some("failed") => RED,
                 _ => MUTED,
             };
-            ListItem::new(Line::from(vec![
+            Line::from(vec![
                 Span::raw("  ".repeat(row.depth)),
                 Span::styled(format!("{icon} "), Style::default().fg(label_color)),
                 Span::styled(terminal_text(&row.label), Style::default().fg(label_color)),
@@ -369,9 +500,17 @@ fn draw_threads(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     },
                     Style::default().fg(MUTED),
                 ),
-            ]))
+            ])
         })
         .collect::<Vec<_>>();
+    app.topology_viewport.fit(
+        lines.iter().map(Line::width).max().unwrap_or(0),
+        area.width.saturating_sub(4) as usize,
+    );
+    let items = lines
+        .into_iter()
+        .map(|line| ListItem::new(horizontal_line(line, app.topology_viewport.column())))
+        .collect();
     draw_selectable_list(
         frame,
         area,
@@ -382,9 +521,14 @@ fn draw_threads(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let mut rows = Vec::new();
+    let hits = app.breakpoint_hits();
     for (index, breakpoint) in app.breakpoints.iter().enumerate() {
+        let current_hits = hits
+            .iter()
+            .filter(|hit| hit.breakpoint_id == breakpoint.id)
+            .collect::<Vec<_>>();
         let mut attributes = Vec::new();
         if breakpoint.temporary {
             attributes.push("temporary".to_string());
@@ -411,7 +555,16 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut Ui
         let scope = breakpoint_target_label(app, breakpoint.target.as_ref());
         rows.push((
             index,
-            ListItem::new(Line::from(vec![
+            None,
+            Line::from(vec![
+                Span::styled(
+                    if current_hits.is_empty() {
+                        String::new()
+                    } else {
+                        format!("▶ {} paused · ", current_hits.len())
+                    },
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     if breakpoint.enabled { "● " } else { "○ " },
                     Style::default().fg(if breakpoint.enabled { RED } else { MUTED }),
@@ -437,9 +590,13 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut Ui
                         .unwrap_or_default(),
                     Style::default().fg(MUTED),
                 ),
-            ])),
+            ]),
         ));
-        for member in &breakpoint.sub_breakpoints {
+        for (site, member) in breakpoint.sub_breakpoints.iter().enumerate() {
+            let site_hits = current_hits
+                .iter()
+                .filter(|hit| hit.matches_member(breakpoint, member))
+                .count();
             let session = session_display_name(app, &member.session_id);
             let location = member
                 .location
@@ -463,7 +620,16 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut Ui
                 .unwrap_or_default();
             rows.push((
                 index,
-                ListItem::new(Line::from(vec![
+                Some(site),
+                Line::from(vec![
+                    Span::styled(
+                        if site_hits == 0 {
+                            String::new()
+                        } else {
+                            format!("▶ {site_hits} paused · ")
+                        },
+                        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled("  ↳ ", Style::default().fg(MUTED)),
                     Span::styled(session, Style::default().fg(Color::White)),
                     Span::styled(
@@ -479,17 +645,32 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut Ui
                         ),
                         Style::default().fg(if member.verified { GREEN } else { YELLOW }),
                     ),
-                ])),
+                ]),
             ));
         }
     }
     let selected = rows
         .iter()
-        .position(|(index, _)| *index == app.selected_breakpoint)
+        .position(|(index, site, _)| {
+            *index == app.selected_breakpoint && *site == app.selected_breakpoint_site
+        })
         .unwrap_or(0);
     let first = list_first(selected, rows.len(), area, 1);
-    let parents = rows.iter().map(|(index, _)| *index).collect::<Vec<_>>();
-    let items = rows.into_iter().map(|(_, item)| item).collect::<Vec<_>>();
+    app.breakpoint_viewport.fit(
+        rows.iter()
+            .map(|(_, _, line)| line.width())
+            .max()
+            .unwrap_or(0),
+        area.width.saturating_sub(4) as usize,
+    );
+    let parents = rows
+        .iter()
+        .map(|(index, site, _)| (*index, *site))
+        .collect::<Vec<_>>();
+    let items = rows
+        .into_iter()
+        .map(|(_, _, line)| ListItem::new(horizontal_line(line, app.breakpoint_viewport.column())))
+        .collect::<Vec<_>>();
     draw_selectable_list(
         frame,
         area,
@@ -504,7 +685,12 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut Ui
         vertical: 1,
     });
     let end = (first + inner.height as usize).min(parents.len());
-    for (row, parent) in parents[first..end].iter().enumerate() {
+    for (row, (parent, site)) in parents[first..end].iter().enumerate() {
+        areas.breakpoint_sites.push((
+            *parent,
+            *site,
+            Rect::new(inner.x, inner.y.saturating_add(row as u16), inner.width, 1),
+        ));
         areas.breakpoint_rows.push((
             *parent,
             Rect::new(inner.x, inner.y.saturating_add(row as u16), inner.width, 1),
@@ -565,7 +751,7 @@ fn breakpoint_target_label(app: &App, value: Option<&v2::Target>) -> String {
     }
 }
 
-fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let source_label = app
         .source_browser
         .document()
@@ -620,6 +806,16 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
             open,
         );
         areas.source_explorer_open = Some(open);
+    }
+    app.source_browser.fit_viewport(inner.height as usize);
+    app.source_browser
+        .fit_horizontal(inner.width.saturating_sub(12) as usize);
+    if let Some(error) = app.source_browser.error() {
+        frame.render_widget(Paragraph::new(format!(
+            "Source unavailable\n\n{}\n\nF8: retry selected frame | o: browse source roots | Ctrl-P: debugger files",
+            terminal_text(error)
+        )).wrap(Wrap { trim: false }).style(Style::default().fg(RED)), inner);
+        return;
     }
     let Some(source) = app.source_browser.document() else {
         frame.render_widget(
@@ -699,7 +895,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
                     format!(" {:>5} │ ", line_number),
                     Style::default().fg(MUTED),
                 ),
-                Span::raw(terminal_text(text)),
+                Span::raw(horizontal_text(text, source.column)),
             ])
             .style(style)
         })
@@ -719,8 +915,8 @@ fn draw_source(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas
     }
 }
 
-fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let items = app
+fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let lines = app
         .frames
         .iter()
         .map(|stack_frame| {
@@ -732,7 +928,7 @@ fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .filter(|name| !name.is_empty())
                 .unwrap_or(stack_frame.session_id.as_str());
             if stack_frame.boundary {
-                return ListItem::new(Line::from(vec![
+                return Line::from(vec![
                     Span::styled("── ", Style::default().fg(YELLOW)),
                     Span::styled(
                         terminal_text(&stack_frame.function),
@@ -746,9 +942,9 @@ fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
                         ),
                         Style::default().fg(MUTED),
                     ),
-                ]));
+                ]);
             }
-            ListItem::new(Line::from(vec![
+            Line::from(vec![
                 Span::styled(
                     format!("#{:<3}", stack_frame.distributed_index),
                     Style::default().fg(ACCENT),
@@ -768,9 +964,17 @@ fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     ),
                     Style::default().fg(MUTED),
                 ),
-            ]))
+            ])
         })
         .collect::<Vec<_>>();
+    app.stack_viewport.fit(
+        lines.iter().map(Line::width).max().unwrap_or(0),
+        area.width.saturating_sub(4) as usize,
+    );
+    let items = lines
+        .into_iter()
+        .map(|line| ListItem::new(horizontal_line(line, app.stack_viewport.column())))
+        .collect();
     let stack_title = if app.distributed_stack_truncation.is_some() {
         "DDB Distributed Call Stack · TRUNCATED"
     } else {
@@ -786,9 +990,9 @@ fn draw_stack(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn draw_variables(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_variables(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let (variables_area, registers_area, memory_area) = inspection_areas(app, area);
-    let items = app
+    let rows = app
         .variables
         .iter()
         .map(|variable| {
@@ -804,7 +1008,7 @@ fn draw_variables(frame: &mut Frame<'_>, app: &App, area: Rect) {
             } else {
                 "  "
             };
-            ListItem::new(vec![
+            vec![
                 Line::from(vec![
                     Span::raw(indent.clone()),
                     Span::styled(disclosure, Style::default().fg(YELLOW)),
@@ -830,13 +1034,32 @@ fn draw_variables(frame: &mut Frame<'_>, app: &App, area: Rect) {
                         Style::default().fg(MUTED),
                     ),
                 ]),
-            ])
+            ]
         })
         .collect::<Vec<_>>();
+    app.variable_viewport.fit(
+        rows.iter().flatten().map(Line::width).max().unwrap_or(0),
+        variables_area.width.saturating_sub(4) as usize,
+    );
+    let items = rows
+        .into_iter()
+        .map(|lines| {
+            ListItem::new(
+                lines
+                    .into_iter()
+                    .map(|line| horizontal_line(line, app.variable_viewport.column()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
     draw_selectable_list(
         frame,
         variables_area,
-        title(app, Focus::Variables, "Variables / Scopes · Enter expand"),
+        title(
+            app,
+            Focus::Variables,
+            "Variables / Watches · w add · Enter expand",
+        ),
         items,
         app.selected_variable,
         app.focus == Focus::Variables,
@@ -874,10 +1097,7 @@ fn inspection_areas(app: &App, area: Rect) -> (Rect, Option<Rect>, Option<Rect>)
     }
 }
 
-fn draw_registers(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let block = panel_block("Registers", app.focus == Focus::Variables);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+fn draw_registers(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let lines = app
         .registers
         .iter()
@@ -894,29 +1114,62 @@ fn draw_registers(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ])
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines), inner);
+    app.register_viewport.fit(
+        lines.iter().map(Line::width).max().unwrap_or(0),
+        usize::from(area.width.saturating_sub(4)),
+    );
+    let lines = lines
+        .into_iter()
+        .map(|line| ListItem::new(horizontal_line(line, app.register_viewport.column())))
+        .collect();
+    draw_selectable_list(
+        frame,
+        area,
+        "Registers".into(),
+        lines,
+        app.selected_register,
+        app.focus == Focus::Registers,
+    );
+}
+
+fn register_hit_area(app: &App, area: Rect, areas: &mut UiAreas) {
+    let (_, registers, memory) = inspection_areas(app, area);
+    if let Some(area) = registers {
+        areas.add_panel(
+            Focus::Registers,
+            area,
+            list_first(app.selected_register, app.registers.len(), area, 1),
+            1,
+        );
+    }
+    if let Some(area) = memory {
+        areas.add_panel(
+            Focus::Memory,
+            area,
+            list_first(app.selected_memory_row, app.memory_row_count(), area, 1),
+            1,
+        );
+    }
 }
 
 fn variable_list_area(app: &App, area: Rect) -> Rect {
     inspection_areas(app, area).0
 }
 
-fn draw_memory(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_memory(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let byte_count = app
         .memory
         .iter()
         .map(|block| block.bytes.len())
         .sum::<usize>();
     let memory_title = format!("Raw Memory · {byte_count} B");
-    let block = panel_block(&memory_title, app.focus == Focus::Variables);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
     let mut lines = Vec::new();
     for memory in &app.memory {
         let base = u64::from_str_radix(memory.begin.trim_start_matches("0x"), 16).ok();
         for (row, bytes) in memory.bytes.chunks(16).enumerate() {
             let address = base
-                .map(|base| format!("{:016x}", base + (row * 16) as u64))
+                .and_then(|base| base.checked_add((row * 16) as u64))
+                .map(|address| format!("{address:016x}"))
                 .unwrap_or_else(|| format!("{}+{:x}", terminal_text(&memory.begin), row * 16));
             let hex = bytes
                 .iter()
@@ -940,7 +1193,44 @@ fn draw_memory(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ]));
         }
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    app.memory_viewport.fit(
+        lines.iter().map(Line::width).max().unwrap_or(0),
+        area.width.saturating_sub(4) as usize,
+    );
+    let items = lines
+        .into_iter()
+        .map(|line| ListItem::new(horizontal_line(line, app.memory_viewport.column())))
+        .collect();
+    draw_selectable_list(
+        frame,
+        area,
+        memory_title,
+        items,
+        app.selected_memory_row,
+        app.focus == Focus::Memory,
+    );
+}
+
+fn draw_output(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let mode = if app.output.following() {
+        "live"
+    } else {
+        "history"
+    };
+    let label = format!(
+        "Output · {mode} · O hide · End follow · {} lines evicted",
+        app.output.dropped
+    );
+    let block = panel_block(&label, app.focus == Focus::Output);
+    let inner = block.inner(area);
+    app.output.fit(inner.width as usize, inner.height as usize);
+    let lines = app
+        .output
+        .visible_lines()
+        .map(|line| Line::from(horizontal_text(line, app.output.column())))
+        .collect::<Vec<_>>();
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_timeline(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1068,11 +1358,18 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let (title, prefix, color) = match app.input_mode {
         InputMode::Command => ("Command", ":", ACCENT),
         InputMode::Evaluate => ("Evaluate", "e> ", GREEN),
+        InputMode::Watch => ("Add watch expression", "w> ", GREEN),
+        InputMode::AssignVariable => ("Assign selected variable (Esc cancels)", "= ", YELLOW),
         InputMode::Memory => ("Read memory", "m> ", YELLOW),
-        InputMode::Jump => ("Jump location", "j> ", YELLOW),
+        InputMode::Jump => ("Jump execution location", "J> ", YELLOW),
         InputMode::Signal => ("Send signal", "s> ", RED),
         InputMode::GotoLine => ("Open source (line or path:line)", "g> ", ACCENT),
-        InputMode::Breakpoint => ("Breakpoint options (-t -h if CONDITION)", "B> ", RED),
+        InputMode::Breakpoint => (
+            "Breakpoint (-t -h --ignore-count N if CONDITION)",
+            "B> ",
+            RED,
+        ),
+        InputMode::FunctionBreakpoint => ("Function breakpoint (symbol [ -- OPTIONS])", "F> ", RED),
         InputMode::ExtensionAction => ("Extension action JSON", "a> ", ACCENT),
         InputMode::Normal => ("Status", "", MUTED),
     };
@@ -1107,17 +1404,6 @@ fn input_line(prefix: &str, input: &str, cursor: usize, color: Color) -> Line<'s
         Span::styled(current, Style::default().fg(Color::Black).bg(color)),
         Span::styled(after, Style::default().fg(color)),
     ])
-}
-
-fn terminal_text(input: &str) -> String {
-    input
-        .chars()
-        .map(|character| match character {
-            '\t' => ' ',
-            character if character.is_control() => '�',
-            character => character,
-        })
-        .collect()
 }
 
 fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
@@ -1304,32 +1590,60 @@ fn draw_breakpoint_target_picker(
     areas.breakpoint_target_apply = Some(actions[1]);
     areas.breakpoint_target_cancel = Some(actions[2]);
 }
-fn draw_help(frame: &mut Frame<'_>, root: Rect) {
-    let area = centered(root, 70, 76);
+fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
+    let area = centered(root, 96, 94);
     frame.render_widget(Clear, area);
+    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(inner);
     let text = vec![
         Line::from(Span::styled(
             "DDB TUI shortcuts",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from(Span::styled("Execution", Style::default().fg(ACCENT))),
         Line::from("F5 continue     F6 pause       F10 next"),
         Line::from("F11 step in     Shift+F11 out"),
+        Line::from("F8 reveal selected stack frame in Source"),
+        Line::from("c cycle target: thread / session / group / all"),
+        Line::from("s choose signal; J opens the execution-jump prompt"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Source and breakpoints",
+            Style::default().fg(ACCENT),
+        )),
         Line::from("source gutter: ▶ execution  ▸ cursor  ● breakpoint"),
         Line::from("b toggle breakpoint at source cursor"),
-        Line::from("B conditional/temporary/hardware breakpoint"),
+        Line::from("B conditional/temporary/hardware/ignore-count breakpoint"),
+        Line::from("Breakpoints: P/right-click picks a paused hit; Enter/click opens source"),
+        Line::from("F function breakpoint, then choose session/group targets"),
         Line::from("Delete remove selected breakpoint"),
         Line::from("x / Space enable or disable selected breakpoint"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Inspection and navigation",
+            Style::default().fg(ACCENT),
+        )),
         Line::from("d refresh DDB distributed stack   e evaluate expression"),
-        Line::from("c cycle execution scope: thread → session → group → all"),
+        Line::from("Variables: = assign the selected value; Esc cancels"),
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
-        Line::from("g open source: line or path:line   j jump execution   s signal"),
+        Line::from("memory: Up/Down or wheel browse rows; Left/Right scroll columns; Home resets; z expand"),
+        Line::from("g open source: line or path:line   J jump execution   s signal"),
+        Line::from("j/k or Up/Down navigate; Page Up/Down moves one visible page"),
         Line::from("source: f follow execution   Alt+Left/Right navigation history"),
+        Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
+        Line::from("w add watch; Variables: Delete removes a watch; Enter expands"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: arrows select; a/Enter/click invokes declared action"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),
-        Line::from(": raw DDB/MI command            r refresh"),
+        Line::from(": native debugger command in selected frame   r refresh"),
         Line::from("Tab / Shift+Tab move focus      arrows / wheel navigate"),
+        Line::from("z expand/restore pane   Esc restore   t toggle timeline"),
+        Line::from("O output pane; Up/Down/Page scroll; Home oldest; End follow; Left/Right"),
+        Line::from("registers: Up/Down browse; Left/Right or horizontal wheel scroll; Home resets; z expand"),
+        Line::from("Topology/Breakpoints/Stack/Variables: Left/Right scroll; Home resets"),
         Line::from("click a panel or toolbar control to activate it"),
         Line::from(""),
         Line::from(Span::styled(
@@ -1337,11 +1651,24 @@ fn draw_help(frame: &mut Frame<'_>, root: Rect) {
             Style::default().fg(YELLOW),
         )),
     ];
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    app.help_page_height = usize::from(rows[0].height).max(1);
+    app.help_max_scroll = paragraph
+        .line_count(rows[0].width.max(1))
+        .saturating_sub(app.help_page_height);
+    app.help_scroll = app.help_scroll.min(app.help_max_scroll);
     frame.render_widget(
-        Paragraph::new(text)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title(" Help ")),
-        area,
+        paragraph.scroll((app.help_scroll.min(u16::MAX as usize) as u16, 0)),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Up/Down, PgUp/PgDn, wheel | {}/{}\nEsc or ? closes help",
+            app.help_scroll + 1,
+            app.help_max_scroll + 1
+        ))
+        .style(Style::default().fg(YELLOW)),
+        rows[1],
     );
 }
 
@@ -1515,7 +1842,272 @@ mod v2_tests {
         let screen = render(&mut app, 140, 40);
         assert!(!screen.to_lowercase().contains("proclet"));
         assert!(!screen.contains("Extensions"));
+        assert!(!screen.contains("DDB Timeline"));
+    }
+
+    #[test]
+    fn output_pane_reveals_multiline_and_long_output_without_timeline() {
+        let mut app = App::new("http://localhost".into());
+        app.show_output = true;
+        app.output.push("output first line\noutput second line");
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("output first line") && screen.contains("output second line"));
+        assert!(!screen.contains("DDB Timeline"));
+        assert!(app
+            .areas
+            .panels
+            .iter()
+            .any(|pane| pane.focus == Focus::Output));
+        app.focus = Focus::Output;
+        app.expanded_pane = true;
+        app.output.push(&format!("{}OUTPUT_END", "界".repeat(100)));
+        assert!(!render(&mut app, 45, 14).contains("OUTPUT_END"));
+        app.output.scroll_horizontal(isize::MAX);
+        assert!(render(&mut app, 45, 14).contains("OUTPUT_END"));
+    }
+
+    #[test]
+    fn horizontal_inspection_scrolling_reveals_clipped_text_and_clamps_on_resize() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Variables;
+        app.expanded_pane = true;
+        app.apply_variables(vec![v2::Variable {
+            variable_id: "long/value".into(),
+            name: "message".into(),
+            value: format!("{}VALUE_END", "界".repeat(50)),
+            ..Default::default()
+        }]);
+        assert!(!render(&mut app, 45, 14).contains("VALUE_END"));
+        app.variable_viewport.scroll(isize::MAX);
+        assert!(render(&mut app, 45, 14).contains("VALUE_END"));
+        assert_eq!(app.selected_variable, 0);
+        render(&mut app, 200, 40);
+        assert_eq!(app.variable_viewport.column(), 0);
+        app.frames.push(crate::model::StackFrame {
+            id: "frame/long".into(),
+            distributed_index: 0,
+            session_id: String::new(),
+            thread_id: "thread/long".into(),
+            level: 0,
+            address: "STACK_END".into(),
+            function: "long_function_".repeat(10),
+            file: None,
+            line: None,
+            boundary: false,
+        });
+        app.focus = Focus::Stack;
+        assert!(!render(&mut app, 45, 14).contains("STACK_END"));
+        app.stack_viewport.scroll(isize::MAX);
+        assert!(render(&mut app, 45, 14).contains("STACK_END"));
+        assert_eq!(app.selected_frame, 0);
+        app.frames.clear();
+        render(&mut app, 45, 14);
+        assert_eq!(app.stack_viewport.column(), 0);
+    }
+
+    #[test]
+    fn pane_expansion_buttons_are_visible_on_borders_and_fit_small_terminals() {
+        let mut app = App::new("http://localhost".into());
+        assert!(render(&mut app, 140, 40).contains("[Expand]"));
+        for (focus, button) in &app.areas.pane_expanders {
+            let pane = app.areas.panels.iter().find(|p| p.focus == *focus).unwrap();
+            assert_eq!(button.y, pane.area.bottom() - 1);
+            assert!(button.right() < pane.area.right());
+            assert!(app.areas.item_at(button.x, button.y).is_none());
+        }
+        app.expanded_pane = true;
+        assert!(render(&mut app, 140, 40).contains("[Restore]"));
+        assert_eq!(app.areas.pane_expanders.len(), 1);
+        for (width, height) in [(1, 1), (8, 5), (45, 14)] {
+            render(&mut app, width, height);
+            for (_, button) in &app.areas.pane_expanders {
+                assert!(button.right() <= width && button.bottom() <= height);
+            }
+        }
+    }
+
+    #[test]
+    fn timeline_is_optional_and_expansion_uses_the_available_width() {
+        let mut app = App::new("http://localhost".into());
+        app.push_timeline("retained diagnostic event");
+        render(&mut app, 140, 40);
+        assert!(!app.areas.panels.iter().any(|p| p.focus == Focus::Timeline));
+        let normal = app
+            .areas
+            .panels
+            .iter()
+            .find(|p| p.focus == Focus::Source)
+            .unwrap()
+            .area;
+        app.expanded_pane = true;
+        render(&mut app, 140, 40);
+        assert_eq!(app.areas.panels.len(), 1);
+        assert!(app.areas.panels[0].area.width > normal.width);
+        app.expanded_pane = false;
+        app.show_timeline = true;
+        let screen = render(&mut app, 140, 40);
         assert!(screen.contains("DDB Timeline"));
+        assert!(screen.contains("retained diagnostic event"));
+        assert!(app.areas.panels.iter().any(|p| p.focus == Focus::Timeline));
+    }
+
+    #[test]
+    fn frame_toolbar_control_is_mouse_addressable() {
+        let mut app = App::new("http://localhost".into());
+        assert!(render(&mut app, 140, 40).contains("Frame F8"));
+        let (_, area) = app
+            .areas
+            .controls
+            .iter()
+            .find(|(control, _)| *control == Control::RevealFrame)
+            .unwrap();
+        assert_eq!(
+            app.areas.control_at(area.x, area.y),
+            Some(Control::RevealFrame)
+        );
+    }
+
+    #[test]
+    fn memory_pane_reaches_last_row_and_ascii_then_reclamps_on_expand() {
+        let mut app = App::new("http://localhost".into());
+        let mut bytes = vec![b'A'; 80 * 16];
+        bytes[79 * 16..].copy_from_slice(b"LAST_MEMORY_ROW!");
+        app.apply_memory(v2::MemoryBlock {
+            address: "0x1000".into(),
+            data: bytes,
+            ..Default::default()
+        });
+        app.focus = Focus::Memory;
+        app.move_selection(79);
+        assert!(render(&mut app, 140, 40).contains("00000000000014f0"));
+        let pane = app
+            .areas
+            .panels
+            .iter()
+            .find(|panel| panel.focus == Focus::Memory)
+            .unwrap();
+        assert!(pane.first_item > 0);
+        assert_eq!(
+            app.areas.item_at(pane.area.x + 1, pane.area.y + 1),
+            Some((Focus::Memory, pane.first_item))
+        );
+        app.memory_viewport.scroll(isize::MAX);
+        assert!(render(&mut app, 140, 40).contains("|LAST_MEMORY_ROW!|"));
+        assert!(app.memory_viewport.column() > 0);
+        app.expanded_pane = true;
+        let expanded = render(&mut app, 140, 40);
+        assert_eq!(app.memory_viewport.column(), 0);
+        assert!(expanded.contains("00000000000014f0"));
+        assert!(expanded.contains("|LAST_MEMORY_ROW!|"));
+        assert_eq!(app.areas.panels.len(), 1);
+        assert_eq!(app.areas.panels[0].focus, Focus::Memory);
+        render(&mut app, 1, 1);
+        app.apply_memory(v2::MemoryBlock::default());
+        assert_eq!(app.selected_memory_row, 0);
+        assert_eq!(app.memory_viewport.column(), 0);
+    }
+
+    #[test]
+    fn memory_rendering_handles_address_overflow_without_panicking() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_memory(v2::MemoryBlock {
+            address: "0xfffffffffffffff8".into(),
+            data: vec![0x41; 32],
+            ..Default::default()
+        });
+        app.focus = Focus::Memory;
+        app.expanded_pane = true;
+        assert!(render(&mut app, 140, 40).contains("0xfffffffffffffff8+10"));
+    }
+
+    #[test]
+    fn register_horizontal_offset_reclamps_when_expanded() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_registers(vec![v2::Register {
+            name: "vector".into(),
+            value: format!("{}END", "界".repeat(30)),
+            ..Default::default()
+        }]);
+        app.focus = Focus::Registers;
+        render(&mut app, 140, 40);
+        app.register_viewport.scroll(isize::MAX);
+        assert!(app.register_viewport.column() > 0);
+        assert!(render(&mut app, 140, 40).contains("END"));
+        app.expanded_pane = true;
+        let screen = render(&mut app, 140, 40);
+        assert_eq!(app.register_viewport.column(), 0);
+        // TestBackend retains an empty cell after each double-width glyph.
+        assert!(screen.contains(&format!("vector {}END", "界 ".repeat(30))));
+    }
+
+    #[test]
+    fn register_pane_has_independent_mouse_focus() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_registers(
+            (0..100)
+                .map(|n| v2::Register {
+                    name: format!("r{n}"),
+                    value: format!("value{n}"),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        render(&mut app, 140, 40);
+        // The register pane occupies the lower part of the inspection column.
+        assert_eq!(app.areas.panel_at(130, 30), Some(Focus::Registers));
+        app.focus = Focus::Registers;
+        app.move_selection(99);
+        assert!(render(&mut app, 140, 40).contains("value99"));
+        let pane = app
+            .areas
+            .panels
+            .iter()
+            .find(|p| p.focus == Focus::Registers)
+            .unwrap();
+        assert!(pane.first_item > 0);
+        assert_eq!(
+            app.areas.item_at(pane.area.x + 1, pane.area.y + 1),
+            Some((Focus::Registers, pane.first_item))
+        );
+        app.expanded_pane = true;
+        assert!(render(&mut app, 140, 40).contains("value99"));
+        assert_eq!(app.areas.panels.len(), 1);
+        assert_eq!(app.areas.panels[0].focus, Focus::Registers);
+        app.apply_registers(Vec::new());
+        assert_eq!(app.selected_register, 0);
+        render(&mut app, 30, 10);
+    }
+
+    #[test]
+    fn help_wraps_scrolls_and_reclamps_after_resize() {
+        let mut app = App::new("http://localhost".into());
+        app.show_help = true;
+        let first = render(&mut app, 45, 14);
+        assert!(first.contains("DDB TUI shortcuts"));
+        assert!(first.contains("Esc or ? closes help"));
+        assert!(app.help_max_scroll > 0);
+        app.help_scroll = usize::MAX;
+        let last = render(&mut app, 45, 14);
+        assert_eq!(app.help_scroll, app.help_max_scroll);
+        assert!(last.contains("Press ? or Esc to close"));
+        render(&mut app, 200, 100);
+        assert_eq!(app.help_scroll, 0);
+        assert_eq!(app.help_max_scroll, 0);
+        for (width, height) in [(1, 1), (10, 3), (20, 8)] {
+            render(&mut app, width, height);
+        }
+    }
+
+    #[test]
+    fn missing_source_is_visible_in_source_pane() {
+        let mut app = App::new("http://localhost".into());
+        app.expanded_pane = true;
+        app.source_browser
+            .unavailable("/build/greeter_server.cc: permission denied".into());
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.contains("Source unavailable"));
+        assert!(screen.contains("permission denied"));
+        assert!(screen.contains("F8: retry selected frame"));
     }
 
     #[test]
@@ -1605,6 +2197,7 @@ mod v2_tests {
     #[test]
     fn timeline_keeps_the_newest_wrapped_event_visible() {
         let mut app = App::new("http://127.0.0.1:5000".to_string());
+        app.show_timeline = true;
         app.push_timeline(format!("receipt {}", "x".repeat(500)));
         for index in 1..=5 {
             app.push_timeline(format!("event {index}"));
@@ -1667,7 +2260,10 @@ mod v2_tests {
                     ..Default::default()
                 }),
                 start_line: 1,
-                content: "first\nexecuting\nselected\nlast".to_string(),
+                content: format!(
+                    "first\nexecuting{}RIGHT_EDGE\nselected\nlast",
+                    "x".repeat(150)
+                ),
                 line_count: 4,
                 has_more: false,
                 total_lines: 4,
@@ -1698,6 +2294,15 @@ mod v2_tests {
         assert!(screen.contains("▶       2 │ executing"), "{screen}");
         assert!(screen.contains("  ▸     3 │ selected"), "{screen}");
         assert!(screen.contains(" ●      4 │ last"), "{screen}");
+        assert!(!screen.contains("RIGHT_EDGE"));
+        let cursor = app.source_browser.document().unwrap().cursor;
+        app.source_browser.scroll_horizontal(isize::MAX);
+        let shifted = render(&mut app, 140, 40);
+        assert!(shifted.contains("RIGHT_EDGE"), "{shifted}");
+        assert!(shifted.contains("▶       2 │"), "{shifted}");
+        assert!(shifted.contains("  ▸     3 │"), "{shifted}");
+        assert!(shifted.contains(" ●      4 │"), "{shifted}");
+        assert_eq!(app.source_browser.document().unwrap().cursor, cursor);
         app.focus = Focus::Breakpoints;
         let breakpoint_screen = render(&mut app, 120, 24);
         assert!(
@@ -1708,7 +2313,100 @@ mod v2_tests {
             breakpoint_screen.contains("waiting for worker session"),
             "{breakpoint_screen}"
         );
+        app.breakpoints[0].message = Some(format!("{}BREAKPOINT_END", "x".repeat(100)));
+        assert!(!render(&mut app, 45, 14).contains("BREAKPOINT_END"));
+        let hit_rows = app.areas.breakpoint_sites.clone();
+        app.breakpoint_viewport.scroll(isize::MAX);
+        assert!(render(&mut app, 45, 14).contains("BREAKPOINT_END"));
+        assert_eq!(app.areas.breakpoint_sites, hit_rows);
+        assert_eq!(app.selected_breakpoint, 0);
     }
+    #[test]
+    fn breakpoint_current_hit_marker_clears_on_resume_despite_historical_hits() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Breakpoints;
+        app.apply_snapshot(v2::Snapshot {
+            sessions: vec![v2::Session {
+                session_id: "session/hit".into(),
+                ..Default::default()
+            }],
+            breakpoints: vec![v2::Breakpoint {
+                breakpoint_id: "breakpoint/hit".into(),
+                hit_count: 15,
+                spec: Some(v2::BreakpointSpec {
+                    enabled: Some(true),
+                    location: Some(v2::breakpoint_spec::Location::Function(
+                        v2::FunctionBreakpointLocation {
+                            function_name: "hit_here".into(),
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            execution_states: vec![v2::ExecutionState {
+                execution_state_id: "execution/hit".into(),
+                target: Some(crate::api::thread_target("thread/hit")),
+                revision: 2,
+                stop_reason: Some(v2::StopReason {
+                    kind: v2::StopReasonKind::Breakpoint as i32,
+                    breakpoint_id: Some("breakpoint/hit".into()),
+                    thread_id: Some("thread/hit".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread/hit".into(),
+            session_id: "session/hit".into(),
+            state: v2::ThreadState::Stopped as i32,
+            ..Default::default()
+        }]);
+        let screen = render(&mut app, 100, 24);
+        assert!(screen.contains("▶ 1 paused"), "{screen}");
+        assert!(screen.contains("hits:15"));
+        app.open_breakpoint_hits().unwrap();
+        assert!(render(&mut app, 100, 24).contains("Paused breakpoint hits"));
+        assert_eq!(app.areas.breakpoint_hit_rows.len(), 1);
+        assert!(app.areas.breakpoint_hit_cancel.is_some());
+        for (width, height) in [(1, 1), (8, 5), (45, 14)] {
+            render(&mut app, width, height);
+            for (_, row) in &app.areas.breakpoint_hit_rows {
+                assert!(row.right() <= width && row.bottom() <= height);
+            }
+        }
+        app.breakpoint_hit_picker = None;
+        app.mark_running(Some("thread/hit"));
+        let screen = render(&mut app, 100, 24);
+        assert!(!screen.contains("paused"), "{screen}");
+        assert!(screen.contains("hits:15"));
+    }
+
+    #[test]
+    fn topology_horizontal_scroll_reveals_long_session_labels_without_changing_target() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Threads;
+        app.apply_snapshot(v2::Snapshot {
+            sessions: vec![v2::Session {
+                session_id: "session/long".into(),
+                display_name: format!("{}SESSION_END", "worker_".repeat(20)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let target = app.execution_target.clone();
+        assert!(!render(&mut app, 45, 14).contains("SESSION_END"));
+        let selected = app.selected_topology_row();
+        app.topology_viewport.scroll(isize::MAX);
+        assert!(render(&mut app, 45, 14).contains("SESSION_END"));
+        assert_eq!(app.selected_topology_row(), selected);
+        assert_eq!(app.execution_target, target);
+        render(&mut app, 200, 24);
+        assert_eq!(app.topology_viewport.column(), 0);
+    }
+
     #[test]
     fn ddb_topology_and_target_picker_are_visible_and_mouse_addressable() {
         let mut app = App::new("http://127.0.0.1:5000".to_string());
@@ -1744,8 +2442,11 @@ mod v2_tests {
 
         app.breakpoint_target_picker = Some(BreakpointTargetPicker {
             draft: BreakpointDraft {
-                source: "/src/main.rs".to_string(),
-                line: 12,
+                location: v2::breakpoint_spec::Location::Source(v2::SourceBreakpointLocation {
+                    source: "/src/main.rs".into(),
+                    line: 12,
+                    column: 0,
+                }),
                 options: BreakpointOptions::default(),
             },
             choices: vec![

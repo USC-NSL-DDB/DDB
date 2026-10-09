@@ -22,6 +22,196 @@ const POLL: Duration = Duration::from_millis(50);
 static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
 static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
+struct OwnedTestProcess(Option<Child>);
+impl Drop for OwnedTestProcess {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            // A ptraced child may not be reapable until the debugger drops.
+            // Do not prevent the following DDB guard from running cleanup.
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
+fn greeter_auto_attach_all_stop_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK.lock().unwrap();
+    let workspace = PathBuf::from(
+        std::env::var_os("DDB_GREETER_WORKSPACE").expect("set DDB_GREETER_WORKSPACE"),
+    );
+    let discovery = fs::read_to_string("/tmp/ddb/service_discovery/config").unwrap();
+    let mut lines = discovery.lines();
+    let endpoint = lines
+        .next()
+        .unwrap()
+        .strip_prefix("tcp://127.0.0.1:")
+        .expect("test requires loopback discovery");
+    let broker_port: u16 = endpoint.parse().unwrap();
+    assert_eq!(lines.next(), Some("service_discovery/report"));
+    let reserved = TcpListener::bind(("127.0.0.1", broker_port))
+        .expect("discovery port is occupied; do not disturb an existing broker");
+    let directory = tempfile::tempdir().unwrap();
+    let broker_config = directory.path().join("mosquitto.conf");
+    fs::write(
+        &broker_config,
+        format!("listener {broker_port} 127.0.0.1\nallow_anonymous true\npersistence false\n"),
+    )
+    .unwrap();
+    drop(reserved);
+    let mut broker = OwnedTestProcess(Some(
+        Command::new("mosquitto")
+            .arg("-c")
+            .arg(&broker_config)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + TIMEOUT;
+    while std::net::TcpStream::connect(("127.0.0.1", broker_port)).is_err() {
+        assert!(broker.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "broker did not start");
+        thread::sleep(POLL);
+    }
+    let port = reserve_port();
+    let config = format!("Framework: grpc\nFrameFilter:\n  filter_preset: [cpp-stdlib, protobuf-gen, ddb-runtime]\nServiceDiscovery:\n  Broker:\n    hostname: 127.0.0.1\n    port: {broker_port}\nConf:\n  auto_shutdown: false\n  on_exit: kill\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: gdb\n", directory.path().display(), directory.path().display());
+    let app_port = reserve_port();
+    let spawn_app = |role: &str, argument: String| {
+        OwnedTestProcess(Some(
+            Command::new("ddb_runapp")
+                .arg(workspace.join("build").join(format!("greeter_{role}")))
+                .arg("--ddb")
+                .arg(format!("--ddb_proc_alias=tui-{role}"))
+                .arg(argument)
+                .current_dir(workspace.join("build"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        ))
+    };
+    let mut ddb = Ddb::spawn_config(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        directory,
+        port,
+        &config,
+        &[],
+    );
+    let mut tui = Tui::spawn(&ddb.base_url());
+    let _server = spawn_app("server", format!("--port={app_port}"));
+    ddb.wait_for_snapshot(|s| s.sessions.len() == 1 && !s.threads.is_empty());
+    tui.click_topology_thread("tui-server");
+    let server_source = workspace.join("greeter_server.cc");
+    let server_line = fs::read_to_string(&server_source)
+        .unwrap()
+        .lines()
+        .position(|line| line.contains("reply->set_message"))
+        .unwrap()
+        + 1;
+    tui.send(format!("g{}:{server_line}\r", server_source.display()).as_bytes());
+    tui.wait_for_source_marker('▸', server_line);
+    tui.send(b"b");
+    tui.wait_for("DDB breakpoint targets");
+    tui.send(b"\r");
+    ddb.wait_for_snapshot(|s| s.breakpoints.len() == 1 && s.breakpoints[0].verified);
+    tui.send(b"\x1b[15~");
+    ddb.wait_for_snapshot(|s| {
+        s.threads
+            .iter()
+            .any(|t| t.state == v2::ThreadState::Running as i32)
+    });
+    let deadline = Instant::now() + TIMEOUT;
+    while std::net::TcpStream::connect(("127.0.0.1", app_port)).is_err() {
+        assert!(Instant::now() < deadline, "greeter server did not listen");
+        thread::sleep(POLL);
+    }
+    let _client = spawn_app("client", format!("--target=127.0.0.1:{app_port}"));
+    ddb.wait_for_snapshot(|s| {
+        s.sessions.iter().any(|session| {
+            session.display_name.contains("tui-client")
+                && s.threads.iter().any(|thread| {
+                    thread.session_id == session.session_id
+                        && thread.state == v2::ThreadState::Stopped as i32
+                })
+        })
+    });
+    tui.click_topology_thread("tui-client");
+    let client_source = workspace.join("greeter_client.cc");
+    let client_line = fs::read_to_string(&client_source)
+        .unwrap()
+        .lines()
+        .position(|line| line.contains("Status status = stub_->SayHello"))
+        .unwrap()
+        + 1;
+    tui.send(format!("g{}:{client_line}\r", client_source.display()).as_bytes());
+    tui.wait_for_source_marker('▸', client_line);
+    tui.send(b"b");
+    tui.wait_for("DDB breakpoint targets");
+    tui.send(b"\r");
+    ddb.wait_for_snapshot(|s| s.breakpoints.len() == 2 && s.breakpoints.iter().all(|b| b.verified));
+    tui.send(b"ccc\x1b[15~");
+    ddb.wait_for_snapshot(|s| {
+        s.threads.iter().any(|t| {
+            t.location.as_ref().is_some_and(|l| {
+                l.path
+                    .as_ref()
+                    .is_some_and(|p| p.ends_with("greeter_client.cc"))
+                    && l.line == client_line as u32
+            })
+        }) && s
+            .threads
+            .iter()
+            .all(|t| t.state == v2::ThreadState::Stopped as i32)
+    });
+    tui.send(b"\x1b[15~");
+    ddb.wait_for_snapshot(|s| {
+        s.threads.iter().any(|t| {
+            t.location.as_ref().is_some_and(|l| {
+                l.path
+                    .as_ref()
+                    .is_some_and(|p| p.ends_with("greeter_server.cc"))
+                    && l.line == server_line as u32
+            })
+        }) && s
+            .threads
+            .iter()
+            .all(|t| t.state == v2::ThreadState::Stopped as i32)
+    });
+    tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+    let hit_row = tui
+        .frames
+        .lock()
+        .unwrap()
+        .back()
+        .unwrap()
+        .lines()
+        .position(|line| {
+            line.chars()
+                .take(33)
+                .collect::<String>()
+                .contains("▶ 1 paused")
+        })
+        .expect("server breakpoint should have a current hit")
+        + 1;
+    tui.send(format!("\x1b[<2;5;{hit_row}M\x1b[<2;5;{hit_row}m").as_bytes());
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Paused breakpoint hits") && screen.contains("tui-server (")
+    });
+    tui.clear_capture();
+    tui.send(b"\r");
+    tui.wait_for_source_marker('▶', server_line);
+    tui.quit();
+    ddb.shutdown();
+    assert_eq!(
+        fs::read_to_string("/tmp/ddb/service_discovery/config").unwrap(),
+        discovery
+    );
+}
+
 fn topology_thread_row(frame: &str, session_label: &str) -> Option<usize> {
     let mut under_session = false;
     frame.lines().enumerate().find_map(|(row, line)| {
@@ -342,8 +532,23 @@ Conf:
     tui.wait_for("zlong.txt");
     tui.send(b"zlong\r");
     tui.wait_for("large file line 1");
+    tui.send(b"j");
+    tui.wait_for_source_marker('▸', 2);
+    tui.send(b"k");
+    tui.wait_for_source_marker('▸', 1);
+    // At 140x40 the source pane contains twenty text rows, not a fixed
+    // ten-line paging step. Repeated keys also cross source-window loads.
+    let page_destination = 1 + 24 * 20;
     tui.send(&b"\x1b[6~".repeat(24));
-    tui.wait_for_source_marker('▸', 241);
+    tui.wait_for_source_marker('▸', page_destination);
+    // Crossing a source read boundary must not reset the cursor to row eight.
+    // Source content occupies terminal rows 5..24 in this fixed-size fixture.
+    tui.wait_for_current_frame(|frame| {
+        frame
+            .lines()
+            .nth(23)
+            .is_some_and(|row| row.contains(&format!("▸ {page_destination:>5} │")))
+    });
     tui.clear_capture();
     tui.send(b"\x1b[1;3D");
     tui.wait_for("outside debug symbols");
@@ -363,8 +568,8 @@ Conf:
         tui.send(b"\r");
         tui.wait_for("zlong.txt");
         tui.send(b"zlong\r");
-        tui.wait_for("large file line 241");
-        tui.wait_for_source_marker('▸', 241);
+        tui.wait_for(&format!("large file line {page_destination}"));
+        tui.wait_for_source_marker('▸', page_destination);
     }
     let output = tui.quit();
     assert!(output.contains("\u{1b}[?1049l"));
@@ -382,6 +587,35 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for("counter");
     tui.wait_for_source_marker('▶', 9);
 
+    // Use rendered button coordinates, including Unicode border cell widths,
+    // to exercise the same mouse path as a user clicking the source pane.
+    for (label, expanded) in [("[Expand]", true), ("[Restore]", false)] {
+        let locate = |screen: &str| {
+            screen.lines().enumerate().find_map(|(row, line)| {
+                let cells = line.chars().collect::<Vec<_>>();
+                let needle = label.chars().collect::<Vec<_>>();
+                cells
+                    .windows(needle.len())
+                    .enumerate()
+                    .find_map(|(column, text)| {
+                        (text == needle && (label == "[Restore]" || (33..105).contains(&column)))
+                            .then_some((column + 1, row + 1))
+                    })
+            })
+        };
+        tui.wait_for_current_frame(|screen| locate(screen).is_some());
+        let (column, row) = locate(tui.frames.lock().unwrap().back().unwrap()).unwrap();
+        tui.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+        tui.wait_for_current_frame(|screen| {
+            screen.contains("[Restore]") == expanded
+                && if expanded {
+                    !screen.contains("Breakpoints")
+                } else {
+                    screen.contains("Breakpoints")
+                }
+        });
+    }
+
     tui.send(b"Bif counter == 42\r");
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
@@ -395,9 +629,9 @@ fn mock_backend_full_terminal_workflow() {
                 == Some("counter == 42")
     });
 
-    // Source -> Stack -> Variables -> Timeline -> Threads -> Breakpoints.
+    // Source -> Stack -> Variables -> Registers -> Timeline -> Threads -> Breakpoints.
     tui.clear_capture();
-    tui.send(b"\t\t\t\t\t");
+    tui.send(b"\t\t\t\t\t\t");
     tui.wait_for("\u{25c6} DDB Breakpoints");
     tui.send(b"x");
     ddb.wait_for_snapshot(|snapshot| {
@@ -420,19 +654,28 @@ fn mock_backend_full_terminal_workflow() {
     });
     tui.send(b"\t");
 
-    tui.send(b"m0x1000 ; 16\r");
+    tui.send(b"m0x1000 ; 256\r");
     tui.wait_for("Raw Memory");
-    tui.wait_for("Raw Memory · 16 B");
+    tui.wait_for("Raw Memory · 256 B");
+    // Focus belongs to Memory after submission. Expansion shows full fixed
+    // address/hex/ASCII rows; paging reaches the final row without another read.
+    tui.send(b"z");
     tui.wait_for("|*...............|");
-    tui.wait_for("16 bytes");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("[Restore]") && screen.contains("00000000000010f0")
+    });
+    tui.send(b"z\x1b[6~\x1b[6~\x1b[6~\x1b[6~");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("00000000000010f0") && !screen.contains("[Restore]")
+    });
 
     tui.send(b"e counter\r");
     tui.wait_for("evaluate counter: completed");
 
-    tui.send(b":-mock-stream-output\r");
-    tui.wait_for("console · mock console output");
+    tui.send(b":print counter\r");
+    tui.wait_for("print counter: completed");
 
-    tui.send(b"japi_v1.rs:10\r");
+    tui.send(b"Japi_v1.rs:10\r");
     tui.wait_for("jump to api_v1.rs:10");
     tui.send(b"s");
     tui.wait_for("DDB signal catalog");
@@ -450,13 +693,18 @@ fn mock_backend_full_terminal_workflow() {
             && !frame.lines().skip(3).any(|line| line.contains('▶'))
     });
     tui.clear_capture();
-    tui.wait_for("exec · stopped");
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .threads
+            .iter()
+            .any(|thread| thread.state == v2::ThreadState::Stopped as i32)
+    });
     // A stopped event precedes the asynchronous frame/source inspection.
     // Synchronize on the rendered execution location before acting on source.
     tui.wait_for_source_marker('▶', 9);
 
     // SGR mouse click on the toolbar's Refresh control (terminal coordinates are 1-based).
-    tui.send(b"\x1b[<0;80;2M\x1b[<0;80;2m");
+    tui.send(b"\x1b[<0;90;2M\x1b[<0;90;2m");
     tui.wait_for("1 sessions · 1 groups · 1 breakpoints");
 
     tui.send(b"b");
@@ -469,7 +717,15 @@ fn mock_backend_full_terminal_workflow() {
     tui.clear_capture();
     tui.send(b"\x1b[21~");
     tui.wait_for("next:");
-    tui.wait_for("exec · stopped");
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot.threads.iter().any(|thread| {
+            thread.state == v2::ThreadState::Stopped as i32
+                && thread
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| location.line == 10)
+        })
+    });
     tui.wait_for_source_marker('▶', 10);
     tui.wait_for_source_marker('▸', 11);
 
@@ -545,7 +801,7 @@ fn managed_panic_restores_terminal_and_stops_owned_ddb() {
     let backend_log = directory.path().join("panic-backend.log");
 
     let mut tui = Tui::spawn_managed_with_panic_hook(&config, &backend_log);
-    tui.wait_for("managed DDB");
+    tui.wait_for("managed_mock_session");
     let ddb_pid = wait_for_managed_ddb_descendant(tui.child.id());
     let token_path = managed_argument_path(ddb_pid, "--api-auth-token-file");
     let runtime_directory = token_path.parent().unwrap().to_path_buf();
@@ -739,6 +995,98 @@ fn real_lldb_terminal_workflow() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     real_debugger_workflow("lldb");
+}
+
+#[test]
+#[ignore = "requires sibling DDB/fixture binaries, GDB and LLDB"]
+fn real_function_breakpoint_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for backend in ["gdb", "lldb"] {
+        let (mut ddb, _fixture) = Ddb::spawn_real(backend);
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .sessions
+                .first()
+                .is_some_and(|session| session.status == v2::SessionStatus::Stopped as i32)
+        });
+        let mut tui = Tui::spawn(&ddb.base_url());
+        tui.wait_for("connected");
+        tui.wait_for("◎ thread");
+        tui.send(b"Fddb_real_loop::function_breakpoint_target -- --ignore-count 3\r");
+        tui.wait_for("DDB breakpoint targets");
+        // Function breakpoints have no source owner; choose broadcast explicitly.
+        tui.send(b" \r");
+        let snapshot = ddb.wait_for_snapshot(|snapshot| {
+            snapshot.operations.iter().any(|operation| {
+                operation.kind == v2::OperationKind::CreateBreakpoint as i32
+                    && operation.state == v2::OperationState::Failed as i32
+            }) || snapshot.breakpoints.first().is_some_and(|bp| {
+                matches!(bp.spec.as_ref().and_then(|spec| spec.location.as_ref()),
+                Some(v2::breakpoint_spec::Location::Function(function))
+                    if function.function_name == "ddb_real_loop::function_breakpoint_target")
+            })
+        });
+        assert!(
+            !snapshot.breakpoints.is_empty(),
+            "{backend} function breakpoint failed: {:?}\n{}",
+            snapshot.operations,
+            ddb.output_text()
+        );
+        assert_eq!(
+            snapshot.breakpoints[0].spec.as_ref().unwrap().ignore_count,
+            Some(3)
+        );
+        tui.wait_for("1 breakpoints");
+        tui.clear_capture();
+        tui.send(b"\x1b[15~");
+        tui.wait_for("exec · stopped");
+        tui.wait_for("counter");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .breakpoints
+                .first()
+                .is_some_and(|bp| bp.hit_count == 1)
+        });
+        let stopped_line = ddb.top_frame_line(&ddb.global_thread_id());
+        assert!(stopped_line > 0);
+        tui.wait_for_source_marker('▶', stopped_line);
+        // The fixture starts at entry with counter=0. Skipping three function
+        // hits must stop on counter=3, not merely store the option in the API.
+        tui.send(b"wcounter\r");
+        tui.wait_for_variable_value("Watch: counter", "3");
+        tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+        let hit_row = tui
+            .frames
+            .lock()
+            .unwrap()
+            .back()
+            .unwrap()
+            .lines()
+            .position(|line| {
+                line.chars()
+                    .take(33)
+                    .collect::<String>()
+                    .contains("▶ 1 paused")
+            })
+            .expect("current hit should be visible in the breakpoint pane")
+            + 1;
+        tui.send(format!("\x1b[<2;5;{hit_row}M\x1b[<2;5;{hit_row}m").as_bytes());
+        tui.wait_for_current_frame(|screen| screen.contains("Paused breakpoint hits"));
+        // Cancel, reopen with the keyboard, then navigate through the real
+        // stopped-thread inspection path rather than just opening a source file.
+        tui.send(b"\x1b");
+        tui.wait_for_current_frame(|screen| !screen.contains("Paused breakpoint hits"));
+        tui.send(b"P");
+        tui.wait_for_current_frame(|screen| screen.contains("Paused breakpoint hits"));
+        tui.send(b"\r");
+        tui.wait_for_current_frame(|screen| !screen.contains("Paused breakpoint hits"));
+        tui.wait_for_variable_value("Watch: counter", "3");
+        tui.wait_for_source_marker('▶', stopped_line);
+        tui.quit();
+        ddb.shutdown();
+    }
 }
 
 #[test]
@@ -984,6 +1332,51 @@ fn real_debugger_workflow(backend: &str) {
     // The breakpoint and execution checks below need a projected thread.
     tui.wait_for("◎ thread");
 
+    if backend == "gdb" {
+        let snapshot = ddb.wait_for_snapshot(|snapshot| {
+            snapshot.operations.iter().any(|operation| {
+                operation.kind == v2::OperationKind::ConfigureDebugger as i32
+                    && operation.state == v2::OperationState::Completed as i32
+            })
+        });
+        assert_eq!(
+            snapshot
+                .operations
+                .iter()
+                .filter(|operation| operation.kind == v2::OperationKind::ConfigureDebugger as i32)
+                .count(),
+            1
+        );
+    }
+
+    // Read a real stack range through the typed API and expand Memory alone.
+    // Both backends expose the stack-pointer register as $sp.
+    tui.send(b"m$sp ; 256\r");
+    tui.wait_for_current_frame(|screen| screen.contains("Raw Memory · 256 B"));
+    tui.send(b"z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Raw Memory · 256 B")
+            && screen.contains("[Restore]")
+            && !screen.contains("Breakpoints")
+    });
+    tui.send(b"z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Breakpoints") && !screen.contains("[Restore]")
+    });
+
+    // Exercise the native CLI through the currently selected canonical frame.
+    tui.send(b":print 314159 + 271828\r");
+    tui.wait_for("585987");
+    tui.wait_for("print 314159 + 271828: completed");
+    // The shared diagnostic launcher opts into the timeline. Hide it explicitly
+    // to prove console output is independent, then restore it for later checks.
+    tui.send(b"t");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Output ·") && screen.contains("585987") && !screen.contains("DDB Timeline")
+    });
+    tui.send(b"t");
+    tui.wait_for_current_frame(|screen| screen.contains("DDB Timeline"));
+
     // Query the real debugger's catalog through the explorer before using a
     // breakpoint. No frame/source response is injected by this PTY workflow.
     tui.send(format!("g{}:2\r", fixture.source.display()).as_bytes());
@@ -1035,6 +1428,39 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for_source_marker('▶', before_step_line);
 
     // Drive lazy expansion through the real SDK/backend, not only the model.
+    tui.send(b"wcounter\r");
+    tui.wait_for("Watch: counter");
+    tui.select_visible_variable("counter");
+    tui.send(b"=31337\r");
+    tui.wait_for("assign variable: completed");
+    tui.wait_for_frame(|frame| {
+        let lines = frame.lines().collect::<Vec<_>>();
+        lines.windows(2).any(|rows| {
+            rows[0]
+                .chars()
+                .skip(105)
+                .collect::<String>()
+                .contains("counter :")
+                && rows[1]
+                    .chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains("31337")
+        })
+    });
+    tui.wait_for_variable_value("Watch: counter", "31337");
+    tui.select_visible_variable("Watch: counter");
+    tui.send(b"\x1b[3~");
+    tui.wait_for_current_frame(|frame| !frame.contains("Watch: counter"));
+    tui.send(b"wrequest\r");
+    tui.wait_for_current_frame(|frame| {
+        frame.contains("Watch: request") && !frame.contains("Evaluating")
+    });
+    tui.expand_visible_variable("Watch: request");
+    tui.wait_for("headers");
+    tui.select_visible_variable("Watch: request");
+    tui.send(b"\x1b[3~");
+    tui.wait_for_current_frame(|frame| !frame.contains("Watch: request"));
     tui.expand_visible_variable("request");
     tui.wait_for("▾ request");
     tui.expand_visible_variable("headers");
@@ -1055,12 +1481,29 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("1 breakpoints");
     ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.len() == 1);
     tui.clear_capture();
+    tui.send(b"w31337 + 1\r");
+    tui.wait_for_variable_value("Watch: 31337 + 1", "31338");
+    let evaluation_count = ddb
+        .wait_for_snapshot(|_| true)
+        .operations
+        .iter()
+        .filter(|operation| operation.kind == v2::OperationKind::Evaluate as i32)
+        .count();
     tui.send(b"\x1b[21~");
     tui.wait_for("next:");
     tui.wait_for("exec · stopped");
     let after_step_line = ddb.wait_for_top_frame_line_change(&thread_id, before_step_line);
     tui.wait_for_source_marker('▶', after_step_line);
     assert_ne!(after_step_line, before_step_line);
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .operations
+            .iter()
+            .filter(|operation| operation.kind == v2::OperationKind::Evaluate as i32)
+            .count()
+            > evaluation_count
+    });
+    tui.wait_for_variable_value("Watch: 31337 + 1", "31338");
 
     let output = tui.quit();
     assert!(output.contains("\u{1b}[?1049l"));
@@ -1394,7 +1837,7 @@ impl Tui {
             shell_quote(&tui_binary),
             shell_quote(Path::new(api)),
         );
-        Self::spawn_shell(&command)
+        Self::spawn_shell(&command).with_timeline()
     }
 
     fn spawn_with_workspace(api: &str, workspace: &Path) -> Self {
@@ -1448,7 +1891,7 @@ impl Tui {
                 shell_quote(config),
             )
         };
-        Self::spawn_shell(&command)
+        Self::spawn_shell(&command).with_timeline()
     }
 
     fn spawn_managed_launch(
@@ -1472,7 +1915,7 @@ impl Tui {
             shell_quote(binary),
             shell_quote(pid_file),
         );
-        Self::spawn_shell(&command)
+        Self::spawn_shell(&command).with_timeline()
     }
 
     fn spawn_managed_attach(pid: u32, backend_log: &Path) -> Self {
@@ -1484,7 +1927,7 @@ impl Tui {
             shell_quote(&ddb_binary),
             shell_quote(backend_log),
         );
-        Self::spawn_shell(&command)
+        Self::spawn_shell(&command).with_timeline()
     }
 
     fn spawn_shell(command: &str) -> Self {
@@ -1526,8 +1969,41 @@ impl Tui {
         self.stdin.flush().expect("TUI input should flush");
     }
 
+    // Diagnostic workflows explicitly opt in; workspace-only workflows keep
+    // the default hidden timeline. Click the Source border, not a source line,
+    // to restore focus without disabling execution following.
+    fn with_timeline(mut self) -> Self {
+        self.wait_for("DDB Debugger");
+        self.send(b"t");
+        self.wait_for("DDB Timeline");
+        self.send(b"\x1b[<0;40;4M\x1b[<0;40;4m");
+        self
+    }
+
     fn click_topology_thread(&mut self, session_label: &str) {
         let deadline = Instant::now() + TIMEOUT;
+        self.send(b"\x1b[<0;2;4M\x1b[<0;2;4m");
+        // Topology sorts groups and sessions by name, not launch order. A new
+        // session may sort above the current selection, so search from the top.
+        let mut previous_topology = None;
+        loop {
+            self.assert_running();
+            self.send(b"\x1b[5~");
+            thread::sleep(Duration::from_millis(100));
+            let topology = self.frames.lock().unwrap().back().map(|frame| {
+                frame
+                    .lines()
+                    .skip(4)
+                    .take(4)
+                    .map(|line| line.chars().take(33).collect::<String>())
+                    .collect::<Vec<_>>()
+            });
+            if topology.is_some() && topology == previous_topology {
+                break;
+            }
+            assert!(Instant::now() < deadline, "topology did not reach its top");
+            previous_topology = topology;
+        }
         loop {
             self.assert_running();
             let row = self
@@ -1546,7 +2022,10 @@ impl Tui {
                 "thread below {session_label} not found:\n{}",
                 self.output_text()
             );
-            thread::sleep(POLL);
+            // Move one row so a session header at the bottom becomes visible
+            // with its first thread. PageDown can skip that pairing entirely.
+            self.send(b"\x1b[B");
+            thread::sleep(Duration::from_millis(100));
         }
     }
 
@@ -1592,6 +2071,46 @@ impl Tui {
             );
             thread::sleep(POLL);
         }
+    }
+
+    fn select_visible_variable(&mut self, name: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let row = self.frames.lock().unwrap().back().and_then(|frame| {
+                frame.lines().position(|line| {
+                    let right = line.chars().skip(105).collect::<String>();
+                    right.contains(&format!("{name} :"))
+                        && (name.starts_with("Watch: ") || !right.contains("Watch: "))
+                })
+            });
+            if let Some(row) = row {
+                self.send(format!("\x1b[<0;112;{}M\x1b[<0;112;{}m", row + 1, row + 1).as_bytes());
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "variable {name} not visible: {}",
+                self.output_text()
+            );
+            thread::sleep(POLL);
+        }
+    }
+
+    fn wait_for_variable_value(&mut self, name: &str, value: &str) {
+        self.wait_for_current_frame(|frame| {
+            frame.lines().collect::<Vec<_>>().windows(2).any(|rows| {
+                rows[0]
+                    .chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains(&format!("{name} :"))
+                    && rows[1]
+                        .chars()
+                        .skip(105)
+                        .collect::<String>()
+                        .contains(value)
+            })
+        });
     }
 
     fn wait_for_current_frame(&mut self, predicate: impl Fn(&str) -> bool) {

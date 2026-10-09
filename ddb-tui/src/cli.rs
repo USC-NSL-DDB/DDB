@@ -39,6 +39,11 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub source_workspace: Option<PathBuf>,
 
+    /// Value presentation: enable GDB visualizers, use raw expandable values,
+    /// or disable child expansion. Does not disable already-installed formatters.
+    #[arg(long, global = true, value_enum, default_value_t = ValuesFormatting::PrettyPrinters)]
+    pub values_formatting: ValuesFormatting,
+
     /// Maximum seconds to wait for a managed DDB service to become ready.
     #[arg(
         long = "startup-timeout",
@@ -58,6 +63,20 @@ pub(crate) struct Args {
 
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(crate) enum ValuesFormatting {
+    #[default]
+    PrettyPrinters,
+    Raw,
+    Disabled,
+}
+
+impl ValuesFormatting {
+    pub fn expandable(self) -> bool {
+        self != Self::Disabled
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -197,6 +216,32 @@ fn parse_existing_path(path: &str) -> Result<PathBuf, io::Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn value_presentation_is_explicit_and_global() {
+        use super::*;
+        assert_eq!(
+            Args::try_parse_from(["ddb-tui"]).unwrap().values_formatting,
+            ValuesFormatting::PrettyPrinters
+        );
+        for (name, expected) in [
+            ("pretty-printers", ValuesFormatting::PrettyPrinters),
+            ("raw", ValuesFormatting::Raw),
+            ("disabled", ValuesFormatting::Disabled),
+        ] {
+            let args = Args::try_parse_from([
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://localhost:5000",
+                "--values-formatting",
+                name,
+            ])
+            .unwrap();
+            assert_eq!(args.values_formatting, expected);
+        }
+        assert!(Args::try_parse_from(["ddb-tui", "--values-formatting", "unknown"]).is_err());
+    }
+
     use std::fs;
 
     use super::*;

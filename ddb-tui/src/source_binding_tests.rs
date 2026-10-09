@@ -98,6 +98,79 @@ fn breakpoint(id: &str, target: v2::Target) -> Breakpoint {
 }
 
 #[test]
+fn breakpoint_navigation_selects_exact_child_owner_without_retargeting_execution() {
+    let mut app = App::new("http://localhost".into());
+    let mut bp = breakpoint("distributed", api::group_target("workers"));
+    bp.sub_breakpoints = ["a", "b"]
+        .into_iter()
+        .map(|owner| v2::SubBreakpoint {
+            sub_breakpoint_id: format!("site/{owner}"),
+            session_id: owner.into(),
+            location: Some(v2::SourceLocation {
+                path: Some(format!("/{owner}/main.rs")),
+                line: 12,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .collect();
+    app.breakpoints.push(bp);
+    app.execution_target = Some(api::session_target("unrelated"));
+    app.focus = Focus::Breakpoints;
+    let (tx, mut rx) = mpsc::channel(8);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "aggregate source must not choose an arbitrary site"
+    );
+    assert!(app.status.contains("session-specific"));
+    app.move_selection(2);
+    assert_eq!(app.selected_breakpoint_site, Some(1));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap(), BackendRequest::LoadSource(request)
+        if matches!(&request.address, source_types::Address::Resolve { target: Some(target), location, .. }
+            if *target == api::session_target("b") && location.path.as_deref() == Some("/b/main.rs")))
+    );
+    assert_eq!(app.execution_target, Some(api::session_target("unrelated")));
+    assert!(!app.source_browser.following());
+    app.focus = Focus::Breakpoints;
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal
+        .draw(|frame| app.areas = ui::draw(frame, &mut app))
+        .unwrap();
+    let (_, _, area) = *app
+        .areas
+        .breakpoint_sites
+        .iter()
+        .find(|(_, site, _)| *site == Some(0))
+        .unwrap();
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &tx,
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap(), BackendRequest::LoadSource(request)
+        if matches!(&request.address, source_types::Address::Resolve { target: Some(target), .. }
+            if *target == api::session_target("a")))
+    );
+}
+
+#[test]
 fn bindings_require_exact_debugger_path_and_owner_not_a_display_path_or_suffix() {
     let source = remote_source(file(&["a"], true));
     let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
@@ -115,7 +188,10 @@ fn breakpoint_creation_defaults_to_the_document_owner_without_changing_selection
     let (sender, mut receiver) = mpsc::channel(2);
     toggle_breakpoint(&mut app, &sender);
     let picker = app.breakpoint_target_picker.as_ref().unwrap();
-    assert_eq!(picker.draft.source, "/build/main.rs");
+    assert!(
+        matches!(&picker.draft.location, v2::breakpoint_spec::Location::Source(source)
+        if source.source == "/build/main.rs")
+    );
     assert_eq!(
         picker
             .choices
@@ -131,7 +207,7 @@ fn breakpoint_creation_defaults_to_the_document_owner_without_changing_selection
         &sender,
     );
     assert!(
-        matches!(receiver.try_recv(), Ok(BackendRequest::CreateBreakpoint { source, target, .. }) if source == "/build/main.rs" && target == BreakpointTarget::Session("a".into()))
+        matches!(receiver.try_recv(), Ok(BackendRequest::CreateBreakpoint { location: v2::breakpoint_spec::Location::Source(source), target, .. }) if source.source == "/build/main.rs" && target == BreakpointTarget::Session("a".into()))
     );
     assert_eq!(app.current_thread().unwrap().session_id, "b");
 }
@@ -217,7 +293,7 @@ fn rendered_execution_and_breakpoint_markers_do_not_cross_session_owners() {
         .push(breakpoint("b", api::session_target("b")));
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal
-        .draw(|frame| app.areas = ui::draw(frame, &app))
+        .draw(|frame| app.areas = ui::draw(frame, &mut app))
         .unwrap();
     let buffer = terminal.backend().buffer();
     let source_row = buffer
@@ -235,7 +311,7 @@ fn rendered_execution_and_breakpoint_markers_do_not_cross_session_owners() {
     app.breakpoints
         .push(breakpoint("a", api::session_target("a")));
     terminal
-        .draw(|frame| app.areas = ui::draw(frame, &app))
+        .draw(|frame| app.areas = ui::draw(frame, &mut app))
         .unwrap();
     let screen = terminal
         .backend()
