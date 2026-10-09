@@ -3396,6 +3396,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breakpoint_fanout_resolves_broadcast_sets_and_nested_selectors() {
+        use ddb_api_types::v2;
+        let model = RuntimeModel::new();
+        for sid in [42, 7] {
+            model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
+        }
+        let service = service(model);
+        let broadcast = PublicTarget {
+            selector: Some(target::Selector::Broadcast(v2::BroadcastTarget {})),
+        };
+        let set = PublicTarget {
+            selector: Some(target::Selector::SessionSet(v2::SessionSetTarget {
+                session_ids: [42, 7]
+                    .into_iter()
+                    .map(|sid| service.ids.encode(ResourceIdKind::Session, sid).unwrap())
+                    .collect(),
+            })),
+        };
+        let nested = PublicTarget {
+            selector: Some(target::Selector::Multiple(MultipleTarget {
+                targets: vec![PublicTarget {
+                    selector: Some(target::Selector::Multiple(MultipleTarget {
+                        targets: vec![set.clone()],
+                    })),
+                }],
+            })),
+        };
+        for target in [broadcast.clone(), set, nested] {
+            let resolved = TargetResolver::new(&service.queries, &service.ids)
+                .resolve(Some(&target), TargetPurpose::Breakpoint)
+                .await
+                .unwrap();
+            assert_eq!(resolved.session_ids, [7, 42]);
+            assert!(matches!(resolved.command, CommandTarget::Multiple(targets)
+                if matches!(targets.as_slice(), [CommandTarget::Session(7), CommandTarget::Session(42)])));
+        }
+        let command = TargetResolver::new(&service.queries, &service.ids)
+            .resolve(Some(&broadcast), TargetPurpose::Command)
+            .await
+            .unwrap();
+        assert!(matches!(command.command, CommandTarget::Broadcast));
+    }
+
+    #[tokio::test]
     async fn runtime_topology_selection_and_breakpoint_paths_are_event_complete() {
         let model = RuntimeModel::new();
         let service = service(Arc::clone(&model));
