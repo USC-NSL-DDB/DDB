@@ -135,7 +135,22 @@ the backend and frontend together when the API contract changes.
 | `?` | Toggle the in-app help overlay |
 | `q` / `Ctrl+C` | Quit |
 
-### Source explorer
+### Logpoints and value inspection
+
+To configure a logpoint, create a normal DDB breakpoint, select its row in
+Breakpoints, and press `L`. Enter a message such as `counter={counter}`.
+`{{` and `}}` produce literal braces. The setting applies to the logical
+breakpoint, including its group/session members. Press `L` and submit an empty
+message to restore an ordinary stopping breakpoint.
+
+Logpoints write to Output and continue their originating thread only after
+successful evaluation and stop revalidation. Failures leave the thread paused.
+Explicit execution, evaluation, assignment, or logpoint configuration cancels
+older automatic logpoint work. Messages are limited to 64 KiB and 128
+expressions. Logpoint metadata belongs to this TUI process, is not persisted,
+and is discarded when the DDB server instance changes. Other frontends still
+see the underlying DDB breakpoint. Stop validation and Continue are separate
+API calls, not an atomic backend stop precondition.
 
 In Variables, select a value and press `=` to assign it using the debugger's
 value syntax. Scope headings cannot be edited. The request uses the variable's
@@ -214,6 +229,8 @@ selected stack frame's source without changing the execution target. Unlike
 `f` in Source, this reveals the selected frame rather than enabling execution
 following. Missing source locations and non-source boundary rows report why
 they cannot be opened.
+
+### Source explorer
 
 `o` or the source panel's Open button lists explicitly configured roots, marked
 `[Local]` or `[DDB]` by their host. To browse directories on the DDB host, add

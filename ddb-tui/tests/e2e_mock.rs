@@ -1034,6 +1034,80 @@ fn real_lldb_terminal_workflow() {
 
 #[test]
 #[ignore = "requires sibling DDB/fixture binaries, GDB and LLDB"]
+fn real_logpoint_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for backend in ["gdb", "lldb"] {
+        let (mut ddb, fixture) = Ddb::spawn_real(backend);
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .threads
+                .iter()
+                .any(|thread| thread.state == v2::ThreadState::Stopped as i32)
+        });
+        let mut tui = Tui::spawn(&ddb.base_url());
+        tui.wait_for("◎ thread");
+        tui.send(b"Fddb_real_loop::function_breakpoint_target\r");
+        tui.wait_for("DDB breakpoint targets");
+        tui.send(b" \r");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot.breakpoints.len() == 1 && snapshot.breakpoints[0].verified
+        });
+        tui.wait_for("1 breakpoints");
+        let header = tui
+            .frames
+            .lock()
+            .unwrap()
+            .back()
+            .unwrap()
+            .lines()
+            .position(|line| {
+                line.chars()
+                    .take(33)
+                    .collect::<String>()
+                    .contains("DDB Breakpoints")
+            })
+            .unwrap()
+            + 1;
+        tui.send(format!("\x1b[<0;5;{header}M\x1b[<0;5;{header}m").as_bytes());
+        tui.send(b"Llog counter={counter}\r");
+        tui.wait_for("Logpoint configuration applied");
+        tui.send(
+            format!(
+                "g{}:{}\r",
+                fixture.source.display(),
+                fixture.breakpoint_line
+            )
+            .as_bytes(),
+        );
+        tui.wait_for_source_marker('▸', fixture.breakpoint_line);
+        tui.send(b"b");
+        tui.wait_for("DDB breakpoint targets");
+        tui.send(b"\r");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot.breakpoints.len() == 2 && snapshot.breakpoints.iter().all(|bp| bp.verified)
+        });
+        tui.send(b"\x1b[15~");
+        tui.wait_for_current_frame(|screen| screen.contains("log counter=0"));
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot.breakpoints.iter().all(|bp| bp.hit_count == 1)
+                && snapshot.threads.iter().any(|thread| {
+                    thread.state == v2::ThreadState::Stopped as i32
+                        && thread
+                            .location
+                            .as_ref()
+                            .is_some_and(|location| location.line == fixture.breakpoint_line as u32)
+                })
+        });
+        tui.wait_for_source_marker('▶', fixture.breakpoint_line);
+        tui.quit();
+        ddb.shutdown();
+    }
+}
+
+#[test]
+#[ignore = "requires sibling DDB/fixture binaries, GDB and LLDB"]
 fn real_function_breakpoint_terminal_workflow() {
     let _guard = REAL_DEBUGGER_LOCK
         .lock()

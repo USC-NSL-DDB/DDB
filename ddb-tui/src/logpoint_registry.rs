@@ -1,4 +1,4 @@
-//! The worker registers creation receipts before classifying queued stops.
+//! The worker configures existing logical breakpoints before classifying queued stops.
 //! Retired metadata remains available for temporary/deleted breakpoint events.
 
 use super::{Stop, Template};
@@ -9,7 +9,7 @@ const MAX_METADATA_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STOP_IDENTITIES: usize = 4096;
 
 #[derive(Default)]
-pub(super) struct Registry {
+pub(crate) struct Registry {
     instance: String,
     templates: BTreeMap<String, Template>,
     retired: VecDeque<String>,
@@ -18,8 +18,37 @@ pub(super) struct Registry {
 }
 
 impl Registry {
+    pub fn ids(&self) -> Vec<String> {
+        self.templates.keys().cloned().collect()
+    }
+
+    pub fn configure(
+        &mut self,
+        instance: &str,
+        id: String,
+        template: Option<Template>,
+    ) -> Result<(), String> {
+        if self.instance != instance {
+            return Err("DDB instance changed".into());
+        }
+        let previous = self.templates.remove(&id);
+        if let Some(previous) = &previous {
+            self.bytes -= template_bytes(previous);
+        }
+        self.retired.retain(|old| old != &id);
+        if let Some(template) = template {
+            if let Err(error) = self.register(instance, id.clone(), template) {
+                if let Some(previous) = previous {
+                    self.bytes += template_bytes(&previous);
+                    self.templates.insert(id, previous);
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     /// Only an authoritative connection/hydration update may change instances.
-    /// A delayed stop or creation receipt cannot switch the registry backwards.
+    /// A delayed stop cannot switch the registry backwards.
     pub fn reset(&mut self, instance: &str) {
         if self.instance != instance {
             *self = Self {
@@ -29,8 +58,8 @@ impl Registry {
         }
     }
 
-    /// Call before issuing creation, on the same serialized worker that registers
-    /// its receipt. Pending creation therefore cannot race another registration.
+    /// Make room for metadata on the serialized configuration worker. Only
+    /// retired entries may be evicted; active logpoints keep their templates.
     pub fn reserve(&mut self, template: &Template) -> Result<(), String> {
         let size = template_bytes(template);
         while self.templates.len() >= MAX_LOGPOINTS

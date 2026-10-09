@@ -46,6 +46,7 @@ pub enum InputMode {
     FunctionBreakpoint,
     ExtensionAction,
     AssignValue,
+    Logpoint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +426,8 @@ pub struct App {
     pub breakpoint_viewport: crate::display_text::HorizontalViewport,
     pub input_cursor: usize,
     pub value_edit: Option<ValueEdit>,
+    pub logpoint_edit: Option<String>,
+    pub logpoint_ids: std::collections::BTreeSet<String>,
     input_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
@@ -504,6 +507,8 @@ impl App {
             input: String::new(),
             input_cursor: 0,
             value_edit: None,
+            logpoint_edit: None,
+            logpoint_ids: Default::default(),
             input_history: VecDeque::with_capacity(100),
             history_index: None,
             history_draft: String::new(),
@@ -623,6 +628,8 @@ impl App {
                 .is_some_and(|previous| previous != &snapshot.server_instance_id)
             {
                 self.source_browser.invalidate_server();
+                self.logpoint_ids.clear();
+                self.logpoint_edit = None;
                 self.pretty_printing_attempted.clear();
                 self.supersede_automatic_control();
                 self.source_explorer.invalidate_server();
@@ -1724,6 +1731,7 @@ impl App {
 
     pub fn cancel_input(&mut self) {
         self.value_edit = None;
+        self.logpoint_edit = None;
         if self.input_mode == InputMode::ExtensionAction {
             self.pending_extension_action = None;
         }
@@ -2077,6 +2085,41 @@ impl App {
         self.supersede_automatic_control();
         self.api_connected = false;
         self.error(error);
+    }
+
+    pub fn logpoint_instance(&self) -> Option<String> {
+        self.source_server_instance.clone()
+    }
+
+    pub fn logpoint_stop(&self, thread_id: &str) -> Option<crate::logpoints::Stop> {
+        let state = self
+            .execution_states
+            .iter()
+            .find(|state| {
+                !state.running
+                    && matches!(
+                        state.target.as_ref().and_then(|target| target.selector.as_ref()),
+                        Some(target::Selector::Thread(thread)) if thread.thread_id == thread_id
+                    )
+            })?
+            .clone();
+        Some(crate::logpoints::Stop {
+            state,
+            server_instance: self.logpoint_instance()?,
+            control_epoch: self.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
+            current_epoch: self.control_epoch.clone(),
+        })
+    }
+
+    pub fn logpoint_stop_is_current(&self, stop: &crate::logpoints::Stop) -> bool {
+        self.api_connected
+            && self.source_server_instance.as_deref() == Some(&stop.server_instance)
+            && self.control_epoch.load(std::sync::atomic::Ordering::SeqCst) == stop.control_epoch
+            && self.execution_states.iter().any(|state| {
+                !state.running
+                    && state.execution_state_id == stop.state.execution_state_id
+                    && state.revision == stop.state.revision
+            })
     }
 }
 
@@ -2462,6 +2505,12 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    ConfigureLogpoint {
+        id: String,
+        template: Option<crate::logpoints::Template>,
+        instance: String,
+    },
+    ClassifyStop(crate::logpoints::Stop),
     EnablePrettyPrinting {
         session_id: String,
     },
@@ -2562,6 +2611,15 @@ pub struct BreakpointOptions {
 
 #[derive(Debug)]
 pub enum UiMessage {
+    LogpointsConfigured {
+        instance: String,
+        ids: Vec<String>,
+    },
+    LogpointOutput(String),
+    ClassifiedStop {
+        stop: crate::logpoints::Stop,
+        error: Option<String>,
+    },
     WatchEvaluated {
         request: WatchEvaluation,
         result: Result<v2::EvaluationResult, String>,

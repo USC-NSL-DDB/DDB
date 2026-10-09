@@ -17,8 +17,10 @@ mod worker_tests;
 
 #[path = "logpoint_registry.rs"]
 mod registry;
+pub(crate) use registry::Registry;
 
 /// A logpoint may continue only the exact stop that initiated its evaluation.
+#[derive(Debug)]
 pub struct Stop {
     pub state: v2::ExecutionState,
     pub server_instance: String,

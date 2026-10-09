@@ -34,11 +34,16 @@ pub async fn run(
     let mut inspections = JoinSet::new();
     let mut sources = JoinSet::new();
     let mut discoveries = JoinSet::new();
+    let mut logpoint_tasks = JoinSet::new();
+    let mut logpoints = crate::logpoints::Registry::default();
     let mut deferred = VecDeque::new();
     let mut pending_inspections = VecDeque::new();
     let mut inspection_generation = None;
     loop {
         while let Some(result) = inspections.try_join_next() {
+            report_inspection_failure(result, &messages).await;
+        }
+        while let Some(result) = logpoint_tasks.try_join_next() {
             report_inspection_failure(result, &messages).await;
         }
         let ready = deferred.pop_front().or_else(|| {
@@ -49,6 +54,10 @@ pub async fn run(
         let request = match ready {
             Some(request) => request,
             None => tokio::select! {
+                result = logpoint_tasks.join_next(), if !logpoint_tasks.is_empty() => {
+                    if let Some(result) = result { report_inspection_failure(result, &messages).await; }
+                    continue;
+                }
                 result = inspections.join_next(), if !inspections.is_empty() => {
                     if let Some(result) = result {
                         report_inspection_failure(result, &messages).await;
@@ -60,6 +69,70 @@ pub async fn run(
                     None => break,
                 },
             },
+        };
+        let request = match request {
+            BackendRequest::ConfigureLogpoint {
+                id,
+                template,
+                instance,
+            } => {
+                let result =
+                    configure_logpoint(&client, &mut logpoints, id, template, &instance).await;
+                let update = match result {
+                    Ok(ids) => UiMessage::LogpointsConfigured { instance, ids },
+                    Err(error) => {
+                        UiMessage::Error(format!("Logpoint configuration failed: {error:#}"))
+                    }
+                };
+                let _ = messages.send(update).await;
+                continue;
+            }
+            BackendRequest::ClassifyStop(stop) => {
+                if let Some((stop, template)) = logpoints.claim(stop) {
+                    if let Some(template) = template {
+                        if logpoint_tasks.len() >= 16 {
+                            let _ = messages
+                                .send(UiMessage::ClassifiedStop {
+                                    stop,
+                                    error: Some(
+                                        "Too many pending logpoints; left thread paused".into(),
+                                    ),
+                                })
+                                .await;
+                        } else {
+                            let client = client.clone();
+                            let messages = messages.clone();
+                            logpoint_tasks.spawn(async move {
+                                let output = messages.clone();
+                                let result = crate::logpoints::run(
+                                    &client,
+                                    &template,
+                                    &stop,
+                                    |text| async move {
+                                        output.send(UiMessage::LogpointOutput(text)).await?;
+                                        Ok(())
+                                    },
+                                )
+                                .await;
+                                if !matches!(result, Ok(true)) {
+                                    let error = result.err().map(|error| {
+                                        format!("Logpoint failed; left thread paused: {error:#}")
+                                    });
+                                    let _ = messages
+                                        .send(UiMessage::ClassifiedStop { stop, error })
+                                        .await;
+                                }
+                            });
+                        }
+                    } else {
+                        let _ = messages
+                            .send(UiMessage::ClassifiedStop { stop, error: None })
+                            .await;
+                    }
+                }
+                continue;
+            }
+            request => request,
         };
         if is_recovery(&request) {
             while let Ok(queued) = requests.try_recv() {
@@ -154,6 +227,44 @@ pub async fn run(
     inspections.shutdown().await;
     sources.shutdown().await;
     discoveries.shutdown().await;
+    logpoint_tasks.shutdown().await;
+}
+
+async fn configure_logpoint(
+    client: &ApiClient,
+    registry: &mut crate::logpoints::Registry,
+    id: String,
+    template: Option<crate::logpoints::Template>,
+    instance: &str,
+) -> anyhow::Result<Vec<String>> {
+    let snapshot = client
+        .get_snapshot(v2::GetSnapshotRequest {
+            sections: vec![v2::SnapshotSection::Breakpoints as i32],
+            ..Default::default()
+        })
+        .await?
+        .snapshot
+        .context("DDB omitted breakpoint snapshot")?;
+    anyhow::ensure!(
+        snapshot.server_instance_id == instance,
+        "DDB instance changed during logpoint configuration"
+    );
+    anyhow::ensure!(
+        snapshot.breakpoints.iter().any(|bp| bp.breakpoint_id == id),
+        "Breakpoint no longer exists"
+    );
+    registry.reset(instance);
+    registry.retain_active(
+        &snapshot
+            .breakpoints
+            .iter()
+            .map(|bp| bp.breakpoint_id.clone())
+            .collect(),
+    );
+    registry
+        .configure(instance, id, template)
+        .map_err(anyhow::Error::msg)?;
+    Ok(registry.ids())
 }
 
 fn inspection_error_target(request: &BackendRequest) -> (u64, String, Option<String>) {
@@ -246,6 +357,9 @@ async fn handle(
     request: BackendRequest,
 ) -> anyhow::Result<()> {
     match request {
+        BackendRequest::ConfigureLogpoint { .. } | BackendRequest::ClassifyStop(_) => {
+            bail!("logpoint requests require the serialized worker registry");
+        }
         BackendRequest::EnablePrettyPrinting { session_id } => {
             let receipt = complete_operation(
                 client,

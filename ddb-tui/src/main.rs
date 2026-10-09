@@ -1,8 +1,6 @@
 mod api;
 mod cli;
 mod display_text;
-// Staged logpoint implementation: activate with its guarded stop lifecycle.
-#[cfg(test)]
 mod logpoints;
 mod model;
 mod output;
@@ -552,6 +550,16 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         }
         KeyCode::Char('b') => toggle_breakpoint(app, requests),
         KeyCode::Char('B') => start_breakpoint_prompt(app),
+        KeyCode::Char('L') if app.focus == Focus::Breakpoints => {
+            if !app.capabilities.supports_inspection("evaluate")
+                || !app.capabilities.supports_execution("continue")
+            {
+                app.error("Logpoints require evaluation and continue support");
+            } else if let Some(id) = app.current_breakpoint().map(|bp| bp.id.clone()) {
+                app.start_input(InputMode::Logpoint);
+                app.logpoint_edit = Some(id);
+            }
+        }
         KeyCode::Char('P') if app.focus == Focus::Breakpoints => {
             if let Err(error) = app.open_breakpoint_hits() {
                 app.error(error);
@@ -662,8 +670,34 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
         KeyCode::Enter => {
             let mode = app.input_mode;
             let input = app.commit_input();
-            if !input.is_empty() || mode == InputMode::Breakpoint {
+            if !input.is_empty() || matches!(mode, InputMode::Breakpoint | InputMode::Logpoint) {
                 match mode {
+                    InputMode::Logpoint => {
+                        let template = if input.is_empty() {
+                            None
+                        } else {
+                            match logpoints::Template::parse(&input) {
+                                Ok(template) => Some(template),
+                                Err(error) => {
+                                    app.error(error);
+                                    return;
+                                }
+                            }
+                        };
+                        if let (Some(id), Some(instance)) =
+                            (app.logpoint_edit.take(), app.logpoint_instance())
+                        {
+                            queue_request(
+                                app,
+                                requests,
+                                BackendRequest::ConfigureLogpoint {
+                                    id,
+                                    template,
+                                    instance,
+                                },
+                            );
+                        }
+                    }
                     InputMode::AssignValue => {
                         if let Some(edit) = app.value_edit.take() {
                             if app.inspection_is_current(edit.generation, &edit.origin_thread)
@@ -1769,6 +1803,31 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
+        UiMessage::LogpointsConfigured { instance, ids } => {
+            if app.logpoint_instance().as_deref() == Some(&instance) {
+                app.logpoint_ids = ids.into_iter().collect();
+                app.status = "Logpoint configuration applied".into();
+            }
+        }
+        UiMessage::LogpointOutput(message) => {
+            app.output.push(&message);
+            app.show_output = true;
+        }
+        UiMessage::ClassifiedStop { stop, error } => {
+            if app.logpoint_stop_is_current(&stop) {
+                if let Some(v2::target::Selector::Thread(thread)) = stop
+                    .state
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.selector.as_ref())
+                {
+                    ordinary_stop(app, requests, thread.thread_id.clone());
+                }
+                if let Some(error) = error {
+                    app.error(error);
+                }
+            }
+        }
         UiMessage::WatchEvaluated { request, result } => app.finish_watch(request, result),
         UiMessage::ValueAssigned { edit, result } => {
             if !app.inspection_is_current(edit.generation, &edit.origin_thread)
@@ -2003,18 +2062,14 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     }
                 }
                 DebuggerActivity::Stopped(Some(thread_id)) => {
-                    app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
-                    pause_running_peers(app, requests, &thread_id);
-                    let active_thread_id = app.current_thread().map(|thread| thread.id.clone());
-                    let should_inspect = match active_thread_id.as_deref() {
-                        None => true,
-                        Some(active) if active == thread_id => {
-                            !app.thread_inspection_requested(&thread_id)
+                    if !app.logpoint_ids.is_empty() {
+                        if let Some(stop) = app.logpoint_stop(&thread_id) {
+                            queue_request(app, requests, BackendRequest::ClassifyStop(stop));
+                        } else {
+                            ordinary_stop(app, requests, thread_id);
                         }
-                        Some(_) => false,
-                    };
-                    if should_inspect {
-                        inspect_thread(app, requests, thread_id);
+                    } else {
+                        ordinary_stop(app, requests, thread_id);
                     }
                 }
                 DebuggerActivity::Stopped(None) | DebuggerActivity::None => {}
@@ -2035,6 +2090,19 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         },
         UiMessage::Error(error) => app.error(error),
         UiMessage::BackendUnavailable(error) => app.backend_unavailable(error),
+    }
+}
+
+fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
+    app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
+    pause_running_peers(app, requests, &thread_id);
+    let should_inspect = match app.current_thread().map(|thread| thread.id.as_str()) {
+        None => true,
+        Some(active) if active == thread_id => !app.thread_inspection_requested(&thread_id),
+        Some(_) => false,
+    };
+    if should_inspect {
+        inspect_thread(app, requests, thread_id);
     }
 }
 
@@ -2144,6 +2212,9 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
     if matches!(
         &request,
         BackendRequest::Control(..)
+            | BackendRequest::ConfigureLogpoint { .. }
+            | BackendRequest::Evaluate { .. }
+            | BackendRequest::AssignValue { .. }
             | BackendRequest::Jump { .. }
             | BackendRequest::SendSignal { .. }
             | BackendRequest::RawCommand { .. }
@@ -2156,6 +2227,16 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
         Err(mpsc::error::TrySendError::Full(request)) => {
+            if let BackendRequest::ClassifyStop(stop) = &request {
+                if let Some(v2::target::Selector::Thread(thread)) = stop
+                    .state
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.selector.as_ref())
+                {
+                    ordinary_stop(app, requests, thread.thread_id.clone());
+                }
+            }
             if let BackendRequest::ExploreSources(request) = &request {
                 app.source_explorer.fail(
                     request.generation,
@@ -2167,6 +2248,16 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
         Err(mpsc::error::TrySendError::Closed(request)) => {
+            if let BackendRequest::ClassifyStop(stop) = &request {
+                if let Some(v2::target::Selector::Thread(thread)) = stop
+                    .state
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.selector.as_ref())
+                {
+                    ordinary_stop(app, requests, thread.thread_id.clone());
+                }
+            }
             if let BackendRequest::ExploreSources(request) = &request {
                 app.source_explorer.fail(
                     request.generation,
@@ -3396,6 +3487,59 @@ mod tests {
         app.finish_watch(third, Ok(v2::EvaluationResult::default()));
         assert!(app.variables.is_empty());
         assert!(app.watches.is_empty());
+    }
+
+    #[test]
+    fn logpoint_prompt_validates_and_captures_the_selected_logical_breakpoint() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "instance".into(),
+            breakpoints: vec![v2::Breakpoint {
+                breakpoint_id: "breakpoint/log".into(),
+                spec: Some(v2::BreakpointSpec {
+                    location: Some(v2::breakpoint_spec::Location::Source(
+                        v2::SourceBreakpointLocation {
+                            source: "main.rs".into(),
+                            line: 7,
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::Evaluate as i32);
+        app.capabilities
+            .execution_actions
+            .push(v2::ExecutionAction::Continue as i32);
+        app.focus = Focus::Breakpoints;
+        let (tx, mut rx) = mpsc::channel(8);
+        for (input, valid) in [("value {counter}", true), ("", true), ("bad {", false)] {
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+                &tx,
+            );
+            assert_eq!(app.input_mode, InputMode::Logpoint);
+            app.input = input.into();
+            handle_prompt_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &tx,
+            );
+            if valid {
+                assert!(
+                    matches!(rx.try_recv().unwrap(), BackendRequest::ConfigureLogpoint { id, instance, template }
+                    if id == "breakpoint/log" && instance == "instance" && template.is_some() != input.is_empty())
+                );
+            } else {
+                assert!(rx.try_recv().is_err());
+            }
+        }
     }
 
     #[test]

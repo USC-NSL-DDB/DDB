@@ -570,6 +570,14 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                     Style::default().fg(if breakpoint.enabled { RED } else { MUTED }),
                 ),
                 Span::styled(
+                    if app.logpoint_ids.contains(&breakpoint.id) {
+                        "log "
+                    } else {
+                        ""
+                    },
+                    Style::default().fg(GREEN),
+                ),
+                Span::styled(
                     format!(
                         "{}:{} ",
                         terminal_text(short_path(&breakpoint.location.src)),
@@ -1370,6 +1378,11 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::Evaluate => ("Evaluate", "e> ", GREEN),
         InputMode::Watch => ("Add watch expression", "w> ", GREEN),
         InputMode::AssignValue => ("Assign selected value (Esc cancels)", "= ", YELLOW),
+        InputMode::Logpoint => (
+            "Log message {expression}; empty restores stopping breakpoint",
+            "L> ",
+            GREEN,
+        ),
         InputMode::Memory => ("Read memory", "m> ", YELLOW),
         InputMode::Jump => ("Jump execution location", "J> ", YELLOW),
         InputMode::Signal => ("Send signal", "s> ", RED),
@@ -1638,6 +1651,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         )),
         Line::from("d refresh DDB distributed stack   e evaluate expression"),
         Line::from("Variables / Registers: = assign the selected value; Esc cancels"),
+        Line::from("Breakpoints: L sets a log message with {expressions}; empty removes it"),
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
         Line::from("memory: Up/Down or wheel browse rows; Left/Right scroll columns; Home resets; z expand"),
         Line::from("g open source: line or path:line   J jump execution   s signal"),

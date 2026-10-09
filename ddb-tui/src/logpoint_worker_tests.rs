@@ -135,6 +135,99 @@ async fn execute(
     })
 }
 
+#[tokio::test]
+async fn worker_applies_configuration_before_queued_stops_and_can_restore_stopping() {
+    use crate::model::{BackendRequest, UiMessage};
+    use std::time::Duration;
+    let epoch = Arc::new(AtomicU64::new(1));
+    let backend = Arc::new(Backend {
+        case: "success",
+        calls: Mutex::new(vec![]),
+        epoch: epoch.clone(),
+        revision: AtomicU64::new(9),
+    });
+    let router = Router::new()
+        .route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerService/GetSnapshot",
+            post(|| async {
+                Json(v2::GetSnapshotResponse {
+                    context: context(),
+                    snapshot: Some(v2::Snapshot {
+                        server_instance_id: "instance".into(),
+                        breakpoints: vec![v2::Breakpoint {
+                            breakpoint_id: "breakpoint/log".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                })
+            }),
+        )
+        .route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerService/ListFrames",
+            post(frames),
+        )
+        .route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate",
+            post(evaluate),
+        )
+        .route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerService/GetExecutionState",
+            post(state),
+        )
+        .route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Execute",
+            post(execute),
+        )
+        .with_state(backend.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = DdbClient::new(ddb_api_client::ClientConfig::new(format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    )))
+    .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let (requests, receiver) = tokio::sync::mpsc::channel(8);
+    let (messages, mut updates) = tokio::sync::mpsc::channel(8);
+    let worker = tokio::spawn(crate::worker::run(
+        client,
+        Arc::default(),
+        receiver,
+        messages,
+    ));
+    let make_stop = |revision| {
+        let mut state = stopped();
+        state.revision = revision;
+        Stop {
+            state,
+            server_instance: "instance".into(),
+            control_epoch: 1,
+            current_epoch: epoch.clone(),
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        requests.send(BackendRequest::ConfigureLogpoint { id: "breakpoint/log".into(), instance: "instance".into(), template: Some(Template::parse("value {counter}").unwrap()) }).await.unwrap();
+        // Queue the stop without waiting for the configuration acknowledgement.
+        requests.send(BackendRequest::ClassifyStop(make_stop(9))).await.unwrap();
+        requests.send(BackendRequest::ClassifyStop(make_stop(9))).await.unwrap();
+        assert!(matches!(updates.recv().await, Some(UiMessage::LogpointsConfigured { ids, .. }) if ids == ["breakpoint/log"]));
+        assert!(matches!(updates.recv().await, Some(UiMessage::LogpointOutput(text)) if text == "value 42\n"));
+        loop {
+            if backend.calls.lock().unwrap().iter().any(|call| call == "continue") { break; }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        requests.send(BackendRequest::ConfigureLogpoint { id: "breakpoint/log".into(), instance: "instance".into(), template: None }).await.unwrap();
+        assert!(matches!(updates.recv().await, Some(UiMessage::LogpointsConfigured { ids, .. }) if ids.is_empty()));
+        requests.send(BackendRequest::ClassifyStop(make_stop(10))).await.unwrap();
+        assert!(matches!(updates.recv().await, Some(UiMessage::ClassifiedStop { error: None, .. })));
+        assert_eq!(backend.calls.lock().unwrap().iter().filter(|call| *call == "continue").count(), 1);
+    }).await.unwrap();
+    drop(requests);
+    worker.await.unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
 async fn exercise(
     case: &'static str,
     template: &str,
