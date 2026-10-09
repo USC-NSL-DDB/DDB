@@ -912,7 +912,7 @@ async fn list_scope_variables(
         .await?)
 }
 
-async fn complete_operation(
+pub(crate) async fn complete_operation(
     client: &ApiClient,
     admission: v2::OperationAdmissionResponse,
 ) -> anyhow::Result<v2::Operation> {
