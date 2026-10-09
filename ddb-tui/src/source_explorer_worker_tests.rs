@@ -3,6 +3,51 @@ use axum::{extract::State, routing::post, Json, Router};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
+#[tokio::test]
+async fn refresh_explicitly_requests_all_ui_sections_including_execution() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let router = Router::new().route(
+        "/api/v2/rpc/ddb.api.v2.DebuggerService/GetSnapshot",
+        post({
+            let captured = captured.clone();
+            move |Json(request): Json<v2::GetSnapshotRequest>| {
+                let captured = captured.clone();
+                async move {
+                    *captured.lock().unwrap() = request.sections;
+                    Json(v2::GetSnapshotResponse {
+                        snapshot: Some(v2::Snapshot::default()),
+                        ..Default::default()
+                    })
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+    let (messages, mut updates) = mpsc::channel(4);
+    refresh(&client, &messages).await.unwrap();
+    assert!(matches!(updates.recv().await, Some(UiMessage::Snapshot(_))));
+    server.abort();
+    let _ = server.await;
+    let sections = captured.lock().unwrap();
+    for required in [
+        v2::SnapshotSection::Topology,
+        v2::SnapshotSection::Selection,
+        v2::SnapshotSection::Execution,
+        v2::SnapshotSection::Breakpoints,
+        v2::SnapshotSection::PendingOperations,
+        v2::SnapshotSection::Extensions,
+        v2::SnapshotSection::Capabilities,
+    ] {
+        assert!(
+            sections.contains(&(required as i32)),
+            "refresh omitted {required:?}"
+        );
+    }
+}
+
 struct Backend {
     read_started: Semaphore,
     read_allowed: Semaphore,

@@ -722,11 +722,31 @@ async fn handle(
     Ok(())
 }
 
+fn ui_state_sync_options() -> StateSyncOptions {
+    StateSyncOptions {
+        // Execution is deliberately not part of DDB's default snapshot.
+        // Both refresh and stream rehydration replace the complete UI model.
+        sections: [
+            v2::SnapshotSection::Topology,
+            v2::SnapshotSection::Selection,
+            v2::SnapshotSection::Execution,
+            v2::SnapshotSection::Breakpoints,
+            v2::SnapshotSection::PendingOperations,
+            v2::SnapshotSection::Extensions,
+            v2::SnapshotSection::Capabilities,
+        ]
+        .into_iter()
+        .map(|section| section as i32)
+        .collect(),
+        ..Default::default()
+    }
+}
+
 async fn refresh(client: &ApiClient, messages: &mpsc::Sender<UiMessage>) -> anyhow::Result<()> {
     let snapshot = client
         .get_snapshot(v2::GetSnapshotRequest {
             context: None,
-            sections: Vec::new(),
+            sections: ui_state_sync_options().sections,
             target: None,
         })
         .await?
@@ -950,7 +970,7 @@ fn parse_jump_location(value: &str) -> anyhow::Result<v2::SourceLocation> {
 /// Runs the SDK-owned snapshot/replay convergence loop. The UI receives only
 /// detached, already-converged public snapshots.
 pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) {
-    let mut sync = match client.projected_state_sync(StateSyncOptions::default()) {
+    let mut sync = match client.projected_state_sync(ui_state_sync_options()) {
         Ok(sync) => sync,
         Err(error) => {
             let _ = messages.send(UiMessage::Error(error.to_string())).await;

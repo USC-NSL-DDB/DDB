@@ -181,6 +181,41 @@ fn greeter_auto_attach_all_stop_terminal_workflow() {
             .iter()
             .all(|t| t.state == v2::ThreadState::Stopped as i32)
     });
+    let stopped = ddb
+        .runtime
+        .block_on(ddb.client.get_snapshot(v2::GetSnapshotRequest {
+            sections: vec![
+                v2::SnapshotSection::Topology as i32,
+                v2::SnapshotSection::Execution as i32,
+                v2::SnapshotSection::Breakpoints as i32,
+            ],
+            ..Default::default()
+        }))
+        .unwrap()
+        .snapshot
+        .unwrap();
+    let server = stopped
+        .sessions
+        .iter()
+        .find(|session| session.display_name.contains("tui-server"))
+        .unwrap();
+    let server_threads = stopped
+        .threads
+        .iter()
+        .filter(|thread| thread.session_id == server.session_id)
+        .map(|thread| thread.thread_id.as_str())
+        .collect::<Vec<_>>();
+    let server_stops = stopped.execution_states.iter().filter(|state| {
+        matches!(state.target.as_ref().and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Thread(target)) if server_threads.contains(&target.thread_id.as_str()))
+    }).collect::<Vec<_>>();
+    assert!(server_stops.iter().any(|state| {
+        let Some(v2::target::Selector::Thread(target)) = state.target.as_ref().and_then(|target| target.selector.as_ref()) else { return false };
+        !state.running && state.stop_reason.as_ref().is_some_and(|reason| {
+            reason.kind == v2::StopReasonKind::Breakpoint as i32
+                && reason.thread_id.as_deref().is_none_or(|owner| owner == target.thread_id)
+                && reason.breakpoint_id.as_ref().is_some_and(|id| stopped.breakpoints.iter().any(|bp| bp.breakpoint_id == *id || bp.sub_breakpoints.iter().any(|member| member.sub_breakpoint_id == *id && member.session_id == server.session_id)))
+        })
+    }), "server breakpoint location must retain a navigable canonical breakpoint stop: {server_stops:#?}");
     tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
     let hit_row = tui
         .frames
