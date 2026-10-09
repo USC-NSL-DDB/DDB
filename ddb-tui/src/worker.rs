@@ -304,22 +304,37 @@ async fn handle(
                 .send(UiMessage::WatchEvaluated { request, result })
                 .await?;
         }
-        BackendRequest::AssignVariable { edit, value } => {
+        BackendRequest::AssignValue { edit, value } => {
             let result = async {
-                let admission = client
-                    .set_variable(v2::SetVariableRequest {
-                        target: Some(thread_target(&edit.owner_thread)),
-                        variable_id: edit.variable_id.clone(),
-                        value,
-                        ..Default::default()
-                    })
-                    .await?;
+                let admission = match &edit.target {
+                    crate::model::ValueEditTarget::Variable(variable_id) => {
+                        client
+                            .set_variable(v2::SetVariableRequest {
+                                target: Some(thread_target(&edit.owner_thread)),
+                                variable_id: variable_id.clone(),
+                                value,
+                                ..Default::default()
+                            })
+                            .await?
+                    }
+                    crate::model::ValueEditTarget::Register(name) => {
+                        client
+                            .evaluate(v2::EvaluateRequest {
+                                target: Some(thread_target(&edit.owner_thread)),
+                                frame_id: Some(edit.frame_id.clone()),
+                                expression: format!("(${name}) = ({value})"),
+                                evaluation_context: v2::EvaluationContext::Repl as i32,
+                                ..Default::default()
+                            })
+                            .await?
+                    }
+                };
                 complete_operation(client, admission).await
             }
             .await
             .map_err(|error| format!("{error:#}"));
             messages
-                .send(UiMessage::VariableAssigned { edit, result })
+                .send(UiMessage::ValueAssigned { edit, result })
                 .await?;
         }
         BackendRequest::Bootstrap => {

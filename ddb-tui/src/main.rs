@@ -524,7 +524,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 app.status = "the connected DDB backend does not support evaluation".to_string();
             }
         }
-        KeyCode::Char('=') if app.focus == Focus::Variables => start_variable_edit(app),
+        KeyCode::Char('=') if matches!(app.focus, Focus::Variables | Focus::Registers) => {
+            start_value_edit(app)
+        }
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
         KeyCode::Delete | KeyCode::Backspace if app.focus == Focus::Variables => {
             if !app.remove_selected_watch() {
@@ -659,18 +661,18 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
             let input = app.commit_input();
             if !input.is_empty() || mode == InputMode::Breakpoint {
                 match mode {
-                    InputMode::AssignVariable => {
-                        if let Some(edit) = app.variable_edit.take() {
+                    InputMode::AssignValue => {
+                        if let Some(edit) = app.value_edit.take() {
                             if app.inspection_is_current(edit.generation, &edit.origin_thread)
                                 && app.current_frame().is_some_and(|f| f.id == edit.frame_id)
                             {
                                 queue_request(
                                     app,
                                     requests,
-                                    BackendRequest::AssignVariable { edit, value: input },
+                                    BackendRequest::AssignValue { edit, value: input },
                                 );
                             } else {
-                                app.error("The variable's inspection context changed. Select it again before editing.");
+                                app.error("The value's inspection context changed. Select it again before editing.");
                             }
                         }
                     }
@@ -1178,32 +1180,59 @@ fn refresh_watches(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
     }
 }
 
-fn start_variable_edit(app: &mut App) {
-    let Some(variable) = app
-        .variables
-        .get(app.selected_variable)
-        .filter(|v| !v.scope && !v.id.is_empty())
-    else {
-        app.status = "Select a variable value, not a scope, to edit.".into();
-        return;
+fn start_value_edit(app: &mut App) {
+    let (target, name) = if app.focus == Focus::Registers {
+        if !app.capabilities.supports_inspection("evaluate") {
+            app.error("Register assignment requires DDB evaluation support.");
+            return;
+        }
+        let Some(register) = app
+            .registers
+            .get(app.selected_register)
+            .filter(|r| !r.unavailable)
+        else {
+            app.error("Select an available register to edit.");
+            return;
+        };
+        let name = register.name.trim_start_matches('$');
+        if name.is_empty() || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+            app.error("This register name cannot be used in an assignment expression.");
+            return;
+        }
+        (
+            model::ValueEditTarget::Register(name.into()),
+            register.name.clone(),
+        )
+    } else {
+        let Some(variable) = app
+            .variables
+            .get(app.selected_variable)
+            .filter(|v| !v.scope && !v.id.is_empty())
+        else {
+            app.status = "Select a variable value, not a scope, to edit.".into();
+            return;
+        };
+        (
+            model::ValueEditTarget::Variable(variable.id.clone()),
+            variable.name.clone(),
+        )
     };
     let Some(frame) = app.current_frame().filter(|f| !f.boundary) else {
-        app.status = "Select a stopped, inspectable frame to edit variables.".into();
+        app.status = "Select a stopped, inspectable frame to edit values.".into();
         return;
     };
     let Some(origin) = app.current_thread() else {
         return;
     };
-    let edit = model::VariableEdit {
-        variable_id: variable.id.clone(),
+    let edit = model::ValueEdit {
+        target,
         owner_thread: frame.thread_id.clone(),
         origin_thread: origin.id.clone(),
         frame_id: frame.id.clone(),
         generation: app.inspection_generation,
     };
-    let name = variable.name.clone();
-    app.start_input(InputMode::AssignVariable);
-    app.variable_edit = Some(edit);
+    app.start_input(InputMode::AssignValue);
+    app.value_edit = Some(edit);
     app.status = format!("Assign {name}: enter a value in the debugger's assignment syntax");
 }
 
@@ -1738,7 +1767,7 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
         UiMessage::WatchEvaluated { request, result } => app.finish_watch(request, result),
-        UiMessage::VariableAssigned { edit, result } => {
+        UiMessage::ValueAssigned { edit, result } => {
             if !app.inspection_is_current(edit.generation, &edit.origin_thread)
                 || !app.current_frame().is_some_and(|f| f.id == edit.frame_id)
             {
@@ -1747,7 +1776,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             match result {
                 Ok(receipt) => {
                     let completed = receipt.state == v2::OperationState::Completed as i32;
-                    app.push_receipt("assign variable", &receipt);
+                    app.push_receipt("assign value", &receipt);
                     if completed {
                         let generation = app.begin_frame_inspection();
                         queue_request(
@@ -3367,6 +3396,56 @@ mod tests {
     }
 
     #[test]
+    fn register_assignment_captures_distributed_owner_and_rejects_stale_prompt() {
+        let mut app = distributed_caller_app();
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::Evaluate as i32);
+        app.registers.push(model::Register {
+            name: "$rax".into(),
+            value: "0".into(),
+            unavailable: false,
+        });
+        app.focus = Focus::Registers;
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::AssignValue);
+        app.input = "42".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::AssignValue { edit, value }
+            if matches!(&edit.target, model::ValueEditTarget::Register(name) if name == "rax")
+                && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child"
+                && edit.frame_id == "frame/parent" && value == "42")
+        );
+        start_value_edit(&mut app);
+        app.inspection_generation += 1;
+        app.input = "99".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(app.status.contains("context changed"));
+        app.registers[0].unavailable = true;
+        start_value_edit(&mut app);
+        assert!(app.status.contains("available register"));
+        app.registers[0].unavailable = false;
+        app.registers[0].name = "rax) = (1); bad".into();
+        start_value_edit(&mut app);
+        assert!(app.status.contains("register name"));
+    }
+
+    #[test]
     fn variable_assignment_captures_owner_and_rejects_changed_inspection() {
         let mut app = distributed_caller_app();
         app.apply_variables(vec![v2::Variable {
@@ -3389,10 +3468,10 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::AssignVariable { edit, value }
-            if edit.variable_id == "var/parent" && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child" && value == "42")
+            matches!(rx.try_recv().unwrap(), BackendRequest::AssignValue { edit, value }
+            if matches!(&edit.target, model::ValueEditTarget::Variable(id) if id == "var/parent") && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child" && value == "42")
         );
-        start_variable_edit(&mut app);
+        start_value_edit(&mut app);
         app.inspection_generation += 1;
         app.input = "99".into();
         handle_prompt_key(
@@ -3405,57 +3484,62 @@ mod tests {
     }
 
     #[test]
-    fn variable_assignment_refreshes_its_frame_and_ignores_stale_results() {
-        let mut app = distributed_caller_app();
-        let edit = model::VariableEdit {
-            variable_id: "var/parent".into(),
-            owner_thread: "thread/parent".into(),
-            origin_thread: "thread/child".into(),
-            frame_id: app.current_frame().unwrap().id.clone(),
-            generation: app.inspection_generation,
-        };
-        let (tx, mut rx) = mpsc::channel(4);
-        apply_message(
-            &mut app,
-            UiMessage::VariableAssigned {
-                edit: edit.clone(),
-                result: Err("Variable is read-only".into()),
-            },
-            &tx,
-        );
-        assert!(app.status.contains("read-only"));
-        assert!(rx.try_recv().is_err());
-        assert_eq!(app.inspection_generation, edit.generation);
+    fn value_assignment_refreshes_its_frame_and_ignores_stale_results() {
+        for target in [
+            model::ValueEditTarget::Variable("var/parent".into()),
+            model::ValueEditTarget::Register("rax".into()),
+        ] {
+            let mut app = distributed_caller_app();
+            let edit = model::ValueEdit {
+                target,
+                owner_thread: "thread/parent".into(),
+                origin_thread: "thread/child".into(),
+                frame_id: app.current_frame().unwrap().id.clone(),
+                generation: app.inspection_generation,
+            };
+            let (tx, mut rx) = mpsc::channel(4);
+            apply_message(
+                &mut app,
+                UiMessage::ValueAssigned {
+                    edit: edit.clone(),
+                    result: Err("Variable is read-only".into()),
+                },
+                &tx,
+            );
+            assert!(app.status.contains("read-only"));
+            assert!(rx.try_recv().is_err());
+            assert_eq!(app.inspection_generation, edit.generation);
 
-        apply_message(
-            &mut app,
-            UiMessage::VariableAssigned {
-                edit: edit.clone(),
-                result: Ok(v2::Operation {
-                    state: v2::OperationState::Completed as i32,
-                    ..Default::default()
-                }),
-            },
-            &tx,
-        );
-        assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::InspectFrame {
+            apply_message(
+                &mut app,
+                UiMessage::ValueAssigned {
+                    edit: edit.clone(),
+                    result: Ok(v2::Operation {
+                        state: v2::OperationState::Completed as i32,
+                        ..Default::default()
+                    }),
+                },
+                &tx,
+            );
+            assert!(
+                matches!(rx.try_recv().unwrap(), BackendRequest::InspectFrame {
             thread_id, generation, frame_id
         } if thread_id == edit.origin_thread && frame_id == edit.frame_id
             && generation == app.inspection_generation && generation > edit.generation)
-        );
-        assert_eq!(app.current_frame().unwrap().id, edit.frame_id);
-        let status = app.status.clone();
-        apply_message(
-            &mut app,
-            UiMessage::VariableAssigned {
-                edit,
-                result: Err("stale failure".into()),
-            },
-            &tx,
-        );
-        assert_eq!(app.status, status);
-        assert!(rx.try_recv().is_err());
+            );
+            assert_eq!(app.current_frame().unwrap().id, edit.frame_id);
+            let status = app.status.clone();
+            apply_message(
+                &mut app,
+                UiMessage::ValueAssigned {
+                    edit,
+                    result: Err("stale failure".into()),
+                },
+                &tx,
+            );
+            assert_eq!(app.status, status);
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[test]

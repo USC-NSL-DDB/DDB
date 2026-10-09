@@ -45,7 +45,7 @@ pub enum InputMode {
     Breakpoint,
     FunctionBreakpoint,
     ExtensionAction,
-    AssignVariable,
+    AssignValue,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -302,8 +302,14 @@ pub struct WatchEvaluation {
 }
 
 #[derive(Clone, Debug)]
-pub struct VariableEdit {
-    pub variable_id: String,
+pub enum ValueEditTarget {
+    Variable(String),
+    Register(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct ValueEdit {
+    pub target: ValueEditTarget,
     pub owner_thread: String,
     pub origin_thread: String,
     pub frame_id: String,
@@ -418,7 +424,7 @@ pub struct App {
     pub topology_viewport: crate::display_text::HorizontalViewport,
     pub breakpoint_viewport: crate::display_text::HorizontalViewport,
     pub input_cursor: usize,
-    pub variable_edit: Option<VariableEdit>,
+    pub value_edit: Option<ValueEdit>,
     input_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
@@ -497,7 +503,7 @@ impl App {
             breakpoint_viewport: Default::default(),
             input: String::new(),
             input_cursor: 0,
-            variable_edit: None,
+            value_edit: None,
             input_history: VecDeque::with_capacity(100),
             history_index: None,
             history_draft: String::new(),
@@ -1717,7 +1723,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
-        self.variable_edit = None;
+        self.value_edit = None;
         if self.input_mode == InputMode::ExtensionAction {
             self.pending_extension_action = None;
         }
@@ -2460,8 +2466,8 @@ pub enum BackendRequest {
         session_id: String,
     },
     EvaluateWatch(WatchEvaluation),
-    AssignVariable {
-        edit: VariableEdit,
+    AssignValue {
+        edit: ValueEdit,
         value: String,
     },
     Bootstrap,
@@ -2560,8 +2566,8 @@ pub enum UiMessage {
         request: WatchEvaluation,
         result: Result<v2::EvaluationResult, String>,
     },
-    VariableAssigned {
-        edit: VariableEdit,
+    ValueAssigned {
+        edit: ValueEdit,
         result: Result<v2::Operation, String>,
     },
     PeerPauseFailed {

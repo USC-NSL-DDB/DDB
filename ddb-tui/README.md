@@ -142,6 +142,12 @@ value syntax. Scope headings cannot be edited. The request uses the variable's
 opaque identity and owning frame, not its display name. A changed inspection
 context cancels submission; backend read-only/stale-handle errors are reported.
 
+In Registers, `=` edits the selected available register through DDB's typed
+evaluation API, using the selected frame and its owning thread. Enter a value
+in debugger expression syntax. Register and variable views refresh after a
+successful assignment. As in the VSCode adapter, register assignment is a
+mutating REPL evaluation; expressions may have side effects.
+
 Watches refresh for the selected stopped frame, including distributed caller
 frames and after variable assignment. Enter expands retained values through
 DDB's variable API. Errors appear on the watch row. Expressions survive resume

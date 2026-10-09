@@ -4,6 +4,58 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 #[tokio::test]
+async fn register_assignment_uses_typed_evaluation_with_owning_frame() {
+    let router = Router::new().route(
+        "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate",
+        post(|Json(request): Json<v2::EvaluateRequest>| async move {
+            assert_eq!(
+                request.target,
+                Some(crate::api::thread_target("thread/parent"))
+            );
+            assert_eq!(request.frame_id.as_deref(), Some("frame/parent"));
+            assert_eq!(request.expression, "($rax) = (42)");
+            assert_eq!(
+                request.evaluation_context,
+                v2::EvaluationContext::Repl as i32
+            );
+            Json(v2::OperationAdmissionResponse {
+                operation: Some(v2::Operation {
+                    state: v2::OperationState::Completed as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+    let (messages, mut updates) = mpsc::channel(4);
+    handle(
+        &client,
+        &messages,
+        BackendRequest::AssignValue {
+            edit: crate::model::ValueEdit {
+                target: crate::model::ValueEditTarget::Register("rax".into()),
+                owner_thread: "thread/parent".into(),
+                origin_thread: "thread/child".into(),
+                frame_id: "frame/parent".into(),
+                generation: 7,
+            },
+            value: "42".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(updates.recv().await, Some(UiMessage::ValueAssigned { edit, result: Ok(_) }) if edit.generation == 7 && edit.origin_thread == "thread/child")
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn refresh_explicitly_requests_all_ui_sections_including_execution() {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let router = Router::new().route(
