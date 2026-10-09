@@ -1384,6 +1384,62 @@ fn real_debugger_workflow(backend: &str) {
         );
     }
 
+    // Edit a scratch register through the TUI, observe the real backend and
+    // refreshed pane, then restore it before allowing the fixture to execute.
+    let register_name = if cfg!(target_arch = "aarch64") {
+        "x0"
+    } else {
+        "rax"
+    };
+    let register_frame = ddb
+        .runtime
+        .block_on(ddb.client.list_frames(v2::ListFramesRequest {
+            thread_id: ddb.global_thread_id(),
+            ..Default::default()
+        }))
+        .unwrap()
+        .frames[0]
+        .frame_id
+        .clone();
+    let original = ddb.register_value(
+        &register_frame,
+        register_name,
+        v2::RegisterFormat::Hexadecimal,
+    );
+    tui.select_visible_register(register_name);
+    tui.send(b"=31337\r");
+    tui.wait_for("assign value: completed");
+    let assigned = ddb.register_value(
+        &register_frame,
+        register_name,
+        v2::RegisterFormat::Hexadecimal,
+    );
+    assert_eq!(
+        u64::from_str_radix(assigned.trim_start_matches("0x"), 16),
+        Ok(31337),
+        "register read after completed assignment: {assigned:?}"
+    );
+    ddb.wait_until("register assignment to reach backend", |ddb| {
+        let value = ddb.register_value(
+            &register_frame,
+            register_name,
+            v2::RegisterFormat::Hexadecimal,
+        );
+        u64::from_str_radix(value.trim_start_matches("0x"), 16) == Ok(31337)
+    });
+    let rendered = ddb.register_value(&register_frame, register_name, v2::RegisterFormat::Natural);
+    tui.wait_for_register_value(register_name, &rendered);
+    tui.send(format!("={original}\r").as_bytes());
+    ddb.wait_until("register restoration to reach backend", |ddb| {
+        ddb.register_value(
+            &register_frame,
+            register_name,
+            v2::RegisterFormat::Hexadecimal,
+        ) == original
+    });
+    let restored = ddb.register_value(&register_frame, register_name, v2::RegisterFormat::Natural);
+    tui.wait_for_register_value(register_name, &restored);
+
     // Read a real stack range through the typed API and expand Memory alone.
     // Both backends expose the stack-pointer register as $sp.
     tui.send(b"m$sp ; 256\r");
@@ -1450,7 +1506,30 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("breakpoint_target");
     tui.wait_for("counter");
     tui.wait_for("std::hint::black_box");
-    tui.wait_for("hits:1");
+    // The paused-hit prefix can push the cumulative count beyond the narrow
+    // pane. Exercise expansion rather than relying on a transient short label.
+    let breakpoint_header = tui
+        .frames
+        .lock()
+        .unwrap()
+        .back()
+        .unwrap()
+        .lines()
+        .position(|line| {
+            line.chars()
+                .take(33)
+                .collect::<String>()
+                .contains("DDB Breakpoints")
+        })
+        .unwrap()
+        + 1;
+    tui.send(format!("\x1b[<0;5;{breakpoint_header}M\x1b[<0;5;{breakpoint_header}m").as_bytes());
+    tui.send(b"z");
+    tui.wait_for_current_frame(|screen| screen.contains("[Restore]") && screen.contains("hits:1"));
+    tui.send(b"z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("DDB Topology") && !screen.contains("[Restore]")
+    });
     ddb.wait_for_snapshot(|snapshot| {
         snapshot
             .breakpoints
@@ -1467,7 +1546,7 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("Watch: counter");
     tui.select_visible_variable("counter");
     tui.send(b"=31337\r");
-    tui.wait_for("assign variable: completed");
+    tui.wait_for("assign value: completed");
     tui.wait_for_frame(|frame| {
         let lines = frame.lines().collect::<Vec<_>>();
         lines.windows(2).any(|rows| {
@@ -1785,6 +1864,28 @@ StaticSessions:
             .and_then(|frame| frame.location.as_ref())
             .expect("top frame should have a location")
             .line as usize
+    }
+
+    fn register_value(&self, frame_id: &str, name: &str, format: v2::RegisterFormat) -> String {
+        let register = self
+            .runtime
+            .block_on(self.client.list_registers(v2::ListRegistersRequest {
+                frame_id: frame_id.into(),
+                format: format as i32,
+                ..Default::default()
+            }))
+            .expect("ListRegisters should succeed")
+            .registers
+            .into_iter()
+            .find(|register| register.name == name && !register.unavailable)
+            .expect("scratch register should be available");
+        if format == v2::RegisterFormat::Natural {
+            register.value
+        } else {
+            register
+                .formatted_value
+                .expect("requested register formatting should be returned")
+        }
     }
 
     fn wait_for_top_frame_line_change(&mut self, thread_id: &str, previous: usize) -> usize {
@@ -2129,6 +2230,44 @@ impl Tui {
             );
             thread::sleep(POLL);
         }
+    }
+
+    fn select_visible_register(&mut self, name: &str) {
+        self.wait_for_current_frame(|frame| {
+            frame.lines().any(|line| {
+                line.chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains(&format!(" {name} "))
+            })
+        });
+        let row = self
+            .frames
+            .lock()
+            .unwrap()
+            .back()
+            .unwrap()
+            .lines()
+            .position(|line| {
+                line.chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains(&format!(" {name} "))
+            })
+            .unwrap()
+            + 1;
+        self.send(format!("\x1b[<0;112;{row}M\x1b[<0;112;{row}m").as_bytes());
+    }
+
+    fn wait_for_register_value(&mut self, name: &str, value: &str) {
+        self.wait_for_current_frame(|frame| {
+            frame.lines().any(|line| {
+                line.chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains(&format!(" {name} {value}"))
+            })
+        });
     }
 
     fn wait_for_variable_value(&mut self, name: &str, value: &str) {
