@@ -795,6 +795,12 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
             )
         })
         .unwrap_or_else(|| "Source".to_string());
+    let loading = app.source_browser.pending_generation().is_some();
+    let source_label = if loading {
+        format!("Loading source · {source_label}")
+    } else {
+        source_label
+    };
     let source_title = title(app, Focus::Source, &source_label);
     let block = panel_block(&source_title, app.focus == Focus::Source);
     let inner = block.inner(area);
@@ -819,9 +825,13 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
     }
     let Some(source) = app.source_browser.document() else {
         frame.render_widget(
-            Paragraph::new("o: source roots · Ctrl-P: debugger files · g: path:line")
-                .style(Style::default().fg(MUTED))
-                .alignment(Alignment::Center),
+            Paragraph::new(if loading {
+                "Resolving or reading source…\n\nYou can use o, Ctrl-P, or g to open another file."
+            } else {
+                "o: source roots · Ctrl-P: debugger files · g: path:line"
+            })
+            .style(Style::default().fg(MUTED))
+            .alignment(Alignment::Center),
             inner,
         );
         return;
@@ -1965,6 +1975,56 @@ mod v2_tests {
             app.areas.control_at(area.x, area.y),
             Some(Control::RevealFrame)
         );
+    }
+
+    #[test]
+    fn source_loading_is_visible_until_completion_or_failure() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Source;
+        let request = app
+            .source_browser
+            .navigate(
+                None,
+                v2::SourceLocation {
+                    path: Some("/src/pending.rs".into()),
+                    line: 1,
+                    ..Default::default()
+                },
+                crate::source_browser::Navigation::Manual,
+            )
+            .unwrap();
+        assert!(render(&mut app, 140, 40).contains("Loading source"));
+        app.source_browser
+            .fail_with_error(request.generation, "Source could not be resolved".into());
+        let failed = render(&mut app, 140, 40);
+        assert!(!failed.contains("Loading source"));
+        assert!(failed.contains("Source could not be resolved"));
+        app.source_browser.set_following(true);
+        crate::source_browser::tests::show_source(
+            &mut app.source_browser,
+            v2::SourceContent {
+                source: Some(v2::SourceFile {
+                    source_reference: "source/ready".into(),
+                    path: Some("/src/ready.rs".into()),
+                    ..Default::default()
+                }),
+                start_line: 1,
+                line_count: 1,
+                total_lines: 1,
+                content: "ready_source_line".into(),
+                ..Default::default()
+            },
+            1,
+        );
+        assert!(!render(&mut app, 140, 40).contains("Loading source"));
+        assert!(render(&mut app, 140, 40).contains("ready_source_line"));
+        let pending = app.source_browser.go_to_line(1).unwrap();
+        let loading = render(&mut app, 140, 40);
+        assert!(loading.contains("Loading source"));
+        assert!(loading.contains("ready_source_line"));
+        app.source_browser.fail(pending.generation);
+        assert!(!render(&mut app, 140, 40).contains("Loading source"));
+        render(&mut app, 1, 1);
     }
 
     #[test]
