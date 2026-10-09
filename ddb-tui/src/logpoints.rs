@@ -15,6 +15,9 @@ use std::sync::{
 #[path = "logpoint_worker_tests.rs"]
 mod worker_tests;
 
+#[path = "logpoint_registry.rs"]
+mod registry;
+
 /// A logpoint may continue only the exact stop that initiated its evaluation.
 pub struct Stop {
     pub state: v2::ExecutionState,
