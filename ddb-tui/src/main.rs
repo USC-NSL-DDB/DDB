@@ -1,6 +1,9 @@
 mod api;
 mod cli;
 mod display_text;
+// Staged logpoint implementation: activate with its guarded stop lifecycle.
+#[cfg(test)]
+mod logpoints;
 mod model;
 mod output;
 mod source_binding;
