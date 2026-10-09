@@ -37,6 +37,13 @@ fn breakpoint_target(counter: u64) -> u64 {
     std::hint::black_box(counter.wrapping_add(request.flags - 2)) // BREAKPOINT_MARKER
 }
 
+// Keep the first instruction in this function's own source scope, so function
+// breakpoint tests do not depend on debugger-specific inline-frame selection.
+#[inline(never)]
+fn function_breakpoint_target(counter: u64) -> u64 {
+    counter
+}
+
 fn parse_arg(args: &[String], flag: &str) -> Option<String> {
     args.windows(2)
         .find(|window| window[0] == flag)
@@ -85,7 +92,7 @@ fn main() {
     let mut counter = 0u64;
     loop {
         let before_ns = realtime_nanos();
-        counter = breakpoint_target(counter);
+        counter = breakpoint_target(function_breakpoint_target(counter));
         if let Some(path) = clock_report.as_deref() {
             write_clock_delta(path, before_ns, realtime_nanos());
         }
