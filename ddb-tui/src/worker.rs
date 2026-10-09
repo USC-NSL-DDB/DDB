@@ -18,6 +18,8 @@ use crate::{
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const OPERATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_COLLECTION_ITEMS: usize = 10_000;
+const MAX_ACTIVE_INSPECTIONS: usize = 4;
+const MAX_PENDING_INSPECTIONS: usize = 64;
 
 #[cfg(test)]
 #[path = "source_explorer_worker_tests.rs"]
@@ -33,16 +35,30 @@ pub async fn run(
     let mut sources = JoinSet::new();
     let mut discoveries = JoinSet::new();
     let mut deferred = VecDeque::new();
+    let mut pending_inspections = VecDeque::new();
     let mut inspection_generation = None;
     loop {
         while let Some(result) = inspections.try_join_next() {
             report_inspection_failure(result, &messages).await;
         }
-        let request = match deferred.pop_front() {
+        let ready = deferred.pop_front().or_else(|| {
+            (inspections.len() < MAX_ACTIVE_INSPECTIONS)
+                .then(|| pending_inspections.pop_front())
+                .flatten()
+        });
+        let request = match ready {
             Some(request) => request,
-            None => match requests.recv().await {
-                Some(request) => request,
-                None => break,
+            None => tokio::select! {
+                result = inspections.join_next(), if !inspections.is_empty() => {
+                    if let Some(result) = result {
+                        report_inspection_failure(result, &messages).await;
+                    }
+                    continue;
+                }
+                request = requests.recv() => match request {
+                    Some(request) => request,
+                    None => break,
+                },
             },
         };
         if is_recovery(&request) {
@@ -92,40 +108,34 @@ pub async fn run(
             });
         } else if matches!(request, BackendRequest::CancelSourceDiscovery) {
             discoveries.abort_all();
-        } else if let Some((generation, thread_id)) = inspection_context(&request) {
+        } else if let Some((generation, _)) = inspection_context(&request) {
             if inspection_generation.is_some_and(|active| active != generation) {
                 inspections.abort_all();
+                pending_inspections.clear();
             }
             inspection_generation = Some(generation);
-            while inspections.len() >= 4 {
-                if let Some(result) = inspections.join_next().await {
-                    report_inspection_failure(result, &messages).await;
+            if inspections.len() >= MAX_ACTIVE_INSPECTIONS {
+                // Keep reading navigation and control requests while inspection
+                // slots are occupied. Bound the backlog independently of HTTP
+                // timeouts and report overload through the normal freshness path.
+                if pending_inspections.len() < MAX_PENDING_INSPECTIONS {
+                    pending_inspections.push_back(request);
+                } else {
+                    report_inspection_error(
+                        inspection_error_target(&request),
+                        "Inspection queue is full; retry after pending inspections complete".into(),
+                        &messages,
+                    )
+                    .await;
                 }
+                continue;
             }
             let client = client.clone();
             let messages = messages.clone();
             inspections.spawn(async move {
-                let parent_id = match &request {
-                    BackendRequest::ExpandVariable { variable_id, .. } => Some(variable_id.clone()),
-                    BackendRequest::ExpandScope { scope_id, .. } => Some(scope_id.clone()),
-                    _ => None,
-                };
+                let error_target = inspection_error_target(&request);
                 if let Err(error) = handle(&client, &messages, request).await {
-                    let error = format!("{error:#}");
-                    let update = match parent_id {
-                        Some(parent_id) => UiMessage::ExpansionError {
-                            generation,
-                            thread_id,
-                            parent_id,
-                            error,
-                        },
-                        None => UiMessage::InspectionError {
-                            generation,
-                            thread_id,
-                            error,
-                        },
-                    };
-                    let _ = messages.send(update).await;
+                    report_inspection_error(error_target, format!("{error:#}"), &messages).await;
                 }
             });
         } else {
@@ -144,6 +154,37 @@ pub async fn run(
     inspections.shutdown().await;
     sources.shutdown().await;
     discoveries.shutdown().await;
+}
+
+fn inspection_error_target(request: &BackendRequest) -> (u64, String, Option<String>) {
+    let (generation, thread_id) = inspection_context(request).expect("inspection request");
+    let parent_id = match request {
+        BackendRequest::ExpandVariable { variable_id, .. } => Some(variable_id.clone()),
+        BackendRequest::ExpandScope { scope_id, .. } => Some(scope_id.clone()),
+        _ => None,
+    };
+    (generation, thread_id, parent_id)
+}
+
+async fn report_inspection_error(
+    (generation, thread_id, parent_id): (u64, String, Option<String>),
+    error: String,
+    messages: &mpsc::Sender<UiMessage>,
+) {
+    let update = match parent_id {
+        Some(parent_id) => UiMessage::ExpansionError {
+            generation,
+            thread_id,
+            parent_id,
+            error,
+        },
+        None => UiMessage::InspectionError {
+            generation,
+            thread_id,
+            error,
+        },
+    };
+    let _ = messages.send(update).await;
 }
 
 async fn report_inspection_failure(
