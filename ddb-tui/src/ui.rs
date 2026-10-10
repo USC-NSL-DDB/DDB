@@ -821,6 +821,14 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
         );
         areas.source_explorer_open = Some(open);
     }
+    if area.width >= 26 && area.height > 0 {
+        let inspect = Rect::new(area.right() - 25, area.y, 13, 1);
+        frame.render_widget(
+            Paragraph::new(" Inspect [E] ").style(Style::default().fg(ACCENT)),
+            inspect,
+        );
+        areas.source_inspect = Some(inspect);
+    }
     app.source_browser.fit_viewport(inner.height as usize);
     app.source_browser
         .fit_horizontal(inner.width.saturating_sub(12) as usize);
@@ -1404,6 +1412,9 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::Command => ("Command", ":", ACCENT),
         InputMode::Evaluate => ("Evaluate", "e> ", GREEN),
         InputMode::Watch => ("Add watch expression", "w> ", GREEN),
+        InputMode::InspectExpression => {
+            ("Inspect once in selected frame (Esc cancels)", "E> ", GREEN)
+        }
         InputMode::AssignValue => ("Assign selected value (Esc cancels)", "= ", YELLOW),
         InputMode::Logpoint => (
             "Log message {expression}; empty restores stopping breakpoint",
@@ -1680,13 +1691,14 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Variables / Registers: = assign the selected value; Esc cancels"),
         Line::from("Breakpoints: L sets a log message with {expressions}; empty removes it"),
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
+        Line::from("E / source Inspect: one-shot expression inspection; expand in Variables; Delete dismisses"),
         Line::from("M in Variables: read selected variable/watch address in its owning frame"),
         Line::from("memory: Up/Down or wheel browse rows; Left/Right scroll columns; Home resets; z expand"),
         Line::from("g open source: line or path:line   J jump execution   s signal"),
         Line::from("j/k or Up/Down navigate; Page Up/Down moves one visible page"),
         Line::from("source: f follow execution   Alt+Left/Right navigation history"),
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
-        Line::from("w add watch; Variables: Delete removes a watch; Enter expands"),
+        Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),

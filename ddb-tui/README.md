@@ -154,8 +154,9 @@ keys, empty commands and control characters are rejected.
 | `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
 | `e` | Evaluate an expression |
 | `w` | Add a retained watch expression in Variables |
-| `Delete` in Variables | Remove the selected watch expression |
+| `Delete` in Variables | Remove the selected watch or dismiss the Inspect result |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
+| `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
 | `g` | Go to a source line (loads another source window when needed) |
 | `Left` / `Right` in Source | Scroll long source lines horizontally, keeping the gutter fixed |
@@ -243,6 +244,13 @@ including within a single long event. New events return the view to the tail.
 Registers have their own focus and selection: click the register pane or use
 `Tab`, then use arrows, Page Up/Down, or the mouse wheel to browse rows. Left/Right
 scroll long register values horizontally; `z` expands the register pane alone.
+
+`E` or the source header's `Inspect [E]` button opens a one-shot expression prompt.
+It captures the selected stopped frame, including a distributed caller, and uses
+DDB's `HOVER` evaluation context. Its `Inspect:` result supports the same child
+expansion and memory action as variables. Delete the result row to dismiss it.
+Changing frames or resuming clears it; it is not automatically re-evaluated like
+a watch. No expression is evaluated just because the mouse moves over source.
 
 `M` in Variables reads 256 bytes at the selected variable or watch's API-provided
 address, using the owning distributed frame. Values without an address report

@@ -37,6 +37,7 @@ pub enum InputMode {
     Normal,
     Command,
     Evaluate,
+    InspectExpression,
     Watch,
     Memory,
     Jump,
@@ -93,6 +94,7 @@ pub struct UiAreas {
     pub source_explorer_rows: Vec<(usize, Rect)>,
     pub source_explorer_controls: Vec<(crate::source_explorer::Control, Rect)>,
     pub source_explorer_open: Option<Rect>,
+    pub source_inspect: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -266,6 +268,7 @@ pub struct StackFrame {
 #[derive(Clone, Debug)]
 pub struct Variable {
     pub id: String,
+    pub inspection: bool,
     pub address: Option<String>,
     pub watch_id: Option<u64>,
     /// Scope rows dispatch ListVariables; value rows dispatch ExpandVariable.
@@ -297,6 +300,16 @@ pub struct WatchExpression {
 #[derive(Clone, Debug)]
 pub struct WatchEvaluation {
     pub watch: WatchExpression,
+    pub generation: u64,
+    pub origin_thread: String,
+    pub owner_thread: String,
+    pub frame_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpressionInspection {
+    pub id: u64,
+    pub expression: String,
     pub generation: u64,
     pub origin_thread: String,
     pub owner_thread: String,
@@ -407,6 +420,8 @@ pub struct SignalPicker {
 pub struct App {
     pub watches: Vec<WatchExpression>,
     next_watch_id: u64,
+    expression_inspection: Option<ExpressionInspection>,
+    next_expression_id: u64,
     pub api_endpoint: String,
     pub api_protocol: String,
     pub api_connected: bool,
@@ -492,6 +507,8 @@ impl App {
         Self {
             watches: Vec::new(),
             next_watch_id: 1,
+            expression_inspection: None,
+            next_expression_id: 1,
             api_endpoint,
             api_protocol: "negotiating".to_string(),
             api_connected: false,
@@ -1004,6 +1021,7 @@ impl App {
             .map(|scope| Variable {
                 watch_id: None,
                 id: scope.scope_id,
+                inspection: false,
                 address: None,
                 scope: true,
                 loading: !scope.expensive && scope.variable_count != Some(0),
@@ -1021,12 +1039,12 @@ impl App {
                 expanded: false,
             })
             .collect::<Vec<_>>();
-        let mut in_watch = false;
+        let mut in_expression = false;
         self.variables.retain(|variable| {
             if variable.depth == 0 {
-                in_watch = variable.watch_id.is_some();
+                in_expression = variable.watch_id.is_some() || variable.inspection;
             }
-            in_watch
+            in_expression
         });
         self.variables.extend(scopes);
         self.selected_variable = bounded(self.selected_variable, self.variables.len());
@@ -1812,6 +1830,9 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
+        if self.input_mode == InputMode::InspectExpression {
+            self.clear_expression_inspection();
+        }
         self.value_edit = None;
         self.logpoint_edit = None;
         if self.input_mode == InputMode::ExtensionAction {
@@ -1929,6 +1950,7 @@ impl App {
     }
 
     fn clear_inspection_details(&mut self) {
+        self.expression_inspection = None;
         self.variables.clear();
         self.reset_watch_rows();
         self.registers.clear();
@@ -2261,6 +2283,7 @@ fn variable_view(variable: v2::Variable, depth: usize) -> Variable {
     Variable {
         watch_id: None,
         id: variable.variable_id,
+        inspection: false,
         address: variable.address,
         scope: false,
         loading: false,
@@ -2596,6 +2619,7 @@ pub enum BackendRequest {
         setup: crate::debugger_setup::Setup,
     },
     EvaluateWatch(WatchEvaluation),
+    InspectExpression(ExpressionInspection),
     AssignValue {
         edit: ValueEdit,
         value: String,
@@ -2692,6 +2716,10 @@ pub struct BreakpointOptions {
 
 #[derive(Debug)]
 pub enum UiMessage {
+    ExpressionInspected {
+        request: ExpressionInspection,
+        result: Result<v2::EvaluationResult, String>,
+    },
     LogpointsConfigured {
         instance: String,
         ids: Vec<String>,
@@ -3577,6 +3605,9 @@ mod v2_tests {
 }
 #[path = "watches.rs"]
 mod watches;
+
+#[path = "expression_inspection.rs"]
+mod expression_inspection;
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;

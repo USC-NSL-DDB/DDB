@@ -540,9 +540,20 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             start_value_edit(app)
         }
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
+        KeyCode::Char('E') => {
+            if let Err(error) = app.start_expression_inspection() {
+                app.error(error);
+            }
+        }
         KeyCode::Delete | KeyCode::Backspace if app.focus == Focus::Variables => {
-            if !app.remove_selected_watch() {
-                app.status = "Select a watch expression to remove it".into();
+            if app
+                .variables
+                .get(app.selected_variable)
+                .is_some_and(|row| row.inspection)
+            {
+                app.clear_expression_inspection();
+            } else if !app.remove_selected_watch() {
+                app.status = "Select a watch or Inspect result row to dismiss it".into();
             }
         }
         KeyCode::Char('m') => {
@@ -680,10 +691,15 @@ fn submit_breakpoint_target_picker(app: &mut App, requests: &mpsc::Sender<Backen
 
 fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
     match key.code {
-        KeyCode::Esc => app.cancel_input(),
+        KeyCode::Esc => {
+            app.cancel_input();
+        }
         KeyCode::Enter => {
             let mode = app.input_mode;
             let input = app.commit_input();
+            if mode == InputMode::InspectExpression && input.is_empty() {
+                app.clear_expression_inspection();
+            }
             if !input.is_empty() || matches!(mode, InputMode::Breakpoint | InputMode::Logpoint) {
                 match mode {
                     InputMode::Logpoint => {
@@ -789,6 +805,21 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         Ok(()) => refresh_watches(app, requests),
                         Err(error) => app.error(error),
                     },
+                    InputMode::InspectExpression => {
+                        match app.prepare_expression_inspection(input) {
+                            Ok(request) => {
+                                if let Err(error) = requests
+                                    .try_send(BackendRequest::InspectExpression(request.clone()))
+                                {
+                                    app.finish_expression_inspection(
+                                        request,
+                                        Err(format!("Could not queue inspection: {error}")),
+                                    );
+                                }
+                            }
+                            Err(error) => app.error(error),
+                        }
+                    }
                     InputMode::Memory => {
                         if app.current_frame().is_some_and(|frame| frame.boundary) {
                             app.error("Select an inspectable frame before reading memory");
@@ -1040,6 +1071,16 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.source_inspect.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                if let Err(error) = app.start_expression_inspection() {
+                    app.error(error);
+                }
+                return;
+            }
             if button == MouseButton::Left {
                 if let Some((focus, _)) = app.areas.pane_expanders.iter().find(|(_, area)| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -1841,6 +1882,9 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
         }
         UiMessage::WatchEvaluated { request, result } => app.finish_watch(request, result),
+        UiMessage::ExpressionInspected { request, result } => {
+            app.finish_expression_inspection(request, result)
+        }
         UiMessage::ValueAssigned { edit, result } => {
             if !app.inspection_is_current(edit.generation, &edit.origin_thread)
                 || !app.current_frame().is_some_and(|f| f.id == edit.frame_id)
@@ -2558,6 +2602,151 @@ mod tests {
             &tx,
         );
         assert_eq!(app.sessions[0].session_id, "session/new");
+    }
+
+    #[test]
+    fn expression_inspection_is_owned_expandable_one_shot_and_dismissible() {
+        let mut app = distributed_caller_app();
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::Evaluate as i32);
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::InspectExpression);
+        assert!(rx.try_recv().is_err(), "opening a prompt must not evaluate");
+        app.input = "request".into();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        let BackendRequest::InspectExpression(request) = rx.try_recv().unwrap() else {
+            panic!("inspect request");
+        };
+        assert_eq!(request.owner_thread, "thread/parent");
+        assert_eq!(request.origin_thread, "thread/child");
+        assert_eq!(request.frame_id, "frame/parent");
+        apply_message(
+            &mut app,
+            UiMessage::ExpressionInspected {
+                request: request.clone(),
+                result: Ok(v2::EvaluationResult {
+                    variable_id: Some("value/inspect".into()),
+                    value: "object".into(),
+                    has_children: true,
+                    address: Some("0x1234".into()),
+                    ..Default::default()
+                }),
+            },
+            &tx,
+        );
+        assert!(app.variables[0].has_children);
+        assert!(app.watches.is_empty());
+        app.apply_variable_children(
+            "value/inspect",
+            vec![v2::Variable {
+                name: "field".into(),
+                value: "42".into(),
+                ..Default::default()
+            }],
+        );
+        assert_eq!(app.variables.len(), 2);
+        app.apply_scopes(vec![v2::Scope {
+            scope_id: "scope/locals".into(),
+            name: "Locals".into(),
+            ..Default::default()
+        }]);
+        assert!(
+            app.variables[0].inspection,
+            "late scope load must retain inspector"
+        );
+        refresh_watches(&mut app, &tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "one-shot inspection must not auto-refresh"
+        );
+        assert_eq!(app.variables[1].name, "field");
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.variables.len(), 1);
+        assert!(app.variables[0].scope);
+        app.finish_expression_inspection(request, Ok(v2::EvaluationResult::default()));
+        assert!(
+            app.variables.iter().all(|row| !row.inspection),
+            "late result must not reopen dismissed inspection"
+        );
+    }
+
+    #[test]
+    fn expression_inspection_rejects_changed_prompt_context_and_late_results() {
+        let mut app = distributed_caller_app();
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::Evaluate as i32);
+        app.start_expression_inspection().unwrap();
+        app.inspection_generation += 1;
+        assert!(app
+            .prepare_expression_inspection("request".into())
+            .unwrap_err()
+            .contains("context changed"));
+        app.start_expression_inspection().unwrap();
+        let old = app.prepare_expression_inspection("first".into()).unwrap();
+        app.start_expression_inspection().unwrap();
+        let current = app.prepare_expression_inspection("second".into()).unwrap();
+        app.finish_expression_inspection(
+            old,
+            Ok(v2::EvaluationResult {
+                value: "old".into(),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(app.variables[0].value, "Evaluating…");
+        app.finish_expression_inspection(current, Err("not available".into()));
+        assert_eq!(app.variables[0].value, "Unavailable: not available");
+        app.begin_inspection();
+        assert!(app.variables.iter().all(|row| !row.inspection));
+        assert!(app.prepare_watches().is_empty());
+    }
+
+    #[test]
+    fn source_inspect_button_opens_prompt_without_evaluation() {
+        let mut app = distributed_caller_app();
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::Evaluate as i32);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                app.areas = ui::draw(frame, &mut app);
+            })
+            .unwrap();
+        let hit = app.areas.source_inspect.expect("source inspector button");
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: hit.x,
+                row: hit.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::InspectExpression);
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -194,8 +194,8 @@ pub async fn run(
                 if pending_inspections.len() < MAX_PENDING_INSPECTIONS {
                     pending_inspections.push_back(request);
                 } else {
-                    report_inspection_error(
-                        inspection_error_target(&request),
+                    reject_inspection(
+                        request,
                         "Inspection queue is full; retry after pending inspections complete".into(),
                         &messages,
                     )
@@ -267,6 +267,28 @@ async fn configure_logpoint(
     Ok(registry.ids())
 }
 
+async fn reject_inspection(
+    request: BackendRequest,
+    error: String,
+    messages: &mpsc::Sender<UiMessage>,
+) {
+    let message = match request {
+        BackendRequest::InspectExpression(request) => UiMessage::ExpressionInspected {
+            request,
+            result: Err(error),
+        },
+        BackendRequest::EvaluateWatch(request) => UiMessage::WatchEvaluated {
+            request,
+            result: Err(error),
+        },
+        request => {
+            report_inspection_error(inspection_error_target(&request), error, messages).await;
+            return;
+        }
+    };
+    let _ = messages.send(message).await;
+}
+
 fn inspection_error_target(request: &BackendRequest) -> (u64, String, Option<String>) {
     let (generation, thread_id) = inspection_context(request).expect("inspection request");
     let parent_id = match request {
@@ -323,6 +345,9 @@ fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
         BackendRequest::EvaluateWatch(request) => {
             Some((request.generation, request.origin_thread.clone()))
         }
+        BackendRequest::InspectExpression(request) => {
+            Some((request.generation, request.origin_thread.clone()))
+        }
         BackendRequest::InspectThread {
             thread_id,
             generation,
@@ -364,35 +389,29 @@ async fn handle(
             setup.run(client, messages, &session_id).await?;
         }
         BackendRequest::EvaluateWatch(request) => {
-            let result = async {
-                let admission = client
-                    .evaluate(v2::EvaluateRequest {
-                        target: Some(thread_target(&request.owner_thread)),
-                        frame_id: Some(request.frame_id.clone()),
-                        expression: request.watch.expression.clone(),
-                        evaluation_context: v2::EvaluationContext::Watch as i32,
-                        ..Default::default()
-                    })
-                    .await?;
-                let receipt = complete_operation(client, admission).await?;
-                if receipt.state != v2::OperationState::Completed as i32 {
-                    anyhow::bail!(
-                        "{}",
-                        receipt.error.map_or_else(
-                            || "Evaluation did not complete".into(),
-                            |error| error.message
-                        )
-                    );
-                }
-                match receipt.result.and_then(|result| result.value) {
-                    Some(v2::operation_result::Value::Evaluation(value)) => Ok(value),
-                    _ => anyhow::bail!("DDB returned no evaluation value"),
-                }
-            }
-            .await
-            .map_err(|error: anyhow::Error| format!("{error:#}"));
+            let result = evaluate_value(
+                client,
+                &request.owner_thread,
+                &request.frame_id,
+                &request.watch.expression,
+                v2::EvaluationContext::Watch,
+            )
+            .await;
             messages
                 .send(UiMessage::WatchEvaluated { request, result })
+                .await?;
+        }
+        BackendRequest::InspectExpression(request) => {
+            let result = evaluate_value(
+                client,
+                &request.owner_thread,
+                &request.frame_id,
+                &request.expression,
+                v2::EvaluationContext::Hover,
+            )
+            .await;
+            messages
+                .send(UiMessage::ExpressionInspected { request, result })
                 .await?;
         }
         BackendRequest::AssignValue { edit, value } => {
@@ -846,6 +865,42 @@ fn ui_state_sync_options() -> StateSyncOptions {
         .collect(),
         ..Default::default()
     }
+}
+
+async fn evaluate_value(
+    client: &ApiClient,
+    owner: &str,
+    frame: &str,
+    expression: &str,
+    context: v2::EvaluationContext,
+) -> Result<v2::EvaluationResult, String> {
+    async {
+        let admission = client
+            .evaluate(v2::EvaluateRequest {
+                target: Some(thread_target(owner)),
+                frame_id: Some(frame.into()),
+                expression: expression.into(),
+                evaluation_context: context as i32,
+                ..Default::default()
+            })
+            .await?;
+        let receipt = complete_operation(client, admission).await?;
+        if receipt.state != v2::OperationState::Completed as i32 {
+            anyhow::bail!(
+                "{}",
+                receipt.error.map_or_else(
+                    || "Evaluation did not complete".into(),
+                    |error| error.message
+                )
+            );
+        }
+        match receipt.result.and_then(|result| result.value) {
+            Some(v2::operation_result::Value::Evaluation(value)) => Ok(value),
+            _ => anyhow::bail!("DDB returned no evaluation value"),
+        }
+    }
+    .await
+    .map_err(|error: anyhow::Error| format!("{error:#}"))
 }
 
 async fn refresh(client: &ApiClient, messages: &mpsc::Sender<UiMessage>) -> anyhow::Result<()> {
@@ -1336,6 +1391,90 @@ fn short_enum(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_expression_inspection_keeps_its_identity_and_error() {
+        let (tx, mut rx) = mpsc::channel(2);
+        reject_inspection(
+            BackendRequest::InspectExpression(crate::model::ExpressionInspection {
+                id: 17,
+                expression: "request".into(),
+                generation: 9,
+                origin_thread: "origin".into(),
+                owner_thread: "owner".into(),
+                frame_id: "frame".into(),
+            }),
+            "queue full".into(),
+            &tx,
+        )
+        .await;
+        assert!(
+            matches!(rx.try_recv().unwrap(), UiMessage::ExpressionInspected { request, result: Err(error) }
+            if request.id == 17 && request.generation == 9 && error == "queue full")
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_inspection_uses_hover_and_the_captured_owner_frame() {
+        use axum::{routing::post, Json, Router};
+        let router = Router::new().route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate",
+            post(|Json(request): Json<v2::EvaluateRequest>| async move {
+                assert_eq!(
+                    request.evaluation_context,
+                    v2::EvaluationContext::Hover as i32
+                );
+                assert_eq!(request.target, Some(thread_target("thread/caller")));
+                assert_eq!(request.frame_id.as_deref(), Some("frame/caller"));
+                assert_eq!(request.expression, "request");
+                Json(v2::OperationAdmissionResponse {
+                    operation: Some(v2::Operation {
+                        state: v2::OperationState::Completed as i32,
+                        result: Some(v2::OperationResult {
+                            value: Some(v2::operation_result::Value::Evaluation(
+                                v2::EvaluationResult {
+                                    value: "object".into(),
+                                    variable_id: Some("value/child".into()),
+                                    has_children: true,
+                                    ..Default::default()
+                                },
+                            )),
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = ApiClient::new(crate::api::ClientConfig::new(format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        )))
+        .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let (tx, mut rx) = mpsc::channel(2);
+        handle(
+            &client,
+            &tx,
+            BackendRequest::InspectExpression(crate::model::ExpressionInspection {
+                id: 3,
+                expression: "request".into(),
+                generation: 7,
+                origin_thread: "thread/leaf".into(),
+                owner_thread: "thread/caller".into(),
+                frame_id: "frame/caller".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), UiMessage::ExpressionInspected { request, result: Ok(value) }
+            if request.origin_thread == "thread/leaf" && value.has_children && value.variable_id.as_deref() == Some("value/child"))
+        );
+        server.abort();
+        let _ = server.await;
+    }
 
     #[tokio::test]
     async fn memory_reads_target_the_frame_owner_but_replies_keep_origin_lifetime() {

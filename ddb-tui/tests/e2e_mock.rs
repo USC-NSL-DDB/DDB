@@ -1701,6 +1701,24 @@ fn real_debugger_workflow(backend: &str) {
     assert_eq!(before_step_line, fixture.breakpoint_line);
     tui.wait_for_source_marker('▶', before_step_line);
 
+    // Explicit source inspection uses HOVER, remains expandable, and is not a retained watch.
+    tui.send(b"Erequest\r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Inspect: request") && !screen.contains("Evaluating")
+    });
+    tui.expand_visible_variable("Inspect: request");
+    tui.wait_for_current_frame(|screen| {
+        screen.lines().any(|line| {
+            line.chars()
+                .skip(105)
+                .collect::<String>()
+                .contains("headers :")
+        })
+    });
+    tui.select_visible_variable("Inspect: request");
+    tui.send(b"\x1b[3~");
+    tui.wait_for_current_frame(|screen| !screen.contains("Inspect: request"));
+
     // Drive lazy expansion through the real SDK/backend, not only the model.
     tui.send(b"wcounter\r");
     tui.wait_for("Watch: counter");

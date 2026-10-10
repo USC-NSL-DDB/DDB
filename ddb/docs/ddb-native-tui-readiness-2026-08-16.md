@@ -56,11 +56,12 @@ generic command that can produce a similar backend effect.
 
 1. **Source expression inspection.** Adapter `inspection.mts::evaluate` sends
    `EVALUATION_CONTEXT_HOVER` for hover requests and returns expandable children.
-   The TUI currently sends REPL for `e` and WATCH for retained watches, with no
-   source-expression hover/inspect interaction. Add a terminal-appropriate,
-   explicit inspection action using HOVER, preserving frame ownership and stale
-   response rejection. Do not automatically evaluate expressions merely because
-   the mouse moves over source text.
+   The TUI now provides `E` and the clickable source-header `Inspect [E]` action.
+   It captures the selected stopped frame before prompting, sends HOVER, and
+   shows one expandable `Inspect:` result in Variables. Frame changes clear it;
+   it is not retained or automatically refreshed as a watch. Keyboard/mouse and
+   worker contract tests cover ownership and stale replies. Mouse movement alone
+   never evaluates code. See the verification section below for real workflows.
 2. **Alternative grouping views.** `DDBViewProvider.ts` registers session grouping
    toggling and breakpoint file grouping/flat reset. The TUI currently always
    builds grouped topology and logical/member breakpoint rows. Add view toggles
@@ -189,6 +190,39 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Explicit expression inspector verification
+
+`E` and the source-header `Inspect [E]` button open a one-shot expression prompt.
+The inspector captures the selected stopped frame before the user types, sends
+the public `HOVER` context, and renders one expandable `Inspect:` row in Variables.
+It uses the existing variable child and memory operations. Delete dismisses its
+root and children; frame invalidation clears it; late or superseded results
+cannot reopen it. It is not part of retained watches and does not auto-refresh.
+
+The evaluation worker is shared with watches, but the inspector's lifetime and
+request identity are separate. This keeps ownership and stale-result policy in
+the expression-inspection module. Queue rejection now reports an evaluation's
+own identity/error for inspectors and watches instead of leaving a loading value.
+No automatic mouse-motion evaluation was added.
+
+Verification on 2026-10-10:
+
+- 235 unit tests and two integration helpers passed. New tests cover keyboard
+  entry, the rendered mouse hitbox, cancellation without evaluation, distributed
+  owner capture, late scope updates, child expansion, watch-refresh independence,
+  dismissal, stale/superseded replies, and scoped queue rejection.
+- The worker HTTP contract test asserts the exact HOVER context, owner thread,
+  and captured frame, then checks the expandable result.
+- Both real GDB and LLDB terminal workflows enter `request`, expand its inspection
+  result, observe the `headers` child, and dismiss the result before proceeding
+  through existing watches and memory interactions.
+- All 22 non-greeter terminal workflows passed serially in 105.26 seconds.
+  Strict all-target TUI Clippy, formatting, and diff whitespace checks passed.
+
+The greeter workflow was not rerun for this change. Grouping/detail views,
+confirmed session termination, editor-hosted watch behavior, and the remaining
+clipped-content and distributed TUI verification items are not closed by this work.
 
 #### Real distributed-caller memory verification
 

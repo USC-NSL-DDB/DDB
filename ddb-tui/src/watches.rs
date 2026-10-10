@@ -54,6 +54,7 @@ impl App {
             .iter()
             .map(|watch| Variable {
                 id: String::new(),
+                inspection: false,
                 address: None,
                 watch_id: Some(watch.id),
                 scope: false,
