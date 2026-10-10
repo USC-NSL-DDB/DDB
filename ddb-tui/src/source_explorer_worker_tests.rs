@@ -80,7 +80,10 @@ async fn refresh_explicitly_requests_all_ui_sections_including_execution() {
     let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
     let (messages, mut updates) = mpsc::channel(4);
     refresh(&client, &messages).await.unwrap();
-    assert!(matches!(updates.recv().await, Some(UiMessage::Snapshot(_))));
+    assert!(matches!(
+        updates.recv().await,
+        Some(UiMessage::RefreshSnapshot(_))
+    ));
     server.abort();
     let _ = server.await;
     let sections = captured.lock().unwrap();

@@ -1879,8 +1879,25 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             app.apply_capabilities(capabilities);
             configure_sessions(app, requests);
         }
+        UiMessage::RefreshSnapshot(snapshot) => {
+            if app.snapshot_instance_matches(&snapshot) {
+                apply_message(app, UiMessage::Snapshot(snapshot), requests);
+            }
+        }
         UiMessage::Snapshot(snapshot) => {
+            if app.snapshot_is_stale(&snapshot) {
+                return;
+            }
             let new_stop = app.has_new_inspection_stop(&snapshot);
+            let stopped_threads = app.new_stopped_threads(&snapshot);
+            let previous = app.current_thread().map(|thread| thread.id.clone());
+            let thread_membership_changed = app.threads.len() != snapshot.threads.len()
+                || app.threads.iter().any(|current| {
+                    !snapshot
+                        .threads
+                        .iter()
+                        .any(|next| next.thread_id == current.id)
+                });
             let session_membership_changed = app.sessions.len() != snapshot.sessions.len()
                 || app.sessions.iter().any(|current| {
                     !snapshot
@@ -1888,9 +1905,18 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                         .iter()
                         .any(|next| next.session_id == current.session_id)
                 });
+            let threads = snapshot.threads.clone();
             app.apply_snapshot(snapshot);
+            app.apply_threads(threads);
             configure_sessions(app, requests);
-            if (session_membership_changed || new_stop)
+            let current = app.current_thread().map(|thread| thread.id.clone());
+            if (session_membership_changed
+                || thread_membership_changed
+                || new_stop
+                || previous != current
+                || current.as_ref().is_some_and(|thread| {
+                    app.frames.is_empty() && !app.thread_inspection_requested(thread)
+                }))
                 && app
                     .current_thread()
                     .is_some_and(|thread| thread.state.contains("stop"))
@@ -1899,6 +1925,9 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     inspect_thread(app, requests, thread_id);
                 }
             }
+            for thread in stopped_threads {
+                handle_stopped_thread(app, requests, thread);
+            }
         }
         UiMessage::Signals { target, signals } => {
             if let Err(error) = app.open_signal_picker(target, signals) {
@@ -1906,30 +1935,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
         }
 
-        UiMessage::Threads(threads) => {
-            let previous = app.current_thread().map(|thread| thread.id.clone());
-            let thread_membership_changed = app.threads.len() != threads.len()
-                || app
-                    .threads
-                    .iter()
-                    .any(|current| !threads.iter().any(|next| next.thread_id == current.id));
-            app.apply_threads(threads);
-            let current = app.current_thread().map(|thread| thread.id.clone());
-            let stopped = app
-                .current_thread()
-                .is_some_and(|thread| thread.state.contains("stop"));
-            if stopped
-                && (previous != current
-                    || thread_membership_changed
-                    || current.as_ref().is_some_and(|thread_id| {
-                        app.frames.is_empty() && !app.thread_inspection_requested(thread_id)
-                    }))
-            {
-                if let Some(thread_id) = current {
-                    inspect_thread(app, requests, thread_id);
-                }
-            }
-        }
         UiMessage::DistributedFrames {
             generation,
             thread_id,
@@ -2047,6 +2052,9 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         }
         UiMessage::Output(output) => app.output.push(&output),
         UiMessage::DebuggerEvent(event) => {
+            if app.event_is_stale(&event) {
+                return;
+            }
             app.push_timeline(format!("◆ {}", event.summary));
             match event.activity {
                 DebuggerActivity::Running(thread_id) => {
@@ -2067,15 +2075,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     }
                 }
                 DebuggerActivity::Stopped(Some(thread_id)) => {
-                    if !app.logpoint_ids.is_empty() {
-                        if let Some(stop) = app.logpoint_stop(&thread_id) {
-                            queue_request(app, requests, BackendRequest::ClassifyStop(stop));
-                        } else {
-                            ordinary_stop(app, requests, thread_id);
-                        }
-                    } else {
-                        ordinary_stop(app, requests, thread_id);
-                    }
+                    handle_stopped_thread(app, requests, thread_id);
                 }
                 DebuggerActivity::Stopped(None) | DebuggerActivity::None => {}
             }
@@ -2096,6 +2096,20 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         UiMessage::Error(error) => app.error(error),
         UiMessage::BackendUnavailable(error) => app.backend_unavailable(error),
     }
+}
+
+fn handle_stopped_thread(
+    app: &mut App,
+    requests: &mpsc::Sender<BackendRequest>,
+    thread_id: String,
+) {
+    if !app.logpoint_ids.is_empty() {
+        if let Some(stop) = app.logpoint_stop(&thread_id) {
+            queue_request(app, requests, BackendRequest::ClassifyStop(stop));
+            return;
+        }
+    }
+    ordinary_stop(app, requests, thread_id);
 }
 
 fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
@@ -2287,6 +2301,222 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    fn snapshot_threads(app: &App) -> Vec<v2::Thread> {
+        app.threads
+            .iter()
+            .map(|thread| v2::Thread {
+                thread_id: thread.id.clone(),
+                session_id: thread.session_id.clone(),
+                name: Some(thread.name.clone()),
+                state: if thread.state == "stopped" {
+                    v2::ThreadState::Stopped
+                } else {
+                    v2::ThreadState::Running
+                } as i32,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    fn topology_snapshot(threads: Vec<v2::Thread>) -> v2::Snapshot {
+        let sessions = threads
+            .iter()
+            .map(|thread| thread.session_id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|session_id| v2::Session {
+                session_id,
+                ..Default::default()
+            })
+            .collect();
+        v2::Snapshot {
+            sessions,
+            threads,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_delivery_installs_threads_atomically() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, _rx) = mpsc::channel(8);
+        apply_message(
+            &mut app,
+            UiMessage::Snapshot(v2::Snapshot {
+                server_instance_id: "backend/one".into(),
+                base_state_revision: 20,
+                sessions: vec![v2::Session {
+                    session_id: "session/client".into(),
+                    ..Default::default()
+                }],
+                threads: vec![v2::Thread {
+                    thread_id: "thread/client".into(),
+                    session_id: "session/client".into(),
+                    state: v2::ThreadState::Stopped as i32,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            &tx,
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(
+            app.threads.len(),
+            1,
+            "a complete snapshot must not need a second message"
+        );
+    }
+
+    #[test]
+    fn snapshot_delivery_rejects_older_topology() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, _rx) = mpsc::channel(8);
+        apply_message(
+            &mut app,
+            UiMessage::Snapshot(v2::Snapshot {
+                server_instance_id: "backend/one".into(),
+                base_state_revision: 20,
+                state_event_cursor: Some(v2::Cursor {
+                    server_instance_id: "backend/one".into(),
+                    sequence: 20,
+                }),
+                sessions: vec![v2::Session {
+                    session_id: "session/client".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            &tx,
+        );
+        apply_message(
+            &mut app,
+            UiMessage::Snapshot(v2::Snapshot {
+                server_instance_id: "backend/one".into(),
+                base_state_revision: 20,
+                state_event_cursor: Some(v2::Cursor {
+                    server_instance_id: "backend/one".into(),
+                    sequence: 19,
+                }),
+                ..Default::default()
+            }),
+            &tx,
+        );
+        assert_eq!(
+            app.sessions.len(),
+            1,
+            "an older stream projection must not undo a newer refresh"
+        );
+    }
+
+    #[test]
+    fn refresh_stop_enforces_all_stop_and_rejects_an_older_resume_event() {
+        let mut app = App::new("http://localhost".into());
+        app.capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Interrupt as i32],
+            execution_action_capabilities: vec![v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Interrupt as i32,
+                scopes: vec![v2::ExecutionScopeKind::Session as i32],
+            }],
+            ..Default::default()
+        };
+        let mut snapshot = topology_snapshot(vec![
+            v2::Thread {
+                thread_id: "thread/server".into(),
+                session_id: "session/server".into(),
+                state: v2::ThreadState::Stopped as i32,
+                ..Default::default()
+            },
+            v2::Thread {
+                thread_id: "thread/client".into(),
+                session_id: "session/client".into(),
+                state: v2::ThreadState::Running as i32,
+                ..Default::default()
+            },
+        ]);
+        snapshot.server_instance_id = "backend/one".into();
+        snapshot.base_state_revision = 20;
+        snapshot.state_event_cursor = Some(v2::Cursor {
+            server_instance_id: "backend/one".into(),
+            sequence: 20,
+        });
+        snapshot.execution_states = vec![v2::ExecutionState {
+            execution_state_id: "execution/server".into(),
+            target: Some(thread_target("thread/server")),
+            revision: 5,
+            stop_reason: Some(v2::StopReason {
+                kind: v2::StopReasonKind::Breakpoint as i32,
+                thread_id: Some("thread/server".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        let (tx, mut rx) = mpsc::channel(8);
+        apply_message(&mut app, UiMessage::Snapshot(snapshot.clone()), &tx);
+        let mut peers = Vec::new();
+        while let Ok(request) = rx.try_recv() {
+            if let BackendRequest::PausePeer { session_id, .. } = request {
+                peers.push(session_id);
+            }
+        }
+        assert_eq!(peers, ["session/client"]);
+        apply_message(&mut app, UiMessage::Snapshot(snapshot), &tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "duplicate snapshots must not repeat control or inspection"
+        );
+        apply_message(
+            &mut app,
+            UiMessage::DebuggerEvent(DebuggerEvent {
+                server_instance_id: "backend/one".into(),
+                state_revision: 20,
+                state_event_sequence: 19,
+                summary: "old running transition".into(),
+                activity: DebuggerActivity::Running("thread/server".into()),
+                refresh: false,
+            }),
+            &tx,
+        );
+        assert_eq!(
+            app.threads
+                .iter()
+                .find(|thread| thread.id == "thread/server")
+                .unwrap()
+                .state,
+            "stopped"
+        );
+        assert_eq!(app.all_stop_cause.as_deref(), Some("thread/server"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn delayed_refresh_cannot_restore_a_previous_backend_instance() {
+        let mut app = App::new("http://localhost".into());
+        let (tx, _rx) = mpsc::channel(8);
+        let snapshot = |instance: &str, revision| v2::Snapshot {
+            server_instance_id: instance.into(),
+            base_state_revision: revision,
+            sessions: vec![v2::Session {
+                session_id: format!("session/{instance}"),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        apply_message(&mut app, UiMessage::Snapshot(snapshot("old", 20)), &tx);
+        apply_message(&mut app, UiMessage::Snapshot(snapshot("new", 1)), &tx);
+        apply_message(
+            &mut app,
+            UiMessage::RefreshSnapshot(snapshot("old", 100)),
+            &tx,
+        );
+        assert_eq!(app.sessions[0].session_id, "session/new");
+        apply_message(
+            &mut app,
+            UiMessage::RefreshSnapshot(snapshot("new", 2)),
+            &tx,
+        );
+        assert_eq!(app.sessions[0].session_id, "session/new");
+    }
 
     #[test]
     fn memory_navigation_is_local_and_read_uses_distributed_frame_owner() {
@@ -3070,6 +3300,9 @@ mod tests {
                 UiMessage::DebuggerEvent(DebuggerEvent {
                     summary: "breakpoint".into(),
                     refresh: false,
+                    server_instance_id: String::new(),
+                    state_revision: 0,
+                    state_event_sequence: 0,
                     activity: DebuggerActivity::Stopped(Some("thread/child".into())),
                 }),
                 &tx,
@@ -3114,6 +3347,9 @@ mod tests {
             UiMessage::DebuggerEvent(DebuggerEvent {
                 summary: "late peer resume".into(),
                 refresh: false,
+                server_instance_id: String::new(),
+                state_revision: 0,
+                state_event_sequence: 0,
                 activity: DebuggerActivity::Running("thread/server".into()),
             }),
             &tx,
@@ -3155,6 +3391,7 @@ mod tests {
         let mut app = distributed_caller_app();
         let (requests, mut receiver) = mpsc::channel(4);
         let mut snapshot = v2::Snapshot {
+            threads: snapshot_threads(&app),
             sessions: vec![v2::Session {
                 session_id: "session/child".into(),
                 ..Default::default()
@@ -3196,6 +3433,7 @@ mod tests {
         let mut app = distributed_caller_app();
         let (requests, mut receiver) = mpsc::channel(1);
         let mut snapshot = v2::Snapshot {
+            threads: snapshot_threads(&app),
             sessions: vec![v2::Session {
                 session_id: "session/child".into(),
                 ..Default::default()
@@ -3791,6 +4029,9 @@ mod tests {
             UiMessage::DebuggerEvent(DebuggerEvent {
                 summary: "BreakpointChanged".to_string(),
                 refresh: false,
+                server_instance_id: String::new(),
+                state_revision: 0,
+                state_event_sequence: 0,
                 activity: DebuggerActivity::None,
             }),
             &requests,
@@ -3834,6 +4075,9 @@ mod tests {
             UiMessage::DebuggerEvent(DebuggerEvent {
                 summary: "exec · stopped · thread/parent".to_string(),
                 refresh: false,
+                server_instance_id: String::new(),
+                state_revision: 0,
+                state_event_sequence: 0,
                 activity: DebuggerActivity::Stopped(Some("thread/parent".to_string())),
             }),
             &requests,
@@ -3844,6 +4088,9 @@ mod tests {
             UiMessage::DebuggerEvent(DebuggerEvent {
                 summary: "exec · stopped · thread/child".to_string(),
                 refresh: false,
+                server_instance_id: String::new(),
+                state_revision: 0,
+                state_event_sequence: 0,
                 activity: DebuggerActivity::Stopped(Some("thread/child".to_string())),
             }),
             &requests,
@@ -3876,6 +4123,7 @@ mod tests {
             line: None,
         });
         let snapshot = v2::Snapshot {
+            threads: snapshot_threads(&app),
             sessions: vec![
                 app.sessions[0].clone(),
                 v2::Session {
@@ -3936,7 +4184,11 @@ mod tests {
         ];
         let (requests, mut receiver) = mpsc::channel(1);
 
-        apply_message(&mut app, UiMessage::Threads(threads), &requests);
+        apply_message(
+            &mut app,
+            UiMessage::Snapshot(topology_snapshot(threads)),
+            &requests,
+        );
 
         let Some(BackendRequest::InspectThread {
             thread_id,
@@ -4005,13 +4257,13 @@ mod tests {
 
         apply_message(
             &mut app,
-            UiMessage::Threads(vec![v2::Thread {
+            UiMessage::Snapshot(topology_snapshot(vec![v2::Thread {
                 thread_id: "thread/17".to_string(),
                 session_id: "session/1".to_string(),
                 state: v2::ThreadState::Stopped as i32,
                 selected: true,
                 ..Default::default()
-            }]),
+            }])),
             &requests,
         );
 

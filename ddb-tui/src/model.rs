@@ -468,6 +468,8 @@ pub struct App {
     pub source_browser: SourceBrowser,
     pub source_workspace: std::sync::Arc<crate::source_workspace::Workspace>,
     source_server_instance: Option<String>,
+    snapshot_revision: u64,
+    snapshot_sequence: u64,
     pub source_explorer: crate::source_explorer::Explorer,
     pub execution_location: Option<SourceLocation>,
     /// Wrapped screen rows above the tail, clamped by the renderer.
@@ -551,6 +553,8 @@ impl App {
             source_browser: SourceBrowser::default(),
             source_workspace: std::sync::Arc::default(),
             source_server_instance: None,
+            snapshot_revision: 0,
+            snapshot_sequence: 0,
             source_explorer: crate::source_explorer::Explorer::default(),
             execution_location: None,
             timeline_scroll: 0,
@@ -615,7 +619,80 @@ impl App {
         })
     }
 
+    pub fn new_stopped_threads(&self, snapshot: &v2::Snapshot) -> Vec<String> {
+        let changed_instance = self
+            .source_server_instance
+            .as_ref()
+            .is_some_and(|instance| instance != &snapshot.server_instance_id);
+        snapshot
+            .execution_states
+            .iter()
+            .filter_map(|state| {
+                if state.running
+                    || (!changed_instance
+                        && self.execution_states.iter().any(|previous| {
+                            previous.execution_state_id == state.execution_state_id
+                                && previous.revision >= state.revision
+                        }))
+                {
+                    return None;
+                }
+                let Some(target::Selector::Thread(target)) = state
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.selector.as_ref())
+                else {
+                    return None;
+                };
+                if state
+                    .stop_reason
+                    .as_ref()
+                    .and_then(|reason| reason.thread_id.as_deref())
+                    .is_some_and(|owner| owner != target.thread_id)
+                    || !snapshot.threads.iter().any(|thread| {
+                        thread.thread_id == target.thread_id
+                            && thread.state == v2::ThreadState::Stopped as i32
+                    })
+                {
+                    return None;
+                }
+                Some(target.thread_id.clone())
+            })
+            .collect()
+    }
+
+    pub fn snapshot_instance_matches(&self, snapshot: &v2::Snapshot) -> bool {
+        self.source_server_instance
+            .as_ref()
+            .is_none_or(|instance| instance == &snapshot.server_instance_id)
+    }
+
+    pub fn snapshot_is_stale(&self, snapshot: &v2::Snapshot) -> bool {
+        self.source_server_instance.as_deref() == Some(snapshot.server_instance_id.as_str())
+            && (snapshot.base_state_revision < self.snapshot_revision
+                || snapshot
+                    .state_event_cursor
+                    .as_ref()
+                    .map_or(0, |cursor| cursor.sequence)
+                    < self.snapshot_sequence)
+    }
+
+    pub fn event_is_stale(&self, event: &DebuggerEvent) -> bool {
+        self.source_server_instance
+            .as_ref()
+            .is_some_and(|instance| {
+                instance != &event.server_instance_id
+                    || event.state_revision < self.snapshot_revision
+                    || event.state_event_sequence < self.snapshot_sequence
+            })
+    }
+
     pub fn apply_snapshot(&mut self, snapshot: v2::Snapshot) {
+        self.snapshot_revision = snapshot.base_state_revision;
+        self.snapshot_sequence = snapshot
+            .state_event_cursor
+            .as_ref()
+            .map_or(0, |cursor| cursor.sequence);
         let selected_breakpoint = self.current_breakpoint().map(|bp| {
             (
                 bp.id.clone(),
@@ -2636,7 +2713,8 @@ pub enum UiMessage {
     },
     Capabilities(v2::Capabilities),
     Snapshot(v2::Snapshot),
-    Threads(Vec<v2::Thread>),
+    /// A request response cannot replace the identity established by the stream.
+    RefreshSnapshot(v2::Snapshot),
     Signals {
         target: v2::Target,
         signals: Vec<v2::DebuggerSignal>,
@@ -2701,6 +2779,9 @@ pub enum UiMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebuggerEvent {
+    pub server_instance_id: String,
+    pub state_revision: u64,
+    pub state_event_sequence: u64,
     pub summary: String,
     pub refresh: bool,
     pub activity: DebuggerActivity,

@@ -858,9 +858,7 @@ async fn refresh(client: &ApiClient, messages: &mpsc::Sender<UiMessage>) -> anyh
         .await?
         .snapshot
         .context("GetSnapshot omitted snapshot")?;
-    let threads = snapshot.threads.clone();
-    messages.send(UiMessage::Snapshot(snapshot)).await?;
-    messages.send(UiMessage::Threads(threads)).await?;
+    messages.send(UiMessage::RefreshSnapshot(snapshot)).await?;
     Ok(())
 }
 
@@ -1094,13 +1092,11 @@ pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) 
                         .await;
                     return;
                 };
-                let threads = snapshot.threads.clone();
                 if messages
                     .send(UiMessage::EventStream(EventStreamStatus::Connected))
                     .await
                     .is_err()
                     || messages.send(UiMessage::Snapshot(snapshot)).await.is_err()
-                    || messages.send(UiMessage::Threads(threads)).await.is_err()
                 {
                     return;
                 }
@@ -1116,11 +1112,18 @@ pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) 
                         .await;
                     return;
                 };
-                let threads = snapshot.threads.clone();
+                let server_instance_id = snapshot.server_instance_id.clone();
+                let state_revision = snapshot.base_state_revision;
+                let state_event_sequence = snapshot
+                    .state_event_cursor
+                    .as_ref()
+                    .map_or(0, |cursor| cursor.sequence);
                 if messages.send(UiMessage::Snapshot(snapshot)).await.is_err()
-                    || messages.send(UiMessage::Threads(threads)).await.is_err()
                     || messages
                         .send(UiMessage::DebuggerEvent(DebuggerEvent {
+                            server_instance_id,
+                            state_revision,
+                            state_event_sequence,
                             summary,
                             refresh: false,
                             activity,

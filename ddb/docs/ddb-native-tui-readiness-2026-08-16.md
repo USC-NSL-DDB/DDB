@@ -183,6 +183,38 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### Atomic, ordered snapshot delivery after `a83e2e35`
+
+Refresh requests and the SDK event watcher previously delivered snapshots and
+threads as separate messages. Their messages could interleave, and an older
+stream projection could overwrite a newer refresh. The TUI now installs topology
+and threads in one UI message, rejects decreasing state revisions or event cursor
+sequences within an instance, and rejects late refreshes from a previous backend
+instance. A newly observed canonical stop in an accepted snapshot also triggers
+all-stop reconciliation, without depending on a separate stop event arriving.
+
+Regression tests exercise the actual UI message handler: atomic thread delivery,
+older topology at the same state revision but a lower cursor sequence, snapshot
+stop reconciliation and duplicate suppression, stale resume rejection, and a
+delayed refresh after a backend-instance change. The atomic delivery and stale
+topology assertions failed before their fixes; the equal-revision cursor case
+also failed with revision-only ordering.
+
+Verification of this patch on 2026-10-10:
+
+- 228 unit tests and 2 integration helpers passed.
+- All 22 non-greeter ignored terminal workflows passed serially in 97.36 seconds,
+  including real GDB/LLDB, logpoints, debugger settings, and managed lifecycle.
+- The unchanged real greeter auto-attach workflow passed twice consecutively in
+  48.46 and 55.86 seconds. Both runs checked client and server breakpoint stops,
+  all-stop, source markers, and breakpoint-to-source navigation. Logs were retained
+  locally at `/tmp/ddb-greeter-state-order.r60kgP/run-1.log` and `run-2.log`.
+- TUI formatting, strict all-target Clippy, and `git diff --check` passed.
+
+These passes do not establish full adapter parity or eliminate every previously
+observed source-loading timeout. The requirement audit and remaining parity work
+above still apply. No test deadline or greeter configuration was changed.
+
 #### Earlier measurements at `f2aa85ea`
 
 Four instrumented runs of `greeter_auto_attach_all_stop_terminal_workflow` passed
