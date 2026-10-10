@@ -138,6 +138,58 @@ alone. Add an explicit user-triggered copy action without emitting clipboard
 escape sequences on selection, hover or ordinary rendering, and retain export
 for terminals where clipboard integration is unavailable.
 
+### Explicit details clipboard copy, 2026-10-10
+
+The command gap above now has an implementation: `y` or the Copy button in
+topology details queues the captured canonical JSON, and the terminal event loop
+sends it using Crossterm's OSC 52 command. Selection, hover and rendering never
+copy. The action neither reads the clipboard nor sends a debugger request, and
+does not change execution scope. UTF-8 snapshots above 32 KiB are rejected with
+an Export hint rather than truncated. Write errors are visible and not retried.
+
+The implementation enables the existing Crossterm clipboard feature and uses
+the already locked base64 version for test decoding. It does not introduce a
+custom clipboard encoder or a new dependency version. Export remains available
+when the terminal or multiplexer does not support or permit clipboard writes.
+The success status means the request was sent, not that the host accepted it.
+
+Tests check exact Unicode payloads, a snapshot retained across later dialog
+changes, explicit keyboard and mouse activation, no copy during rendering,
+one-shot consumption, oversize rejection and visible writer failure. The PTY
+workflow decodes the emitted bytes and checks the captured backend instance and
+session IDs before continuing through the existing export assertions. This
+verifies the wire request, not actual OS clipboard acceptance. An initial test
+incorrectly expected a BEL terminator; it was corrected to Crossterm's existing
+ESC-backslash terminator without changing the production encoder.
+
+The first full terminal run passed 25 of 27 workflows and exposed two failures.
+The copy bytes were emitted correctly, but the modal covered the global status
+and background refresh could replace it. A rendering regression reproduced this
+before the fix. Copy feedback now belongs to the details dialog and wraps above
+the stationary action buttons; it survives global status changes. Oversize
+errors use the same visible feedback area.
+
+The terminal-loss test failed before triggering terminal loss: it waited for a
+transient `managed DDB` startup status even though the captured screen already
+showed a connected, inspected session. Its readiness wait now checks connected
+state and the rendered managed stack frame. The terminal destruction, backend
+exit and credential-directory cleanup assertions are unchanged. Neither test's
+timeout was increased. These failures are not evidence of an orphaned backend
+or a failed clipboard encoding.
+
+After these corrections, all 280 unit tests and two integration helpers passed,
+as did strict all-target Clippy, formatting and diff checks. Both previously
+failing terminal workflows passed individually, then all 27 non-greeter
+workflows passed serially in 83.81 seconds. The terminal-loss synchronization
+change is isolated in `827d4391`; clipboard code, tests and documentation form
+the following commit. Adapter HEAD was rechecked as `f3c671f`. The full eleven-
+requirement completion sign-off remains separate from this feature verification.
+
+The real instrumented gRPC greeter auto-attach all-stop workflow also passed
+on the corrected tree in 33.37 seconds, including both breakpoint stops and
+paused-hit source navigation. The shared discovery configuration and test
+deadlines were unchanged.
+
 Entry setup verification: the real settings workflow passed with GDB and LLDB
 in 6.56 seconds. It checks that the breakpoint is temporary and verified
 before native startup commands finish, that setup has not resumed the process,

@@ -350,6 +350,7 @@ async fn run(
                 app.should_quit = true;
             }
         }
+        flush_details_copy(app, &mut io::stdout().lock());
         if app.watches_revision != queued_watch_revision {
             if let Some(saver) = &watch_saver {
                 if let Err(error) = saver.update(
@@ -452,6 +453,11 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
     if let Some(details) = app.topology_details.as_mut() {
         match key.code {
+            KeyCode::Char('y') if key.modifiers.is_empty() => {
+                if let Err(error) = app.queue_details_copy() {
+                    app.error(error);
+                }
+            }
             KeyCode::Char('e') if key.modifiers.is_empty() => app.start_details_export(),
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => app.topology_details = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1179,6 +1185,14 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                 let position = ratatui::layout::Position::new(mouse.column, mouse.row);
                 if app
                     .areas
+                    .details_copy
+                    .is_some_and(|area| area.contains(position))
+                {
+                    if let Err(error) = app.queue_details_copy() {
+                        app.error(error);
+                    }
+                } else if app
+                    .areas
                     .details_export
                     .is_some_and(|area| area.contains(position))
                 {
@@ -1709,6 +1723,24 @@ fn reveal_breakpoint_hit(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
             inspect_thread(app, requests, thread_id);
         }
         Err(error) => app.error(error),
+    }
+}
+
+fn flush_details_copy(app: &mut App, output: &mut impl io::Write) {
+    let Some(text) = app.pending_details_copy.take() else {
+        return;
+    };
+    match execute!(
+        output,
+        crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+    ) {
+        Ok(()) => {
+            app.status = "Copy sent to terminal; if paste is unavailable, use e Export".into()
+        }
+        Err(error) => app.error(format!("Clipboard write failed: {error}; use e Export")),
+    }
+    if let Some(details) = app.topology_details.as_mut() {
+        details.copy_status = Some(app.status.clone());
     }
 }
 
@@ -2715,6 +2747,111 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn details_copy_is_explicit_captured_bounded_and_consumed_once() {
+        use base64::Engine;
+        let mut app = App::new("http://localhost".into());
+        let text = "{\"label\":\"界é\",\"sessionId\":\"session/one\"}";
+        app.topology_details = Some(model::TopologyDetails {
+            copy_status: None,
+            lines: vec![text.into()],
+            width: text.len(),
+            top: 0,
+            page: 1,
+            horizontal: Default::default(),
+        });
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let copy = app.areas.details_copy.unwrap();
+        let mut bytes = Vec::new();
+        flush_details_copy(&mut app, &mut bytes);
+        assert!(bytes.is_empty(), "rendering must not copy");
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+            &tx,
+        );
+        assert!(app.pending_details_copy.is_none());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            &tx,
+        );
+        app.topology_details.as_mut().unwrap().lines = vec!["replacement".into()];
+        flush_details_copy(&mut app, &mut bytes);
+        let encoded = std::str::from_utf8(&bytes)
+            .unwrap()
+            .strip_prefix("\x1b]52;c;")
+            .unwrap()
+            .strip_suffix("\x1b\\")
+            .unwrap();
+        assert_eq!(
+            base64::prelude::BASE64_STANDARD.decode(encoded).unwrap(),
+            format!("{text}\n").as_bytes()
+        );
+        app.status = "background snapshot refreshed".into();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            rendered.contains("Copy sent to terminal"),
+            "copy feedback must remain visible inside the dialog"
+        );
+        let previous = bytes.clone();
+        flush_details_copy(&mut app, &mut bytes);
+        assert_eq!(bytes, previous);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: copy.x,
+                row: copy.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(
+            app.pending_details_copy.take().as_deref(),
+            Some("replacement\n")
+        );
+        app.topology_details.as_mut().unwrap().lines = vec!["x".repeat(32768)];
+        assert!(app.queue_details_copy().unwrap_err().contains("Export"));
+        assert!(app.pending_details_copy.is_none());
+        assert!(
+            rx.try_recv().is_err(),
+            "copy must not issue debugger commands"
+        );
+    }
+
+    #[test]
+    fn clipboard_write_failure_is_visible_and_not_retried() {
+        struct Broken;
+        impl io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut app = App::new("http://localhost".into());
+        app.pending_details_copy = Some("captured".into());
+        flush_details_copy(&mut app, &mut Broken);
+        assert!(app.pending_details_copy.is_none());
+        assert!(app.status.contains("Clipboard write failed"));
+        assert!(app.status.contains("Export"));
+    }
 
     #[test]
     fn api_trace_records_and_loss_are_visible_without_changing_debugger_state() {

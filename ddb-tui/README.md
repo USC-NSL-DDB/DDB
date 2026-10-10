@@ -217,6 +217,7 @@ normal DDB-native view.
 | `v` in Topology / header `Flat [v]` or `Group [v]` | Toggle grouped/flat session view without changing execution scope |
 | `i` in Topology / right-click a row | Open a frozen canonical group/session details snapshot; arrows or hjkl, PageUp/PageDown, Home/End and wheel scroll; Esc or right-click closes |
 | `e` in topology details / `Export` button | Export the captured JSON snapshot to a new local file; enter a path and press Enter, or Esc/empty Enter to cancel |
+| `y` in topology details / `Copy` button | Send the captured JSON to the terminal clipboard using OSC 52 |
 | `K` in Topology / `Kill [K]` | Confirm SIGKILL for one selected session or a thread's owning session; `y`/Terminate accepts, Enter/Esc cancels |
 | `v` in Breakpoints / header `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
@@ -373,6 +374,19 @@ exist. Paths are literal: `~` and environment variables are not expanded. Existi
 files, directories and symlinks are never overwritten. New files are owner-only on
 Unix. Wait for the `Details exported to …` message before quitting. Export is local
 to the frontend, does not require a live backend, and does not write the clipboard.
+
+For direct copying, press `y` or click Copy in the details dialog. This sends the
+same captured JSON to the terminal host's clipboard, without contacting DDB or
+changing the selected target. Nothing copies on selection, hover or rendering,
+and the TUI never reads clipboard contents. Copy is limited to 32 KiB of UTF-8
+data; larger snapshots must be exported instead of silently truncated.
+
+Copy uses Crossterm's [OSC 52 clipboard command](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands).
+Your terminal and any multiplexer must support and permit it. The status reports
+that the request was sent, not that the clipboard accepted it, because the write
+has no acknowledgement. If paste does not work, use Export. Write errors are
+reported and are not retried automatically. This targets the clipboard of the
+terminal displaying the TUI, including when the TUI runs over SSH.
 
 In Topology, Breakpoints, Stack, Variables, Registers, and Memory, Left/Right or a horizontal mouse wheel reveals clipped
 names and values. Home returns to the start. Each pane remembers its position;

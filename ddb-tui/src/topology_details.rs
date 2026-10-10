@@ -50,6 +50,7 @@ impl DetailsExport {
 /// the user is reading or about to export.
 #[derive(Clone, Debug)]
 pub struct TopologyDetails {
+    pub copy_status: Option<String>,
     pub lines: Vec<String>,
     pub width: usize,
     pub top: usize,
@@ -67,6 +68,25 @@ impl TopologyDetails {
 }
 
 impl App {
+    pub fn queue_details_copy(&mut self) -> Result<(), String> {
+        let details = self
+            .topology_details
+            .as_mut()
+            .ok_or("No details snapshot to copy")?;
+        let bytes = details.lines.iter().fold(0usize, |size, line| {
+            size.saturating_add(line.len()).saturating_add(1)
+        });
+        if bytes == 0 || bytes > 32 * 1024 {
+            let message =
+                "Clipboard copy requires 1 to 32768 bytes; use e Export for larger details"
+                    .to_string();
+            details.copy_status = Some(message.clone());
+            return Err(message);
+        }
+        self.pending_details_copy = Some(format!("{}\n", details.lines.join("\n")));
+        Ok(())
+    }
+
     pub fn start_details_export(&mut self) {
         if let Some(details) = self.topology_details.take() {
             self.start_input(InputMode::ExportDetails);
@@ -153,6 +173,7 @@ impl App {
         });
         let text = serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
         self.topology_details = Some(TopologyDetails {
+            copy_status: None,
             width: text
                 .lines()
                 .map(|line| ratatui::text::Line::from(line).width())

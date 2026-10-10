@@ -1558,11 +1558,28 @@ fn draw_topology_details(frame: &mut Frame<'_>, app: &mut App, root: Rect, areas
     };
     let area = centered(root, 95, 90);
     frame.render_widget(Clear, area);
-    let block = panel_block("Topology details · snapshot · e export · Esc close", true);
+    let block = panel_block(
+        "Topology details · snapshot · y copy · e export · Esc close",
+        true,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let status_height = details.copy_status.as_ref().map_or(0, |message| {
+        Paragraph::new(terminal_text(message))
+            .wrap(Wrap { trim: false })
+            .line_count(inner.width)
+            .min(usize::from(inner.height.saturating_sub(2))) as u16
+    });
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-    let inner = rows[0];
+    let content =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(status_height)]).split(rows[0]);
+    if let Some(message) = &details.copy_status {
+        frame.render_widget(
+            Paragraph::new(terminal_text(message)).wrap(Wrap { trim: false }),
+            content[1],
+        );
+    }
+    let inner = content[0];
     if rows[1].width >= 18 && rows[1].height > 0 {
         let export = Rect::new(rows[1].x, rows[1].y, 10, 1);
         let close = Rect::new(rows[1].right() - 7, rows[1].y, 7, 1);
@@ -1576,8 +1593,16 @@ fn draw_topology_details(frame: &mut Frame<'_>, app: &mut App, root: Rect, areas
         );
         areas.details_export = Some(export);
         areas.details_close = Some(close);
+        if rows[1].width >= 29 {
+            let copy = Rect::new(rows[1].x + 11, rows[1].y, 8, 1);
+            frame.render_widget(
+                Paragraph::new("[y Copy]").style(Style::default().fg(ACCENT)),
+                copy,
+            );
+            areas.details_copy = Some(copy);
+        }
     } else {
-        frame.render_widget(Paragraph::new("e export"), rows[1]);
+        frame.render_widget(Paragraph::new("y copy · e export"), rows[1]);
     }
     details.page = usize::from(inner.height).max(1);
     details.scroll(0);
@@ -1860,7 +1885,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Variables: W or Edit button edits the selected watch expression; Esc cancels edits"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
         Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
-        Line::from("Details: e or Export saves the captured JSON to a new local file; enter a literal path, Enter saves, Esc cancels"),
+        Line::from("Details: y or Copy sends captured JSON to the terminal clipboard; e or Export saves a new local file"),
         Line::from("Extensions: Home/End jumps to the first/last data page; Shift+Home resets only the action label"),
         Line::from("Stack: distributed by default; start with --stack-mode local for local-only frames; d refreshes the selected mode"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),

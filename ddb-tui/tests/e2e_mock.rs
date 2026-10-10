@@ -699,6 +699,38 @@ fn topology_details_export_terminal_workflow() {
     tui.wait_for_current_frame(|screen| {
         screen.contains("Topology details") && screen.contains("[e Export]")
     });
+    assert!(!tui
+        .output
+        .lock()
+        .unwrap()
+        .windows(5)
+        .any(|bytes| bytes == b"\x1b]52;"));
+    tui.send(b"y");
+    tui.wait_for_current_frame(|screen| screen.contains("Copy sent to terminal"));
+    let copied = {
+        use base64::Engine;
+        let output = tui.output.lock().unwrap();
+        let prefix = b"\x1b]52;c;";
+        let start = output
+            .windows(prefix.len())
+            .position(|bytes| bytes == prefix)
+            .unwrap()
+            + prefix.len();
+        let end = output[start..]
+            .windows(2)
+            .position(|bytes| bytes == b"\x1b\\")
+            .unwrap()
+            + start;
+        base64::prelude::BASE64_STANDARD
+            .decode(&output[start..end])
+            .unwrap()
+    };
+    let copied_json: Value = serde_json::from_slice(&copied).unwrap();
+    assert_eq!(copied_json["serverInstanceId"], snapshot.server_instance_id);
+    assert_eq!(
+        copied_json["sessions"][0]["sessionId"],
+        snapshot.sessions[0].session_id
+    );
     tui.send(b"e");
     tui.wait_for_current_frame(|screen| screen.contains("Export snapshot to NEW file"));
     tui.send(path.to_str().unwrap().as_bytes());
