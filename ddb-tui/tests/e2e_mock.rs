@@ -139,6 +139,10 @@ fn greeter_auto_attach_all_stop_terminal_workflow() {
                 })
         })
     });
+    // Backend discovery can precede the TUI's event projection. Wait for the
+    // rendered membership before scanning: the client sorts above the server
+    // and would otherwise be inserted behind an already advancing search.
+    tui.wait_for_current_frame(|frame| frame.contains("2 sessions · 2 groups"));
     tui.click_topology_thread("tui-client");
     let client_source = workspace.join("greeter_client.cc");
     let client_line = fs::read_to_string(&client_source)
@@ -257,6 +261,25 @@ fn topology_thread_row(frame: &str, session_label: &str) -> Option<usize> {
         }
         (under_session && topology.contains('•')).then_some(row + 1)
     })
+}
+
+fn topology_reached_top(current: Option<&Vec<String>>) -> bool {
+    // The list renders from offset zero until the selection needs scrolling.
+    // Its first visible row can therefore be selected only at the actual top.
+    // Identical captures alone do not acknowledge that an input was processed.
+    current
+        .and_then(|rows| rows.first())
+        .is_some_and(|row| row.contains('▸'))
+}
+
+#[test]
+fn unchanged_topology_capture_is_not_an_acknowledgement_of_page_up() {
+    let rows = vec!["│      • 16 stopped".into(), "│▸     • 5 stopped".into()];
+    assert!(!topology_reached_top(Some(&rows)));
+    assert!(!topology_reached_top(None));
+    assert!(topology_reached_top(Some(&vec![
+        "│▸▾ client 1 sessions".into()
+    ])));
 }
 
 #[test]
@@ -2258,7 +2281,7 @@ impl Tui {
         self.send(b"\x1b[<0;2;4M\x1b[<0;2;4m");
         // Topology sorts groups and sessions by name, not launch order. A new
         // session may sort above the current selection, so search from the top.
-        let mut previous_topology = None;
+        self.clear_capture();
         loop {
             self.assert_running();
             self.send(b"\x1b[5~");
@@ -2271,11 +2294,10 @@ impl Tui {
                     .map(|line| line.chars().take(33).collect::<String>())
                     .collect::<Vec<_>>()
             });
-            if topology.is_some() && topology == previous_topology {
+            if topology_reached_top(topology.as_ref()) {
                 break;
             }
             assert!(Instant::now() < deadline, "topology did not reach its top");
-            previous_topology = topology;
         }
         loop {
             self.assert_running();
@@ -2290,11 +2312,16 @@ impl Tui {
                 self.send(format!("\x1b[<0;12;{row}M\x1b[<0;12;{row}m").as_bytes());
                 return;
             }
-            assert!(
-                Instant::now() < deadline,
-                "thread below {session_label} not found:\n{}",
-                self.output_text()
-            );
+            if Instant::now() >= deadline {
+                let screen = self
+                    .frames
+                    .lock()
+                    .unwrap()
+                    .back()
+                    .cloned()
+                    .unwrap_or_default();
+                panic!("thread below {session_label} not found:\n{screen}");
+            }
             // Move one row so a session header at the bottom becomes visible
             // with its first thread. PageDown can skip that pairing entirely.
             self.send(b"\x1b[B");
