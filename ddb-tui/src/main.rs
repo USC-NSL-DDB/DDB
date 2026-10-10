@@ -1160,10 +1160,7 @@ fn select_mouse_item(app: &mut App, focus: Focus, item: usize) -> bool {
             }
             true
         }
-        Focus::Timeline => {
-            app.timeline_scroll = item.min(app.timeline.len().saturating_sub(1));
-            true
-        }
+        Focus::Timeline => false,
         Focus::Output => false,
         Focus::Extensions => {
             app.extension_scroll = item;

@@ -1251,17 +1251,14 @@ fn draw_output(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_timeline(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_timeline(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let timeline_title = title(app, Focus::Timeline, "DDB Timeline");
     let block = panel_block(&timeline_title, app.focus == Focus::Timeline);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let (start, end) = timeline_window(app, area);
     let lines = app
         .timeline
         .iter()
-        .skip(start)
-        .take(end.saturating_sub(start))
         .map(|line| {
             Line::from(Span::styled(
                 terminal_text(line),
@@ -1269,7 +1266,36 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ))
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let row_counts = lines
+        .iter()
+        .map(|line| {
+            Paragraph::new(line.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(inner.width)
+        })
+        .collect::<Vec<_>>();
+    let max_scroll = row_counts
+        .iter()
+        .sum::<usize>()
+        .saturating_sub(inner.height as usize);
+    app.timeline_scroll = app.timeline_scroll.min(max_scroll);
+    let mut start = max_scroll.saturating_sub(app.timeline_scroll);
+    // Discard fully hidden events before using Paragraph's u16 row offset.
+    // The retained history can contain more than 65,535 wrapped rows.
+    let mut first = 0;
+    for rows in row_counts {
+        if rows > start {
+            break;
+        }
+        start -= rows;
+        first += 1;
+    }
+    let paragraph = Paragraph::new(lines.into_iter().skip(first).collect::<Vec<_>>())
+        .wrap(Wrap { trim: false });
+    frame.render_widget(
+        paragraph.scroll((u16::try_from(start).unwrap_or(u16::MAX), 0)),
+        inner,
+    );
 }
 
 fn draw_extensions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
@@ -1752,29 +1778,6 @@ fn source_start(app: &App) -> usize {
         .document()
         .map(|source| source.scroll.min(source.lines.len().saturating_sub(1)))
         .unwrap_or_default()
-}
-
-fn timeline_window(app: &App, area: Rect) -> (usize, usize) {
-    if app.timeline.is_empty() {
-        return (0, 0);
-    }
-    let width = area.width.saturating_sub(2).max(1) as usize;
-    let mut remaining_rows = area.height.saturating_sub(2).max(1) as usize;
-    let end = app.timeline_scroll.min(app.timeline.len() - 1) + 1;
-    let mut start = end;
-    for index in (0..end).rev() {
-        let characters = app.timeline[index].chars().count().max(1);
-        let rows = characters.saturating_add(width - 1) / width;
-        if rows > remaining_rows && start < end {
-            break;
-        }
-        start = index;
-        remaining_rows = remaining_rows.saturating_sub(rows);
-        if remaining_rows == 0 {
-            break;
-        }
-    }
-    (start, end)
 }
 
 fn list_first(selected: usize, len: usize, area: Rect, item_height: usize) -> usize {
@@ -2269,6 +2272,43 @@ mod v2_tests {
     }
 
     #[test]
+    fn timeline_scroll_reaches_the_end_of_one_tall_event() {
+        let mut app = App::new("http://localhost".into());
+        app.show_timeline = true;
+        app.focus = Focus::Timeline;
+        app.expanded_pane = true;
+        app.push_timeline(format!("BEGIN {} END_MARKER", "word ".repeat(200)));
+        render(&mut app, 45, 14);
+        app.move_selection(1000);
+        assert!(render(&mut app, 45, 14).contains("END_MARKER"));
+        app.move_selection(-1000);
+        assert!(render(&mut app, 45, 14).contains("BEGIN"));
+        assert!(render(&mut app, 45, 14).contains("BEGIN"));
+        render(&mut app, 200, 100);
+        assert_eq!(app.timeline_scroll, 0);
+        for (width, height) in [(1, 1), (10, 3), (45, 14)] {
+            render(&mut app, width, height);
+        }
+    }
+
+    #[test]
+    fn timeline_wrapping_uses_display_width_and_word_boundaries() {
+        let mut app = App::new("http://localhost".into());
+        app.show_timeline = true;
+        app.focus = Focus::Timeline;
+        app.expanded_pane = true;
+        app.push_timeline(format!(
+            "BEGIN {} END_MARKER",
+            "界界 abcdefghij ".repeat(100)
+        ));
+        assert!(render(&mut app, 45, 14).contains("END_MARKER"));
+        app.move_selection(-1000);
+        assert!(render(&mut app, 45, 14).contains("BEGIN"));
+        app.move_selection(1000);
+        assert!(render(&mut app, 45, 14).contains("END_MARKER"));
+    }
+
+    #[test]
     fn timeline_keeps_the_newest_wrapped_event_visible() {
         let mut app = App::new("http://127.0.0.1:5000".to_string());
         app.show_timeline = true;
@@ -2277,6 +2317,19 @@ mod v2_tests {
             app.push_timeline(format!("event {index}"));
         }
         assert!(render(&mut app, 140, 40).contains("event 5"));
+    }
+
+    #[test]
+    fn timeline_tail_survives_more_than_u16_wrapped_history_rows() {
+        let mut app = App::new("http://localhost".into());
+        app.show_timeline = true;
+        app.focus = Focus::Timeline;
+        app.expanded_pane = true;
+        for _ in 0..499 {
+            app.push_timeline("word ".repeat(400));
+        }
+        app.push_timeline("TAIL");
+        assert!(render(&mut app, 15, 14).contains("TAIL"));
     }
 
     #[test]

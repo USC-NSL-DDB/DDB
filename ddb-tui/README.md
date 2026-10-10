@@ -235,6 +235,8 @@ pane; click `[Restore]`, press `z` again, or press `Esc` to restore
 the layout. `Tab` still changes the focused pane while expanded. The diagnostic
 timeline is hidden by default. Press `t` to show and focus it, or hide it again.
 Timeline events continue to be collected while the pane is hidden.
+Up/Down, Page Up/Down, and the mouse wheel scroll wrapped timeline rows,
+including within a single long event. New events return the view to the tail.
 Registers have their own focus and selection: click the register pane or use
 `Tab`, then use arrows, Page Up/Down, or the mouse wheel to browse rows. Left/Right
 scroll long register values horizontally; `z` expands the register pane alone.

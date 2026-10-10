@@ -470,6 +470,7 @@ pub struct App {
     source_server_instance: Option<String>,
     pub source_explorer: crate::source_explorer::Explorer,
     pub execution_location: Option<SourceLocation>,
+    /// Wrapped screen rows above the tail, clamped by the renderer.
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
     pub timeline: VecDeque<String>,
@@ -1938,7 +1939,7 @@ impl App {
             // SourceBrowser::move_cursor through the input dispatcher.
             Focus::Source => {}
             Focus::Timeline => {
-                self.timeline_scroll = move_line(self.timeline_scroll, delta);
+                self.timeline_scroll = move_line(self.timeline_scroll, delta.saturating_neg());
             }
             Focus::Output => self.output.scroll(delta),
             Focus::Extensions => {
@@ -2007,7 +2008,7 @@ impl App {
             self.timeline.pop_front();
         }
         self.timeline.push_back(message.into());
-        self.timeline_scroll = self.timeline.len().saturating_sub(1);
+        self.timeline_scroll = 0;
     }
 
     pub fn push_receipt(&mut self, label: &str, receipt: &v2::Operation) {
