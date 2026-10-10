@@ -76,11 +76,11 @@ generic command that can produce a similar backend effect.
    Do not fabricate legacy numeric IDs or equate them with opaque API IDs. Avoid
    silently writing terminal clipboard escape sequences on selection or hover.
 4. **Confirmed session termination.** `sessionControls.ts` captures the selected
-   session before confirmation and sends SIGKILL only after acceptance. The TUI's
-   signal picker is not an equivalent confirmed kill workflow. Add an explicit
-   session action, freeze its target while confirming, and reject stale/removed
-   targets. Test cancellation and focus changes without terminating real user
-   processes.
+   session before confirmation and sends SIGKILL only after acceptance. The TUI
+   now offers `K` and a topology `Kill [K]` button. The dialog freezes one session,
+   defaults Enter/Esc to cancellation, and requires `y` or a left-click on
+   Terminate. Both confirmation and the worker reject stale/removed targets.
+   See the verification section below; no real user process was killed in tests.
 5. **Variable-to-memory navigation.** Adapter `inspection.mts` preserves
    `variable.address` and evaluation addresses as memory references. The TUI now
    preserves both fields, including expanded children, and `M` in Variables reads
@@ -193,6 +193,34 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Confirmed session termination verification
+
+Topology `K` / `Kill [K]` captures the selected session or a selected thread's
+owning session, never a group or the broader execution scope. The scrollable
+dialog shows the name, canonical session ID, process ID when known, and DDB
+instance. Enter/Esc/n/q cancels; `y` or a left-click on Terminate accepts.
+Underlying navigation and execution keys are ignored while confirmation is open.
+
+The session-termination module owns target capture and validation. Confirmation
+and the worker check the captured instance, session revision, process identity,
+creation timestamp, and live status. The worker fetches a fresh topology snapshot
+before using public Execute with SIGKILL and that snapshot's state-revision
+precondition. This is the API's optimistic pre-admission check, not a claim that
+state cannot change after admission. Rejected confirmation requires a new user
+action; it is not silently retargeted or automatically reconfirmed.
+
+Tests cover cancellation, focus/selection changes, ignored execution keys,
+removed/changed/exited/replacement sessions, and HTTP request target, signal,
+and revision guard. The mock terminal workflow opens the warning and cancels
+before continuing its existing debugger interactions. No real process is killed.
+
+Verification on 2026-10-10: 242 unit tests and two integration helpers passed,
+including rendered mouse confirmation/right-click rejection and 1x1, 8x5, and
+45x14 dialog layouts. The mock full terminal workflow passed in 5.37 seconds.
+Strict all-target TUI Clippy, formatting, and diff whitespace checks passed.
+Real backend termination was not exercised. The broader adapter-parity goal
+remains open, including details/export and watch editing/persistence.
 
 #### Breakpoint file grouping verification
 

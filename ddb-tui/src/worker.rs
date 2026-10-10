@@ -25,6 +25,10 @@ const MAX_PENDING_INSPECTIONS: usize = 64;
 #[path = "source_explorer_worker_tests.rs"]
 mod source_explorer_tests;
 
+#[cfg(test)]
+#[path = "session_termination_worker_tests.rs"]
+mod session_termination_tests;
+
 pub async fn run(
     client: ApiClient,
     workspace: std::sync::Arc<crate::source_workspace::Workspace>,
@@ -605,6 +609,39 @@ async fn handle(
             .await?;
             messages
                 .send(UiMessage::Receipt(format!("signal {signal}"), receipt))
+                .await?;
+        }
+        BackendRequest::TerminateSession(request) => {
+            let snapshot = client
+                .get_snapshot(v2::GetSnapshotRequest {
+                    sections: vec![v2::SnapshotSection::Topology as i32],
+                    ..Default::default()
+                })
+                .await?
+                .snapshot
+                .context("DDB omitted session snapshot")?;
+            request
+                .validate(&snapshot.server_instance_id, &snapshot.sessions)
+                .map_err(anyhow::Error::msg)?;
+            let receipt = complete_operation(
+                client,
+                client
+                    .execute(v2::ExecuteRequest {
+                        context: None,
+                        target: Some(crate::api::session_target(request.session.session_id)),
+                        action: v2::ExecutionAction::Signal as i32,
+                        jump_location: None,
+                        signal_name: Some("SIGKILL".into()),
+                        preconditions: Some(v2::Preconditions {
+                            state_revision: Some(snapshot.base_state_revision),
+                            resource_version: None,
+                        }),
+                    })
+                    .await?,
+            )
+            .await?;
+            messages
+                .send(UiMessage::Receipt("terminate session".into(), receipt))
                 .await?;
         }
         BackendRequest::CreateBreakpoint {

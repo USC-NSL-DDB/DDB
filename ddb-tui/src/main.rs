@@ -379,6 +379,29 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if app.session_termination.is_some() {
+        match key.code {
+            KeyCode::Char('y') if key.modifiers.is_empty() => {
+                submit_session_termination(app, requests)
+            }
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('n') | KeyCode::Char('q') => {
+                app.cancel_session_termination()
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.cancel_session_termination()
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let dialog = app.session_termination.as_mut().unwrap();
+                dialog.scroll = dialog.scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let dialog = app.session_termination.as_mut().unwrap();
+                dialog.scroll = dialog.scroll.saturating_add(1);
+            }
+            _ => {}
+        }
+        return;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
@@ -542,6 +565,11 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
         KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
         KeyCode::Char('v') if app.focus == Focus::Breakpoints => app.toggle_breakpoint_grouping(),
+        KeyCode::Char('K') if app.focus == Focus::Threads => {
+            if let Err(error) = app.open_session_termination() {
+                app.error(error);
+            }
+        }
         KeyCode::Char('E') => {
             if let Err(error) = app.start_expression_inspection() {
                 app.error(error);
@@ -989,7 +1017,44 @@ fn submit_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>) 
     }
 }
 
+fn submit_session_termination(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    match app.commit_session_termination() {
+        Ok(request) => queue_request(app, requests, BackendRequest::TerminateSession(request)),
+        Err(error) => app.error(error),
+    }
+}
+
 fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if app.session_termination.is_some() {
+        let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if app
+                    .areas
+                    .termination_cancel
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.cancel_session_termination();
+                } else if app
+                    .areas
+                    .termination_confirm
+                    .is_some_and(|area| area.contains(position))
+                {
+                    submit_session_termination(app, requests);
+                }
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let dialog = app.session_termination.as_mut().unwrap();
+                dialog.scroll = if mouse.kind == MouseEventKind::ScrollUp {
+                    dialog.scroll.saturating_sub(3)
+                } else {
+                    dialog.scroll.saturating_add(3)
+                };
+            }
+            _ => {}
+        }
+        return;
+    }
     if app.show_help {
         match mouse.kind {
             MouseEventKind::ScrollUp => app.help_scroll = app.help_scroll.saturating_sub(3),
@@ -1073,6 +1138,17 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.termination_open.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Threads;
+                if let Err(error) = app.open_session_termination() {
+                    app.error(error);
+                }
+                return;
+            }
             if button == MouseButton::Left
                 && app.areas.breakpoint_grouping.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -2340,6 +2416,7 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             | BackendRequest::AssignValue { .. }
             | BackendRequest::Jump { .. }
             | BackendRequest::SendSignal { .. }
+            | BackendRequest::TerminateSession(_)
             | BackendRequest::RawCommand { .. }
     ) {
         app.supersede_automatic_control();
@@ -2708,6 +2785,172 @@ mod tests {
             assert_eq!(app.current_frame().map(|frame| frame.id.clone()), frame);
             assert!(rx.try_recv().is_err());
         }
+    }
+
+    #[test]
+    fn session_termination_is_explicit_frozen_and_cancelable() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            sessions: ["session/a", "session/b"]
+                .into_iter()
+                .map(|id| v2::Session {
+                    session_id: id.into(),
+                    display_name: id.into(),
+                    revision: 7,
+                    status: v2::SessionStatus::Stopped as i32,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        app.capabilities.execution_actions = vec![v2::ExecutionAction::Signal as i32];
+        app.capabilities.execution_action_capabilities = vec![v2::ExecutionActionCapability {
+            action: v2::ExecutionAction::Signal as i32,
+            scopes: vec![v2::ExecutionScopeKind::Session as i32],
+        }];
+        app.focus = Focus::Threads;
+        app.select_topology_row(0);
+        assert!(
+            app.open_session_termination().is_err(),
+            "groups cannot be killed"
+        );
+        app.select_topology_row(1);
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.session_termination.is_some());
+        assert!(rx.try_recv().is_err());
+        // Input behind the modal cannot move scope or send execution commands.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &tx,
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.session_termination.is_none());
+        assert!(rx.try_recv().is_err());
+        app.open_session_termination().unwrap();
+        // A programmatic focus/selection change must not retarget confirmation.
+        app.select_topology_row(2);
+        app.focus = Focus::Source;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::TerminateSession(request)
+            if request.session.session_id == "session/a" && request.instance == "backend")
+        );
+        assert!(app.session_termination.is_none());
+        app.open_session_termination().unwrap();
+        app.sessions
+            .retain(|session| session.session_id != "session/b");
+        submit_session_termination(&mut app, &tx);
+        assert!(rx.try_recv().is_err());
+        assert!(app.session_termination.is_none());
+
+        app.select_topology_row(1);
+        app.open_session_termination().unwrap();
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let cancel = app.areas.termination_cancel.unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: cancel.x,
+                row: cancel.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(app.session_termination.is_none());
+        assert!(rx.try_recv().is_err());
+
+        // Open with the rendered topology button, then explicitly confirm
+        // with the mouse. Right-clicking confirmation is not acceptance.
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let open = app.areas.termination_open.unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: open.x,
+                row: open.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(app.session_termination.is_some());
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let confirm = app.areas.termination_confirm.unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Right),
+                column: confirm.x,
+                row: confirm.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: confirm.x,
+                row: confirm.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::TerminateSession(request)
+            if request.session.session_id == "session/a")
+        );
+        app.open_session_termination().unwrap();
+        for (width, height) in [(1, 1), (8, 5), (45, 14)] {
+            let mut small =
+                Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            small
+                .draw(|frame| app.areas = ui::draw(frame, &mut app))
+                .unwrap();
+            for button in [app.areas.termination_cancel, app.areas.termination_confirm]
+                .into_iter()
+                .flatten()
+            {
+                assert!(button.right() <= width && button.bottom() <= height);
+            }
+        }
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.session_termination.is_none());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

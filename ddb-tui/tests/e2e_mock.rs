@@ -668,6 +668,13 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for_source_marker('▶', 9);
     tui.send(b"v");
     tui.wait_for_current_frame(|screen| screen.contains("Flat [v]"));
+    // Confirmation is safe by default: Enter cancels without a signal.
+    tui.send(b"K");
+    tui.wait_for_current_frame(|screen| screen.contains("Terminate one session?"));
+    tui.wait_for_current_frame(|screen| screen.contains("SIGKILL terminates this process"));
+    tui.send(b"\r");
+    tui.wait_for_current_frame(|screen| !screen.contains("Terminate one session?"));
+    tui.wait_for_source_marker('▶', 9);
     // Threads -> Breakpoints -> Source.
     tui.send(b"\t\t");
 

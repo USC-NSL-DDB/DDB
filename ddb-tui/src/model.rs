@@ -97,6 +97,9 @@ pub struct UiAreas {
     pub source_inspect: Option<Rect>,
     pub topology_grouping: Option<Rect>,
     pub breakpoint_grouping: Option<Rect>,
+    pub termination_confirm: Option<Rect>,
+    pub termination_cancel: Option<Rect>,
+    pub termination_open: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -440,6 +443,7 @@ pub struct App {
     pub input_mode: InputMode,
     pub input: String,
     pub signal_picker: Option<SignalPicker>,
+    pub session_termination: Option<SessionTermination>,
     pub registers: Vec<Register>,
     pub selected_register: usize,
     pub register_viewport: crate::display_text::HorizontalViewport,
@@ -527,6 +531,7 @@ impl App {
             capabilities: v2::Capabilities::default(),
             focus: Focus::Source,
             signal_picker: None,
+            session_termination: None,
             input_mode: InputMode::Normal,
             registers: Vec::new(),
             selected_register: 0,
@@ -747,6 +752,7 @@ impl App {
                 self.breakpoint_target_picker = None;
                 self.breakpoint_hit_picker = None;
                 self.signal_picker = None;
+                self.session_termination = None;
                 self.invalidate_inspection();
                 self.push_timeline("DDB instance changed; discarded remote source handles, retained local documents");
             }
@@ -2739,6 +2745,7 @@ pub enum BackendRequest {
         signal: String,
         target: v2::Target,
     },
+    TerminateSession(SessionTermination),
     ListSignals {
         target: v2::Target,
     },
@@ -3814,6 +3821,9 @@ mod watches;
 
 #[path = "expression_inspection.rs"]
 mod expression_inspection;
+#[path = "session_termination.rs"]
+mod session_termination;
+pub use session_termination::SessionTermination;
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;

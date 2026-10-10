@@ -46,6 +46,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_signal_picker(frame, app, root, &mut areas);
         draw_breakpoint_hits(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
+        draw_session_termination(frame, app, root, &mut areas);
         return areas;
     }
     let rows = Layout::default()
@@ -73,6 +74,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_breakpoint_hits(frame, app, root, &mut areas);
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
+        draw_session_termination(frame, app, root, &mut areas);
         return areas;
     }
 
@@ -182,6 +184,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
     draw_signal_picker(frame, app, root, &mut areas);
     draw_breakpoint_hits(frame, app, root, &mut areas);
     explorer::draw(frame, app, root, &mut areas);
+    draw_session_termination(frame, app, root, &mut areas);
     areas
 }
 
@@ -207,6 +210,14 @@ fn draw_pane_expanders(frame: &mut Frame<'_>, app: &App, areas: &mut UiAreas) {
             button,
         );
         areas.pane_expanders.push((panel.focus, button));
+        if panel.focus == Focus::Threads && panel.area.width >= 24 {
+            let button = Rect::new(panel.area.x + 1, panel.area.bottom() - 1, 8, 1);
+            frame.render_widget(
+                Paragraph::new("Kill [K]").style(Style::default().fg(RED)),
+                button,
+            );
+            areas.termination_open = Some(button);
+        }
     }
 }
 
@@ -1521,6 +1532,48 @@ fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
+fn draw_session_termination(frame: &mut Frame<'_>, app: &mut App, root: Rect, areas: &mut UiAreas) {
+    let Some(dialog) = app.session_termination.as_mut() else {
+        return;
+    };
+    let area = centered(root, 85, 75);
+    frame.render_widget(Clear, area);
+    let block = panel_block("Terminate one session?", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let text = format!(
+        "SIGKILL terminates this process. This cannot be undone.\n\nSession: {}\nID: {}\nProcess: {}\nDDB instance: {}\n\nOnly this session is targeted, regardless of execution scope.\nUp/Down or wheel scroll. y confirms; Enter/Esc cancels.",
+        terminal_text(&dialog.session.display_name),
+        terminal_text(&dialog.session.session_id),
+        terminal_text(dialog.session.process_id.as_deref().unwrap_or("unknown")),
+        terminal_text(&dialog.instance),
+    );
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let maximum = paragraph
+        .line_count(rows[0].width)
+        .saturating_sub(rows[0].height as usize)
+        .min(u16::MAX as usize) as u16;
+    dialog.scroll = dialog.scroll.min(maximum);
+    frame.render_widget(paragraph.scroll((dialog.scroll, 0)), rows[0]);
+    if rows[1].width >= 29 && rows[1].height > 0 {
+        let cancel = Rect::new(rows[1].x, rows[1].y, 12, 1);
+        let confirm = Rect::new(rows[1].right() - 15, rows[1].y, 15, 1);
+        frame.render_widget(
+            Paragraph::new("[Esc Cancel]").style(Style::default().fg(ACCENT)),
+            cancel,
+        );
+        frame.render_widget(
+            Paragraph::new("[y Terminate]").style(Style::default().fg(RED)),
+            confirm,
+        );
+        areas.termination_cancel = Some(cancel);
+        areas.termination_confirm = Some(confirm);
+    } else {
+        frame.render_widget(Paragraph::new("Esc cancel"), rows[1]);
+    }
+}
+
 fn draw_signal_picker(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiAreas) {
     let Some(picker) = app.signal_picker.as_ref() else {
         return;
@@ -1745,6 +1798,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
         Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
+        Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
