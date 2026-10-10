@@ -356,4 +356,29 @@ fn workflow(backend: &str) {
     tui.select_visible_variable("Watch: _ddb_missing");
     reject_selected_memory(&mut tui);
     assert!(tui.quit().contains("\u{1b}[?1049l"));
+
+    // The same reconstructed caller must disappear only by explicit choice.
+    // Local mode still uses real frame handles for source and variable inspection.
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
+    let mut local = Tui::spawn_shell(&format!(
+        "stty rows 40 cols 140; exec {} --stack-mode local connect --api {} --refresh-ms 10000",
+        shell_quote(&binary),
+        shell_quote(Path::new(&ddb.base_url()))
+    ));
+    local.click_topology_thread("dbt-leaf");
+    click_text(&mut local, "DDB Local Call Stack");
+    local.send(b"z");
+    local.wait_for_current_frame(|screen| {
+        screen.contains("[Restore]") && screen.contains("dbt-leaf") && screen.contains("extraction")
+    });
+    let screen = local.frames.lock().unwrap().back().unwrap().clone();
+    assert!(!screen.contains("root_stop"));
+    assert!(!screen.contains("dbt-root"));
+    assert!(!screen.contains("DDB Distributed Call Stack"));
+    local.send(b"z");
+    let line = ddb.top_frame_line(&leaf_thread);
+    local.wait_for_source_marker('▶', line);
+    local.send(b"w9502\r");
+    local.wait_for_variable_value("Watch: 9502", "9502");
+    assert!(local.quit().contains("\u{1b}[?1049l"));
 }

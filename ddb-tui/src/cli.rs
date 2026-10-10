@@ -52,6 +52,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_enum, default_value_t = ValuesFormatting::PrettyPrinters)]
     pub values_formatting: ValuesFormatting,
 
+    /// Show distributed callers by default, or explicitly inspect only local frames.
+    #[arg(long, global = true, value_enum, default_value_t = StackMode::Distributed)]
+    pub stack_mode: StackMode,
+
     /// Maximum seconds to wait for a managed DDB service to become ready.
     #[arg(
         long = "startup-timeout",
@@ -71,6 +75,13 @@ pub(crate) struct Args {
 
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(crate) enum StackMode {
+    #[default]
+    Distributed,
+    Local,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -224,6 +235,44 @@ fn parse_existing_path(path: &str) -> Result<PathBuf, io::Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stack_mode_is_explicit_global_and_distributed_by_default() {
+        assert_eq!(
+            Args::try_parse_from(["ddb-tui"]).unwrap().stack_mode,
+            StackMode::Distributed
+        );
+        for arguments in [
+            vec![
+                "ddb-tui",
+                "--stack-mode",
+                "local",
+                "connect",
+                "--api",
+                "http://localhost",
+            ],
+            vec![
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://localhost",
+                "--stack-mode",
+                "local",
+            ],
+            vec![
+                "ddb-tui",
+                "--stack-mode",
+                "local",
+                "launch",
+                "--",
+                "/bin/true",
+            ],
+        ] {
+            let args = Args::try_parse_from(arguments).unwrap();
+            assert_eq!(args.stack_mode, StackMode::Local);
+            args.parse_mode().unwrap();
+        }
+        assert!(Args::try_parse_from(["ddb-tui", "--stack-mode", "automatic"]).is_err());
+    }
     #[test]
     fn watch_file_is_explicit_global_and_may_be_new() {
         use super::*;

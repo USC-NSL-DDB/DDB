@@ -353,9 +353,12 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
     ]
     .into_iter()
     .filter(|(control, _, _)| match control {
-        Control::RefreshStack => app
-            .capabilities
-            .supports_ddb_feature("distributed_backtrace"),
+        Control::RefreshStack => {
+            app.stack_mode == crate::cli::StackMode::Local
+                || app
+                    .capabilities
+                    .supports_ddb_feature("distributed_backtrace")
+        }
         Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
         control => control
             .action_name()
@@ -1072,7 +1075,9 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .into_iter()
         .map(|line| ListItem::new(horizontal_line(line, app.stack_viewport.column())))
         .collect();
-    let stack_title = if app.distributed_stack_truncation.is_some() {
+    let stack_title = if app.stack_mode == crate::cli::StackMode::Local {
+        "DDB Local Call Stack"
+    } else if app.distributed_stack_truncation.is_some() {
         "DDB Distributed Call Stack · TRUNCATED"
     } else {
         "DDB Distributed Call Stack"
@@ -1857,6 +1862,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
         Line::from("Details: e or Export saves the captured JSON to a new local file; enter a literal path, Enter saves, Esc cancels"),
         Line::from("Extensions: Home/End jumps to the first/last data page; Shift+Home resets only the action label"),
+        Line::from("Stack: distributed by default; start with --stack-mode local for local-only frames; d refreshes the selected mode"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),

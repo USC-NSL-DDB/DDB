@@ -389,6 +389,7 @@ fn inspection_context(request: &BackendRequest) -> Option<(u64, String)> {
         BackendRequest::InspectThread {
             thread_id,
             generation,
+            ..
         }
         | BackendRequest::InspectFrame {
             thread_id,
@@ -498,7 +499,8 @@ async fn handle(
         BackendRequest::InspectThread {
             thread_id,
             generation,
-        } => inspect_thread(client, messages, thread_id, generation).await?,
+            local_session,
+        } => inspect_thread(client, messages, thread_id, generation, local_session).await?,
         BackendRequest::InspectFrame {
             thread_id,
             generation,
@@ -996,6 +998,7 @@ async fn inspect_thread(
     messages: &mpsc::Sender<UiMessage>,
     thread_id: String,
     generation: u64,
+    local_session: Option<String>,
 ) -> anyhow::Result<()> {
     let _ = complete_operation(
         client,
@@ -1008,7 +1011,10 @@ async fn inspect_thread(
             .await?,
     )
     .await?;
-    let result = distributed_frames(client, &thread_id).await?;
+    let result = match local_session {
+        Some(session_id) => local_frames(client, &thread_id, &session_id).await?,
+        None => distributed_frames(client, &thread_id).await?,
+    };
     let first_frame = result
         .frames
         .iter()
@@ -1032,6 +1038,43 @@ async fn inspect_thread(
             .await?;
     }
     Ok(())
+}
+
+async fn local_frames(
+    client: &ApiClient,
+    thread_id: &str,
+    session_id: &str,
+) -> anyhow::Result<v2::DistributedBacktraceResult> {
+    let frames = client
+        .collect_frames(
+            v2::ListFramesRequest {
+                thread_id: thread_id.into(),
+                ..Default::default()
+            },
+            MAX_COLLECTION_ITEMS,
+        )
+        .await?;
+    let frames = frames
+        .into_iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            anyhow::ensure!(
+                frame.thread_id == thread_id,
+                "local stack returned a frame owned by another thread"
+            );
+            Ok(v2::DistributedFrame {
+                index: index as u32,
+                session_id: session_id.into(),
+                thread_id: frame.thread_id.clone(),
+                frame: Some(frame),
+                ..Default::default()
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(v2::DistributedBacktraceResult {
+        frames,
+        ..Default::default()
+    })
 }
 
 async fn distributed_frames(
@@ -1465,6 +1508,74 @@ fn short_enum(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn local_stack_collects_pages_preserves_frame_handles_and_rejects_foreign_owners() {
+        use axum::{routing::post, Json, Router};
+        for foreign in [false, true] {
+            let router =
+                Router::new().route(
+                    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListFrames",
+                    post(
+                        move |Json(request): Json<v2::ListFramesRequest>| async move {
+                            assert_eq!(request.thread_id, "thread/local");
+                            let second = request.page.and_then(|page| page.page_token).is_some_and(
+                                |token| {
+                                    assert_eq!(token, "opaque/next");
+                                    true
+                                },
+                            );
+                            let level = u32::from(second);
+                            Json(v2::ListFramesResponse {
+                                frames: vec![v2::Frame {
+                                    frame_id: format!("frame/{level}"),
+                                    thread_id: if foreign {
+                                        "thread/foreign"
+                                    } else {
+                                        "thread/local"
+                                    }
+                                    .into(),
+                                    level,
+                                    function_name: Some(format!("local_{level}")),
+                                    ..Default::default()
+                                }],
+                                page: Some(v2::PageInfo {
+                                    next_page_token: (!second).then(|| "opaque/next".into()),
+                                }),
+                                ..Default::default()
+                            })
+                        },
+                    ),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = ApiClient::new(crate::api::ClientConfig::new(format!(
+                "http://{}",
+                listener.local_addr().unwrap()
+            )))
+            .unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let result = local_frames(&client, "thread/local", "session/local").await;
+            if foreign {
+                assert!(result.unwrap_err().to_string().contains("another thread"));
+            } else {
+                let result = result.unwrap();
+                assert!(!result.truncated);
+                assert_eq!(result.frames.len(), 2);
+                for (index, frame) in result.frames.iter().enumerate() {
+                    assert_eq!(frame.index, index as u32);
+                    assert_eq!(frame.session_id, "session/local");
+                    assert_eq!(frame.thread_id, "thread/local");
+                    assert!(frame.boundary.is_none());
+                    assert_eq!(
+                        frame.frame.as_ref().unwrap().frame_id,
+                        format!("frame/{index}")
+                    );
+                }
+            }
+            server.abort();
+            let _ = server.await;
+        }
+    }
 
     #[tokio::test]
     async fn rejected_expression_inspection_keeps_its_identity_and_error() {

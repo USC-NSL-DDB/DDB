@@ -507,6 +507,7 @@ pub struct App {
     pub selected_breakpoint_site: Option<usize>,
     pub breakpoint_hit_picker: Option<breakpoint_hits::BreakpointHitPicker>,
     pub inspection_generation: u64,
+    pub stack_mode: crate::cli::StackMode,
     inspected_thread_id: Option<String>,
     pub source_browser: SourceBrowser,
     pub source_workspace: std::sync::Arc<crate::source_workspace::Workspace>,
@@ -606,6 +607,7 @@ impl App {
             selected_breakpoint_site: None,
             breakpoint_hit_picker: None,
             inspection_generation: 0,
+            stack_mode: Default::default(),
             inspected_thread_id: None,
             source_browser: SourceBrowser::default(),
             source_workspace: std::sync::Arc::default(),
@@ -2760,6 +2762,9 @@ pub enum BackendRequest {
     InspectThread {
         thread_id: String,
         generation: u64,
+        /// Explicit local mode captures the selected thread's session owner.
+        /// None retains the default distributed backtrace operation.
+        local_session: Option<String>,
     },
     InspectFrame {
         thread_id: String,

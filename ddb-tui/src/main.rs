@@ -90,6 +90,7 @@ async fn main() -> Result<()> {
     let mut app = App::new(endpoint.to_string());
     app.source_workspace = workspace;
     app.values_formatting = args.values_formatting;
+    app.stack_mode = args.stack_mode;
     app.debugger_settings = debugger_settings;
     for expression in saved_watches {
         app.add_watch(expression).map_err(anyhow::Error::msg)?;
@@ -1702,6 +1703,12 @@ fn inspect_thread(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread
         BackendRequest::InspectThread {
             thread_id,
             generation,
+            local_session: (app.stack_mode == cli::StackMode::Local).then(|| {
+                app.current_thread()
+                    .expect("selected above")
+                    .session_id
+                    .clone()
+            }),
         },
     );
 }
@@ -1750,9 +1757,10 @@ fn start_execution_prompt(app: &mut App, action: &str, mode: InputMode) {
 }
 
 fn refresh_stack(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
-    if !app
-        .capabilities
-        .supports_ddb_feature("distributed_backtrace")
+    if app.stack_mode == cli::StackMode::Distributed
+        && !app
+            .capabilities
+            .supports_ddb_feature("distributed_backtrace")
     {
         app.status = "DDB distributed stack is not available for this runtime".to_string();
         return;
@@ -4146,6 +4154,7 @@ mod tests {
             BackendRequest::InspectThread {
                 thread_id: "thread/child".into(),
                 generation: 1,
+                local_session: None,
             },
         );
         assert_eq!(
@@ -4620,7 +4629,7 @@ mod tests {
         apply_message(&mut app, UiMessage::Snapshot(snapshot.clone()), &requests);
         assert!(
             matches!(receiver.try_recv().unwrap(), BackendRequest::InspectThread {
-            thread_id, generation: next,
+            thread_id, generation: next, ..
         } if thread_id == "thread/child" && next > generation)
         );
         assert!(app.frames.is_empty());
@@ -4766,6 +4775,32 @@ mod tests {
             app.source_browser.following(),
             "explicit thread selection must reveal its next frame response"
         );
+    }
+
+    #[test]
+    fn local_stack_request_captures_session_owner_and_preserves_execution_scope() {
+        let mut app = distributed_caller_app();
+        app.stack_mode = cli::StackMode::Local;
+        let thread = app.current_thread().unwrap().clone();
+        let target = app.execution_target.clone();
+        let (tx, mut rx) = mpsc::channel(4);
+        inspect_thread(&mut app, &tx, thread.id.clone());
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::InspectThread {
+            thread_id, local_session: Some(session), generation
+        } if thread_id == thread.id && session == thread.session_id && generation == app.inspection_generation)
+        );
+        assert_eq!(app.execution_target, target);
+        assert!(rx.try_recv().is_err());
+        app.capabilities.supported_operations.clear();
+        refresh_stack(&mut app, &tx);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::InspectThread {
+                local_session: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -5511,6 +5546,7 @@ mod tests {
         let Some(BackendRequest::InspectThread {
             thread_id,
             generation,
+            ..
         }) = receiver.recv().await
         else {
             panic!("new DDB session membership should refresh the distributed stack");
@@ -5562,6 +5598,7 @@ mod tests {
         let Some(BackendRequest::InspectThread {
             thread_id,
             generation,
+            ..
         }) = receiver.recv().await
         else {
             panic!("new DDB parent thread membership should refresh the distributed stack");
@@ -5642,6 +5679,7 @@ mod tests {
         let BackendRequest::InspectThread {
             thread_id,
             generation: retried_generation,
+            ..
         } = request
         else {
             panic!("a stopped projection should request thread inspection");

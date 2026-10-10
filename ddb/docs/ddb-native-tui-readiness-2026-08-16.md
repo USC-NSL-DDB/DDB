@@ -38,13 +38,37 @@ the canonical adapter and are not a reason to add a legacy transport to the TUI.
 | pathSubstitutions, autorun | Explicit `--debugger-settings` source mappings and backend-specific native commands, ordered and tested on GDB/LLDB. |
 | stopAtEntry boolean or function | `entry_function: main` or another symbol in debugger settings uses typed temporary breakpoints for each ready/stopped native session, including later discovery, without automatic continuation. Native `launch --stop-at-entry` remains a separate process-start policy. |
 | showDevDebugOutput | `--backend-log` captures managed backend stdout/stderr explicitly; inferior/debugger output remains in the Output pane. |
-| distributedStack=false | **Open:** the TUI always requests distributed frames. Keep distributed stacks as the default, but provide an explicit local-only choice if completing full configuration parity. |
+| distributedStack=false | `--stack-mode local` explicitly uses paginated ListFrames. The default remains distributed; pane labeling and refresh follow the selected mode, with no error-driven fallback. |
 | printCalls | **Open:** there is no equivalent opt-in sanitized client request trace. The optional timeline is execution telemetry, not HTTP method/path/status diagnostics. |
 | debugger_args | **Open:** the managed TUI does not forward additional backend arguments. Any implementation must reject managed endpoint/authentication/report overrides rather than weakening ownership guarantees. |
 | pairedBreakpointRequests | Adapter/extension coordination detail; TUI directly creates typed logical breakpoints with explicit group/session/multiple targets, so no paired DAP request protocol is needed. |
 
 These concrete gaps replace the vague remaining configuration sign-off. The
 entry-function addition alone does not establish complete adapter parity.
+
+Local-stack verification: both real distributed-caller workflows passed together
+in 9.91 seconds after adding an explicit local-mode TUI to each GDB/LLDB case.
+The default TUI first displays the cross-session caller and inspects its memory.
+The local-mode TUI then selects the same callee, expands its stack, and verifies
+that callee frames remain but the caller and distributed title are absent.
+Source markers and watch evaluation still work. The contract test serves two
+ListFrames pages, checks continuation and original frame handles, and rejects a
+frame with a foreign thread owner. The CLI test verifies a distributed default,
+global placement of the local option and rejection of unknown modes. The input
+test captures the selected session owner without changing execution scope and
+refreshes local frames without requiring distributed-backtrace capability.
+
+The implementation uses the existing inspection-generation and frame projection
+path for both modes. Local frames have no synthetic distributed boundary or
+invented frame identity. Collection remains bounded by the SDK's 10,000-item
+limit, which reports an error rather than silently dropping frames. This follows
+the module-design guidance by keeping scope/register/source inspection shared.
+
+The final local-stack gate passed 276 unit tests, two integration helpers, strict
+Clippy, formatting and diff checks. All 26 non-greeter terminal workflows passed
+in 81.67 seconds, including both default-distributed and explicit-local native
+debugger assertions. Greeter was not rerun for this stack-read option. Sanitized
+API tracing and managed backend argument forwarding remain open parity work.
 
 Entry setup verification: the real settings workflow passed with GDB and LLDB
 in 6.56 seconds. It checks that the breakpoint is temporary and verified

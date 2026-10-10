@@ -144,6 +144,15 @@ keys, empty commands and control characters are rejected.
 
 ## Interaction
 
+Stacks are distributed by default. To inspect only frames in the selected
+thread, pass `--stack-mode local` in managed or connect mode. The stack pane is
+then labeled `DDB Local Call Stack`; `d` and the toolbar refresh that local stack.
+Local mode uses the paginated `ListFrames` API, retaining native frame handles
+for source, variables, registers and memory. It does not change execution scope
+or all-stop behavior, and never activates automatically after a distributed
+backtrace failure. Omit the option or use `--stack-mode distributed` for the
+normal DDB-native view.
+
 | Input | Action |
 |---|---|
 | `Tab` / `Shift+Tab` | Move panel focus |
@@ -161,7 +170,7 @@ keys, empty commands and control characters are rejected.
 | `x` / `Space` | Enable or disable the selected breakpoint |
 | `Delete` | Remove the selected breakpoint |
 | `F` | Add a function/symbol breakpoint, then choose session/group targets |
-| `d` | Refresh the DDB distributed stack (normally refreshed automatically) |
+| `d` | Refresh the selected stack mode, distributed by default |
 | `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
 | `e` | Evaluate an expression |
 | `w` | Add a retained watch expression in Variables |
@@ -597,8 +606,10 @@ the v2 SDK to capture the caller context, resume it, and pause it at another PC.
 The TUI then selects the callee thread, reconstructs its distributed stack,
 opens a non-top caller frame, expands a variable, and reads its storage through
 `M`. Both GDB and LLDB must show the caller's expected bytes. Literal watches and
-failed evaluations must reject `M` without switching to Memory. Run only these
-cases with `cargo test --test e2e_mock distributed_caller_memory -- --ignored --test-threads=1`.
+failed evaluations must reject `M` without switching to Memory. Each workflow
+also checks a second TUI in explicit local mode: the same callee
+retains source and variable inspection while the cross-session caller is absent.
+Run only these cases with `cargo test --test e2e_mock distributed_caller_memory -- --ignored --test-threads=1`.
 
 The opt-in auto-attach greeter regression additionally requires an instrumented
 gRPC helloworld checkout, `ddb_runapp`, Mosquitto, and an existing
