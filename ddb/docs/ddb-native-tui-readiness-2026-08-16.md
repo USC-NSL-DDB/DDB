@@ -2,10 +2,137 @@
 
 Date: 2026-08-16
 
-Status: historical checkpoint, not a completion sign-off for the current TUI work.
+Status: the August checkpoint is historical. The October completion audit below
+is the current sign-off for the eleven requested TUI requirements.
 The August implementation was recorded as five allowlisted local commits described
 below; no remote branch was updated while preparing that checkpoint. Its feature
 descriptions, compatibility paths, and test counts must not be read as current.
+
+## Completion audit, 2026-10-10
+
+Implementation reviewed: `52465af49062d2409f5061ddebe0b49d3555e652`.
+VS Code adapter reviewed: `f3c671fc67ba382f3450bdeca91936ce35055cb4` at
+`/mnt/home/ybyan/projs/vscode-adapter`. Both revisions were read from Git, and
+the DDB worktree was clean before this documentation update. This section
+supersedes the open sign-off statements in the chronological records below.
+
+The audit read the adapter's contributed commands, `CanonicalLaunchArguments`,
+actual DAP handlers and custom requests in `src/v2/session.mts`, sidebar commands
+in `src/DDBViewProvider.ts`, session controls in `src/sessionControls.ts`, and
+frame reveal in `src/frontend/extension.ts`. It compared their behavior with
+the TUI handlers and assertions, not just matching test names or package.json
+declarations. All eleven requirements are implemented and verified within the
+scope and limitations recorded here.
+
+### Requirement evidence
+
+| Requested requirement | Implemented behavior and inspected evidence |
+|---|---|
+| 1. Both greeter processes stop under default all-stop | `greeter_auto_attach_all_stop_terminal_workflow` launches instrumented server/client through `ddb_runapp --ddb`, creates both breakpoints through TUI input, reaches each breakpoint and asserts every discovered thread is stopped. It also checks canonical server breakpoint ownership and navigates the paused hit to the execution marker. The latest run passed in 33.37 seconds. Unit assertions cover a client stop pausing the server once, failed-pause reporting, late peer resumes, atomic snapshot installation, stale revisions and backend replacement. |
+| 2. Natural source scrolling | `SourceBrowser::fit_viewport` keeps the viewport stationary until the cursor crosses an edge. `moving_cursor_within_visible_page_does_not_scroll_document` checks the original pinned-cursor symptom; `crossing_source_windows_keeps_cursor_at_the_scrolling_edge` covers both directions, resize and stale loads. Input tests check j/k and viewport-sized paging. Real debugger tests verify that stepping moves the execution marker independently of manual navigation. |
+| 3. Current adapter feature set | The complete command and DAP inventory is mapped below. Source/member ownership, distributed inspection, group/session breakpoint targets, hit navigation, logpoints, watches, assignment, memory, startup options and lifecycle have model, public-API or native terminal assertions. No legacy MI transport or guessed numeric identifiers were added. |
+| 4. Expand panes and reveal clipped content | `z` and rendered Expand/Restore buttons use the same local state; Esc restores. Tests verify hit rectangles, focus, hidden-pane exclusion, independent horizontal offsets, resize clamping and Unicode tails. The full terminal workflow clicks the actual rendered controls. Expanded Variables excludes Registers and Memory without discarding their data. |
+| 5. Register scrolling | Keyboard and mouse assertions move register rows and horizontal values independently, preserve the selected register and issue no backend inspection requests. Render tests cover mouse focus and expansion clamping. GDB and LLDB terminal workflows read, assign, render and restore an actual register. |
+| 6. Optional timeline | Timeline is hidden by default and skipped by focus cycling. `t` shows/focuses or hides it; Output remains independent. Render tests confirm retained events become visible when enabled and that large wrapped events remain navigable beyond 65,535 rows. Native workflows verify console output while Timeline is hidden. |
+| 7. Stopped thread opens frame/source, with useful errors | Explicit stopped-thread selection restores source following and requests inspection. The real greeter uses mouse thread selection; native workflows verify stack, source and variables. Source loading/failure tests assert the inline reason and F8 retry hint, clear loading on completion/failure, and reject obsolete responses. Boundary frames cannot masquerade as executable frames. |
+| 8. Help layout | Help wraps and scrolls at 45x14, exposes its last page, reclamps at 200x100 and does not panic at tiny sizes. Keyboard and mouse tests prove the modal blocks controls behind it. Destructive confirmation and ordinary prompts retain separate input handling. |
+| 9. Current-frame toolbar control | The rendered Frame F8 rectangle resolves to RevealFrame. F8 from another pane loads the selected distributed frame owner's source without changing execution scope or inspection generation. Missing locations and boundary frames produce errors. This is source reveal, not execution jump. |
+| 10. UI polish | Distinct execution/navigation/breakpoint markers, explicit loading/errors, pane controls, topology and breakpoint grouping, frozen details, visible dialog feedback, and Unicode-aware clipping have inspected rendering assertions. Native terminal workflows exercise the corresponding mouse paths. This establishes concrete layout and interaction behavior, not a claim that visual preferences are universal. |
+| 11. Keyboard polish | j/k navigate; uppercase J opens execution jump; F8 reveals the frame; z/Esc expand/restore; Tab skips hidden panes. Help and confirmation are modal. Prompt letters remain literal input. Extension data and action navigation are independent. Tests assert that local navigation does not dispatch debugger commands. The README and in-app help document the bindings. |
+
+The principal evidence files are [terminal workflows](../../ddb-tui/tests/e2e_mock.rs),
+[native distributed caller inspection](../../ddb-tui/tests/support/real_distributed_memory.rs),
+[input and state assertions](../../ddb-tui/src/main.rs),
+[render assertions](../../ddb-tui/src/ui.rs),
+[source viewport assertions](../../ddb-tui/src/source_browser_tests.rs), and
+[source ownership assertions](../../ddb-tui/src/source_binding_tests.rs).
+
+### Adapter command parity
+
+Each contributed command at the pinned adapter revision has a user-accessible
+TUI equivalent. Presentation differs where the terminal requires it.
+
+| Adapter command | TUI equivalent and verification |
+|---|---|
+| `ddbSessionsExplorer.refresh`, `ddbBreakpointsExplorer.refresh` | `r` or Refresh obtains canonical state; the full terminal workflow checks the refreshed session/group/breakpoint counts. |
+| `ddbSessionsExplorer.toggleGrouping` | Topology `v` or header button switches grouped/flat views. Model/input tests preserve session identity and scope; the terminal workflow clicks the header. |
+| `ddbBreakpointsExplorer.focusHit` | Breakpoints `P` or right-click opens current paused hits. Selection revalidates stop identity; real greeter and GDB/LLDB function-breakpoint tests reach source and variables. |
+| `ddbBreakpointsExplorer.openSource` | Enter or click opens the selected breakpoint/member source. `breakpoint_navigation_selects_exact_child_owner_without_retargeting_execution` checks canonical owner selection, and distributed source workflows cover distinct checkouts. |
+| `ddbBreakpointsExplorer.toggleGroupByFile`, `ddbBreakpointsExplorer.showFlat` | Breakpoints `v` or header button chooses file grouping or flat view. Tests preserve logical/member identity, distinguish full paths and prevent file headers from executing breakpoint actions. |
+| `ddbSessionsExplorer.showLogicalGroupDetails` | Topology `i` or right-click opens frozen canonical group/session details, including ungrouped sessions. Tests preserve IDs, membership and execution scope. |
+| `ddbSessionsExplorer.pauseSession`, `ddbSessionsExplorer.continueSession` | Select the session row and use Pause/Continue. Typed execution targets distinguish session, group, thread and broadcast; capabilities reject unsupported scopes. |
+| `ddbSessionsExplorer.killSession` | `K` or Kill opens captured-session SIGKILL confirmation. Enter/Esc cancel; explicit y/click confirms. Worker tests reject changed, removed or replaced sessions and assert the exact target and revision precondition. |
+| `ddbSessionsExplorer.sendSignal` | `s` opens the backend's typed signal catalog for the chosen execution target. Tests preserve the captured target and selected signal; the terminal workflow sends SIGUSR1. |
+| `ddb.jumpToFocusedFrame` | Frame F8 or F8 reveals the selected frame as described in requirement 9. |
+| `ddbSessionsExplorer.copyDetails` | Details `y` or Copy sends captured JSON through OSC 52. Unit tests check explicit activation, Unicode bytes, bounds, failure and persistent feedback. The terminal workflow decodes the payload and verifies backend/session ownership. Export remains available. |
+
+### DAP, configuration and DDB-native behavior
+
+The audit also covered features that are not contributed sidebar commands:
+
+- Continue, pause, next, step-in, step-out and execution jump use typed Execute
+  actions, advertised scope checks and operation receipts. Failed fanout targets
+  remain identifiable. Source reveal and local navigation never imply execution.
+- Source, conditional, function, hit-count, temporary and hardware breakpoint
+  options remain capability-gated. Group/session/multiple targets use canonical
+  IDs and group inheritance. Real GDB/LLDB tests prove function breakpoints with
+  ignore count 3 stop at `counter = 3`, not merely that an option was stored.
+- Frontend logpoints evaluate/interpolate before guarded continuation. Real
+  GDB/LLDB tests observe `counter = 0` output and a subsequent stopping breakpoint;
+  worker tests reject stale, failed and oversized evaluations.
+- Distributed stacks are the default. Explicit `--stack-mode local` uses
+  paginated ListFrames with no automatic fallback. Native two-process tests
+  inspect a non-top distributed caller, its expandable value and exact memory
+  bytes, then prove local mode excludes that caller. Synthetic boundaries are
+  non-inspectable, and stop/frame generations reject late replies.
+- Variables/scopes, lazy expensive scopes, expandable one-shot expression
+  inspection, retained/editable watches, value assignment, register assignment,
+  memory reads and native console commands have API or native terminal coverage.
+  Watches can persist through the explicit watch file; clipboard and persistence
+  are never silently enabled.
+- The existing active-configuration table below maps every
+  `CanonicalLaunchArguments` property. Tests cover managed config/dispatcher,
+  external connection, credential isolation, argument boundaries, typed source
+  mappings, pretty/raw/disabled values, native startup commands, temporary entry
+  functions including later-discovered sessions, explicit local stacks, backend
+  logs and sanitized API traces. Shell cwd/environment provide process startup
+  context. Paired DAP breakpoint sequencing is replaced by direct typed target
+  selection, not copied as a second frontend protocol.
+- Generic DDB extension descriptors, data and declared actions remain available
+  without hard-coded framework UI. Rendering and action tests cover schema-driven
+  input, paging, large Unicode cells and independent action-label scrolling.
+
+The TUI imports the public `ddb-api-client` and generated v2 types. Stack,
+inspection, execution and output paths were inspected against the current SDK;
+the fresh SDK-to-real-DDB integration also passed. DAP-specific handles and
+internal VS Code decoration/synchronization commands are frontend implementation
+details, not missing debugger operations.
+
+### Final gates and limits
+
+- On the implementation tree now committed as `52465af4`: 280 TUI unit tests,
+  two integration helpers, strict all-target Clippy, formatting and diff checks
+  passed. All 27 non-greeter terminal workflows passed serially in 83.81 seconds.
+  The real greeter workflow passed in 33.37 seconds with shared discovery config
+  unchanged. The prior two failed tests and their corrections remain below.
+- During this completion audit: the same 280 TUI tests and two helpers passed
+  again; all 16 SDK tests passed; the SDK integration against real DDB passed in
+  0.67 seconds. No implementation changed between the terminal run and audit.
+- Native evidence covers the installed Linux GDB and LLDB backends and the
+  instrumented gRPC greeter, not every debugger version, operating system or
+  distributed application. All-stop coordinates peer pauses; it is not an atomic
+  simultaneous stop across machines. Failure is reported rather than hidden.
+- OSC 52 tests verify emitted bytes, not acceptance by every terminal or
+  multiplexer. The dialog reports sent, and Export provides the fallback.
+  Frontend logpoint and termination checks do not claim backend-atomic
+  validation plus dispatch. These limits are documented rather than concealed.
+- This closes the requested TUI work, not a repository-wide release gate. The
+  previously recorded parallel backend telemetry-test failure, unrelated backend
+  formatting difference and release/license prerequisites are not claimed fixed.
+
+All work remains in auditable local commits on `codex/tui-next`; nothing was
+pushed. Earlier open-gap records below are retained as history, not current
+outstanding TUI tasks.
 
 ## Follow-up status, 2026-10-10
 
