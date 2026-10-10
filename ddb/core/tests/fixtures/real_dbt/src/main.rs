@@ -172,6 +172,12 @@ define_hops!(
 
 #[inline(never)]
 fn root_stop(_self_ctx_path: &str) -> ! {
+    #[repr(C)]
+    struct MemoryMarker {
+        value: u64,
+    }
+    let memory_marker = MemoryMarker { value: 9501 };
+    std::hint::black_box(&memory_marker);
     park_at_context()
 }
 

@@ -85,9 +85,11 @@ generic command that can produce a similar backend effect.
    and rejection of absent addresses, boundary frames, and running threads.
    Backend decoders and projections preserve address metadata, and both native
    backends now supply storage addresses. Real GDB/LLDB scope tests compare memory
-   reached through these addresses with fixture expressions. The real
-   distributed-caller case and additional unavailable/synthetic-value coverage
-   listed below remain open.
+   reached through these addresses with fixture expressions. The public API's
+   real distributed-caller path is now verified for both backends, including
+   non-top-frame child expansion and stale-frame rejection. A complete TUI
+   interaction through that distributed frame and additional unavailable/synthetic
+   value coverage remain open.
 6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
    adapter plus its VS Code host before declaring inspection parity. Existing
    add/remove, refresh and expansion prove only those narrower capabilities.
@@ -187,6 +189,29 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Real distributed-caller memory verification
+
+The real distributed-backtrace matrix now also exercises the authenticated v2
+inspection API. For each four-session GDB/LLDB case it obtains the public
+distributed backtrace from the leaf, selects a non-top root caller frame, and
+asserts that its owner differs from the leaf thread. It then lists that frame's
+locals, expands a known fixture struct, and reads its field address through the
+owning thread. Typed ProtoJSON decoding checks all eight bytes against
+`9501_u64`, rather than accepting merely nonempty memory output.
+
+The fixture retains the original context-restoration checks. After restoring and
+resuming callers, the test attempts to inspect the retained frame again and
+requires `EXPIRED` or `FAILED_PRECONDITION`, not an arbitrary API error.
+
+Final verification on 2026-10-10: all four real distributed-backtrace tests passed
+in 9.70 seconds, covering local and four-session GDB/LLDB cases. Strict Clippy for
+the integration target, formatting of the touched Rust files, and diff whitespace
+checks passed. Only the fixture, test setup, and integration assertions changed.
+
+This is real API evidence combined with the existing TUI ownership unit tests;
+it is not a claim that a complete distributed-caller TUI mouse/keyboard workflow
+has been exercised. That UI composition and the remaining parity work stay open.
 
 #### GDB native storage-address verification
 

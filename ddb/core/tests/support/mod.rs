@@ -217,13 +217,13 @@ impl DdbProcess {
     }
 
     pub fn spawn_real_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
-        let config_contents = render_real_dbt_config(sessions, "gdb");
+        let config_contents = with_v2_auth(render_real_dbt_config(sessions, "gdb"));
         Self::spawn_with_config("ddb-real-dbt-integration.yaml", config_contents)
     }
 
     pub fn spawn_lldb_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
         ensure_debugger_environment("lldb");
-        let config_contents = render_real_dbt_config(sessions, "lldb");
+        let config_contents = with_v2_auth(render_real_dbt_config(sessions, "lldb"));
         Self::spawn_with_config("ddb-real-lldb-dbt-integration.yaml", config_contents)
     }
 
