@@ -1943,21 +1943,7 @@ impl App {
             }
             Focus::Output => self.output.scroll(delta),
             Focus::Extensions => {
-                if self.extension_actions.is_empty() {
-                    self.extension_scroll = move_line(self.extension_scroll, delta);
-                } else {
-                    self.selected_extension_action = move_index(
-                        self.selected_extension_action,
-                        self.extension_actions.len(),
-                        delta,
-                    );
-                    if let Some(action) = self.extension_actions.get(self.selected_extension_action)
-                    {
-                        if !action.description.is_empty() {
-                            self.status = action.description.clone();
-                        }
-                    }
-                }
+                self.extension_scroll = self.extension_scroll.saturating_add_signed(delta);
             }
             Focus::Variables => {
                 self.selected_variable =
@@ -2001,6 +1987,17 @@ impl App {
         } else {
             visible[(index + 1) % visible.len()]
         };
+    }
+
+    pub fn move_extension_action(&mut self, delta: isize) {
+        self.selected_extension_action = move_index(
+            self.selected_extension_action,
+            self.extension_actions.len(),
+            delta,
+        );
+        if let Some(action) = self.extension_actions.get(self.selected_extension_action) {
+            self.status = format!("{}: {}", action.title, action.description);
+        }
     }
 
     pub fn push_timeline(&mut self, message: impl Into<String>) {

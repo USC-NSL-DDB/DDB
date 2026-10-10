@@ -1298,7 +1298,7 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_extensions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+fn draw_extensions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let extension_title = title(app, Focus::Extensions, "Extensions");
     let block = panel_block(&extension_title, app.focus == Focus::Extensions);
     let inner = block.inner(area);
@@ -1365,6 +1365,7 @@ fn draw_extensions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiA
     let start = app
         .extension_scroll
         .min(visual_lines.saturating_sub(inner.height as usize));
+    app.extension_scroll = start;
     let vertical_scroll = u16::try_from(start).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((vertical_scroll, 0)), inner);
 }
@@ -1389,7 +1390,7 @@ fn draw_extension_actions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &
                 ),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  [a/Enter/click]", Style::default().fg(MUTED)),
+            Span::styled("  [←/→ select · a/Enter/click]", Style::default().fg(MUTED)),
         ])),
         area,
     );
@@ -1686,7 +1687,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
         Line::from("w add watch; Variables: Delete removes a watch; Enter expands"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
-        Line::from("extensions: arrows select; a/Enter/click invokes declared action"),
+        Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),
         Line::from(": native debugger command in selected frame   r refresh"),
         Line::from("Tab / Shift+Tab move focus      arrows / wheel navigate"),
@@ -2236,7 +2237,9 @@ mod v2_tests {
         assert!(screen.contains("Summary"));
         assert!(screen.contains("Key: workers"));
 
-        app.extension_scroll = 8;
+        app.focus = Focus::Extensions;
+        app.move_selection(4);
+        assert_eq!(app.extension_scroll, 8);
         let screen = render(&mut app, 140, 40);
         assert!(screen.contains("Topology"));
 
@@ -2244,6 +2247,10 @@ mod v2_tests {
         let screen = render(&mut app, 140, 40);
         assert!(screen.contains("sample provider ready"));
         assert!(screen.contains("move_worker"));
+        assert_ne!(app.extension_scroll, usize::MAX);
+        let bottom = app.extension_scroll;
+        app.move_selection(-1);
+        assert_eq!(app.extension_scroll, bottom - 1);
     }
 
     #[test]

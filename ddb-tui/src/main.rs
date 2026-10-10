@@ -485,6 +485,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             app.source_browser
                 .scroll_horizontal(if key.code == KeyCode::Left { -8 } else { 8 });
         }
+        KeyCode::Left | KeyCode::Right if app.focus == Focus::Extensions => {
+            app.move_extension_action(if key.code == KeyCode::Left { -1 } else { 1 });
+        }
         KeyCode::Home if app.focus == Focus::Source => {
             app.source_browser.scroll_horizontal(isize::MIN);
         }
@@ -1119,6 +1122,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     Focus::Registers => app.register_viewport.scroll(delta),
                     Focus::Memory => app.memory_viewport.scroll(delta),
                     Focus::Output => app.output.scroll_horizontal(delta),
+                    Focus::Extensions => app.move_extension_action(delta.signum()),
                     _ => return,
                 }
                 app.focus = focus;
@@ -4168,6 +4172,65 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn extension_data_and_action_navigation_are_independent() {
+        let mut app = App::new("http://localhost".into());
+        for id in ["first", "second"] {
+            app.extension_actions.push(model::ExtensionActionView {
+                extension_id: "ddb.example".into(),
+                extension_version: "1.0.0".into(),
+                extension_title: "Example".into(),
+                action_id: id.into(),
+                title: id.into(),
+                description: "Action details".into(),
+                request_schema_uri: "schema://action".into(),
+            });
+        }
+        app.focus = Focus::Extensions;
+        app.areas
+            .add_focus_panel(Focus::Extensions, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let (tx, mut rx) = mpsc::channel(8);
+        for code in [KeyCode::Down, KeyCode::Char('j'), KeyCode::PageDown] {
+            handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &tx);
+        }
+        assert!(app.extension_scroll > 2);
+        assert_eq!(app.selected_extension_action, 0);
+        let position = app.extension_scroll;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.selected_extension_action, 1);
+        assert_eq!(app.extension_scroll, position);
+        assert!(app.status.contains("second"));
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 2,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.extension_scroll, position - 3);
+        assert_eq!(app.selected_extension_action, 1);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollLeft,
+                column: 2,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.selected_extension_action, 0);
+        assert_eq!(app.extension_scroll, position - 3);
+        assert!(rx.try_recv().is_err(), "navigation must not invoke actions");
     }
 
     #[tokio::test]
