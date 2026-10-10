@@ -1131,7 +1131,11 @@ fn managed_terminal_loss_does_not_orphan_ddb() {
     let backend_log = directory.path().join("terminal-loss-backend.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
-    tui.wait_for("managed DDB");
+    // The startup status can be replaced before the first rendered frame.
+    // Wait for an inspected session before destroying its terminal instead.
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("● connected") && screen.contains("managed_mock_session")
+    });
     let ddb_pid = wait_for_managed_ddb_descendant(tui.child.id());
     let token_path = managed_argument_path(ddb_pid, "--api-auth-token-file");
     let runtime_directory = token_path.parent().unwrap().to_path_buf();
