@@ -22,6 +22,106 @@ test race: backend discovery could precede the TUI's projection, inserting the
 client above an already advancing scan. It does not establish a fix for every
 previous source-loading timeout.
 
+### Requirement audit at `51f365fa`
+
+This audit compares the current TUI with adapter `f3c671f`, including
+`src/v2/session.mts`, `src/v2/inspection.mts`, `src/DDBViewProvider.ts`,
+`src/sessionControls.ts`, `src/sessionTreeItems.ts`, and the focused-frame command
+in `src/frontend/extension.ts`. Matching DAP request names alone is insufficient:
+the extension itself exposes additional user workflows.
+
+The following evidence is in `ddb-tui/src/main.rs`, `src/ui.rs`, and
+`tests/e2e_mock.rs`. Test names identify assertions, not a claim that all possible
+interactions are covered. The current unit gate passed 223 tests and two
+non-ignored integration helpers at `51f365fa`.
+
+| Requested requirement | Current evidence | Remaining verification or implementation |
+|---|---|---|
+| 1. Default distributed all-stop | Unit coverage exists, but two current real greeter runs failed the server-stop all-stop assertion | **Not complete. Fix and reverify the reproduced failure described below** |
+| 2. Natural source scrolling | `source_vim_keys_navigate_and_paging_tracks_viewport_height`; separate navigation/execution marker render test; real GDB/LLDB workflows assert changed execution line after Next | Re-run terminal workflows after remaining interaction changes |
+| 3. Full current adapter feature set | Distributed stacks, source ownership, logical/member breakpoint navigation, paused-hit selection, typed signals, watches, variable/register editing, logpoints, startup commands and source mappings have implementation and focused tests | **Not complete.** See the concrete parity backlog below |
+| 4. Expansion and clipped content | Pane border hit tests; horizontal scrolling tests; real memory and breakpoint expansion; wrapped timeline fix `51e4e508`; extension data navigation fix `51f365fa` | Long extension action labels and a single event exceeding the paragraph's 16-bit scroll range remain unverified/incomplete |
+| 5. Register scrolling | Independent focus/render tests and `register_keys_scroll_rows_and_values_without_inspection_requests`; real GDB/LLDB register assignment and restoration | Final terminal rerun |
+| 6. Optional timeline | Hidden by default; `timeline_is_optional_and_expansion_uses_the_available_width`; independent Output pane tested with timeline hidden | No known missing toggle behavior; oversized-event limitation remains under item 4 |
+| 7. Stopped-thread stack/source navigation and inline errors | `selecting_a_stopped_thread_restores_source_following_after_manual_browsing`; `missing_source_is_visible_in_source_pane`; real greeter thread selection and source markers | Keep checking late replies and the intermittent source-loading timeout, not only static rendering |
+| 8. Help layout | `help_wraps_scrolls_and_reclamps_after_resize`; modal keyboard/mouse test | Update help alongside every new binding and recheck narrow terminals |
+| 9. Current-frame control | `frame_toolbar_control_is_mouse_addressable`; `frame_shortcut_reveals_distributed_owner_without_changing_execution_target` | Preserve source reveal versus execution-jump distinction in subsequent changes |
+| 10. UI polish | Explicit loading/unavailable states, pane focus, expansion controls, output separation, bounded output and Unicode viewport tests | Complete details/grouping and clipped action-label work; final rendered interaction review |
+| 11. Keyboard polish | Lowercase j/k navigation, uppercase J execution jump, local navigation without backend commands, modal help, independent extension actions/data | Add discoverable bindings for remaining parity features without stealing existing navigation keys |
+
+#### Concrete adapter-parity backlog
+
+Do not remove these items from the goal merely because the TUI offers a more
+generic command that can produce a similar backend effect.
+
+1. **Source expression inspection.** Adapter `inspection.mts::evaluate` sends
+   `EVALUATION_CONTEXT_HOVER` for hover requests and returns expandable children.
+   The TUI currently sends REPL for `e` and WATCH for retained watches, with no
+   source-expression hover/inspect interaction. Add a terminal-appropriate,
+   explicit inspection action using HOVER, preserving frame ownership and stale
+   response rejection. Do not automatically evaluate expressions merely because
+   the mouse moves over source text.
+2. **Alternative grouping views.** `DDBViewProvider.ts` registers session grouping
+   toggling and breakpoint file grouping/flat reset. The TUI currently always
+   builds grouped topology and logical/member breakpoint rows. Add view toggles
+   that preserve opaque selection identities, execution scope, and mouse mapping.
+   Test switching views while sessions and breakpoint members change.
+3. **Details and copying.** The adapter exposes group details plus session fields
+   and a copy-details command. The TUI needs an accessible, scrollable details view
+   and an explicit copy/export interaction for the available canonical fields.
+   Do not fabricate legacy numeric IDs or equate them with opaque API IDs. Avoid
+   silently writing terminal clipboard escape sequences on selection or hover.
+4. **Confirmed session termination.** `sessionControls.ts` captures the selected
+   session before confirmation and sends SIGKILL only after acceptance. The TUI's
+   signal picker is not an equivalent confirmed kill workflow. Add an explicit
+   session action, freeze its target while confirming, and reject stale/removed
+   targets. Test cancellation and focus changes without terminating real user
+   processes.
+5. **Variable-to-memory navigation.** Adapter `inspection.mts` preserves
+   `variable.address` and evaluation addresses as memory references. The TUI's
+   `model.rs::variable_view` drops the address and its `Variable` row has no
+   address field. Preserve this metadata for values and watches, and provide an
+   explicit selected-value memory action with the owning frame/session target.
+   Existing manually entered memory reads do not cover this workflow.
+6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
+   adapter plus its VS Code host before declaring inspection parity. Existing
+   add/remove, refresh and expansion prove only those narrower capabilities.
+   Record missing behavior and implement the terminal equivalent rather than
+   silently excluding it.
+
+These findings change the next implementation work. The full goal is not ready
+for sign-off even if the current terminal suite is green.
+
+#### Current terminal verification and all-stop failure
+
+At `51f365fa`, all 22 non-greeter ignored terminal workflows passed in 137.17
+seconds, including real GDB and LLDB inspection/stepping, register edits and
+restoration, logpoints, startup settings, source explorers, and lifecycle tests.
+These do not establish distributed all-stop correctness.
+
+Two subsequent real auto-attached greeter runs failed after 44.54 and 47.25
+seconds. The second run's backtrace identifies `tests/e2e_mock.rs:175`, the wait
+after the second broadcast Continue. Its final snapshot shows the server stopped
+at `greeter_server.cc:59` in `GreeterServiceImpl::SayHello` while the client session
+and its threads remain Running. This is not merely a missing source marker.
+The first client-stop assertion had already succeeded.
+
+The second snapshot's Execute operations include the two broadcast requests and
+multiple completed server-session requests afterward, but no client-session
+request. This narrows investigation toward event/control reconciliation; it does
+not prove why the client interrupt was absent. The full second-run test log is
+retained locally at `/tmp/ddb-greeter-audit.EBiv13/run.log`, not checked into Git.
+Earlier successful runs below are historical evidence, not grounds to dismiss
+these current failures.
+
+Prioritize this failure before the feature backlog. Capture the delivered
+canonical stop/running events, snapshot cursor, control epoch, all-stop cause,
+and queued peer target around the second Continue. Distinguish a stale event,
+suppressed reconciliation, and delayed worker dispatch with a regression that
+reproduces the observed event order. Do not increase the test timeout or weaken
+its all-thread assertion to get a green result. No production all-stop changes
+were made during this audit.
+
 ### Source-loading investigation
 
 Four instrumented runs of `greeter_auto_attach_all_stop_terminal_workflow` passed
