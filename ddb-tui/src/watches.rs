@@ -54,6 +54,7 @@ impl App {
             .iter()
             .map(|watch| Variable {
                 id: String::new(),
+                address: None,
                 watch_id: Some(watch.id),
                 scope: false,
                 loading: false,
@@ -132,6 +133,7 @@ impl App {
         match result {
             Ok(result) => {
                 variable.id = result.variable_id.unwrap_or_default();
+                variable.address = result.address;
                 variable.value = result.value;
                 variable.type_name = result.type_name.unwrap_or_default();
                 variable.has_children = self.values_formatting.expandable()

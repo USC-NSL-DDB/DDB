@@ -156,6 +156,7 @@ keys, empty commands and control characters are rejected.
 | `w` | Add a retained watch expression in Variables |
 | `Delete` in Variables | Remove the selected watch expression |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
+| `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
 | `g` | Go to a source line (loads another source window when needed) |
 | `Left` / `Right` in Source | Scroll long source lines horizontally, keeping the gutter fixed |
 | `Home` in Source | Return to the left edge of the source text |
@@ -242,6 +243,12 @@ including within a single long event. New events return the view to the tail.
 Registers have their own focus and selection: click the register pane or use
 `Tab`, then use arrows, Page Up/Down, or the mouse wheel to browse rows. Left/Right
 scroll long register values horizontally; `z` expands the register pane alone.
+
+`M` in Variables reads 256 bytes at the selected variable or watch's API-provided
+address, using the owning distributed frame. Values without an address report
+that limitation; the TUI does not interpret their display text as an address.
+The current native backend projections omit variable/evaluation addresses, so
+use `m` to enter an address for those values until the backend supplies them.
 
 `m` reads memory and focuses its pane. Memory has independent row selection;
 Up/Down, Page Up/Down, and the mouse wheel reach every returned row. Left/Right

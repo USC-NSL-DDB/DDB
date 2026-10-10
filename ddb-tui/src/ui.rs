@@ -1680,6 +1680,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Variables / Registers: = assign the selected value; Esc cancels"),
         Line::from("Breakpoints: L sets a log message with {expressions}; empty removes it"),
         Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
+        Line::from("M in Variables: read selected variable/watch address in its owning frame"),
         Line::from("memory: Up/Down or wheel browse rows; Left/Right scroll columns; Home resets; z expand"),
         Line::from("g open source: line or path:line   J jump execution   s signal"),
         Line::from("j/k or Up/Down navigate; Page Up/Down moves one visible page"),

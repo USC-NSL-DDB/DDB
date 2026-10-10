@@ -78,11 +78,14 @@ generic command that can produce a similar backend effect.
    targets. Test cancellation and focus changes without terminating real user
    processes.
 5. **Variable-to-memory navigation.** Adapter `inspection.mts` preserves
-   `variable.address` and evaluation addresses as memory references. The TUI's
-   `model.rs::variable_view` drops the address and its `Variable` row has no
-   address field. Preserve this metadata for values and watches, and provide an
-   explicit selected-value memory action with the owning frame/session target.
-   Existing manually entered memory reads do not cover this workflow.
+   `variable.address` and evaluation addresses as memory references. The TUI now
+   preserves both fields, including expanded children, and `M` in Variables reads
+   the selected address through its owning distributed frame. Keyboard-level
+   tests cover address preservation, owner targeting, watch refresh invalidation,
+   and rejection of absent addresses, boundary frames, and running threads.
+   Native backend `projection.rs` and `mutations.rs` still populate these fields
+   with `None`. End-to-end native selected-value navigation therefore remains
+   incomplete; manual address reads and synthetic address tests do not prove it.
 6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
    adapter plus its VS Code host before declaring inspection parity. Existing
    add/remove, refresh and expansion prove only those narrower capabilities.

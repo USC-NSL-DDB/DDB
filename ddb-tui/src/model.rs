@@ -266,6 +266,7 @@ pub struct StackFrame {
 #[derive(Clone, Debug)]
 pub struct Variable {
     pub id: String,
+    pub address: Option<String>,
     pub watch_id: Option<u64>,
     /// Scope rows dispatch ListVariables; value rows dispatch ExpandVariable.
     pub scope: bool,
@@ -1003,6 +1004,7 @@ impl App {
             .map(|scope| Variable {
                 watch_id: None,
                 id: scope.scope_id,
+                address: None,
                 scope: true,
                 loading: !scope.expensive && scope.variable_count != Some(0),
                 name: scope.name,
@@ -2259,6 +2261,7 @@ fn variable_view(variable: v2::Variable, depth: usize) -> Variable {
     Variable {
         watch_id: None,
         id: variable.variable_id,
+        address: variable.address,
         scope: false,
         loading: false,
         name: variable.name,

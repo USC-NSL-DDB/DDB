@@ -552,6 +552,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 app.status = "the connected DDB backend does not support memory reads".to_string();
             }
         }
+        KeyCode::Char('M') if app.focus == Focus::Variables => {
+            read_selected_variable_memory(app, requests);
+        }
         KeyCode::Char('r') => queue_recovery(app, requests),
         KeyCode::Char('c') => app.cycle_execution_scope(),
         KeyCode::Char('a') if app.focus == Focus::Extensions => {
@@ -2098,6 +2101,45 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
     }
 }
 
+fn read_selected_variable_memory(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    let Some(address) = app
+        .variables
+        .get(app.selected_variable)
+        .filter(|variable| !variable.scope && !variable.loading)
+        .and_then(|variable| variable.address.as_ref())
+        .filter(|address| !address.trim().is_empty())
+        .cloned()
+    else {
+        app.error("Selected value has no memory address; use m to enter an address");
+        return;
+    };
+    let Some(frame) = app.current_frame().filter(|frame| !frame.boundary) else {
+        app.error("Select an inspectable frame before reading variable memory");
+        return;
+    };
+    let owner_thread = frame.thread_id.clone();
+    let Some(thread_id) = app
+        .current_thread()
+        .filter(|thread| thread.state == "stopped")
+        .map(|thread| thread.id.clone())
+    else {
+        app.error("Select a stopped thread before reading variable memory");
+        return;
+    };
+    app.focus = Focus::Memory;
+    queue_request(
+        app,
+        requests,
+        BackendRequest::ReadMemory {
+            address,
+            count: 256,
+            thread_id,
+            owner_thread,
+            generation: app.inspection_generation,
+        },
+    );
+}
+
 fn handle_stopped_thread(
     app: &mut App,
     requests: &mpsc::Sender<BackendRequest>,
@@ -2516,6 +2558,87 @@ mod tests {
             &tx,
         );
         assert_eq!(app.sessions[0].session_id, "session/new");
+    }
+
+    #[test]
+    fn selected_value_memory_preserves_address_and_distributed_owner() {
+        let mut app = distributed_caller_app();
+        let (tx, mut rx) = mpsc::channel(8);
+        app.apply_variables(vec![v2::Variable {
+            variable_id: "parent/value".into(),
+            address: Some("0x1234".into()),
+            value: "not an address".into(),
+            ..Default::default()
+        }]);
+        app.focus = Focus::Variables;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::ReadMemory {
+            address, count: 256, thread_id, owner_thread, generation
+        } if address == "0x1234" && thread_id == "thread/child"
+            && owner_thread == "thread/parent" && generation == app.inspection_generation)
+        );
+        assert_eq!(app.focus, Focus::Memory);
+
+        app.add_watch("value".into()).unwrap();
+        let watch = app.prepare_watches().pop().unwrap();
+        app.finish_watch(
+            watch,
+            Ok(v2::EvaluationResult {
+                address: Some("0x5678".into()),
+                ..Default::default()
+            }),
+        );
+        app.focus = Focus::Variables;
+        app.selected_variable = 0;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::ReadMemory {
+            address, owner_thread, ..
+        } if address == "0x5678" && owner_thread == "thread/parent")
+        );
+        app.prepare_watches();
+        app.focus = Focus::Variables;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(app.status.contains("no memory address"));
+        assert_eq!(app.focus, Focus::Variables);
+    }
+
+    #[test]
+    fn selected_value_memory_rejects_boundary_running_and_missing_addresses() {
+        let mut app = distributed_caller_app();
+        let (tx, mut rx) = mpsc::channel(8);
+        app.apply_variables(vec![v2::Variable {
+            address: Some("0x1234".into()),
+            ..Default::default()
+        }]);
+        app.frames[0].boundary = true;
+        read_selected_variable_memory(&mut app, &tx);
+        assert!(app.status.contains("inspectable frame"));
+        app.frames[0].boundary = false;
+        app.threads[0].state = "running".into();
+        read_selected_variable_memory(&mut app, &tx);
+        assert!(app.status.contains("stopped thread"));
+        app.threads[0].state = "stopped".into();
+        for address in [None, Some(String::new()), Some("  ".into())] {
+            app.variables[0].address = address;
+            read_selected_variable_memory(&mut app, &tx);
+            assert!(app.status.contains("no memory address"));
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
