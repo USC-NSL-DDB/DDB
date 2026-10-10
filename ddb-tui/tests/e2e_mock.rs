@@ -635,6 +635,55 @@ Conf:
 
 #[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
+fn watch_file_survives_terminal_restart_and_tracks_edits_and_deletions() {
+    let mut ddb = Ddb::spawn_mock();
+    ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);
+    let directory = tempfile::tempdir().unwrap();
+    let watch_file = directory.path().join("watches.json");
+    let spawn = || {
+        Tui::spawn_shell(&format!(
+            "stty rows 40 cols 140; exec {} --watch-file {} connect --api {} --refresh-ms 10000",
+            shell_quote(Path::new(env!("CARGO_BIN_EXE_ddb-tui"))),
+            shell_quote(&watch_file),
+            shell_quote(Path::new(&ddb.base_url())),
+        ))
+    };
+    let mut first = spawn();
+    first.wait_for("counter");
+    first.send(b"wcounter\r");
+    first.wait_for_current_frame(|screen| screen.contains("Watch: counter"));
+    first.send(b"W + 1\r");
+    first.wait_for_current_frame(|screen| screen.contains("Watch: counter + 1"));
+    // Verify autosave while the first frontend is still alive, not just on exit.
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let saved = fs::read(&watch_file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if saved
+            .as_ref()
+            .is_some_and(|json| json["expressions"] == serde_json::json!(["counter + 1"]))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "watch edits were not saved");
+        thread::sleep(POLL);
+    }
+    assert!(first.quit().contains("\u{1b}[?1049l"));
+    let mut second = spawn();
+    second.wait_for_current_frame(|screen| {
+        screen.contains("Watch: counter + 1") && !screen.contains("Waiting for a stopped frame")
+    });
+    second.select_visible_variable("Watch: counter + 1");
+    second.send(b"\x1b[3~");
+    second.wait_for_current_frame(|screen| !screen.contains("Watch: counter + 1"));
+    assert!(second.quit().contains("\u{1b}[?1049l"));
+    let saved: Value = serde_json::from_slice(&fs::read(&watch_file).unwrap()).unwrap();
+    assert_eq!(saved, serde_json::json!({"version":1,"expressions":[]}));
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn mock_backend_full_terminal_workflow() {
     let mut ddb = Ddb::spawn_mock();
     ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);

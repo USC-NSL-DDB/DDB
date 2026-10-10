@@ -37,6 +37,7 @@ impl App {
             return Ok(None);
         }
         watch.expression = expression;
+        self.watches_revision = self.watches_revision.wrapping_add(1);
         // Invalidate pending evaluations even when no stopped frame is available.
         watch.revision += 1;
         let row = watch_variable(watch);
@@ -73,6 +74,7 @@ impl App {
             revision: 0,
         });
         self.next_watch_id += 1;
+        self.watches_revision = self.watches_revision.wrapping_add(1);
         self.reset_watch_rows();
         self.selected_variable = self.watches.len() - 1;
         self.focus = Focus::Variables;
@@ -94,6 +96,7 @@ impl App {
             .map_or(self.variables.len(), |offset| start + 1 + offset);
         self.variables.drain(start..end);
         self.watches.retain(|watch| watch.id != id);
+        self.watches_revision = self.watches_revision.wrapping_add(1);
         self.selected_variable = self
             .selected_variable
             .min(self.variables.len().saturating_sub(1));
@@ -206,5 +209,30 @@ fn watch_variable(watch: &WatchExpression) -> Variable {
         children: 0,
         depth: 0,
         expanded: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persistence_revision_tracks_expression_changes_not_evaluations() {
+        let mut app = App::new("http://localhost".into());
+        app.add_watch("counter".into()).unwrap();
+        assert_eq!(app.watches_revision, 1);
+        app.prepare_watches();
+        assert_eq!(app.watches_revision, 1);
+        app.start_watch_edit().unwrap();
+        app.commit_watch_edit("counter".into()).unwrap();
+        assert_eq!(app.watches_revision, 1);
+        app.start_watch_edit().unwrap();
+        app.cancel_input();
+        assert_eq!(app.watches_revision, 1);
+        app.start_watch_edit().unwrap();
+        app.commit_watch_edit("counter + 1".into()).unwrap();
+        assert_eq!(app.watches_revision, 2);
+        app.remove_selected_watch();
+        assert_eq!(app.watches_revision, 3);
     }
 }

@@ -212,11 +212,42 @@ Watches refresh for the selected stopped frame, including distributed caller
 frames and after variable assignment. Enter expands retained values through
 DDB's variable API. Errors appear on the watch row. Expressions survive resume
 and reconnect within this TUI process, but old values and handles do not.
-Watches are not saved across TUI restarts. Expressions use debugger syntax and
-may have side effects; prefer expressions that only read state.
+Use `--watch-file PATH` to retain expressions across TUI restarts. Without this
+option, watches remain process-local. Expressions use debugger syntax and may
+have side effects; prefer expressions that only read state.
 Editing preserves the watch's identity and only evaluates that changed expression.
 Other watches keep their values and expanded children. Old replies cannot replace
 the edited result. Edits made while running wait for a stopped frame.
+
+For example, reuse this file when starting the same project:
+
+```sh
+ddb-tui --watch-file .ddb/watches.json .ddb/dbg_grpc.yaml
+```
+
+The parent directory must already exist. The file may be new; adding, editing,
+or removing a watch saves it automatically in the background. Normal shutdown
+flushes the latest change. Only expressions are saved, never values, handles,
+session IDs, addresses, or API credentials. Loaded expressions are evaluated
+when an inspectable stopped frame is selected. Only pass files you trust.
+
+The versioned format is:
+
+```json
+{"version":1,"expressions":["counter","request"]}
+```
+
+Files are limited to 1 MiB, 64 expressions, and 4096 bytes per single-line
+expression. Invalid files stop startup before a managed backend is launched.
+Saves use atomic replacement and owner-only permissions on Unix. A persistent
+`.lock` sidecar uses an OS advisory lock, released when the process exits, even
+after a crash. Do not delete it while a TUI is using the file. A second TUI cannot
+open the same watch file; use a separate file for an independent watch list.
+Detected external edits are not overwritten. Save errors appear in the TUI and
+are reported on shutdown if the latest change remains unsaved. The lock does
+not prevent unrelated editors from writing, so edit the file while the TUI is
+closed. Expressions can contain sensitive data; keep private watch files and
+their lock sidecars out of version control.
 
 The `:` console accepts the selected session's native debugger CLI, such as
 `print counter` in GDB or `frame variable` in LLDB. It uses the selected stack

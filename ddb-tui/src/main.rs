@@ -19,6 +19,7 @@ mod source_workspace;
 mod supervisor;
 mod timeline;
 mod ui;
+mod watch_store;
 mod worker;
 
 use std::{io, time::Duration};
@@ -56,6 +57,13 @@ use tokio::sync::mpsc;
 async fn main() -> Result<()> {
     let args = Args::parse();
     let mode = args.parse_mode()?;
+    let (watch_store, saved_watches) = match &args.watch_file {
+        Some(path) => {
+            let (store, expressions) = watch_store::Store::open(path)?;
+            (Some(store), expressions)
+        }
+        None => (None, Vec::new()),
+    };
     let debugger_settings = match &args.debugger_settings {
         Some(path) => debugger_setup::Settings::load(path)?,
         None => debugger_setup::Settings::default(),
@@ -78,14 +86,21 @@ async fn main() -> Result<()> {
         _ => unreachable!("mode and backend ownership must agree"),
     };
 
+    let mut app = App::new(endpoint.to_string());
+    app.source_workspace = workspace;
+    app.values_formatting = args.values_formatting;
+    app.debugger_settings = debugger_settings;
+    for expression in saved_watches {
+        app.add_watch(expression).map_err(anyhow::Error::msg)?;
+    }
+    app.focus = Focus::Source;
     let primary = run_frontend(
         &endpoint,
         token.as_deref(),
         args.refresh_ms,
         managed.as_ref(),
-        workspace,
-        args.values_formatting,
-        debugger_settings,
+        app,
+        watch_store,
     )
     .await;
     let cleanup = match managed.as_mut() {
@@ -100,15 +115,10 @@ async fn run_frontend(
     token: Option<&str>,
     refresh_ms: u64,
     managed: Option<&ManagedBackend>,
-    workspace: std::sync::Arc<source_workspace::Workspace>,
-    values_formatting: cli::ValuesFormatting,
-    debugger_settings: debugger_setup::Settings,
+    mut app: App,
+    watch_store: Option<watch_store::Store>,
 ) -> Result<()> {
     let client = negotiate_client(endpoint, token, managed).await?;
-    let mut app = App::new(endpoint.to_string());
-    app.source_workspace = workspace;
-    app.values_formatting = values_formatting;
-    app.debugger_settings = debugger_settings;
     if let Some(backend) = managed {
         app.push_timeline(format!(
             "managed DDB {} ready (instance {}, log {})",
@@ -124,7 +134,7 @@ async fn run_frontend(
     let terminal_backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(terminal_backend)?;
 
-    let result = run(&mut terminal, &mut app, client, refresh_ms).await;
+    let result = run(&mut terminal, &mut app, client, refresh_ms, watch_store).await;
     drop(terminal);
     let restoration = terminal_session.restore();
     match (result, restoration) {
@@ -238,6 +248,7 @@ async fn run(
     app: &mut App,
     client: ApiClient,
     refresh_ms: u64,
+    watch_store: Option<watch_store::Store>,
 ) -> Result<()> {
     let (request_tx, request_rx) = mpsc::channel(64);
     let (message_tx, mut message_rx) = mpsc::channel(128);
@@ -248,11 +259,13 @@ async fn run(
         message_tx.clone(),
     ));
     let mut event_task = tokio::spawn(worker::watch_events(client.clone(), message_tx.clone()));
-    let mut output_task = tokio::spawn(worker::watch_output(client, message_tx));
+    let mut output_task = tokio::spawn(worker::watch_output(client, message_tx.clone()));
     request_tx
         .send(BackendRequest::Bootstrap)
         .await
         .context("backend worker stopped")?;
+    let watch_saver = watch_store.map(watch_store::Saver::start);
+    let mut queued_watch_revision = app.watches_revision;
 
     let mut events = EventStream::new();
     let mut refresh = tokio::time::interval(Duration::from_millis(refresh_ms.max(250)));
@@ -264,9 +277,12 @@ async fn run(
     let mut output_finished = false;
     let mut background_failure = None;
     while !app.should_quit {
-        terminal.draw(|frame| {
+        if let Err(error) = terminal.draw(|frame| {
             app.areas = ui::draw(frame, app);
-        })?;
+        }) {
+            background_failure = Some(error.into());
+            break;
+        }
 
         tokio::select! {
             signal = &mut termination => {
@@ -309,6 +325,25 @@ async fn run(
                 app.should_quit = true;
             }
         }
+        if app.watches_revision != queued_watch_revision {
+            if let Some(saver) = &watch_saver {
+                if let Err(error) = saver.update(
+                    app.watches
+                        .iter()
+                        .map(|watch| watch.expression.clone())
+                        .collect(),
+                ) {
+                    app.error(format!("Could not queue watch save: {error:#}"));
+                }
+            }
+            queued_watch_revision = app.watches_revision;
+        }
+        if let Some(error) = watch_saver
+            .as_ref()
+            .and_then(watch_store::Saver::take_error)
+        {
+            app.error(error);
+        }
     }
     if !worker_finished {
         worker_task.abort();
@@ -321,6 +356,16 @@ async fn run(
     if !output_finished {
         output_task.abort();
         let _ = output_task.await;
+    }
+    if let Some(saver) = watch_saver {
+        if let Err(error) = saver.finish().await {
+            background_failure = Some(match background_failure {
+                Some(primary) => {
+                    primary.context(format!("watch persistence also failed: {error:#}"))
+                }
+                None => error,
+            });
+        }
     }
     background_failure.map_or(Ok(()), Err)
 }

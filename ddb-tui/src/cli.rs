@@ -43,6 +43,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub debugger_settings: Option<PathBuf>,
 
+    /// Load and automatically save watches in an explicitly trusted JSON file.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub watch_file: Option<PathBuf>,
+
     /// Value presentation: enable GDB visualizers, use raw expandable values,
     /// or disable child expansion. Does not disable already-installed formatters.
     #[arg(long, global = true, value_enum, default_value_t = ValuesFormatting::PrettyPrinters)]
@@ -220,6 +224,24 @@ fn parse_existing_path(path: &str) -> Result<PathBuf, io::Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watch_file_is_explicit_global_and_may_be_new() {
+        use super::*;
+        assert!(Args::try_parse_from(["ddb-tui"])
+            .unwrap()
+            .watch_file
+            .is_none());
+        let args = Args::try_parse_from([
+            "ddb-tui",
+            "connect",
+            "--api",
+            "http://localhost",
+            "--watch-file",
+            "new-watches.json",
+        ])
+        .unwrap();
+        assert_eq!(args.watch_file, Some(PathBuf::from("new-watches.json")));
+    }
     #[test]
     fn value_presentation_is_explicit_and_global() {
         use super::*;

@@ -97,9 +97,10 @@ generic command that can produce a similar backend effect.
 6. **Editor-hosted watch behavior.** Watch editing is now available with `W` or
    the Variables `Edit [W]` button, including editing from a watch child. The
    existing watch identity is retained; old evaluation replies are rejected;
-   only the changed expression is evaluated. Persistence across TUI restarts
-   remains unimplemented and must be addressed before declaring full parity
-   with the adapter plus its VS Code host.
+   only the changed expression is evaluated. Explicit `--watch-file PATH`
+   persistence now restores and autosaves expressions across restarts. It never
+   restores debugger handles or old values, and does not discover/evaluate watch
+   files implicitly from an arbitrary checkout.
 
 These findings change the next implementation work. The full goal is not ready
 for sign-off even if the current terminal suite is green.
@@ -194,6 +195,56 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Watch-file persistence verification
+
+`--watch-file PATH` is available in managed config, launch, attach, and connect
+modes. The file is an explicitly trusted, versioned JSON expression list. Startup
+validates it and acquires its exclusive sidecar lock before launching a managed
+backend. Without this flag, watches remain process-local and no watch file is
+read or written. A missing file starts an empty list; its parent must exist.
+
+The persistence module contains bounded parsing, schema/version checks, locking,
+external-change detection, and atomic replacement. It saves only expressions,
+never values, opaque handles, memory addresses, session IDs, or API credentials.
+Expressions themselves may contain sensitive data or have debugger side effects;
+the guide documents that trust requirement and owner-only Unix file permissions.
+
+Expression add/edit/remove revisions drive a serial background saver. Evaluation
+updates and cancelled/unchanged edits do not rewrite the file. Rapid changes
+coalesce, and normal shutdown flushes the latest pending update. Save failures
+are observed by the UI without blocking on its backend message channel, and an
+unsaved latest update causes shutdown to report failure. Terminal draw errors now
+also take the ordinary worker and persistence cleanup path.
+
+An OS advisory lock prevents two cooperating TUIs from editing the same file.
+The `.lock` sidecar remains after exit, but its OS lock is released automatically.
+Observed external edits are rejected before replacement. This does not claim
+transactional exclusion of unrelated editors that ignore the advisory lock.
+Watch/lock symlinks are rejected on Unix; invalid/future/oversized files are not
+rewritten. Limits are 1 MiB, 64 expressions, and 4096 bytes per single-line entry.
+
+The terminal regression adds and edits a watch, observes autosave before exit,
+restarts the frontend using the same file, observes the restored watch, deletes
+it, and verifies the persisted empty list. The focused run passed in 1.22 seconds.
+Unit tests cover round trips, permissions, exclusive locking/release, invalid
+schemas, external edits, symlinks, final-update flushing, and failure reporting.
+
+A parallel unit run exposed an intermittent release failure before the final
+gate. A deterministic duplicate-descriptor regression reproduced the same lock
+lifetime: closing the owner does not release an advisory lock while a forked
+child still holds the shared open file description before exec. The lock guard
+now explicitly unlocks on drop, including startup-validation failures. The
+regression failed before that fix; acquisition errors now retain their original
+OS cause rather than classifying every error as contention.
+
+Final verification on 2026-10-10: the deterministic inherited-descriptor
+regression and all 256 unit tests passed, along with two integration helpers.
+All 23 non-greeter terminal workflows passed serially in 66.78 seconds, including
+real GDB/LLDB, managed lifecycle/credential checks, and watch-file restart coverage.
+Strict all-target TUI Clippy, formatting, and diff whitespace checks passed.
+The real greeter workflow was not rerun for this change. Details/export and the
+remaining distributed-memory TUI verification still prevent full-goal sign-off.
 
 #### Retained watch editing verification
 

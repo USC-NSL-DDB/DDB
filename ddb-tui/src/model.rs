@@ -433,6 +433,7 @@ pub struct SignalPicker {
 
 pub struct App {
     pub watches: Vec<WatchExpression>,
+    pub watches_revision: u64,
     next_watch_id: u64,
     editing_watch: Option<u64>,
     expression_inspection: Option<ExpressionInspection>,
@@ -526,6 +527,7 @@ impl App {
         Self {
             watches: Vec::new(),
             next_watch_id: 1,
+            watches_revision: 0,
             editing_watch: None,
             expression_inspection: None,
             next_expression_id: 1,
