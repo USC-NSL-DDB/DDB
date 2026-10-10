@@ -1322,44 +1322,11 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     let lines = app
         .timeline
-        .iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                terminal_text(line),
-                Style::default().fg(Color::Gray),
-            ))
-        })
+        .visible(inner.width, inner.height, &mut app.timeline_scroll)
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Gray))))
         .collect::<Vec<_>>();
-    let row_counts = lines
-        .iter()
-        .map(|line| {
-            Paragraph::new(line.clone())
-                .wrap(Wrap { trim: false })
-                .line_count(inner.width)
-        })
-        .collect::<Vec<_>>();
-    let max_scroll = row_counts
-        .iter()
-        .sum::<usize>()
-        .saturating_sub(inner.height as usize);
-    app.timeline_scroll = app.timeline_scroll.min(max_scroll);
-    let mut start = max_scroll.saturating_sub(app.timeline_scroll);
-    // Discard fully hidden events before using Paragraph's u16 row offset.
-    // The retained history can contain more than 65,535 wrapped rows.
-    let mut first = 0;
-    for rows in row_counts {
-        if rows > start {
-            break;
-        }
-        start -= rows;
-        first += 1;
-    }
-    let paragraph = Paragraph::new(lines.into_iter().skip(first).collect::<Vec<_>>())
-        .wrap(Wrap { trim: false });
-    frame.render_widget(
-        paragraph.scroll((u16::try_from(start).unwrap_or(u16::MAX), 0)),
-        inner,
-    );
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_extensions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
@@ -2461,6 +2428,22 @@ mod v2_tests {
         }
         app.push_timeline("TAIL");
         assert!(render(&mut app, 15, 14).contains("TAIL"));
+    }
+
+    #[test]
+    fn one_timeline_event_beyond_u16_rows_remains_fully_navigable() {
+        let mut app = App::new("http://localhost".into());
+        app.show_timeline = true;
+        app.focus = Focus::Timeline;
+        app.expanded_pane = true;
+        app.push_timeline(format!("BEGIN {} TAIL", "word ".repeat(210_000)));
+        assert!(render(&mut app, 15, 14).contains("TAIL"));
+        app.move_selection(isize::MIN);
+        assert!(render(&mut app, 15, 14).contains("BEGIN"));
+        assert!(app.timeline_scroll > u16::MAX as usize);
+        app.move_selection(isize::MAX);
+        assert!(render(&mut app, 15, 14).contains("TAIL"));
+        assert!(render(&mut app, 45, 14).contains("TAIL"));
     }
 
     #[test]

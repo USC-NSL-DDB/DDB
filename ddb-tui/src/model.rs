@@ -507,7 +507,7 @@ pub struct App {
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
     pub extension_action_viewport: crate::display_text::HorizontalViewport,
-    pub timeline: VecDeque<String>,
+    pub timeline: crate::timeline::Timeline,
     pub output: crate::output::OutputBuffer,
     pub show_output: bool,
     pub status: String,
@@ -597,7 +597,7 @@ impl App {
             timeline_scroll: 0,
             extension_scroll: 0,
             extension_action_viewport: Default::default(),
-            timeline: VecDeque::with_capacity(500),
+            timeline: Default::default(),
             output: Default::default(),
             show_output: false,
             status: "connecting to DDB…".to_string(),
@@ -2199,10 +2199,7 @@ impl App {
     }
 
     pub fn push_timeline(&mut self, message: impl Into<String>) {
-        if self.timeline.len() == 500 {
-            self.timeline.pop_front();
-        }
-        self.timeline.push_back(message.into());
+        self.timeline.push(message.into());
         self.timeline_scroll = 0;
     }
 

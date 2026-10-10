@@ -17,6 +17,7 @@ mod source_provider;
 mod source_types;
 mod source_workspace;
 mod supervisor;
+mod timeline;
 mod ui;
 mod worker;
 

@@ -194,6 +194,35 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### Oversized timeline-event navigation
+
+The timeline now owns sanitized events and cached grapheme-aligned byte ranges
+for wrapped rows. Visual positions use `usize`, and rendering receives only the
+visible row slices without Paragraph's 16-bit scroll offset. Width changes
+rebuild the row index; normal scrolling reuses it; new events are wrapped once
+at the current width. The existing 500-event retention and follow-on-new-event
+behavior are unchanged. Individual event text is not truncated.
+
+Wrapping prefers whitespace boundaries and splits overlong words only between
+graphemes. An overflowing separator is consumed at the wrap; an already-fitting
+word stays on its row. Wide/combining Unicode and tiny terminal layouts remain
+covered. A glyph wider than a one-cell pane needs a wider pane to render, but
+its text remains retained.
+
+The new rendered regression failed on the old renderer because the tail of one
+event was unreachable beyond 65,535 wrapped rows. It now verifies beginning,
+tail, and resize navigation. A numbered-row test checks exact positions 65,535
+and 65,536 within one event. Cache reuse and retention have direct tests.
+
+Verification on 2026-10-10: 247 unit tests and two integration helpers passed.
+The mock full terminal workflow passed in 3.61 seconds; strict all-target TUI
+Clippy, formatting, and diff whitespace checks passed. Real debugger workflows
+were not rerun for this local timeline-rendering change.
+
+This closes the known single-event timeline scroll limit. It does not close
+details/export, watch editing/persistence, or the remaining distributed-memory
+TUI verification gap.
+
 #### Extension action label scrolling and distributed recheck
 
 Long extension action labels now have an independent horizontal viewport.
