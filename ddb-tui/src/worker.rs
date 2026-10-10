@@ -1303,7 +1303,7 @@ fn output_event_summary(event: v2::OutputEvent) -> String {
         .unwrap_or_else(|_| "output".to_string());
     let mut text = match event.content {
         Some(output_event::Content::Text(text)) => text,
-        Some(output_event::Content::Data(data)) => format!("{} binary bytes", data.len()),
+        Some(output_event::Content::Data(data)) => String::from_utf8_lossy(&data).into_owned(),
         None => String::new(),
     };
     if event.truncated {
@@ -1432,6 +1432,31 @@ mod tests {
             server.abort();
             let _ = server.await;
         }
+    }
+
+    #[test]
+    fn byte_backed_output_preserves_text_and_replaces_invalid_utf8() {
+        let mut bytes = "client says 你好\n".as_bytes().to_vec();
+        bytes.push(0xff);
+        bytes.extend_from_slice(b"\x1b[2J");
+        let summary = output_event_summary(v2::OutputEvent {
+            stream: v2::OutputStreamKind::InferiorStdout as i32,
+            session_id: Some("session/client".into()),
+            content: Some(output_event::Content::Data(bytes)),
+            ..Default::default()
+        });
+        assert_eq!(
+            summary,
+            "stdout [session/client] · client says 你好\n�\x1b[2J"
+        );
+        let mut output = crate::output::OutputBuffer::default();
+        output.push(&summary);
+        output.fit(120, 10);
+        let displayed = output.visible_lines().collect::<Vec<_>>();
+        assert_eq!(
+            displayed,
+            ["stdout [session/client] · client says 你好", "��[2J"]
+        );
     }
 
     #[test]

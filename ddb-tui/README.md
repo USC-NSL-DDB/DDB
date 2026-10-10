@@ -260,6 +260,9 @@ wheel scrolling reveals long lines. Scrolling back prevents new output from
 moving your view. The buffer retains 1,000 lines of at most 4,096 characters each;
 evicted-line counts and line truncation are shown explicitly. Terminal control
 characters are displayed safely rather than executed.
+Byte-backed output is decoded as UTF-8, replacing invalid byte sequences with
+replacement characters, as in the VS Code adapter. This is a text view, not a
+lossless binary export.
 Press `F8` from any pane, or click `Frame F8` in the toolbar, to reveal the
 selected stack frame's source without changing the execution target. Unlike
 `f` in Source, this reveals the selected frame rather than enabling execution
