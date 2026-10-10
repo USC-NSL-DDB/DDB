@@ -22,6 +22,34 @@ test race: backend discovery could precede the TUI's projection, inserting the
 client above an already advancing scan. It does not establish a fix for every
 previous source-loading timeout.
 
+### Current requirement audit at `fe1eb296`, 2026-10-10
+
+The worktree was clean for this audit. Adapter HEAD remains `f3c671f`. The
+following replaces the older `51f365fa` matrix as the current evidence summary;
+that older matrix remains below to preserve the history of reproduced failures.
+This is not yet a full parity sign-off.
+
+| Requirement | Inspected evidence and current result |
+|---|---|
+| 1. Default all-stop with greeter | Real auto-attach PTY workflow passed again in 33.23 seconds on this commit. It creates both breakpoints through TUI input, continues to the client and then server breakpoint, asserts all discovered threads stopped at both stages, checks the server's canonical breakpoint stop, and opens its source through the paused-hit dialog. |
+| 2. Natural source scrolling | `SourceBrowser::fit_viewport` keeps the viewport stationary until the cursor crosses a visible edge and reclamps on resize. Keyboard assertions check j/k and page size changes without backend requests. Execution and navigation markers have separate rendering assertions. These tests passed in the 272-test gate. |
+| 3. Adapter feature parity | Rechecked contributed commands in adapter `package.json`, DAP capabilities in `src/v2/session.mts`, and its custom request dispatch. The previously listed implementation backlog has changes and tests recorded below. A final command/configuration-by-command/configuration mapping is still required before claiming full parity. |
+| 4. Expand panes and reach clipped content | Mouse expansion preserves focus and sends no backend command; help blocks underlying clicks. Expanded Variables excludes Registers/Memory. Render tests cover horizontal inspection, memory rows, long topology labels, oversized timeline events and extension cells. Extension paging now excludes the action bar. |
+| 5. Register scrolling | Inspected keyboard/mouse assertions advance rows and horizontal columns independently, reset the column with Home, and dispatch no inspection requests. Rendering tests cover focus and resize reclamping. Real GDB/LLDB terminal workflows passed in the 26-test run. |
+| 6. Optional timeline | Hidden timeline is skipped during focus cycling. The t toggle shows/focuses it, then hides it and restores Source focus. Output remains accessible independently. Expansion and oversized-event rendering tests passed. |
+| 7. Stopped-thread source navigation and errors | Explicit stopped-thread selection restores source following and requests inspection. Missing-source rendering includes the backend reason and F8 retry hint. Greeter exercises actual mouse thread selection and source loading, followed by paused-hit source navigation. Late-response/ownership cases retain their focused tests. |
+| 8. Help layout | Inspected 45x14 wrapping/scrolling assertions, bottom-page visibility, 200x100 reclamping, and 1x1/10x3/20x8 render checks. Modal keyboard/mouse behavior is tested. Help includes the latest extension navigation binding. |
+| 9. Current-frame toolbar action | Rendered Frame F8 hit rectangle resolves to RevealFrame. F8 uses the selected distributed frame owner's source target without changing execution scope or inspection generation; missing locations and boundary frames report errors. |
+| 10. UI polish | Loading/error states, distinct execution/navigation/breakpoint markers, independent inspection panes, explicit expansion controls, frozen topology details, and Unicode clipping have current render/interaction coverage. Subjective visual quality is not established merely by green tests; final parity review must also check discoverability against the adapter. |
+| 11. Keyboard polish | Local navigation is tested not to dispatch debugger commands. Modal help/details/confirmation block underlying actions. j/k source navigation is distinct from J execution jump; F8 reveals source; z/Esc expands/restores; extension Home/End and paging have explicit tests. Final parity review must reconcile the remaining adapter command/configuration inventory with documented bindings. |
+
+Current aggregate verification is 272 unit tests, two integration helpers,
+26 non-greeter terminal workflows, and this separate real greeter pass. Strict
+Clippy, formatting and diff checks passed for the TUI. This does not claim a
+clean parallel backend unit gate: the previously observed telemetry test failure
+is separate from these results. No timeouts were increased for this audit and
+the greeter test verifies that the shared service-discovery config is unchanged.
+
 ### Extension data navigation verification, 2026-10-10
 
 The extension renderer no longer passes its vertical offset through Paragraph's
