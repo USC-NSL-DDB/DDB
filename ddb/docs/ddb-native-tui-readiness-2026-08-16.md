@@ -186,6 +186,52 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### Native value-address implementation boundary after `983dac85`
+
+The frontend action is implemented, but native address support is not. A fresh
+backend trace identified the following work, rather than a frontend expression
+fallback:
+
+- `application/debugger_reads.rs` drops address metadata at all three decode
+  boundaries: stack/scope rows, created variable objects, and expanded children.
+  Add an optional storage-address field to both decoded value types and preserve
+  it through `projection.rs`, requested-page metadata enrichment in `service.rs`,
+  and object-backed evaluation completion in `mutations.rs`.
+- `assets/lldb_ext/ddb_lldb_bridge.py` already holds native `SBValue` objects for
+  those paths. Obtain storage addresses from native values only where the value
+  is already requested. Omit invalid addresses, register-only values, and
+  unavailable values. Do not confuse a pointer's storage with its pointee.
+- `assets/gdb_ext/runtime-gdb.py` holds native symbols for nonlocal scope reads,
+  but ordinary locals and variable-object operations currently use standard MI.
+  GDB needs a native-value address path as well; merely extending the decoder or
+  the LLDB bridge does not complete this work. Preserve symbol/frame identity
+  rather than resolving a potentially ambiguous display label. Expanded
+  pretty-printer children may have no native storage, which must remain an
+  explicit absent address rather than a guessed expression.
+- Nonlocal pagination deliberately requests one metadata-only lookahead record.
+  Both bridge implementations skip fetching its value. Address extraction must
+  stay inside the requested-value branch, never symbol enumeration, sorting,
+  continuation lookahead, or a `--no-values` operation.
+- Keep existing stop-revision validation before and after native reads and
+  variable-object lifetime bounds. Do not retain otherwise disposable leaf
+  evaluation objects solely to preserve an address string. A resume invalidates
+  the associated frontend row and outstanding memory reply as it does today.
+
+Use debugger-native address metadata, not display-value parsing or automatic
+evaluation of `&(expression)`. GDB documents `Value.address` as an optional
+address for addressable values, and LLDB provides storage-address access on
+`SBValue`: [GDB value API](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Values-From-Inferior.html),
+[LLDB value API](https://lldb.llvm.org/python_api/lldb.SBValue.html).
+
+Required verification before closing this parity item: decoder tests for absent,
+valid, and malformed metadata; native bridge tests proving no lookup for the
+lookahead record; real GDB and LLDB locals, globals/statics, expanded children,
+and watch results; unavailable/register-only/synthetic values; pointer storage
+versus pointee distinction; shadowed names; and stale-stop rejection. Finally,
+drive `M` through the real TUI and compare the returned bytes with a known fixture
+value, including a distributed caller frame. Existing manual `$sp` reads are
+regression coverage, not evidence that selected-value navigation works.
+
 #### Atomic, ordered snapshot delivery after `a83e2e35`
 
 Refresh requests and the SDK event watcher previously delivered snapshots and
