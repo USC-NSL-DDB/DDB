@@ -95,6 +95,42 @@ The TUI requires the current API v2 and uses the typed Rust SDK for every
 backend request. There is no v1 fallback or alternate protocol mode. Upgrade
 the backend and frontend together when the API contract changes.
 
+### Debugger session settings
+
+Pass `--debugger-settings /absolute/path/settings.yaml` to apply backend settings
+to each ready GDB/LLDB session, including sessions discovered by automatic attach.
+The file is explicit opt-in and is read before starting the managed backend.
+
+```yaml
+source_mappings:
+  - from: /build/checkout
+    to: /srv/source/checkout
+gdb:
+  commands:
+    - set print elements 33
+lldb:
+  commands:
+    - settings set target.max-children-count 33
+```
+
+Setup enables GDB pretty printers when requested by `--values-formatting`, applies
+source mappings in file order through `ConfigureDebugger`, then runs the matching
+backend's commands through `ExecuteRawCommand` in native CLI syntax. Mapping
+paths refer to the debugger host; they are not local TUI source-workspace paths
+and are not resolved relative to this YAML file. Prefer absolute paths.
+
+Only use trusted settings files. Startup commands can change or resume the
+debuggee and have the same authority as the native debugger console. A failed
+operation stops the remaining setup; already applied changes are not rolled back.
+Errors are reported in the TUI; startup command output is collected in Output,
+which you can show with `O`. A refresh or reconnect to the
+same known session does not repeat setup, including failed attempts. New sessions
+and a new DDB server instance receive their own setup. Restarting the TUI applies
+setup again. To retry deliberately without restarting, use the native console.
+Setup waits for Ready/Stopped sessions and does not interrupt running sessions.
+Files are limited to 64 KiB, 128 mappings, and 128 commands per backend; unknown
+keys, empty commands and control characters are rejected.
+
 ## Interaction
 
 | Input | Action |
@@ -447,8 +483,9 @@ backend-visible distributed breakpoint changes, group/session/thread topology
 and execution scopes, event-driven stops, distributed stack boundaries and
 inspectable frames, lazy variables/registers, evaluation, memory reads,
 capability-gated controls, exact post-step execution-line markers, independent
-source-cursor movement, mouse input, and terminal
-restoration.
+source-cursor movement, mouse input, and terminal restoration. Real GDB/LLDB
+cases also verify startup command output, installed backend source mappings,
+register assignment/restoration, and logpoints continuing to an ordinary stop.
 
 Managed PTY cases additionally cover direct and dispatched one-command startup,
 two-session partial readiness, authenticated token redaction and early unlinking,

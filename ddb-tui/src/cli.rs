@@ -39,6 +39,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub source_workspace: Option<PathBuf>,
 
+    /// Explicit backend source mappings and GDB/LLDB startup commands (YAML).
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
+    pub debugger_settings: Option<PathBuf>,
+
     /// Value presentation: enable GDB visualizers, use raw expandable values,
     /// or disable child expansion. Does not disable already-installed formatters.
     #[arg(long, global = true, value_enum, default_value_t = ValuesFormatting::PrettyPrinters)]
@@ -245,6 +249,29 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn debugger_settings_are_explicit_and_global_for_managed_and_connected_modes() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = directory.path().join("settings.yaml");
+        let config = directory.path().join("ddb.yaml");
+        fs::write(&settings, "{}\n").unwrap();
+        fs::write(&config, "Framework: unspecified\n").unwrap();
+        for tail in [
+            vec![config.to_str().unwrap()],
+            vec!["connect", "--api", "http://127.0.0.1:7000"],
+        ] {
+            let mut arguments = vec!["ddb-tui"];
+            arguments.extend(tail);
+            arguments.extend(["--debugger-settings", settings.to_str().unwrap()]);
+            let args = Args::try_parse_from(arguments).unwrap();
+            assert_eq!(
+                args.debugger_settings,
+                Some(settings.canonicalize().unwrap())
+            );
+            assert!(args.parse_mode().is_ok());
+        }
+    }
 
     #[test]
     fn positional_config_selects_managed_mode() {

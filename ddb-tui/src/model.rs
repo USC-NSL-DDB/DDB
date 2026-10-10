@@ -419,7 +419,8 @@ pub struct App {
     pub selected_register: usize,
     pub register_viewport: crate::display_text::HorizontalViewport,
     pub values_formatting: crate::cli::ValuesFormatting,
-    pub pretty_printing_attempted: std::collections::BTreeSet<String>,
+    pub debugger_settings: crate::debugger_setup::Settings,
+    pub session_setup_attempted: std::collections::BTreeSet<String>,
     pub stack_viewport: crate::display_text::HorizontalViewport,
     pub variable_viewport: crate::display_text::HorizontalViewport,
     pub topology_viewport: crate::display_text::HorizontalViewport,
@@ -499,7 +500,8 @@ impl App {
             selected_register: 0,
             register_viewport: Default::default(),
             values_formatting: Default::default(),
-            pretty_printing_attempted: Default::default(),
+            debugger_settings: Default::default(),
+            session_setup_attempted: Default::default(),
             stack_viewport: Default::default(),
             variable_viewport: Default::default(),
             topology_viewport: Default::default(),
@@ -630,7 +632,7 @@ impl App {
                 self.source_browser.invalidate_server();
                 self.logpoint_ids.clear();
                 self.logpoint_edit = None;
-                self.pretty_printing_attempted.clear();
+                self.session_setup_attempted.clear();
                 self.supersede_automatic_control();
                 self.source_explorer.invalidate_server();
                 self.breakpoint_target_picker = None;
@@ -651,7 +653,7 @@ impl App {
         }
         self.sessions = snapshot.sessions;
         self.source_workspace.update_sessions(&self.sessions);
-        self.pretty_printing_attempted.retain(|id| {
+        self.session_setup_attempted.retain(|id| {
             self.sessions
                 .iter()
                 .any(|session| &session.session_id == id)
@@ -2511,8 +2513,9 @@ pub enum BackendRequest {
         instance: String,
     },
     ClassifyStop(crate::logpoints::Stop),
-    EnablePrettyPrinting {
+    ConfigureSession {
         session_id: String,
+        setup: crate::debugger_setup::Setup,
     },
     EvaluateWatch(WatchEvaluation),
     AssignValue {

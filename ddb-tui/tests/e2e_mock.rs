@@ -1034,6 +1034,69 @@ fn real_lldb_terminal_workflow() {
 
 #[test]
 #[ignore = "requires sibling DDB/fixture binaries, GDB and LLDB"]
+fn real_debugger_settings_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for backend in ["gdb", "lldb"] {
+        let (mut ddb, fixture) = Ddb::spawn_real(backend);
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .sessions
+                .iter()
+                .any(|session| session.status == v2::SessionStatus::Stopped as i32)
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let settings = directory.path().join("settings.yaml");
+        fs::write(&settings, format!(
+            "source_mappings:\n  - from: /ddb-setup-build\n    to: {}\ngdb:\n  commands: ['echo DDB_SETUP_APPLIED']\nlldb:\n  commands: [\"script print('DDB_SETUP_APPLIED')\"]\n",
+            serde_json::to_string(fixture.source.parent().unwrap().to_str().unwrap()).unwrap()
+        )).unwrap();
+        let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
+        let mut tui = Tui::spawn_shell(&format!(
+            "stty rows 40 cols 140; exec {} --debugger-settings {} connect --api {} --refresh-ms 10000",
+            shell_quote(&tui_binary), shell_quote(&settings), shell_quote(Path::new(&ddb.base_url()))
+        ));
+        let snapshot = ddb.wait_for_snapshot(|snapshot| {
+            snapshot.operations.iter().any(|op| {
+                op.state == v2::OperationState::Failed as i32
+                    || (op.kind == v2::OperationKind::RawCommand as i32
+                        && op.state == v2::OperationState::Completed as i32)
+            })
+        });
+        for operation in &snapshot.operations {
+            assert_ne!(
+                operation.state,
+                v2::OperationState::Failed as i32,
+                "{backend} setup failed: {:?}",
+                operation.error
+            );
+        }
+        tui.send(b"O");
+        tui.wait_for("DDB_SETUP_APPLIED");
+        assert_eq!(
+            snapshot
+                .operations
+                .iter()
+                .filter(|op| op.kind == v2::OperationKind::ConfigureDebugger as i32
+                    && op.state == v2::OperationState::Completed as i32)
+                .count(),
+            if backend == "gdb" { 2 } else { 1 }
+        );
+        tui.wait_for("◎ thread");
+        tui.send(if backend == "gdb" {
+            b":show substitute-path\r"
+        } else {
+            b":settings show target.source-map\r"
+        });
+        tui.wait_for("/ddb-setup-build");
+        tui.quit();
+        ddb.shutdown();
+    }
+}
+
+#[test]
+#[ignore = "requires sibling DDB/fixture binaries, GDB and LLDB"]
 fn real_logpoint_terminal_workflow() {
     let _guard = REAL_DEBUGGER_LOCK
         .lock()

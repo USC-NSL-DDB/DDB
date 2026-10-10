@@ -1,5 +1,6 @@
 mod api;
 mod cli;
+mod debugger_setup;
 mod display_text;
 mod logpoints;
 mod model;
@@ -54,6 +55,10 @@ use tokio::sync::mpsc;
 async fn main() -> Result<()> {
     let args = Args::parse();
     let mode = args.parse_mode()?;
+    let debugger_settings = match &args.debugger_settings {
+        Some(path) => debugger_setup::Settings::load(path)?,
+        None => debugger_setup::Settings::default(),
+    };
     let workspace = std::sync::Arc::new(match &args.source_workspace {
         Some(path) => source_workspace::Workspace::load(path)?,
         None => source_workspace::Workspace::default(),
@@ -79,6 +84,7 @@ async fn main() -> Result<()> {
         managed.as_ref(),
         workspace,
         args.values_formatting,
+        debugger_settings,
     )
     .await;
     let cleanup = match managed.as_mut() {
@@ -95,11 +101,13 @@ async fn run_frontend(
     managed: Option<&ManagedBackend>,
     workspace: std::sync::Arc<source_workspace::Workspace>,
     values_formatting: cli::ValuesFormatting,
+    debugger_settings: debugger_setup::Settings,
 ) -> Result<()> {
     let client = negotiate_client(endpoint, token, managed).await?;
     let mut app = App::new(endpoint.to_string());
     app.source_workspace = workspace;
     app.values_formatting = values_formatting;
+    app.debugger_settings = debugger_settings;
     if let Some(backend) = managed {
         app.push_timeline(format!(
             "managed DDB {} ready (instance {}, log {})",
@@ -1868,7 +1876,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         }
         UiMessage::Capabilities(capabilities) => {
             app.apply_capabilities(capabilities);
-            configure_value_presentation(app, requests);
+            configure_sessions(app, requests);
         }
         UiMessage::Snapshot(snapshot) => {
             let new_stop = app.has_new_inspection_stop(&snapshot);
@@ -1880,7 +1888,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                         .any(|next| next.session_id == current.session_id)
                 });
             app.apply_snapshot(snapshot);
-            configure_value_presentation(app, requests);
+            configure_sessions(app, requests);
             if (session_membership_changed || new_stop)
                 && app
                     .current_thread()
@@ -2164,41 +2172,39 @@ fn pause_running_peers(
     }
 }
 
-fn configure_value_presentation(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
-    use cli::ValuesFormatting;
-    if app.values_formatting != ValuesFormatting::PrettyPrinters
-        || !app
-            .capabilities
-            .supported_operations
-            .contains(&(v2::OperationKind::ConfigureDebugger as i32))
-    {
-        return;
-    }
+fn configure_sessions(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
     let sessions = app
         .sessions
         .iter()
         .filter(|session| {
-            session
-                .backend
-                .as_ref()
-                .is_some_and(|backend| backend.kind == v2::BackendKind::Gdb as i32)
-                && matches!(
-                    v2::SessionStatus::try_from(session.status),
-                    Ok(v2::SessionStatus::Ready | v2::SessionStatus::Stopped)
-                )
-                && !app.pretty_printing_attempted.contains(&session.session_id)
+            matches!(
+                v2::SessionStatus::try_from(session.status),
+                Ok(v2::SessionStatus::Ready | v2::SessionStatus::Stopped)
+            ) && !app.session_setup_attempted.contains(&session.session_id)
         })
-        .map(|session| session.session_id.clone())
+        .filter_map(|session| {
+            let setup = app
+                .debugger_settings
+                .plan(session.backend.as_ref()?.kind, app.values_formatting)?;
+            Some((session.session_id.clone(), setup))
+        })
         .collect::<Vec<_>>();
-    for session_id in sessions {
-        match requests.try_send(BackendRequest::EnablePrettyPrinting {
+    for (session_id, setup) in sessions {
+        if !setup.supported(&app.capabilities) {
+            app.error(format!(
+                "Debugger setup for {session_id} requires unsupported operations"
+            ));
+            continue;
+        }
+        match requests.try_send(BackendRequest::ConfigureSession {
             session_id: session_id.clone(),
+            setup,
         }) {
             Ok(()) => {
-                app.pretty_printing_attempted.insert(session_id);
+                app.session_setup_attempted.insert(session_id);
             }
             Err(error) => app.error(format!(
-                "Could not queue pretty-printer setup for {session_id}: {error}"
+                "Could not queue debugger setup for {session_id}: {error}"
             )),
         }
     }
@@ -2369,48 +2375,55 @@ mod tests {
             ),
         ];
         let (tx, mut rx) = mpsc::channel(8);
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(rx.try_recv().is_err());
         app.capabilities
             .supported_operations
             .push(v2::OperationKind::ConfigureDebugger as i32);
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::EnablePrettyPrinting { session_id } if session_id == "gdb")
+            matches!(rx.try_recv().unwrap(), BackendRequest::ConfigureSession { session_id, .. } if session_id == "gdb")
         );
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(rx.try_recv().is_err());
         app.sessions[2].status = v2::SessionStatus::Stopped as i32;
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::EnablePrettyPrinting { session_id } if session_id == "starting")
+            matches!(rx.try_recv().unwrap(), BackendRequest::ConfigureSession { session_id, .. } if session_id == "starting")
         );
         assert!(rx.try_recv().is_err());
         for mode in [cli::ValuesFormatting::Raw, cli::ValuesFormatting::Disabled] {
-            app.pretty_printing_attempted.clear();
+            app.session_setup_attempted.clear();
             app.values_formatting = mode;
-            configure_value_presentation(&mut app, &tx);
+            configure_sessions(&mut app, &tx);
             assert!(rx.try_recv().is_err());
         }
         app.values_formatting = cli::ValuesFormatting::PrettyPrinters;
         let (full_tx, mut full_rx) = mpsc::channel(1);
         full_tx.try_send(BackendRequest::Refresh).unwrap();
-        configure_value_presentation(&mut app, &full_tx);
-        assert!(app.pretty_printing_attempted.is_empty());
+        configure_sessions(&mut app, &full_tx);
+        assert!(app.session_setup_attempted.is_empty());
         full_rx.try_recv().unwrap();
-        configure_value_presentation(&mut app, &full_tx);
+        configure_sessions(&mut app, &full_tx);
         assert!(matches!(
             full_rx.try_recv().unwrap(),
-            BackendRequest::EnablePrettyPrinting { .. }
+            BackendRequest::ConfigureSession { .. }
         ));
     }
 
     #[test]
     fn pretty_printer_setup_survives_refresh_but_resets_for_a_new_backend_instance() {
         let mut app = App::new("http://localhost".into());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.yaml");
+        std::fs::write(&path, "gdb: {commands: ['set print elements 33']}\n").unwrap();
+        app.debugger_settings = debugger_setup::Settings::load(&path).unwrap();
         app.capabilities
             .supported_operations
             .push(v2::OperationKind::ConfigureDebugger as i32);
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::RawCommand as i32);
         let snapshot = |instance: &str| v2::Snapshot {
             server_instance_id: instance.into(),
             sessions: vec![v2::Session {
@@ -2426,25 +2439,25 @@ mod tests {
         };
         let (tx, mut rx) = mpsc::channel(4);
         app.apply_snapshot(snapshot("instance/one"));
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(matches!(
             rx.try_recv().unwrap(),
-            BackendRequest::EnablePrettyPrinting { .. }
+            BackendRequest::ConfigureSession { .. }
         ));
         app.apply_snapshot(snapshot("instance/one"));
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(rx.try_recv().is_err());
         app.apply_snapshot(snapshot("instance/two"));
-        configure_value_presentation(&mut app, &tx);
+        configure_sessions(&mut app, &tx);
         assert!(matches!(
             rx.try_recv().unwrap(),
-            BackendRequest::EnablePrettyPrinting { .. }
+            BackendRequest::ConfigureSession { .. }
         ));
         app.apply_snapshot(v2::Snapshot {
             server_instance_id: "instance/two".into(),
             ..Default::default()
         });
-        assert!(app.pretty_printing_attempted.is_empty());
+        assert!(app.session_setup_attempted.is_empty());
     }
 
     #[test]

@@ -360,31 +360,8 @@ async fn handle(
         BackendRequest::ConfigureLogpoint { .. } | BackendRequest::ClassifyStop(_) => {
             bail!("logpoint requests require the serialized worker registry");
         }
-        BackendRequest::EnablePrettyPrinting { session_id } => {
-            let receipt = complete_operation(
-                client,
-                client
-                    .configure_debugger(v2::ConfigureDebuggerRequest {
-                        target: Some(crate::api::session_target(&session_id)),
-                        setting: Some(
-                            v2::configure_debugger_request::Setting::EnablePrettyPrinting(
-                                v2::Empty {},
-                            ),
-                        ),
-                        ..Default::default()
-                    })
-                    .await
-                    .with_context(|| {
-                        format!("could not enable pretty printers for {session_id}")
-                    })?,
-            )
-            .await?;
-            messages
-                .send(UiMessage::Receipt(
-                    format!("pretty printers for {session_id}"),
-                    receipt,
-                ))
-                .await?;
+        BackendRequest::ConfigureSession { session_id, setup } => {
+            setup.run(client, messages, &session_id).await?;
         }
         BackendRequest::EvaluateWatch(request) => {
             let result = async {
@@ -1433,18 +1410,24 @@ mod tests {
             let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
             let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
             let (tx, mut rx) = mpsc::channel(1);
-            handle(
+            let result = handle(
                 &client,
                 &tx,
-                BackendRequest::EnablePrettyPrinting {
+                BackendRequest::ConfigureSession {
                     session_id: "session/gdb".into(),
+                    setup: crate::debugger_setup::Settings::default()
+                        .plan(
+                            v2::BackendKind::Gdb as i32,
+                            crate::cli::ValuesFormatting::PrettyPrinters,
+                        )
+                        .unwrap(),
                 },
             )
-            .await
-            .unwrap();
+            .await;
+            assert_eq!(result.is_ok(), state == v2::OperationState::Completed);
             assert!(
                 matches!(rx.try_recv().unwrap(), UiMessage::Receipt(label, operation)
-                if label == "pretty printers for session/gdb" && operation.state == state as i32)
+                if label == "debugger setup for session/gdb" && operation.state == state as i32)
             );
             server.abort();
             let _ = server.await;
