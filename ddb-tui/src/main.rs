@@ -425,6 +425,27 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if let Some(details) = app.topology_details.as_mut() {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => app.topology_details = None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.topology_details = None
+            }
+            KeyCode::Up | KeyCode::Char('k') => details.scroll(-1),
+            KeyCode::Down | KeyCode::Char('j') => details.scroll(1),
+            KeyCode::PageUp => details.scroll(-(details.page as isize)),
+            KeyCode::PageDown => details.scroll(details.page as isize),
+            KeyCode::Home => {
+                details.top = 0;
+                details.horizontal = Default::default();
+            }
+            KeyCode::End => details.scroll(isize::MAX),
+            KeyCode::Left | KeyCode::Char('h') => details.horizontal.scroll(-4),
+            KeyCode::Right | KeyCode::Char('l') => details.horizontal.scroll(4),
+            _ => {}
+        }
+        return;
+    }
     if app.session_termination.is_some() {
         match key.code {
             KeyCode::Char('y') if key.modifiers.is_empty() => {
@@ -624,6 +645,11 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
         }
         KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
+        KeyCode::Char('i') if app.focus == Focus::Threads => {
+            if let Err(error) = app.open_topology_details(app.selected_topology_row()) {
+                app.error(error);
+            }
+        }
         KeyCode::Char('v') if app.focus == Focus::Breakpoints => app.toggle_breakpoint_grouping(),
         KeyCode::Char('K') if app.focus == Focus::Threads => {
             if let Err(error) = app.open_session_termination() {
@@ -1104,6 +1130,33 @@ fn submit_session_termination(app: &mut App, requests: &mpsc::Sender<BackendRequ
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if let Some(details) = app.topology_details.as_mut() {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => details.scroll(-3),
+            MouseEventKind::ScrollDown => details.scroll(3),
+            MouseEventKind::ScrollLeft => details.horizontal.scroll(-4),
+            MouseEventKind::ScrollRight => details.horizontal.scroll(4),
+            MouseEventKind::Down(MouseButton::Right) => app.topology_details = None,
+            _ => {}
+        }
+        return;
+    }
+    if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+        && app.input_mode == InputMode::Normal
+        && !app.show_help
+        && !app.source_explorer.visible
+        && app.session_termination.is_none()
+        && app.signal_picker.is_none()
+        && app.breakpoint_target_picker.is_none()
+        && app.breakpoint_hit_picker.is_none()
+    {
+        if let Some((Focus::Threads, row)) = app.areas.item_at(mouse.column, mouse.row) {
+            if let Err(error) = app.open_topology_details(row) {
+                app.error(error);
+            }
+            return;
+        }
+    }
     if app.session_termination.is_some() {
         let position = ratatui::layout::Position::new(mouse.column, mouse.row);
         match mouse.kind {
@@ -2577,6 +2630,86 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn topology_details_capture_and_scroll_without_dispatching_debugger_commands() {
+        let mut app = App::new("http://localhost".into());
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "instance".into(),
+            sessions: vec![v2::Session {
+                session_id: "session".into(),
+                display_name: format!("{}END_MARKER", "界e\u{301}".repeat(100)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        app.focus = Focus::Threads;
+        let scope = app.execution_target();
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.topology_details.is_some());
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(90, 18)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+            &tx,
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.topology_details.as_ref().unwrap().top > 0);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.topology_details.as_ref().unwrap().horizontal.column() > 0);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.topology_details.as_ref().unwrap().top, 0);
+        assert_eq!(
+            app.topology_details.as_ref().unwrap().horizontal.column(),
+            0
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.topology_details.is_none());
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let (x, y) = (0..18)
+            .flat_map(|y| (0..90).map(move |x| (x, y)))
+            .find(|(x, y)| matches!(app.areas.item_at(*x, *y), Some((Focus::Threads, 1))))
+            .unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Right),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(app.topology_details.is_some());
+        assert_eq!(app.execution_target(), scope);
+        assert!(rx.try_recv().is_err());
+    }
 
     fn snapshot_threads(app: &App) -> Vec<v2::Thread> {
         app.threads

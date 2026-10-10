@@ -47,6 +47,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_breakpoint_hits(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         draw_session_termination(frame, app, root, &mut areas);
+        draw_topology_details(frame, app, root);
         return areas;
     }
     let rows = Layout::default()
@@ -75,6 +76,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         draw_session_termination(frame, app, root, &mut areas);
+        draw_topology_details(frame, app, root);
         return areas;
     }
 
@@ -185,6 +187,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
     draw_breakpoint_hits(frame, app, root, &mut areas);
     explorer::draw(frame, app, root, &mut areas);
     draw_session_termination(frame, app, root, &mut areas);
+    draw_topology_details(frame, app, root);
     areas
 }
 
@@ -1517,6 +1520,28 @@ fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
+fn draw_topology_details(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
+    let Some(details) = app.topology_details.as_mut() else {
+        return;
+    };
+    let area = centered(root, 95, 90);
+    frame.render_widget(Clear, area);
+    let block = panel_block("Topology details · snapshot · Esc/right-click close", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    details.page = usize::from(inner.height).max(1);
+    details.scroll(0);
+    details.horizontal.fit(details.width, inner.width as usize);
+    let lines = details
+        .lines
+        .iter()
+        .skip(details.top)
+        .take(details.page)
+        .map(|line| horizontal_line(Line::from(line.clone()), details.horizontal.column()))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn draw_session_termination(frame: &mut Frame<'_>, app: &mut App, root: Rect, areas: &mut UiAreas) {
     let Some(dialog) = app.session_termination.as_mut() else {
         return;
@@ -1784,6 +1809,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
         Line::from("Variables: W or Edit button edits the selected watch expression; Esc cancels edits"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
+        Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
@@ -1938,6 +1964,39 @@ mod v2_tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn topology_details_reach_long_unicode_lines_and_rows_beyond_u16() {
+        let mut app = App::new("http://localhost".into());
+        app.sessions = vec![v2::Session {
+            session_id: "session".into(),
+            ..Default::default()
+        }];
+        app.open_topology_details(0).unwrap();
+        let details = app.topology_details.as_mut().unwrap();
+        details.lines = (0..70_000)
+            .map(|i| format!("{i}: {}END_MARKER", "界e\u{301}".repeat(100)))
+            .collect();
+        details.width = Line::from(details.lines.last().unwrap().as_str()).width();
+        render(&mut app, 90, 18);
+        let details = app.topology_details.as_mut().unwrap();
+        details.scroll(isize::MAX);
+        assert!(details.top > u16::MAX as usize);
+        let screen = render(&mut app, 90, 18);
+        assert!(screen.contains("69999:"));
+        app.topology_details
+            .as_mut()
+            .unwrap()
+            .horizontal
+            .scroll(isize::MAX);
+        assert!(render(&mut app, 90, 18).contains("END_MARKER"));
+        render(&mut app, 12, 5);
+        render(&mut app, 140, 40);
+        assert!(
+            app.topology_details.as_ref().unwrap().top
+                <= 70_000 - app.topology_details.as_ref().unwrap().page
+        );
     }
 
     #[test]

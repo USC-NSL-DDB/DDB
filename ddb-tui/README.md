@@ -159,6 +159,7 @@ keys, empty commands and control characters are rejected.
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
 | `v` in Topology / header `Flat [v]` or `Group [v]` | Toggle grouped/flat session view without changing execution scope |
+| `i` in Topology / right-click a row | Open a frozen canonical group/session details snapshot; arrows or hjkl, PageUp/PageDown, Home/End and wheel scroll; Esc or right-click closes |
 | `K` in Topology / `Kill [K]` | Confirm SIGKILL for one selected session or a thread's owning session; `y`/Terminate accepts, Enter/Esc cancels |
 | `v` in Breakpoints / header `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |

@@ -71,8 +71,9 @@ generic command that can produce a similar backend effect.
    non-source locations have a separate group. Group headers are non-actionable,
    and member selection survives snapshot replacement by opaque member ID.
 3. **Details and copying.** The adapter exposes group details plus session fields
-   and a copy-details command. The TUI needs an accessible, scrollable details view
-   and an explicit copy/export interaction for the available canonical fields.
+   and a copy-details command. The TUI now has a scrollable frozen details view
+   through `i` in Topology or right-clicking a row. An explicit copy/export
+   interaction remains to be implemented for the available canonical fields.
    Do not fabricate legacy numeric IDs or equate them with opaque API IDs. Avoid
    silently writing terminal clipboard escape sequences on selection or hover.
 4. **Confirmed session termination.** `sessionControls.ts` captures the selected
@@ -154,6 +155,27 @@ were removed, including the diagnostic environment hook. No timeouts were
 increased. Next trace source request generation, enqueue/start/completion, and
 the backend resolver/catalog command to distinguish source work from message
 delivery before returning to the later stop-event trace.
+
+### Topology details view verification, 2026-10-10
+
+The details dialog captures canonical v2 group/session resources, backend instance
+and state revision. Thread rows resolve to their owning session without assuming
+that thread and session ID namespaces are disjoint. Ungrouped and unresolved-group
+rows retain their actual membership and do not fabricate legacy hashes or IDs.
+The captured document remains unchanged while discovery updates arrive.
+
+Opening and scrolling the dialog does not change execution scope or issue debugger
+requests. Keyboard and right-click input are modal; arrows/hjkl, page keys, Home/End,
+and mouse wheels navigate the document. Width is cached when captured. Rendering
+uses visible line slices and grapheme-safe horizontal clipping, not a u16 paragraph
+scroll offset. Tests reach row 69,999 and the end of a long Unicode line, then resize
+between narrow and normal layouts.
+
+Verification: 260 TUI unit tests and two integration helpers passed; strict Clippy,
+formatting and diff checks passed. The mock terminal workflow is checked separately
+from the rendered details tests. No real greeter or real-backend workflow was rerun
+for this read-only view. Export, distributed-memory TUI composition and the final
+full-goal audit remain open.
 
 ### Source-loading investigation
 

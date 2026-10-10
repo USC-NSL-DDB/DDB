@@ -448,6 +448,7 @@ pub struct App {
     pub input: String,
     pub signal_picker: Option<SignalPicker>,
     pub session_termination: Option<SessionTermination>,
+    pub topology_details: Option<TopologyDetails>,
     pub registers: Vec<Register>,
     pub selected_register: usize,
     pub register_viewport: crate::display_text::HorizontalViewport,
@@ -539,6 +540,7 @@ impl App {
             focus: Focus::Source,
             signal_picker: None,
             session_termination: None,
+            topology_details: None,
             input_mode: InputMode::Normal,
             registers: Vec::new(),
             selected_register: 0,
@@ -3833,6 +3835,10 @@ mod expression_inspection;
 #[path = "session_termination.rs"]
 mod session_termination;
 pub use session_termination::SessionTermination;
+
+#[path = "topology_details.rs"]
+mod topology_details;
+pub use topology_details::TopologyDetails;
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;
