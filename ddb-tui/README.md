@@ -160,6 +160,7 @@ keys, empty commands and control characters are rejected.
 | `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
 | `v` in Topology / header `Flat [v]` or `Group [v]` | Toggle grouped/flat session view without changing execution scope |
 | `i` in Topology / right-click a row | Open a frozen canonical group/session details snapshot; arrows or hjkl, PageUp/PageDown, Home/End and wheel scroll; Esc or right-click closes |
+| `e` in topology details / `Export` button | Export the captured JSON snapshot to a new local file; enter a path and press Enter, or Esc/empty Enter to cancel |
 | `K` in Topology / `Kill [K]` | Confirm SIGKILL for one selected session or a thread's owning session; `y`/Terminate accepts, Enter/Esc cancels |
 | `v` in Breakpoints / header `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
@@ -306,6 +307,15 @@ reveals the hex and ASCII columns without wrapping them. Use `z` or the pane's
 Expand button for a full-width view. New reads reset the view; changing frames
 or resuming execution clears stale memory. Distributed-frame reads target that
 frame's owning thread, not the thread where the distributed stack began.
+
+Topology details export uses canonical v2 resources, not legacy numeric IDs or group
+hashes. The exported document is the snapshot you opened, even if sessions change
+while entering its destination. Relative paths resolve from the TUI's working
+directory; use an absolute path to choose another location. Parent directories must
+exist. Paths are literal: `~` and environment variables are not expanded. Existing
+files, directories and symlinks are never overwritten. New files are owner-only on
+Unix. Wait for the `Details exported to …` message before quitting. Export is local
+to the frontend, does not require a live backend, and does not write the clipboard.
 
 In Topology, Breakpoints, Stack, Variables, Registers, and Memory, Left/Right or a horizontal mouse wheel reveals clipped
 names and values. Home returns to the start. Each pane remembers its position;

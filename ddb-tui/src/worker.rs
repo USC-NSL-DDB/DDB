@@ -39,11 +39,15 @@ pub async fn run(
     let mut sources = JoinSet::new();
     let mut discoveries = JoinSet::new();
     let mut logpoint_tasks = JoinSet::new();
+    let mut exports = JoinSet::new();
     let mut logpoints = crate::logpoints::Registry::default();
     let mut deferred = VecDeque::new();
     let mut pending_inspections = VecDeque::new();
     let mut inspection_generation = None;
     loop {
+        while let Some(result) = exports.try_join_next() {
+            report_export(result, &messages).await;
+        }
         while let Some(result) = inspections.try_join_next() {
             report_inspection_failure(result, &messages).await;
         }
@@ -58,6 +62,10 @@ pub async fn run(
         let request = match ready {
             Some(request) => request,
             None => tokio::select! {
+                result = exports.join_next(), if !exports.is_empty() => {
+                    if let Some(result) = result { report_export(result, &messages).await; }
+                    continue;
+                }
                 result = logpoint_tasks.join_next(), if !logpoint_tasks.is_empty() => {
                     if let Some(result) = result { report_inspection_failure(result, &messages).await; }
                     continue;
@@ -75,6 +83,19 @@ pub async fn run(
             },
         };
         let request = match request {
+            BackendRequest::ExportDetails(export) => {
+                if exports.len() >= 2 {
+                    let _ = messages
+                        .send(UiMessage::Error(
+                            "Two details exports are already pending; retry after completion"
+                                .into(),
+                        ))
+                        .await;
+                } else {
+                    exports.spawn_blocking(move || export.write());
+                }
+                continue;
+            }
             BackendRequest::ConfigureLogpoint {
                 id,
                 template,
@@ -232,6 +253,19 @@ pub async fn run(
     sources.shutdown().await;
     discoveries.shutdown().await;
     logpoint_tasks.shutdown().await;
+    exports.shutdown().await;
+}
+
+async fn report_export(
+    result: Result<anyhow::Result<std::path::PathBuf>, tokio::task::JoinError>,
+    messages: &mpsc::Sender<UiMessage>,
+) {
+    let message = match result {
+        Ok(Ok(path)) => UiMessage::Notice(format!("Details exported to {}", path.display())),
+        Ok(Err(error)) => UiMessage::Error(format!("Details export failed: {error:#}")),
+        Err(error) => UiMessage::Error(format!("Details export task failed: {error}")),
+    };
+    let _ = messages.send(message).await;
 }
 
 async fn configure_logpoint(
@@ -386,6 +420,9 @@ async fn handle(
     request: BackendRequest,
 ) -> anyhow::Result<()> {
     match request {
+        BackendRequest::ExportDetails(_) => {
+            bail!("details exports require the local export worker")
+        }
         BackendRequest::ConfigureLogpoint { .. } | BackendRequest::ClassifyStop(_) => {
             bail!("logpoint requests require the serialized worker registry");
         }

@@ -72,8 +72,9 @@ generic command that can produce a similar backend effect.
    and member selection survives snapshot replacement by opaque member ID.
 3. **Details and copying.** The adapter exposes group details plus session fields
    and a copy-details command. The TUI now has a scrollable frozen details view
-   through `i` in Topology or right-clicking a row. An explicit copy/export
-   interaction remains to be implemented for the available canonical fields.
+   through `i` in Topology or right-clicking a row. `e` or Export prompts for a
+   local destination and writes the captured canonical fields only after Enter.
+   Existing paths are never overwritten, and no clipboard escapes are emitted.
    Do not fabricate legacy numeric IDs or equate them with opaque API IDs. Avoid
    silently writing terminal clipboard escape sequences on selection or hover.
 4. **Confirmed session termination.** `sessionControls.ts` captures the selected
@@ -155,6 +156,41 @@ were removed, including the diagnostic environment hook. No timeouts were
 increased. Next trace source request generation, enqueue/start/completion, and
 the backend resolver/catalog command to distinguish source work from message
 delivery before returning to the later stop-event trace.
+
+### Explicit topology export verification, 2026-10-10
+
+The details dialog now offers `e` and a clickable Export action. Destination entry
+captures the already displayed document, not whichever session happens to be
+selected when Enter is pressed. Esc and empty Enter cancel without a filesystem
+write. An explicit export creates a new local JSON file using buffered writes to
+a same-directory temporary file, file sync and no-clobber persistence. Unix files
+are owner-only and the parent directory is synced. Existing files, directories,
+symlinks and dangling symlinks are not overwritten. Two bounded background export
+tasks keep file writes off the UI and debugger-command execution path. There are
+no clipboard writes and no debugger operations required for the export.
+
+Export path entry exposed two prompt-rendering defects: compact terminals showed
+only status while input was active, and long inputs could hide the cursor. Shared
+prompt rendering now shows the active prompt in compact layouts and scrolls long
+input to keep the cursor visible. Rendered tests cover long Unicode paths at
+heights 8, 18 and 30, including moving back to the start.
+
+The first new terminal test used the source function name `mock_session` as a
+session label and failed before reaching export. Its captured screen showed the
+actual session label, and the selector was changed to the canonical snapshot's
+display name. The exact test then passed, exercising cancellation, a saved JSON
+document with matching instance/session IDs, and a second export to the same path
+that reports an error without changing the file. No timeout was increased and no
+diagnostic instrumentation remains. The adapter revision is still `f3c671f`.
+
+The 265 unit tests and two integration helpers pass, including an offline worker
+test that observes both export success and no-overwrite failure. Strict Clippy,
+formatting and diff checks pass. All 24 non-greeter terminal workflows passed in
+67.93 seconds, including real GDB/LLDB interaction, watch persistence, source
+navigation, lifecycle checks and the new export workflow. The real greeter
+all-stop workflow was not rerun for this local
+export change. Distributed-memory TUI composition and the full-goal audit remain
+open; this is not a completion sign-off.
 
 ### Topology details view verification, 2026-10-10
 

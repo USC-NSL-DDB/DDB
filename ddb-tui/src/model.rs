@@ -40,6 +40,7 @@ pub enum InputMode {
     InspectExpression,
     Watch,
     EditWatch,
+    ExportDetails,
     Memory,
     Jump,
     Signal,
@@ -84,6 +85,8 @@ pub struct UiAreas {
     pub breakpoint_hit_rows: Vec<(usize, Rect)>,
     pub breakpoint_hit_cancel: Option<Rect>,
     pub controls: Vec<(Control, Rect)>,
+    pub details_export: Option<Rect>,
+    pub details_close: Option<Rect>,
     pub breakpoint_rows: Vec<(usize, Rect)>,
     pub breakpoint_sites: Vec<(usize, Option<usize>, Rect)>,
     pub extension_action_rows: Vec<(usize, Rect)>,
@@ -449,6 +452,7 @@ pub struct App {
     pub signal_picker: Option<SignalPicker>,
     pub session_termination: Option<SessionTermination>,
     pub topology_details: Option<TopologyDetails>,
+    pending_details_export: Option<Vec<String>>,
     pub registers: Vec<Register>,
     pub selected_register: usize,
     pub register_viewport: crate::display_text::HorizontalViewport,
@@ -541,6 +545,7 @@ impl App {
             signal_picker: None,
             session_termination: None,
             topology_details: None,
+            pending_details_export: None,
             input_mode: InputMode::Normal,
             registers: Vec::new(),
             selected_register: 0,
@@ -1896,6 +1901,7 @@ impl App {
     }
 
     pub fn start_input(&mut self, mode: InputMode) {
+        self.pending_details_export = None;
         self.editing_watch = None;
         self.input_mode = mode;
         self.input.clear();
@@ -1905,6 +1911,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
+        self.pending_details_export = None;
         self.editing_watch = None;
         if self.input_mode == InputMode::InspectExpression {
             self.clear_expression_inspection();
@@ -2712,6 +2719,7 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    ExportDetails(DetailsExport),
     ConfigureLogpoint {
         id: String,
         template: Option<crate::logpoints::Template>,
@@ -3838,7 +3846,7 @@ pub use session_termination::SessionTermination;
 
 #[path = "topology_details.rs"]
 mod topology_details;
-pub use topology_details::TopologyDetails;
+pub use topology_details::{DetailsExport, TopologyDetails};
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;

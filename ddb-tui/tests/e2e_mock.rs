@@ -684,6 +684,50 @@ fn watch_file_survives_terminal_restart_and_tracks_edits_and_deletions() {
 
 #[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
+fn topology_details_export_terminal_workflow() {
+    let mut ddb = Ddb::spawn_mock();
+    let snapshot = ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("details.json");
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("counter");
+    tui.click_topology_thread(&snapshot.sessions[0].display_name);
+    tui.send(b"i");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Topology details") && screen.contains("[e Export]")
+    });
+    tui.send(b"e");
+    tui.wait_for_current_frame(|screen| screen.contains("Export snapshot to NEW file"));
+    tui.send(path.to_str().unwrap().as_bytes());
+    tui.send(b"\x1b");
+    tui.wait_for_current_frame(|screen| !screen.contains("Export snapshot to NEW file"));
+    assert!(!path.exists());
+    tui.send(b"i");
+    tui.wait_for_current_frame(|screen| screen.contains("Topology details"));
+    tui.send(b"e");
+    tui.wait_for_current_frame(|screen| screen.contains("Export snapshot to NEW file"));
+    tui.send(format!("{}\r", path.display()).as_bytes());
+    tui.wait_for_current_frame(|screen| screen.contains("Details exported to"));
+    let saved = fs::read(&path).unwrap();
+    let document: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(document["serverInstanceId"], snapshot.server_instance_id);
+    assert_eq!(
+        document["sessions"][0]["sessionId"],
+        snapshot.sessions[0].session_id
+    );
+    assert_eq!(document["selection"], "session");
+    tui.send(b"i");
+    tui.wait_for_current_frame(|screen| screen.contains("Topology details"));
+    tui.send(b"e");
+    tui.wait_for_current_frame(|screen| screen.contains("Export snapshot to NEW file"));
+    tui.send(format!("{}\r", path.display()).as_bytes());
+    tui.wait_for_current_frame(|screen| screen.contains("never overwritten"));
+    assert_eq!(fs::read(&path).unwrap(), saved);
+    assert!(tui.quit().contains("\u{1b}[?1049l"));
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn mock_backend_full_terminal_workflow() {
     let mut ddb = Ddb::spawn_mock();
     ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);

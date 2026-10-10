@@ -427,6 +427,7 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
     if let Some(details) = app.topology_details.as_mut() {
         match key.code {
+            KeyCode::Char('e') if key.modifiers.is_empty() => app.start_details_export(),
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => app.topology_details = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.topology_details = None
@@ -819,10 +820,20 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
             if !input.is_empty()
                 || matches!(
                     mode,
-                    InputMode::Breakpoint | InputMode::Logpoint | InputMode::EditWatch
+                    InputMode::Breakpoint
+                        | InputMode::Logpoint
+                        | InputMode::EditWatch
+                        | InputMode::ExportDetails
                 )
             {
                 match mode {
+                    InputMode::ExportDetails => match app.commit_details_export(input) {
+                        Ok(Some(export)) => {
+                            queue_request(app, requests, BackendRequest::ExportDetails(export))
+                        }
+                        Ok(None) => {}
+                        Err(error) => app.error(error),
+                    },
                     InputMode::Logpoint => {
                         let template = if input.is_empty() {
                             None
@@ -1132,6 +1143,22 @@ fn submit_session_termination(app: &mut App, requests: &mpsc::Sender<BackendRequ
 fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<BackendRequest>) {
     if let Some(details) = app.topology_details.as_mut() {
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if app
+                    .areas
+                    .details_export
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.start_details_export();
+                } else if app
+                    .areas
+                    .details_close
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.topology_details = None;
+                }
+            }
             MouseEventKind::ScrollUp => details.scroll(-3),
             MouseEventKind::ScrollDown => details.scroll(3),
             MouseEventKind::ScrollLeft => details.horizontal.scroll(-4),
@@ -2630,6 +2657,70 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn details_export_keyboard_and_mouse_require_explicit_path_confirmation() {
+        let mut app = App::new("http://localhost".into());
+        app.sessions = vec![v2::Session {
+            session_id: "captured".into(),
+            ..Default::default()
+        }];
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+        app.open_topology_details(0).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let area = app.areas.details_export.unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::ExportDetails);
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err());
+        app.open_topology_details(0).unwrap();
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            &tx,
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(rx.try_recv().is_err(), "empty path cancels");
+        app.open_topology_details(0).unwrap();
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            &tx,
+        );
+        app.insert_input("snapshot.json");
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            BackendRequest::ExportDetails(_)
+        ));
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn topology_details_capture_and_scroll_without_dispatching_debugger_commands() {

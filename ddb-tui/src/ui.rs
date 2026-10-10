@@ -47,7 +47,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_breakpoint_hits(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         draw_session_termination(frame, app, root, &mut areas);
-        draw_topology_details(frame, app, root);
+        draw_topology_details(frame, app, root, &mut areas);
         return areas;
     }
     let rows = Layout::default()
@@ -76,7 +76,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         draw_session_termination(frame, app, root, &mut areas);
-        draw_topology_details(frame, app, root);
+        draw_topology_details(frame, app, root, &mut areas);
         return areas;
     }
 
@@ -187,7 +187,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
     draw_breakpoint_hits(frame, app, root, &mut areas);
     explorer::draw(frame, app, root, &mut areas);
     draw_session_termination(frame, app, root, &mut areas);
-    draw_topology_details(frame, app, root);
+    draw_topology_details(frame, app, root, &mut areas);
     areas
 }
 
@@ -317,6 +317,10 @@ fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_mini_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.input_mode != InputMode::Normal {
+        draw_prompt(frame, app, area);
+        return;
+    }
     frame.render_widget(
         Paragraph::new(terminal_text(&format!(" {} ", app.status)))
             .style(Style::default().fg(MUTED)),
@@ -1456,6 +1460,11 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::Evaluate => ("Evaluate", "e> ", GREEN),
         InputMode::Watch => ("Add watch expression", "w> ", GREEN),
         InputMode::EditWatch => ("Edit watch expression (Esc cancels)", "W> ", GREEN),
+        InputMode::ExportDetails => (
+            "Export snapshot to NEW file (Enter saves, Esc cancels)",
+            "path> ",
+            GREEN,
+        ),
         InputMode::InspectExpression => {
             ("Inspect once in selected frame (Esc cancels)", "E> ", GREEN)
         }
@@ -1478,19 +1487,35 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::ExtensionAction => ("Extension action JSON", "a> ", ACCENT),
         InputMode::Normal => ("Status", "", MUTED),
     };
+    let block = if area.height >= 3 {
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {title} "))
+    } else {
+        Block::default()
+    };
+    let visible_width = usize::from(block.inner(area).width);
     let content = if app.input_mode == InputMode::Normal {
         Line::from(terminal_text(&app.status))
     } else {
-        input_line(prefix, &app.input, app.input_cursor, color)
+        let before = app.input.chars().take(app.input_cursor).collect::<String>();
+        let cursor_end = crate::display_text::width(prefix)
+            + crate::display_text::width(&before)
+            + app
+                .input
+                .chars()
+                .nth(app.input_cursor)
+                .map(|character| crate::display_text::width(&character.to_string()).max(1))
+                .unwrap_or(1);
+        horizontal_line(
+            input_line(prefix, &app.input, app.input_cursor, color),
+            cursor_end.saturating_sub(visible_width),
+        )
     };
     frame.render_widget(
         Paragraph::new(content)
             .style(Style::default().fg(color))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {title} ")),
-            ),
+            .block(block),
         area,
     );
 }
@@ -1520,15 +1545,33 @@ fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn draw_topology_details(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
+fn draw_topology_details(frame: &mut Frame<'_>, app: &mut App, root: Rect, areas: &mut UiAreas) {
     let Some(details) = app.topology_details.as_mut() else {
         return;
     };
     let area = centered(root, 95, 90);
     frame.render_widget(Clear, area);
-    let block = panel_block("Topology details · snapshot · Esc/right-click close", true);
+    let block = panel_block("Topology details · snapshot · e export · Esc close", true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let inner = rows[0];
+    if rows[1].width >= 18 && rows[1].height > 0 {
+        let export = Rect::new(rows[1].x, rows[1].y, 10, 1);
+        let close = Rect::new(rows[1].right() - 7, rows[1].y, 7, 1);
+        frame.render_widget(
+            Paragraph::new("[e Export]").style(Style::default().fg(ACCENT)),
+            export,
+        );
+        frame.render_widget(
+            Paragraph::new("[Close]").style(Style::default().fg(ACCENT)),
+            close,
+        );
+        areas.details_export = Some(export);
+        areas.details_close = Some(close);
+    } else {
+        frame.render_widget(Paragraph::new("e export"), rows[1]);
+    }
     details.page = usize::from(inner.height).max(1);
     details.scroll(0);
     details.horizontal.fit(details.width, inner.width as usize);
@@ -1810,6 +1853,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Variables: W or Edit button edits the selected watch expression; Esc cancels edits"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
         Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
+        Line::from("Details: e or Export saves the captured JSON to a new local file; enter a literal path, Enter saves, Esc cancels"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
@@ -1964,6 +2008,19 @@ mod v2_tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn export_path_prompt_tracks_cursor_in_short_and_normal_layouts() {
+        let mut app = App::new("http://localhost".into());
+        app.start_input(InputMode::ExportDetails);
+        app.insert_input(&format!("/{}destination.json", "界e\u{301}/".repeat(30)));
+        for height in [8, 18, 30] {
+            assert!(render(&mut app, 45, height).contains("destination.json"));
+            app.input_cursor = 0;
+            assert!(render(&mut app, 45, height).contains("path> /"));
+            app.input_cursor = app.input.chars().count();
+        }
     }
 
     #[test]
