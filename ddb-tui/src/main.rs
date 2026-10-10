@@ -21,6 +21,7 @@ mod timeline;
 mod ui;
 mod watch_store;
 mod worker;
+mod wrapped_text;
 
 use std::{io, time::Duration};
 
@@ -587,6 +588,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         }
         KeyCode::Left | KeyCode::Right if app.focus == Focus::Extensions => {
             app.move_extension_action(if key.code == KeyCode::Left { -1 } else { 1 });
+        }
+        KeyCode::Home | KeyCode::End if app.focus == Focus::Extensions => {
+            app.move_selection(if key.code == KeyCode::Home {
+                isize::MIN
+            } else {
+                isize::MAX
+            });
         }
         KeyCode::Home if app.focus == Focus::Source => {
             app.source_browser.scroll_horizontal(isize::MIN);
@@ -1596,6 +1604,11 @@ fn start_value_edit(app: &mut App) {
 }
 
 fn page_size(app: &App) -> isize {
+    if app.focus == Focus::Extensions {
+        if let Some(area) = app.areas.extension_data {
+            return area.height.max(1) as isize;
+        }
+    }
     if app.focus == Focus::Breakpoints && !app.areas.breakpoint_sites.is_empty() {
         return app.areas.breakpoint_sites.len() as isize;
     }
@@ -2657,6 +2670,84 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn extension_home_end_and_paging_navigate_large_data_without_requests() {
+        use ddb_api_extension::ExtensionProvider;
+        let mut app = App::new("http://localhost".into());
+        app.apply_capabilities(v2::Capabilities {
+            extensions: vec![ddb_sample_extension::SampleWorkersExtension::default().descriptor()],
+            ..Default::default()
+        });
+        app.focus = Focus::Extensions;
+        app.expanded_pane = true;
+        app.extension_panels.push(model::ExtensionPanelView {
+            extension_title: "Data".into(),
+            panel_title: "Rows".into(),
+            description: String::new(),
+            columns: vec!["Index".into()],
+            rows: (0..70_000)
+                .map(|index| vec![format!("{index:05}")])
+                .collect(),
+        });
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        assert!(!app.areas.extension_action_rows.is_empty());
+        assert_eq!(
+            page_size(&app),
+            app.areas.panels[0].area.height.saturating_sub(3) as isize,
+            "the border and action bar are not scrollable data rows"
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+            &tx,
+        );
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let bottom = app.extension_scroll;
+        assert!(bottom > u16::MAX as usize);
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("69999"));
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.extension_scroll, bottom - 1);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.extension_scroll < bottom - 1);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert!(
+            app.extension_scroll > 0,
+            "Shift+Home only resets the action label"
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.extension_scroll, 0);
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn details_export_keyboard_and_mouse_require_explicit_path_confirmation() {

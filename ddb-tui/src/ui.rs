@@ -1367,56 +1367,55 @@ fn draw_extensions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut
         rows[1]
     };
     let inner = presentation_area;
-    let mut lines = Vec::new();
-    for panel in &app.extension_panels {
-        lines.push(Line::from(vec![
-            Span::styled(
-                terminal_text(&panel.extension_title),
-                Style::default().fg(ACCENT),
-            ),
-            Span::styled(
-                format!(" · {}", terminal_text(&panel.panel_title)),
-                Style::default().fg(YELLOW),
-            ),
-        ]));
-        if !panel.description.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", terminal_text(&panel.description)),
-                Style::default().fg(MUTED),
-            )));
-        }
-        if panel.rows.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  no data",
-                Style::default().fg(MUTED),
-            )));
-        } else {
-            for row in &panel.rows {
-                let cells = row
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        let column = panel
-                            .columns
-                            .get(index)
-                            .map(String::as_str)
-                            .unwrap_or("Value");
-                        format!("{}: {}", terminal_text(column), terminal_text(value))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("  ");
-                lines.push(Line::from(format!("  {cells}")));
+    areas.extension_data = Some(inner);
+    let panels = &app.extension_panels;
+    let document = app.extension_document.get_or_insert_with(|| {
+        let mut lines = Vec::new();
+        for panel in panels {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    terminal_text(&panel.extension_title),
+                    Style::default().fg(ACCENT),
+                ),
+                Span::styled(
+                    format!(" · {}", terminal_text(&panel.panel_title)),
+                    Style::default().fg(YELLOW),
+                ),
+            ]));
+            if !panel.description.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", terminal_text(&panel.description)),
+                    Style::default().fg(MUTED),
+                )));
+            }
+            if panel.rows.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  no data",
+                    Style::default().fg(MUTED),
+                )));
+            } else {
+                for row in &panel.rows {
+                    let cells = row
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            let column = panel
+                                .columns
+                                .get(index)
+                                .map(String::as_str)
+                                .unwrap_or("Value");
+                            format!("{}: {}", terminal_text(column), terminal_text(value))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    lines.push(Line::from(format!("  {cells}")));
+                }
             }
         }
-    }
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let visual_lines = paragraph.line_count(inner.width);
-    let start = app
-        .extension_scroll
-        .min(visual_lines.saturating_sub(inner.height as usize));
-    app.extension_scroll = start;
-    let vertical_scroll = u16::try_from(start).unwrap_or(u16::MAX);
-    frame.render_widget(paragraph.scroll((vertical_scroll, 0)), inner);
+        crate::wrapped_text::WrappedText::new(lines)
+    });
+    let lines = document.visible(inner.width, inner.height, &mut app.extension_scroll);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_extension_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
@@ -1857,6 +1856,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
         Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
         Line::from("Details: e or Export saves the captured JSON to a new local file; enter a literal path, Enter saves, Esc cancels"),
+        Line::from("Extensions: Home/End jumps to the first/last data page; Shift+Home resets only the action label"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
@@ -2448,6 +2448,44 @@ mod v2_tests {
     }
 
     #[test]
+    fn extension_document_cache_survives_identical_snapshots_and_invalidates_on_change() {
+        use ddb_api_extension::ExtensionProvider;
+        let provider = ddb_sample_extension::SampleWorkersExtension::default();
+        let mut app = App::new("http://localhost".into());
+        app.apply_capabilities(v2::Capabilities {
+            extensions: vec![provider.descriptor()],
+            ..Default::default()
+        });
+        app.focus = Focus::Extensions;
+        app.expanded_pane = true;
+        let snapshot = v2::Snapshot {
+            extension_states: vec![v2::ExtensionState {
+                extension_state_id: "workers".into(),
+                extension_id: ddb_sample_extension::EXTENSION_ID.into(),
+                revision: 1,
+                payloads: provider.state().unwrap(),
+            }],
+            ..Default::default()
+        };
+        app.apply_snapshot(snapshot.clone());
+        assert!(render(&mut app, 140, 40).contains("alpha"));
+        assert!(app.extension_document.is_some());
+        app.apply_snapshot(snapshot.clone());
+        assert!(
+            app.extension_document.is_some(),
+            "unchanged data must not trigger reflow"
+        );
+        let mut changed = snapshot.clone();
+        changed.extension_states[0].payloads.clear();
+        app.apply_snapshot(changed);
+        assert!(app.extension_document.is_none());
+        assert!(!render(&mut app, 140, 40).contains("Worker: alpha"));
+        app.apply_snapshot(snapshot);
+        assert!(app.extension_document.is_none());
+        assert!(render(&mut app, 140, 40).contains("Worker: alpha"));
+    }
+
+    #[test]
     fn public_extension_descriptor_and_payload_render_generically() {
         use ddb_api_extension::ExtensionProvider;
         use ddb_sample_extension::SampleWorkersExtension;
@@ -2596,6 +2634,33 @@ mod v2_tests {
         }
         app.push_timeline("TAIL");
         assert!(render(&mut app, 15, 14).contains("TAIL"));
+    }
+
+    #[test]
+    fn extension_cell_beyond_u16_rows_is_fully_reachable_and_reflows_on_resize() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Extensions;
+        app.expanded_pane = true;
+        app.extension_panels.push(crate::model::ExtensionPanelView {
+            extension_title: "Extension".into(),
+            panel_title: "Large data".into(),
+            description: String::new(),
+            columns: vec!["Value".into()],
+            rows: vec![vec![format!(
+                "BEGIN {} TAIL",
+                "界e\u{301} ".repeat(210_000)
+            )]],
+        });
+        app.extension_scroll = usize::MAX;
+        assert!(render(&mut app, 15, 14).contains("TAIL"));
+        assert!(app.extension_scroll > u16::MAX as usize);
+        app.move_selection(isize::MIN);
+        assert!(render(&mut app, 15, 14).contains("BEGIN"));
+        app.move_selection(isize::MAX);
+        assert!(render(&mut app, 15, 14).contains("TAIL"));
+        assert!(render(&mut app, 45, 14).contains("TAIL"));
+        app.apply_snapshot(v2::Snapshot::default());
+        assert!(!render(&mut app, 45, 14).contains("TAIL"));
     }
 
     #[test]

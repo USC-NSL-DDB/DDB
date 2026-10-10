@@ -22,6 +22,32 @@ test race: backend discovery could precede the TUI's projection, inserting the
 client above an already advancing scan. It does not establish a fix for every
 previous source-loading timeout.
 
+### Extension data navigation verification, 2026-10-10
+
+The extension renderer no longer passes its vertical offset through Paragraph's
+16-bit scroll API. A shared grapheme-aware wrapper caches styled visual rows and
+renders only the visible slice. Identical projected snapshots retain the cache;
+changed data invalidates it, and width changes reflow it. Timeline uses the same
+wrapping function without changing its retention policy.
+
+The regression with one large Unicode cell failed to display its final `TAIL`
+before this fix. It now reaches both ends beyond 65,535 visual rows, preserves
+wide and combining characters, reflows on resize, and clears stale content.
+Additional tests cover 70,000 logical rows, styles, cache reuse and invalidation,
+empty content, and terminal control sanitization.
+
+Home/End now selects the first/last extension data page. Shift+Home still resets
+only the action label. A separate regression exposed Page Down counting 11 rows
+when only 10 data rows were visible under the action bar. Paging now uses the
+actual rendered data rectangle, excluding the action bar and borders.
+
+Verification on this change: 272 unit tests and two integration helpers passed;
+strict all-target Clippy, formatting and diff checks passed. All 26 non-greeter
+terminal workflows passed serially in 76.62 seconds, including real GDB/LLDB
+distributed caller inspection. The real greeter was not rerun for this rendering
+change; its preceding evidence is recorded below. Adapter HEAD was rechecked as
+`f3c671f`. The full requirement-by-requirement completion audit remains open.
+
 ### Requirement audit at `51f365fa`
 
 This audit compares the current TUI with adapter `f3c671f`, including
@@ -199,8 +225,8 @@ the final code in 34.52 seconds, following an earlier 31.50-second pass before t
 status fix. No test timeout was increased and no probes remain. The fixture tests
 use real debuggers and reconstructed caller contexts; the separate greeter test
 supplies evidence for the actual gRPC auto-attach/all-stop workflow. The final full-goal audit
-remains open, including large extension-data scrolling, whose renderer still
-clamps its paragraph offset to 16 bits.
+remains open. The extension renderer's then-outstanding 16-bit offset limitation
+is resolved by the extension data navigation verification recorded above.
 
 ### Explicit topology export verification, 2026-10-10
 

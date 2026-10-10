@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ops::Range};
 
-use ratatui::{style::Style, text::Span};
+use crate::wrapped_text::wrap_ranges as wrap;
 
 /// Retained events and cached, grapheme-aligned visual rows. Row offsets never
 /// enter Paragraph's u16 scroll API. Only visible rows are handed to rendering.
@@ -87,52 +87,10 @@ impl Timeline {
     }
 }
 
-/// Prefer whitespace boundaries, splitting overlong words only at graphemes.
-/// A separator overflowing the right edge is consumed at the wrap, not moved
-/// onto the next line. Other whitespace is retained. A glyph wider than the pane
-/// occupies a row on its own and becomes visible when the pane is widened.
-fn wrap(text: &str, width: usize) -> Vec<Range<usize>> {
-    let span = Span::raw(text);
-    let mut rows = Vec::new();
-    let (mut start, mut offset, mut cells) = (0, 0, 0);
-    let mut boundary = None;
-    for grapheme in span.styled_graphemes(Style::default()) {
-        let size = Span::raw(grapheme.symbol).width();
-        if cells + size > width && offset > start {
-            if grapheme.is_whitespace() {
-                rows.push(start..offset);
-                offset += grapheme.symbol.len();
-                start = offset;
-                cells = 0;
-                boundary = None;
-                continue;
-            }
-            if let Some((end, used)) = boundary.take() {
-                rows.push(start..end);
-                start = end;
-                cells -= used;
-            }
-            if cells + size > width && offset > start {
-                rows.push(start..offset);
-                start = offset;
-                cells = 0;
-            }
-        }
-        offset += grapheme.symbol.len();
-        cells += size;
-        if grapheme.is_whitespace() {
-            boundary = Some((offset, cells));
-        }
-    }
-    if start < text.len() || rows.is_empty() {
-        rows.push(start..text.len());
-    }
-    rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{style::Style, text::Span};
 
     #[test]
     fn wrapping_preserves_content_and_graphemes() {

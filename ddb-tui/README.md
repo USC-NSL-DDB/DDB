@@ -177,6 +177,7 @@ keys, empty commands and control characters are rejected.
 | `Left` / `Right` in Extensions | Select an extension action without invoking it |
 | `Shift+Left` / `Shift+Right`, Shift+horizontal wheel in Extensions | Scroll the selected action label; `Shift+Home` resets its horizontal position |
 | `Up` / `Down`, Page Up/Down in Extensions | Scroll extension data, even when actions are available |
+| `Home` / `End` in Extensions | Jump to the first/last page of extension data; `Shift+Home` still resets only the action label |
 | `:` | Run a native GDB/LLDB command in the selected frame |
 | `r` | Refresh all state |
 | `?` | Toggle the in-app help overlay |

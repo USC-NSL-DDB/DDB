@@ -90,6 +90,7 @@ pub struct UiAreas {
     pub breakpoint_rows: Vec<(usize, Rect)>,
     pub breakpoint_sites: Vec<(usize, Option<usize>, Rect)>,
     pub extension_action_rows: Vec<(usize, Rect)>,
+    pub extension_data: Option<Rect>,
     pub breakpoint_target_rows: Vec<(usize, Rect)>,
     pub breakpoint_target_apply: Option<Rect>,
     pub breakpoint_target_cancel: Option<Rect>,
@@ -354,7 +355,7 @@ pub struct SourceLocation {
     pub line: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtensionPanelView {
     pub extension_title: String,
     pub description: String,
@@ -491,6 +492,8 @@ pub struct App {
     pub selected_extension_action: usize,
     pub pending_extension_action: Option<ExtensionActionView>,
     pub extension_panels: Vec<ExtensionPanelView>,
+    /// Invalidated by apply_snapshot when the projected extension panels change.
+    pub extension_document: Option<crate::wrapped_text::WrappedText>,
     pub breakpoints: Vec<Breakpoint>,
     pub breakpoint_target_picker: Option<BreakpointTargetPicker>,
     pub execution_target: Option<v2::Target>,
@@ -589,6 +592,7 @@ impl App {
             selected_memory_row: 0,
             memory_viewport: Default::default(),
             extension_panels: Vec::new(),
+            extension_document: None,
             breakpoint_target_picker: None,
             execution_target: None,
             breakpoints: Vec::new(),
@@ -801,8 +805,12 @@ impl App {
             .filter_map(breakpoint_view)
             .collect();
         self.pending_commands = snapshot.pending_commands.len();
-        self.extension_panels =
+        let panels =
             extension_panel_views(&self.capabilities.extensions, &snapshot.extension_states);
+        if self.extension_panels != panels {
+            self.extension_panels = panels;
+            self.extension_document = None;
+        }
         if self.extension_panels.is_empty()
             && self.extension_actions.is_empty()
             && self.focus == Focus::Extensions
