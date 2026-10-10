@@ -122,6 +122,26 @@ reproduces the observed event order. Do not increase the test timeout or weaken
 its all-thread assertion to get a green result. No production all-stop changes
 were made during this audit.
 
+Follow-up tracing at `2d5e4b3d` did not reach the second stop: the unchanged
+workflow repeatedly failed its initial source-marker wait with the source pane
+still displaying Loading source. File-only probes showed initial stop delivery
+to the UI within roughly 60–143 ms. Hiding the optional timeline in a temporary
+comparison did not resolve the source timeout. In the restored original workflow,
+the first 300 terminal draws consumed 1.39 seconds cumulatively; that run failed
+after 19.33 seconds. This does not support attributing the whole source timeout
+to timeline rendering, and it does not diagnose the later all-stop failure.
+
+The measured original run is retained locally under
+`/tmp/ddb-allstop-trace.Uwo5pr/`; file-only initial-event traces also exist under
+`/tmp/ddb-allstop-trace.Z9Q3Xn/` and `/tmp/ddb-allstop-trace.YJAbbf/`. Early attempts
+that printed into the PTY disturbed screen capture and are not valid control
+evidence. Temporary local-source experiments also changed selection/setup and
+are not substitutes for the original workflow. All probes and test experiments
+were removed, including the diagnostic environment hook. No timeouts were
+increased. Next trace source request generation, enqueue/start/completion, and
+the backend resolver/catalog command to distinguish source work from message
+delivery before returning to the later stop-event trace.
+
 ### Source-loading investigation
 
 Four instrumented runs of `greeter_auto_attach_all_stop_terminal_workflow` passed
