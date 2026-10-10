@@ -537,7 +537,23 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
 fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let mut rows = Vec::new();
     let hits = app.breakpoint_hits();
-    for (index, breakpoint) in app.breakpoints.iter().enumerate() {
+    let mut previous_file = None;
+    for index in app.breakpoint_order() {
+        let breakpoint = &app.breakpoints[index];
+        if app.breakpoints_grouped && previous_file != Some(breakpoint.file_group()) {
+            rows.push((
+                None,
+                None,
+                Line::styled(
+                    breakpoint
+                        .file_group()
+                        .map(|file| format!("File: {}", terminal_text(file)))
+                        .unwrap_or_else(|| "Non-source / unresolved breakpoints".into()),
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ),
+            ));
+            previous_file = Some(breakpoint.file_group());
+        }
         let current_hits = hits
             .iter()
             .filter(|hit| hit.breakpoint_id == breakpoint.id)
@@ -567,7 +583,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
         };
         let scope = breakpoint_target_label(app, breakpoint.target.as_ref());
         rows.push((
-            index,
+            Some(index),
             None,
             Line::from(vec![
                 Span::styled(
@@ -640,7 +656,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                 .map(|message| format!(" · {}", terminal_text(message)))
                 .unwrap_or_default();
             rows.push((
-                index,
+                Some(index),
                 Some(site),
                 Line::from(vec![
                     Span::styled(
@@ -673,7 +689,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     let selected = rows
         .iter()
         .position(|(index, site, _)| {
-            *index == app.selected_breakpoint && *site == app.selected_breakpoint_site
+            *index == Some(app.selected_breakpoint) && *site == app.selected_breakpoint_site
         })
         .unwrap_or(0);
     let first = list_first(selected, rows.len(), area, 1);
@@ -701,12 +717,28 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
         app.focus == Focus::Breakpoints,
     );
     areas.add_focus_panel(Focus::Breakpoints, area);
+    if area.width >= 34 && area.height > 0 {
+        let control = Rect::new(area.right() - 12, area.y, 11, 1);
+        frame.render_widget(
+            Paragraph::new(if app.breakpoints_grouped {
+                " Flat [v] "
+            } else {
+                " Files [v] "
+            })
+            .style(Style::default().fg(ACCENT)),
+            control,
+        );
+        areas.breakpoint_grouping = Some(control);
+    }
     let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
     let end = (first + inner.height as usize).min(parents.len());
     for (row, (parent, site)) in parents[first..end].iter().enumerate() {
+        let Some(parent) = parent else {
+            continue;
+        };
         areas.breakpoint_sites.push((
             *parent,
             *site,
@@ -1713,6 +1745,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
         Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
+        Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),

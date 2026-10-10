@@ -717,6 +717,8 @@ fn mock_backend_full_terminal_workflow() {
     tui.clear_capture();
     tui.send(b"\t\t\t\t\t\t");
     tui.wait_for("\u{25c6} DDB Breakpoints");
+    tui.send(b"v");
+    tui.wait_for_current_frame(|screen| screen.contains("File: "));
     tui.send(b"x");
     ddb.wait_for_snapshot(|snapshot| {
         snapshot
@@ -736,6 +738,8 @@ fn mock_backend_full_terminal_workflow() {
             .and_then(|spec| spec.enabled)
             == Some(true)
     });
+    tui.send(b"v");
+    tui.wait_for_current_frame(|screen| !screen.contains("File: "));
     tui.send(b"\t");
 
     tui.send(b"m0x1000 ; 256\r");

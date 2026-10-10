@@ -541,6 +541,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         }
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
         KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
+        KeyCode::Char('v') if app.focus == Focus::Breakpoints => app.toggle_breakpoint_grouping(),
         KeyCode::Char('E') => {
             if let Err(error) = app.start_expression_inspection() {
                 app.error(error);
@@ -1072,6 +1073,15 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.breakpoint_grouping.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Breakpoints;
+                app.toggle_breakpoint_grouping();
+                return;
+            }
             if button == MouseButton::Left
                 && app.areas.topology_grouping.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -2698,6 +2708,116 @@ mod tests {
             assert_eq!(app.current_frame().map(|frame| frame.id.clone()), frame);
             assert!(rx.try_recv().is_err());
         }
+    }
+
+    #[test]
+    fn breakpoint_grouping_preserves_member_identity_and_skips_header_actions() {
+        let bp = |id: &str, path: &str, members: &[&str]| v2::Breakpoint {
+            breakpoint_id: id.into(),
+            target: Some(crate::api::session_target("session/one")),
+            spec: Some(v2::BreakpointSpec {
+                location: Some(v2::breakpoint_spec::Location::Source(
+                    v2::SourceBreakpointLocation {
+                        source: path.into(),
+                        line: 7,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }),
+            sub_breakpoints: members
+                .iter()
+                .map(|id| v2::SubBreakpoint {
+                    sub_breakpoint_id: (*id).into(),
+                    session_id: "session/one".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let snapshot = |breakpoints| v2::Snapshot {
+            server_instance_id: "backend".into(),
+            breakpoints,
+            ..Default::default()
+        };
+        let mut app = App::new("http://localhost".into());
+        app.apply_snapshot(snapshot(vec![
+            bp("b", "/z/main.rs", &["old", "keep"]),
+            bp("a", "/a/main.rs", &[]),
+        ]));
+        app.focus = Focus::Breakpoints;
+        app.expanded_pane = true;
+        app.selected_breakpoint_site = Some(1);
+        let target = app.current_breakpoint().unwrap().target.clone();
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.breakpoints_grouped);
+        assert_eq!(app.breakpoint_order(), vec![1, 0]);
+        assert_eq!(app.current_breakpoint().unwrap().id, "b");
+        assert_eq!(app.selected_breakpoint_site, Some(1));
+        assert_eq!(app.current_breakpoint().unwrap().target, target);
+        assert!(rx.try_recv().is_err());
+
+        app.apply_snapshot(snapshot(vec![
+            bp("a", "/a/main.rs", &[]),
+            bp("b", "/z/main.rs", &["keep", "new"]),
+        ]));
+        assert!(app.breakpoints_grouped);
+        assert_eq!(app.current_breakpoint().unwrap().id, "b");
+        assert_eq!(app.selected_breakpoint_site, Some(0));
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 32)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        // Full paths distinguish identical basenames. Headers have no action
+        // hitbox; clicking one must not reveal or mutate a breakpoint.
+        let buffer = terminal.backend().buffer();
+        let header_rows = (0..32)
+            .filter(|&y| {
+                let line = (0..120)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>();
+                line.contains("File: /")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(header_rows.len(), 2);
+        for row in header_rows {
+            assert!(app.areas.breakpoint_at(3, row).is_none());
+            handle_mouse(
+                &mut app,
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: 3,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &tx,
+            );
+            assert!(rx.try_recv().is_err());
+            assert_eq!(app.current_breakpoint().unwrap().id, "b");
+        }
+        app.move_selection(-1);
+        assert_eq!(app.selected_breakpoint_site, None);
+        app.move_selection(-1);
+        assert_eq!(app.current_breakpoint().unwrap().id, "a");
+        let button = app.areas.breakpoint_grouping.unwrap();
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: button.x,
+                row: button.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(!app.breakpoints_grouped);
+        assert_eq!(app.current_breakpoint().unwrap().id, "a");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

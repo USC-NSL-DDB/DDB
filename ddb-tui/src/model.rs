@@ -96,6 +96,7 @@ pub struct UiAreas {
     pub source_explorer_open: Option<Rect>,
     pub source_inspect: Option<Rect>,
     pub topology_grouping: Option<Rect>,
+    pub breakpoint_grouping: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -390,6 +391,13 @@ pub struct BreakpointLocation {
     pub line: u64,
 }
 
+impl Breakpoint {
+    pub fn file_group(&self) -> Option<&str> {
+        (self.location.line > 0 && !self.location.src.is_empty())
+            .then_some(self.location.src.as_str())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BreakpointDraft {
     pub location: v2::breakpoint_spec::Location,
@@ -479,6 +487,7 @@ pub struct App {
     pub topology_grouped: bool,
     pub selected_variable: usize,
     pub selected_breakpoint: usize,
+    pub breakpoints_grouped: bool,
     pub selected_breakpoint_site: Option<usize>,
     pub breakpoint_hit_picker: Option<breakpoint_hits::BreakpointHitPicker>,
     pub inspection_generation: u64,
@@ -567,6 +576,7 @@ impl App {
             selected_frame: 0,
             selected_variable: 0,
             selected_breakpoint: 0,
+            breakpoints_grouped: false,
             selected_breakpoint_site: None,
             breakpoint_hit_picker: None,
             inspection_generation: 0,
@@ -2055,15 +2065,45 @@ impl App {
             .collect()
     }
 
+    /// Presentation order only. Canonical storage and action targets never move.
+    pub fn breakpoint_order(&self) -> Vec<usize> {
+        let mut order = (0..self.breakpoints.len()).collect::<Vec<_>>();
+        if self.breakpoints_grouped {
+            order.sort_by(|&left, &right| {
+                let left = &self.breakpoints[left];
+                let right = &self.breakpoints[right];
+                left.file_group()
+                    .cmp(&right.file_group())
+                    .then_with(|| left.location.src.cmp(&right.location.src))
+                    .then_with(|| left.location.line.cmp(&right.location.line))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        }
+        order
+    }
+
+    pub fn toggle_breakpoint_grouping(&mut self) {
+        self.breakpoints_grouped = !self.breakpoints_grouped;
+        self.breakpoint_viewport = Default::default();
+        self.status = format!(
+            "Breakpoints: {} · selection and targets unchanged",
+            if self.breakpoints_grouped {
+                "grouped by file"
+            } else {
+                "flat"
+            }
+        );
+    }
+
     pub fn move_selection(&mut self, delta: isize) {
         match self.focus {
             Focus::Threads => self.move_topology_selection(delta),
             Focus::Breakpoints => {
                 let rows = self
-                    .breakpoints
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(index, bp)| {
+                    .breakpoint_order()
+                    .into_iter()
+                    .flat_map(|index| {
+                        let bp = &self.breakpoints[index];
                         std::iter::once((index, None)).chain(
                             (0..bp.sub_breakpoints.len()).map(move |site| (index, Some(site))),
                         )
@@ -3336,6 +3376,55 @@ mod v2_tests {
             app.topology_rows()[app.selected_topology_row()].kind,
             TopologyRowKind::Session("session/b".into())
         );
+    }
+
+    #[test]
+    fn breakpoint_file_groups_keep_non_source_locations_separate() {
+        let mut app = App::new("http://localhost".into());
+        let source = |path: &str, line| {
+            breakpoint_spec::Location::Source(v2::SourceBreakpointLocation {
+                source: path.into(),
+                line,
+                ..Default::default()
+            })
+        };
+        for (id, location) in [
+            ("z", source("/second/main.rs", 1)),
+            ("b", source("/first/main.rs", 9)),
+            ("a", source("/first/main.rs", 9)),
+            ("early", source("/first/main.rs", 2)),
+            (
+                "fn",
+                breakpoint_spec::Location::Function(v2::FunctionBreakpointLocation {
+                    function_name: "entry".into(),
+                }),
+            ),
+            (
+                "addr",
+                breakpoint_spec::Location::Address(v2::AddressBreakpointLocation {
+                    address: "0x1000".into(),
+                }),
+            ),
+        ] {
+            app.breakpoints.push(
+                breakpoint_view(v2::Breakpoint {
+                    breakpoint_id: id.into(),
+                    spec: Some(v2::BreakpointSpec {
+                        location: Some(location),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+        }
+        assert_eq!(app.breakpoint_order(), vec![0, 1, 2, 3, 4, 5]);
+        app.toggle_breakpoint_grouping();
+        assert_eq!(app.breakpoint_order(), vec![5, 4, 3, 2, 1, 0]);
+        assert_eq!(app.breakpoints[4].file_group(), None);
+        assert_eq!(app.breakpoints[5].file_group(), None);
+        app.toggle_breakpoint_grouping();
+        assert_eq!(app.breakpoint_order(), vec![0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

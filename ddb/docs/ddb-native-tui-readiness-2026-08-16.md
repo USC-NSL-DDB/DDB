@@ -66,8 +66,10 @@ generic command that can produce a similar backend effect.
    toggling and breakpoint file grouping/flat reset. The TUI now offers grouped
    and flat topology through `v` and a clickable header button. It preserves
    opaque session/thread selection and execution scope across switches and
-   discovery updates. Breakpoint file grouping/flat reset remains unimplemented;
-   its selection and mouse mapping must also survive membership changes.
+   discovery updates. Breakpoints now also offer file grouping and flat reset
+   through focused-pane `v` and header controls. Full paths define file groups;
+   non-source locations have a separate group. Group headers are non-actionable,
+   and member selection survives snapshot replacement by opaque member ID.
 3. **Details and copying.** The adapter exposes group details plus session fields
    and a copy-details command. The TUI needs an accessible, scrollable details view
    and an explicit copy/export interaction for the available canonical fields.
@@ -191,6 +193,28 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Breakpoint file grouping verification
+
+Breakpoint views default to flat logical/member rows. `v` or the header control
+switches to full-path file groups. Rendering and keyboard navigation share the
+model's presentation order; neither sorts canonical storage nor changes action
+targets. Group headers are skipped by keyboard selection and have no breakpoint
+mouse hitbox. Functions, addresses, and unresolved locations without source lines
+appear under a non-source heading. Toggling back restores snapshot order.
+
+Regression coverage checks full paths with identical basenames, line/ID ordering,
+non-source locations, preserved targets, member replacement/reordering across
+snapshots, inert header clicks, and keyboard/header-button reset. The mock terminal
+workflow toggles grouping and changes breakpoint enabled state through the public
+backend before returning to its existing source and inspection checks.
+
+Verification on 2026-10-10: 239 unit tests and two integration helpers passed;
+the mock full terminal workflow passed in 5.92 seconds. Strict all-target TUI
+Clippy, formatting, and diff whitespace checks passed.
+
+This closes the file-grouping view gap, not the full adapter-parity goal. Real
+greeter/GDB/LLDB workflows were not rerun for this presentation-only change.
 
 #### Topology grouping verification
 
