@@ -1853,7 +1853,7 @@ fn debugger_setting_command(
                 }
             }
             let prefix = if matches!(backend, DebuggerBackendKind::Lldb) {
-                "settings append -- target.source-map"
+                "settings append target.source-map"
             } else {
                 "set substitute-path"
             };
@@ -2464,6 +2464,25 @@ fn typed_execution_defaults_to_ddb_history_recording() {
         ..Default::default()
     };
     assert_eq!(execution_command(&interrupt).unwrap(), "-exec-interrupt");
+}
+
+#[test]
+fn lldb_source_mapping_uses_settings_append_without_an_option_separator() {
+    let request = ConfigureDebuggerRequest {
+        setting: Some(configure_debugger_request::Setting::SourceMapping(
+            ddb_api_types::v2::SourcePathMapping {
+                from: "/build with spaces".into(),
+                to: "/source with spaces".into(),
+            },
+        )),
+        ..Default::default()
+    };
+    let command = debugger_setting_command(&request, &DebuggerBackendKind::Lldb).unwrap();
+    let encoded = command.strip_prefix("-interpreter-exec console ").unwrap();
+    assert_eq!(
+        serde_json::from_str::<String>(encoded).unwrap(),
+        "settings append target.source-map \"/build with spaces\" \"/source with spaces\""
+    );
 }
 
 #[test]
