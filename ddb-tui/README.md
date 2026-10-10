@@ -105,6 +105,7 @@ The file is explicit opt-in and is read before starting the managed backend.
 source_mappings:
   - from: /build/checkout
     to: /srv/source/checkout
+entry_function: main
 gdb:
   commands:
     - set print elements 33
@@ -114,10 +115,20 @@ lldb:
 ```
 
 Setup enables GDB pretty printers when requested by `--values-formatting`, applies
-source mappings in file order through `ConfigureDebugger`, then runs the matching
+source mappings in file order through `ConfigureDebugger`, installs the optional
+`entry_function` as an enabled temporary function breakpoint through
+`CreateBreakpoint`, then runs the matching
 backend's commands through `ExecuteRawCommand` in native CLI syntax. Mapping
 paths refer to the debugger host; they are not local TUI source-workspace paths
 and are not resolved relative to this YAML file. Prefer absolute paths.
+
+`entry_function` applies once to each ready/stopped GDB or LLDB session, including
+later automatic attachments. It does not resume execution or rewind a process
+that has already passed the function. Omit it to leave entry breakpoints alone.
+Use a function present in each target program, or use the interactive function
+breakpoint picker for per-target choices. Installation requires advertised
+function and temporary breakpoint support. Wait for setup to finish before
+continuing; native startup commands run after the entry breakpoint is installed.
 
 Only use trusted settings files. Startup commands can change or resume the
 debuggee and have the same authority as the native debugger console. A failed

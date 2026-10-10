@@ -22,6 +22,51 @@ test race: backend discovery could precede the TUI's projection, inserting the
 client above an already advancing scan. It does not establish a fix for every
 previous source-loading timeout.
 
+### Active adapter configuration audit, 2026-10-10
+
+The audit inspected `CanonicalLaunchArguments`, `launchRequest`,
+`configurationDoneRequest`, and `connection.mts::managedArguments` at adapter
+`f3c671f`, rather than treating every inherited package.json property as a working
+feature. Deprecated target/arguments/terminal/SSH settings are not implemented by
+the canonical adapter and are not a reason to add a legacy transport to the TUI.
+
+| Active adapter option | TUI mapping or remaining gap |
+|---|---|
+| ddbpath, configFilePath, apiEndpoint, apiToken | `--ddb-path`, positional YAML/`--config`, `connect --api`, and `--token`/`DDB_API_TOKEN`; managed lifecycle and credential isolation have PTY tests. |
+| cwd, env | Shell working directory and environment inheritance provide startup control, including removing variables with `env -u`; this does not require a second configuration format. |
+| valuesFormatting | `--values-formatting pretty-printers/raw/disabled`; raw corresponds to the adapter's parseText mode. |
+| pathSubstitutions, autorun | Explicit `--debugger-settings` source mappings and backend-specific native commands, ordered and tested on GDB/LLDB. |
+| stopAtEntry boolean or function | `entry_function: main` or another symbol in debugger settings uses typed temporary breakpoints for each ready/stopped native session, including later discovery, without automatic continuation. Native `launch --stop-at-entry` remains a separate process-start policy. |
+| showDevDebugOutput | `--backend-log` captures managed backend stdout/stderr explicitly; inferior/debugger output remains in the Output pane. |
+| distributedStack=false | **Open:** the TUI always requests distributed frames. Keep distributed stacks as the default, but provide an explicit local-only choice if completing full configuration parity. |
+| printCalls | **Open:** there is no equivalent opt-in sanitized client request trace. The optional timeline is execution telemetry, not HTTP method/path/status diagnostics. |
+| debugger_args | **Open:** the managed TUI does not forward additional backend arguments. Any implementation must reject managed endpoint/authentication/report overrides rather than weakening ownership guarantees. |
+| pairedBreakpointRequests | Adapter/extension coordination detail; TUI directly creates typed logical breakpoints with explicit group/session/multiple targets, so no paired DAP request protocol is needed. |
+
+These concrete gaps replace the vague remaining configuration sign-off. The
+entry-function addition alone does not establish complete adapter parity.
+
+Entry setup verification: the real settings workflow passed with GDB and LLDB
+in 6.56 seconds. It checks that the breakpoint is temporary and verified
+before native startup commands finish, that setup has not resumed the process,
+and that Continue reaches the configured function with a source marker and
+`counter = 0`. The first version of this test incorrectly waited for hidden
+timeline text despite reaching the function; it now checks canonical stopped
+function state and visible source/value output without changing its timeout.
+The contract test asserts exact session targeting, mapping/entry/command order,
+feature gating, and stopping after mapping or entry failure. The lifecycle test
+checks one-time setup across refresh, a later discovered LLDB session, removal,
+and backend-instance replacement. Validation rejects blank, oversized and
+control-containing symbols while retaining C++ function expressions with spaces.
+The module-design guidance kept this work inside the existing ordered setup
+module, avoiding a second startup lifecycle in the input loop.
+
+The implementation gate passed 273 unit tests and two integration helpers. The
+added late-discovery lifecycle assertion also passed in a focused rerun. All
+26 non-greeter PTY workflows passed in 79.54 seconds; strict all-target Clippy,
+formatting and diff checks passed after the final test change. This entry-setup
+change did not rerun greeter; its preceding 33.23-second pass is recorded below.
+
 ### Current requirement audit at `fe1eb296`, 2026-10-10
 
 The worktree was clean for this audit. Adapter HEAD remains `f3c671f`. The

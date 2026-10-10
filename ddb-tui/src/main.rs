@@ -3818,12 +3818,23 @@ mod tests {
     }
 
     #[test]
-    fn pretty_printer_setup_survives_refresh_but_resets_for_a_new_backend_instance() {
+    fn session_setup_with_entry_survives_refresh_but_resets_for_a_new_backend_instance() {
         let mut app = App::new("http://localhost".into());
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.yaml");
-        std::fs::write(&path, "gdb: {commands: ['set print elements 33']}\n").unwrap();
+        std::fs::write(
+            &path,
+            "entry_function: main\ngdb: {commands: ['set print elements 33']}\n",
+        )
+        .unwrap();
         app.debugger_settings = debugger_setup::Settings::load(&path).unwrap();
+        app.capabilities
+            .supported_operations
+            .push(v2::OperationKind::CreateBreakpoint as i32);
+        app.capabilities.breakpoint_features.extend([
+            v2::BreakpointFeature::Function as i32,
+            v2::BreakpointFeature::Temporary as i32,
+        ]);
         app.capabilities
             .supported_operations
             .push(v2::OperationKind::ConfigureDebugger as i32);
@@ -3851,6 +3862,19 @@ mod tests {
             BackendRequest::ConfigureSession { .. }
         ));
         app.apply_snapshot(snapshot("instance/one"));
+        configure_sessions(&mut app, &tx);
+        assert!(rx.try_recv().is_err());
+        let mut discovered = snapshot("instance/one");
+        let mut new_session = discovered.sessions[0].clone();
+        new_session.session_id = "session/new-lldb".into();
+        new_session.backend.as_mut().unwrap().kind = v2::BackendKind::Lldb as i32;
+        discovered.sessions.push(new_session);
+        app.apply_snapshot(discovered.clone());
+        configure_sessions(&mut app, &tx);
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::ConfigureSession { session_id, .. } if session_id == "session/new-lldb")
+        );
+        app.apply_snapshot(discovered);
         configure_sessions(&mut app, &tx);
         assert!(rx.try_recv().is_err());
         app.apply_snapshot(snapshot("instance/two"));

@@ -1205,7 +1205,7 @@ fn real_debugger_settings_terminal_workflow() {
         let directory = tempfile::tempdir().unwrap();
         let settings = directory.path().join("settings.yaml");
         fs::write(&settings, format!(
-            "source_mappings:\n  - from: /ddb-setup-build\n    to: {}\ngdb:\n  commands: ['echo DDB_SETUP_APPLIED']\nlldb:\n  commands: [\"script print('DDB_SETUP_APPLIED')\"]\n",
+            "entry_function: ddb_real_loop::function_breakpoint_target\nsource_mappings:\n  - from: /ddb-setup-build\n    to: {}\ngdb:\n  commands: ['echo DDB_SETUP_APPLIED']\nlldb:\n  commands: [\"script print('DDB_SETUP_APPLIED')\"]\n",
             serde_json::to_string(fixture.source.parent().unwrap().to_str().unwrap()).unwrap()
         )).unwrap();
         let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
@@ -1230,6 +1230,17 @@ fn real_debugger_settings_terminal_workflow() {
         }
         tui.send(b"O");
         tui.wait_for("DDB_SETUP_APPLIED");
+        let entry = snapshot.breakpoints.iter().find(|bp| {
+            matches!(bp.spec.as_ref().and_then(|spec| spec.location.as_ref()),
+                Some(v2::breakpoint_spec::Location::Function(function)) if function.function_name == "ddb_real_loop::function_breakpoint_target")
+        }).expect("typed entry breakpoint must be installed before startup commands");
+        assert!(entry.spec.as_ref().unwrap().temporary);
+        assert!(entry.verified);
+        assert_eq!(entry.hit_count, 0, "setup must not resume execution");
+        assert!(snapshot
+            .threads
+            .iter()
+            .all(|thread| thread.state == v2::ThreadState::Stopped as i32));
         assert_eq!(
             snapshot
                 .operations
@@ -1246,6 +1257,22 @@ fn real_debugger_settings_terminal_workflow() {
             b":settings show target.source-map\r"
         });
         tui.wait_for("/ddb-setup-build");
+        tui.clear_capture();
+        tui.send(b"\x1b[15~");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot.threads.iter().any(|thread| {
+                thread.state == v2::ThreadState::Stopped as i32
+                    && thread
+                        .location
+                        .as_ref()
+                        .and_then(|location| location.function_name.as_deref())
+                        .is_some_and(|function| function.contains("function_breakpoint_target"))
+            })
+        });
+        let stopped_line = ddb.top_frame_line(&ddb.global_thread_id());
+        tui.wait_for_source_marker('▶', stopped_line);
+        tui.send(b"wcounter\r");
+        tui.wait_for_variable_value("Watch: counter", "0");
         tui.quit();
         ddb.shutdown();
     }
