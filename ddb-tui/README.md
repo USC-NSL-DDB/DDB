@@ -58,7 +58,20 @@ Useful managed options are:
 --backend-log PATH       retain backend stdout/stderr at a new private path
 --config PATH            explicit alternative to the positional config
 --values-formatting MODE pretty-printers (default), raw, or disabled
+--trace-api             show sanitized API request metadata in Output
 ```
+
+`--trace-api` works in managed and connect modes and is off by default. Press
+`O` to view request attempts, canonical RPC names and HTTP statuses, including
+startup discovery, retries and stream setup. Traces exclude credentials, headers,
+endpoint prefixes, query values, debugger payloads and raw error text. A status
+means HTTP headers arrived, not that the debugger operation completed. Stream
+contents are never traced. Requests do not wait for trace rendering: the SDK
+retains at most 256 records, and the TUI reports dropped records if it falls
+behind. Output uses its existing bounded retention and scrolling controls.
+If initial negotiation fails before the TUI opens, buffered trace records are
+printed to stderr. This option does not enable backend telemetry or persist a
+trace file, and is separate from `--backend-log`.
 
 For example, adjust command workers and backend logging without changing the
 private managed transport:

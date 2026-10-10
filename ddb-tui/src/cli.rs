@@ -61,6 +61,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_enum, default_value_t = StackMode::Distributed)]
     pub stack_mode: StackMode,
 
+    /// Show sanitized API request metadata in Output (no payloads or credentials).
+    #[arg(long, global = true)]
+    pub trace_api: bool,
+
     /// Maximum seconds to wait for a managed DDB service to become ready.
     #[arg(
         long = "startup-timeout",
@@ -366,6 +370,18 @@ mod tests {
     }
     #[test]
     fn stack_mode_is_explicit_global_and_distributed_by_default() {
+        assert!(!Args::try_parse_from(["ddb-tui"]).unwrap().trace_api);
+        assert!(
+            Args::try_parse_from([
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://localhost",
+                "--trace-api"
+            ])
+            .unwrap()
+            .trace_api
+        );
         assert_eq!(
             Args::try_parse_from(["ddb-tui"]).unwrap().stack_mode,
             StackMode::Distributed

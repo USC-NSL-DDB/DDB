@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
     app.source_workspace = workspace;
     app.values_formatting = args.values_formatting;
     app.stack_mode = args.stack_mode;
+    app.trace_api = args.trace_api;
     app.debugger_settings = debugger_settings;
     for expression in saved_watches {
         app.add_watch(expression).map_err(anyhow::Error::msg)?;
@@ -120,7 +121,26 @@ async fn run_frontend(
     mut app: App,
     watch_store: Option<watch_store::Store>,
 ) -> Result<()> {
-    let client = negotiate_client(endpoint, token, managed).await?;
+    let mut config = ClientConfig::new(endpoint);
+    if let Some(token) = token {
+        config = config.with_bearer_token(token.to_string());
+    }
+    let client = ApiClient::new(config)?;
+    let mut traces = app.trace_api.then(|| client.subscribe_request_traces());
+    if let Err(error) = negotiate_client(&client, managed).await {
+        if let Some(receiver) = &mut traces {
+            loop {
+                match receiver.try_recv() {
+                    Ok(record) => eprintln!("{record}"),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(count)) => {
+                        eprintln!("[DDB API] {count} trace records dropped")
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        return Err(error);
+    }
     if let Some(backend) = managed {
         app.push_timeline(format!(
             "managed DDB {} ready (instance {}, log {})",
@@ -136,7 +156,15 @@ async fn run_frontend(
     let terminal_backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(terminal_backend)?;
 
-    let result = run(&mut terminal, &mut app, client, refresh_ms, watch_store).await;
+    let result = run(
+        &mut terminal,
+        &mut app,
+        client,
+        refresh_ms,
+        watch_store,
+        traces,
+    )
+    .await;
     drop(terminal);
     let restoration = terminal_session.restore();
     match (result, restoration) {
@@ -149,16 +177,7 @@ async fn run_frontend(
     }
 }
 
-async fn negotiate_client(
-    endpoint: &str,
-    token: Option<&str>,
-    managed: Option<&ManagedBackend>,
-) -> Result<ApiClient> {
-    let mut client_config = ClientConfig::new(endpoint);
-    if let Some(token) = token {
-        client_config = client_config.with_bearer_token(token.to_string());
-    }
-    let v2_client = ApiClient::new(client_config)?;
+async fn negotiate_client(v2_client: &ApiClient, managed: Option<&ManagedBackend>) -> Result<()> {
     match v2_client.handshake().await {
         Ok((server, capabilities)) => {
             capabilities.validate_for_tui()?;
@@ -183,10 +202,10 @@ async fn negotiate_client(
                     );
                 }
             }
-            Ok(v2_client)
+            Ok(())
         }
         Err(error) if managed.is_none() && error.is_retryable() => {
-            Ok(v2_client)
+            Ok(())
         }
         Err(error) => Err(error).context(format!(
             "DDB API v2 negotiation failed; ddb-tui {} supports {}. For a version mismatch, install the paired package or choose a compatible frontend; refusing to downgrade for this error",
@@ -251,6 +270,7 @@ async fn run(
     client: ApiClient,
     refresh_ms: u64,
     watch_store: Option<watch_store::Store>,
+    mut traces: Option<tokio::sync::broadcast::Receiver<ddb_api_client::RequestTrace>>,
 ) -> Result<()> {
     let (request_tx, request_rx) = mpsc::channel(64);
     let (message_tx, mut message_rx) = mpsc::channel(128);
@@ -287,6 +307,9 @@ async fn run(
         }
 
         tokio::select! {
+            record = async { traces.as_mut().expect("guarded receiver").recv().await }, if traces.is_some() => {
+                if !apply_api_trace(app, record) { traces = None; }
+            }
             signal = &mut termination => {
                 if let Err(error) = signal {
                     background_failure = Some(error);
@@ -1689,6 +1712,20 @@ fn reveal_breakpoint_hit(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
     }
 }
 
+fn apply_api_trace(
+    app: &mut App,
+    record: Result<ddb_api_client::RequestTrace, tokio::sync::broadcast::error::RecvError>,
+) -> bool {
+    match record {
+        Ok(record) => app.output.push(&record.to_string()),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => app
+            .output
+            .push(&format!("[DDB API] {count} trace records dropped")),
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+    }
+    true
+}
+
 fn inspect_thread(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
     if let Some(index) = app.threads.iter().position(|thread| thread.id == thread_id) {
         app.selected_thread = index;
@@ -2678,6 +2715,35 @@ fn queue_recovery(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 mod tests {
     use super::*;
     use model::{DebuggerEvent, ThreadItem};
+
+    #[test]
+    fn api_trace_records_and_loss_are_visible_without_changing_debugger_state() {
+        let mut app = App::new("http://localhost".into());
+        let focus = app.focus;
+        assert!(apply_api_trace(
+            &mut app,
+            Ok(ddb_api_client::RequestTrace {
+                attempt_id: 3,
+                service: "ddb.api.v2.DebuggerService",
+                operation: "ListFrames",
+                outcome: ddb_api_client::RequestTraceOutcome::Response(200),
+            })
+        ));
+        assert!(apply_api_trace(
+            &mut app,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(44))
+        ));
+        app.output.fit(200, 10);
+        let text = app.output.visible_lines().collect::<Vec<_>>().join("\n");
+        assert!(text.contains("3 POST /api/v2/rpc/ddb.api.v2.DebuggerService/ListFrames -> 200"));
+        assert!(text.contains("44 trace records dropped"));
+        assert_eq!(app.focus, focus);
+        assert!(app.execution_target.is_none());
+        assert!(!apply_api_trace(
+            &mut app,
+            Err(tokio::sync::broadcast::error::RecvError::Closed)
+        ));
+    }
 
     #[test]
     fn extension_home_end_and_paging_navigate_large_data_without_requests() {

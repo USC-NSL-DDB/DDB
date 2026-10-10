@@ -1052,7 +1052,7 @@ fn managed_backend_arguments_reach_ddb_without_changing_transport() {
                 shell_quote(&ddb_binary)
             )
         };
-        let mut tui = Tui::spawn_shell(&format!("stty rows 40 cols 140; exec {prefix} --ddb-arg=--command-workers=4 --ddb-arg=--file-level=warn '--ddb-arg=--session-id=argument with spaces' {}", shell_quote(&config)));
+        let mut tui = Tui::spawn_shell(&format!("stty rows 40 cols 140; exec {prefix} --trace-api --ddb-arg=--command-workers=4 --ddb-arg=--file-level=warn '--ddb-arg=--session-id=argument with spaces' {}", shell_quote(&config)));
         tui.wait_for("managed_mock_session");
         tui.wait_for_source_marker('▶', 9);
         let pid = wait_for_managed_ddb_descendant(tui.child.id());
@@ -1073,6 +1073,12 @@ fn managed_backend_arguments_reach_ddb_without_changing_transport() {
         assert!(!arguments
             .iter()
             .any(|arg| arg.starts_with(b"--api-port") || arg.starts_with(b"--api-bind")));
+        tui.send(b"Oz\x1b[H");
+        tui.wait_for_current_frame(|screen| {
+            screen.contains("[Restore]")
+                && screen.contains("[DDB API]")
+                && screen.contains("/GetServerInfo -> 200")
+        });
         assert!(tui.quit().contains("\u{1b}[?1049l"));
         wait_for_process_exit(pid);
     }

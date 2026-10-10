@@ -39,7 +39,7 @@ the canonical adapter and are not a reason to add a legacy transport to the TUI.
 | stopAtEntry boolean or function | `entry_function: main` or another symbol in debugger settings uses typed temporary breakpoints for each ready/stopped native session, including later discovery, without automatic continuation. Native `launch --stop-at-entry` remains a separate process-start policy. |
 | showDevDebugOutput | `--backend-log` captures managed backend stdout/stderr explicitly; inferior/debugger output remains in the Output pane. |
 | distributedStack=false | `--stack-mode local` explicitly uses paginated ListFrames. The default remains distributed; pane labeling and refresh follow the selected mode, with no error-driven fallback. |
-| printCalls | **Open:** there is no equivalent opt-in sanitized client request trace. The optional timeline is execution telemetry, not HTTP method/path/status diagnostics. |
+| printCalls | `--trace-api` consumes the SDK's bounded metadata subscription and displays canonical request attempts and HTTP statuses in Output, including handshake, retry and stream-setup requests. It excludes headers, credentials, endpoint prefixes, queries, payloads and raw errors. |
 | debugger_args | Repeatable `--ddb-arg=--name=value` in managed config/launch/attach modes forwards the current backend logging, telemetry and worker options. Transport/authentication/report controls remain reserved; unknown flags and positional/subcommand injection are rejected. |
 | pairedBreakpointRequests | Adapter/extension coordination detail; TUI directly creates typed logical breakpoints with explicit group/session/multiple targets, so no paired DAP request protocol is needed. |
 
@@ -95,6 +95,48 @@ including credential isolation, crash/signal/terminal-loss cleanup, native
 launch/attach, and the new argument test. Formatting and diff checks passed.
 The earlier greeter all-stop evidence remains unchanged; it was not rerun for
 argument forwarding. API tracing and the final full parity sign-off remain open.
+
+API tracing verification: the SDK now exposes a lazy bounded request-metadata
+subscription at its actual unary and stream send paths. No callback can block
+requests; slow readers receive an explicit lag count. Client clones share attempt
+IDs, retries get distinct IDs, and cancelling an in-flight send emits a fixed
+cancelled outcome. Response status denotes received headers only. The TUI uses
+the same Output buffer and leaves focus, execution scope and the optional
+timeline unchanged. Handshake traces are subscribed before negotiation and are
+shown on stderr if negotiation fails before terminal startup.
+
+All 16 SDK unit/transport tests and 278 TUI unit tests plus two integration
+helpers passed, as did strict Clippy for both crates. Tests send secret markers
+in authentication, endpoint prefix/query, requests, responses and errors and
+assert none reaches trace formatting or Debug output. Other assertions cover
+retry IDs/statuses, cloned clients, stream setup, cancellation, request timeout,
+no-subscriber behavior, bounded lag and TUI loss reporting. The real managed
+startup workflow passed in 1.98 seconds with traces visible through both entry
+points. Its initial test incorrectly expected authentication on public discovery;
+that assertion was corrected without changing SDK authentication behavior.
+
+The module-design guidance placed tracing in the public SDK transport, rather
+than duplicating HTTP behavior in the TUI. The configuration parity gaps listed
+above now have implementations; the final full command/workflow sign-off remains
+open until the complete regression and requirement audit is recorded.
+
+SDK tracing is committed separately as `e3e89555`. The public Rust SDK integration
+against a real DDB process passed in 0.78 seconds. All 27 non-greeter terminal
+workflows passed on the TUI consumer in 83.72 seconds. Formatting and diff checks
+passed for the changed crates.
+
+The real instrumented greeter auto-attach all-stop workflow also passed on this
+implementation in 36.43 seconds. Both breakpoint stops, all discovered threads
+stopping, canonical server-stop ownership and paused-hit source navigation were
+asserted without changing the shared discovery configuration or test timeouts.
+
+The command-level audit found one interaction still missing: adapter
+`ddbSessionsExplorer.copyDetails` writes the selected session's fields to the
+clipboard. The TUI's explicit file export preserves those details but is not a
+direct clipboard-copy action. Do not mark command parity complete based on export
+alone. Add an explicit user-triggered copy action without emitting clipboard
+escape sequences on selection, hover or ordinary rendering, and retain export
+for terminals where clipboard integration is unavailable.
 
 Entry setup verification: the real settings workflow passed with GDB and LLDB
 in 6.56 seconds. It checks that the breakpoint is temporary and verified
