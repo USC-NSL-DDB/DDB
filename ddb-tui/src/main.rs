@@ -508,6 +508,15 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             app.source_browser
                 .scroll_horizontal(if key.code == KeyCode::Left { -8 } else { 8 });
         }
+        KeyCode::Left | KeyCode::Right | KeyCode::Home
+            if app.focus == Focus::Extensions && key.modifiers.contains(KeyModifiers::SHIFT) =>
+        {
+            app.extension_action_viewport.scroll(match key.code {
+                KeyCode::Left => -8,
+                KeyCode::Right => 8,
+                _ => isize::MIN,
+            });
+        }
         KeyCode::Left | KeyCode::Right if app.focus == Focus::Extensions => {
             app.move_extension_action(if key.code == KeyCode::Left { -1 } else { 1 });
         }
@@ -1262,6 +1271,9 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     Focus::Registers => app.register_viewport.scroll(delta),
                     Focus::Memory => app.memory_viewport.scroll(delta),
                     Focus::Output => app.output.scroll_horizontal(delta),
+                    Focus::Extensions if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                        app.extension_action_viewport.scroll(delta);
+                    }
                     Focus::Extensions => app.move_extension_action(delta.signum()),
                     _ => return,
                 }
@@ -5250,6 +5262,85 @@ mod tests {
         assert_eq!(app.selected_extension_action, 0);
         assert_eq!(app.extension_scroll, position - 3);
         assert!(rx.try_recv().is_err(), "navigation must not invoke actions");
+    }
+
+    #[test]
+    fn extension_action_labels_scroll_without_selecting_or_invoking_another_action() {
+        let mut app = App::new("http://localhost".into());
+        for title in [
+            format!("{}LABEL_END", "界e\u{301} ".repeat(60)),
+            "second".into(),
+        ] {
+            app.extension_actions.push(model::ExtensionActionView {
+                extension_id: "ddb.example".into(),
+                extension_version: "1".into(),
+                extension_title: "Example".into(),
+                action_id: title.clone(),
+                title,
+                description: String::new(),
+                request_schema_uri: "schema://action".into(),
+            });
+        }
+        app.focus = Focus::Extensions;
+        app.expanded_pane = true;
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(45, 14)).unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut reached_end = false;
+        for _ in 0..60 {
+            terminal
+                .draw(|frame| app.areas = ui::draw(frame, &mut app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            reached_end |= (0..14).any(|y| {
+                (0..45)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("LABEL_END")
+            });
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT),
+                &tx,
+            );
+            assert_eq!(
+                app.selected_extension_action, 0,
+                "label scroll must not select another action"
+            );
+        }
+        assert!(reached_end, "full Unicode action label must be reachable");
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert_eq!(app.extension_action_viewport.column(), 0);
+        let panel = app
+            .areas
+            .panels
+            .iter()
+            .find(|panel| panel.focus == Focus::Extensions)
+            .unwrap()
+            .area;
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: panel.x + 1,
+                row: panel.y + 1,
+                modifiers: KeyModifiers::SHIFT,
+            },
+            &tx,
+        );
+        assert!(app.extension_action_viewport.column() > 0);
+        assert_eq!(app.selected_extension_action, 0);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.selected_extension_action, 1);
+        assert_eq!(app.extension_action_viewport.column(), 0);
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

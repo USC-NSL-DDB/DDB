@@ -1434,7 +1434,7 @@ fn draw_extensions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut
     frame.render_widget(paragraph.scroll((vertical_scroll, 0)), inner);
 }
 
-fn draw_extension_actions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+fn draw_extension_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let Some(action) = app.extension_actions.get(app.selected_extension_action) else {
         return;
     };
@@ -1443,19 +1443,28 @@ fn draw_extension_actions(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &
         app.selected_extension_action + 1,
         app.extension_actions.len()
     );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(position, Style::default().fg(YELLOW)),
-            Span::styled(
-                format!(
-                    "{} · {}",
-                    terminal_text(&action.extension_title),
-                    terminal_text(&action.title)
-                ),
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    let line = Line::from(vec![
+        Span::styled(position, Style::default().fg(YELLOW)),
+        Span::styled(
+            format!(
+                "{} · {}",
+                terminal_text(&action.extension_title),
+                terminal_text(&action.title)
             ),
-            Span::styled("  [←/→ select · a/Enter/click]", Style::default().fg(MUTED)),
-        ])),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  [←/→ select · Shift+←/→ scroll · a/Enter/click]",
+            Style::default().fg(MUTED),
+        ),
+    ]);
+    app.extension_action_viewport
+        .fit(line.width(), area.width as usize);
+    frame.render_widget(
+        Paragraph::new(horizontal_line(
+            line,
+            app.extension_action_viewport.column(),
+        )),
         area,
     );
     areas
@@ -1802,6 +1811,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
+        Line::from("extensions: Shift+Left/Right or Shift+horizontal wheel scroll action label; Shift+Home resets"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),
         Line::from(": native debugger command in selected frame   r refresh"),
         Line::from("Tab / Shift+Tab move focus      arrows / wheel navigate"),

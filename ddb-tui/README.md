@@ -172,6 +172,7 @@ keys, empty commands and control characters are rejected.
 | `s` | Send a signal to the selected thread |
 | `a` / `Enter` in Extensions | Invoke an action declared by the active DDB extension |
 | `Left` / `Right` in Extensions | Select an extension action without invoking it |
+| `Shift+Left` / `Shift+Right`, Shift+horizontal wheel in Extensions | Scroll the selected action label; `Shift+Home` resets its horizontal position |
 | `Up` / `Down`, Page Up/Down in Extensions | Scroll extension data, even when actions are available |
 | `:` | Run a native GDB/LLDB command in the selected frame |
 | `r` | Refresh all state |

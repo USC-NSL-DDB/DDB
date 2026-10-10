@@ -194,6 +194,36 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### Extension action label scrolling and distributed recheck
+
+Long extension action labels now have an independent horizontal viewport.
+Shift+Left/Right and Shift+horizontal wheel scroll the label; Shift+Home resets
+it. Ordinary Left/Right still selects actions, and Up/Down still scrolls data.
+Changing the selected action or receiving new capability descriptors resets the
+label position. The shared Unicode-aware clipping code preserves grapheme cells.
+
+The new rendered-input regression failed before the fix because Shift+Right
+selected the next action. It now reaches the end of a long wide/combining-Unicode
+label without changing the selected action or sending backend requests, and
+checks keyboard reset, mouse scrolling, and reset on action selection.
+
+Verification on 2026-10-10: 243 unit tests and two integration helpers passed.
+All 22 non-greeter terminal workflows passed serially in 105.87 seconds, including
+real GDB/LLDB inspection, stepping and register restoration, source ownership,
+managed lifecycle, startup settings, and logpoints. Strict all-target TUI Clippy,
+formatting, and diff whitespace checks passed. No diagnostic probes were added.
+
+At `f67e7298`, the real greeter auto-attach terminal workflow passed in 48.55
+seconds, before the extension-label-only change. It verified both client and
+server breakpoints with all canonical threads stopped at each, then exercised
+paused-hit navigation. The historical failure table at `51f365fa` above is not
+the latest verdict. The test's 15-second individual waits and all-stop assertions
+were unchanged, and the test did not overwrite shared discovery configuration.
+
+The single oversized timeline-event limitation, details/export, watch editing
+and persistence, and full distributed TUI variable-to-memory composition remain
+open. A passing greeter run does not prove every late-event/recovery ordering.
+
 #### Confirmed session termination verification
 
 Topology `K` / `Kill [K]` captures the selected session or a selected thread's

@@ -506,6 +506,7 @@ pub struct App {
     /// Wrapped screen rows above the tail, clamped by the renderer.
     pub timeline_scroll: usize,
     pub extension_scroll: usize,
+    pub extension_action_viewport: crate::display_text::HorizontalViewport,
     pub timeline: VecDeque<String>,
     pub output: crate::output::OutputBuffer,
     pub show_output: bool,
@@ -595,6 +596,7 @@ impl App {
             execution_location: None,
             timeline_scroll: 0,
             extension_scroll: 0,
+            extension_action_viewport: Default::default(),
             timeline: VecDeque::with_capacity(500),
             output: Default::default(),
             show_output: false,
@@ -608,6 +610,7 @@ impl App {
     }
 
     pub fn apply_capabilities(&mut self, capabilities: v2::Capabilities) {
+        self.extension_action_viewport = Default::default();
         self.api_protocol = protocol_label(&capabilities);
         self.extension_actions = extension_action_views(&capabilities.extensions);
         self.selected_extension_action =
@@ -2184,6 +2187,7 @@ impl App {
     }
 
     pub fn move_extension_action(&mut self, delta: isize) {
+        self.extension_action_viewport = Default::default();
         self.selected_extension_action = move_index(
             self.selected_extension_action,
             self.extension_actions.len(),
