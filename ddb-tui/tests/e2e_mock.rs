@@ -1724,8 +1724,8 @@ fn real_debugger_workflow(backend: &str) {
     });
     tui.wait_for_variable_value("Watch: counter", "31337");
     tui.select_visible_variable("Watch: counter");
-    if backend == "lldb" {
-        // Native storage metadata must drive M without a manually entered expression.
+    {
+        // Native storage metadata must drive M on both backends, without a manually entered expression.
         tui.send(b"M");
         tui.wait_for_current_frame(|screen| screen.contains("Raw Memory · 256 B"));
         tui.send(b"z");
@@ -1755,11 +1755,9 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for_current_frame(|frame| !frame.contains("Watch: request"));
     tui.expand_visible_variable("request");
     tui.wait_for("▾ request");
-    if backend == "lldb" {
-        // M leaves a Memory pane visible. Scroll to the first child in the
-        // smaller Variables viewport before exercising its mouse expansion.
-        tui.send(b"\x1b[B");
-    }
+    // M leaves a Memory pane visible. Scroll to the first child in the
+    // smaller Variables viewport before exercising its mouse expansion.
+    tui.send(b"\x1b[B");
     tui.expand_visible_variable("headers");
     tui.wait_for("▾ headers");
     // Variables -> Stack -> Source; subsequent breakpoint commands use the source cursor.

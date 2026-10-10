@@ -847,7 +847,7 @@ impl MockAttachController {
                     vec![("register-values".to_string(), Value::List(values))].into();
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
-            "-var-create" => {
+            "-var-create" | "-ddb-var-create" => {
                 let parts = args.split_whitespace().collect::<Vec<_>>();
                 let marker = parts
                     .iter()
@@ -876,11 +876,13 @@ impl MockAttachController {
                 .into();
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
-            "-var-list-children" => {
+            "-var-list-children" | "-ddb-var-list-children" => {
                 let parts = args.split_whitespace().collect::<Vec<_>>();
                 let object_name = parts
                     .iter()
-                    .find(|part| !part.starts_with('-'))
+                    .position(|part| *part == "--all-values")
+                    .and_then(|index| parts.get(index + 1))
+                    .or_else(|| parts.iter().find(|part| !part.starts_with('-')))
                     .copied()
                     .unwrap_or("ddb_api_variable")
                     .trim_matches('"');

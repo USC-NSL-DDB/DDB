@@ -83,10 +83,11 @@ generic command that can produce a similar backend effect.
    the selected address through its owning distributed frame. Keyboard-level
    tests cover address preservation, owner targeting, watch refresh invalidation,
    and rejection of absent addresses, boundary frames, and running threads.
-   Backend decoders and projections now preserve address metadata, and LLDB's
-   bridge supplies native storage addresses for requested values. GDB metadata
-   remains unimplemented. Do not close this item on LLDB-only coverage; the
-   cross-backend and distributed-owner cases listed below still apply.
+   Backend decoders and projections preserve address metadata, and both native
+   backends now supply storage addresses. Real GDB/LLDB scope tests compare memory
+   reached through these addresses with fixture expressions. The real
+   distributed-caller case and additional unavailable/synthetic-value coverage
+   listed below remain open.
 6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
    adapter plus its VS Code host before declaring inspection parity. Existing
    add/remove, refresh and expansion prove only those narrower capabilities.
@@ -187,6 +188,46 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### GDB native storage-address verification
+
+GDB now uses DDB-native variable-create and child-list wrappers. Standard MI
+performs the requested value operation once. Address enrichment parses only
+bounded native lvalue paths and uses symbol/value APIs for fields, pointers, and
+array elements; it never calls a second general expression evaluator. Function
+calls, assignments, casts, arithmetic, and unsupported synthetic paths receive
+no inferred address. Nonlocal values retain native scope-symbol identity.
+
+Child reads explicitly include both the owning thread and frame. The initial
+real GDB run exposed that GDB rejects `--frame` without `--thread`; the corrected
+command builder has a regression asserting the pair and a nonzero frame level.
+LLDB and the mock backend implement the same internal command names. Existing
+standard MI entry points remain available for stdin clients.
+
+Verification on 2026-10-10:
+
+- Both real GDB/LLDB scope contracts passed with native address/memory comparisons
+  for locals, nonlocals, expanded fields, and evaluated watches.
+- Real TUI workflows passed for GDB in 26.67 seconds and LLDB in 21.23 seconds.
+  Both use `M` on a watch and verify the complete native-endian `31337_u64` value.
+  The mock terminal workflow passed in 4.91 seconds.
+- Four GDB resolver tests and 13 LLDB bridge tests passed. GDB tests assert that
+  unsupported expressions trigger no native value lookup, a function-call watch
+  invokes standard variable creation only once, and no-values child requests do
+  not query storage paths.
+- 336 backend tests passed serially with one intentional ignored test. One
+  earlier parallel run failed the telemetry test
+  `operation_logs_exclude_error_and_debugger_payload_text` because its captured
+  log lacked `op_safe_reference`. It passed in isolation and serially. This is
+  retained as an unresolved parallel-test failure, not reported as a clean
+  parallel backend gate.
+- 230 TUI unit tests and two integration helpers passed, as did strict backend
+  binary Clippy, strict TUI all-target Clippy, formatting of touched Rust files,
+  and diff whitespace checks.
+
+Real distributed-caller memory navigation and the broader adapter-parity audit
+remain open. These checks do not prove storage support for every language-level
+expression or synthetic pretty-printer value.
+
 #### LLDB native storage-address verification
 
 The LLDB bridge now emits storage addresses for requested native values, and the
@@ -222,8 +263,8 @@ caller memory navigation, and the remaining parity requirements are still open.
 #### Native value-address implementation boundary after `983dac85`
 
 At `983dac85`, the frontend action was implemented but native address support was
-not. The following trace records the implementation boundary; LLDB metadata and
-backend propagation have since been implemented, while GDB remains outstanding:
+not. The following trace records the implementation boundary; native metadata and
+backend propagation have since been implemented for both debuggers:
 
 - `application/debugger_reads.rs` drops address metadata at all three decode
   boundaries: stack/scope rows, created variable objects, and expanded children.

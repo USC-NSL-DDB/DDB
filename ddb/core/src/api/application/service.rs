@@ -1187,7 +1187,7 @@ impl DdbApplicationService {
                 frame.global_thread_id, frame.level, object.name
             ),
             None => format!(
-                "-var-create --thread {} --frame {} {} * {expression}",
+                "-ddb-var-create --thread {} --frame {} {} * {expression}",
                 frame.global_thread_id, frame.level, object.name
             ),
         };
@@ -1344,7 +1344,13 @@ impl DdbApplicationService {
                     "variable child identity no longer addresses the collection",
                 )
             })?;
-            let command = variable_children_command(&object_name, *index, high);
+            let command = variable_children_command(
+                &object_name,
+                *index,
+                high,
+                frame.global_thread_id,
+                frame.level,
+            );
             let outcome = scope
                 .wait(self.command_port.execute(&command, target.clone()))
                 .await?
@@ -1397,7 +1403,8 @@ impl DdbApplicationService {
                     "variable page range no longer addresses the collection",
                 )
             })?;
-        let command = variable_children_command(&object_name, low, high);
+        let command =
+            variable_children_command(&object_name, low, high, frame.global_thread_id, frame.level);
         let outcome = scope
             .wait(self.command_port.execute(&command, target))
             .await?
@@ -2571,10 +2578,12 @@ fn validate_variable_object_name(name: &str) -> Result<(), ApplicationError> {
     Ok(())
 }
 
-fn variable_children_command(name: &str, from: u32, to: u32) -> String {
+fn variable_children_command(name: &str, from: u32, to: u32, thread: u64, frame: u32) -> String {
     let name = serde_json::to_string(name)
         .expect("serializing a validated variable-object name cannot fail");
-    format!("-var-list-children --all-values {name} {from} {to}")
+    format!(
+        "-ddb-var-list-children --thread {thread} --frame {frame} --all-values {name} {from} {to}"
+    )
 }
 
 fn register_unavailable(value: &str) -> bool {
@@ -2700,6 +2709,14 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn variable_child_query_carries_the_owning_thread_and_frame() {
+        assert_eq!(
+            variable_children_command("object.1", 2, 4, 42, 3),
+            "-ddb-var-list-children --thread 42 --frame 3 --all-values \"object.1\" 2 4"
+        );
+    }
 
     #[derive(Default)]
     struct RecordingCommandPort {

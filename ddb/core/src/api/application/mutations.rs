@@ -248,7 +248,7 @@ impl DdbApplicationService {
         };
         let command = match object.as_ref() {
             Some(object) => format!(
-                "-var-create{frame_option} {} * {}",
+                "-ddb-var-create{frame_option} {} * {}",
                 object.name,
                 quote(&request.expression)
             ),

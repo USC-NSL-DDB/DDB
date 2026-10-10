@@ -663,9 +663,11 @@ class Bridge(object):
             # LLDB SBValue uses installed formatters by default.
             "-enable-pretty-printing": lambda arguments: ("done", None),
             "-var-create": self._var_create,
+            "-ddb-var-create": self._var_create,
             "-ddb-list-scope-variables": self._list_scope_variables,
             "-ddb-scope-var-create": self._scope_var_create,
             "-var-list-children": self._var_list_children,
+            "-ddb-var-list-children": self._var_list_children,
             "-var-delete": self._var_delete,
             "-var-assign": self._var_assign,
             "-data-evaluate-expression": self._evaluate_expression,
@@ -1333,6 +1335,7 @@ class Bridge(object):
         }
 
     def _var_list_children(self, arguments):
+        _, arguments = self._frame_and_arguments(arguments)
         include_values = "--no-values" not in arguments
         positional = [
             argument

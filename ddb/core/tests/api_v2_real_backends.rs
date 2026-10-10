@@ -1557,9 +1557,7 @@ fn assert_variable_scope_contract(backend: &str) {
             .collect::<Vec<_>>();
         assert_eq!(selected.len(), 1, "{backend}: {variables:?}");
         assert_eq!(selected[0]["value"], expected_value);
-        if backend == "lldb" {
-            assert_native_storage_address(&ddb, &target, selected[0], expected_name);
-        }
+        assert_native_storage_address(&ddb, &target, selected[0], expected_name);
         assert!(!variables
             .iter()
             .any(|v| v["name"] == "local_static" || v["name"] == "nested_static"));
@@ -1580,15 +1578,8 @@ fn assert_variable_scope_contract(backend: &str) {
         names.sort_unstable();
         assert_eq!(names, ["argument", "local", "local_static", "nested", "nested_static", "shadowed"],
             "{backend} must retain block statics, exclude globals and expired blocks, and not duplicate variables: {variables:?}");
-        if backend == "lldb" {
-            for value in variables["variables"].as_array().unwrap() {
-                assert_native_storage_address(
-                    &ddb,
-                    &target,
-                    value,
-                    value["name"].as_str().unwrap(),
-                );
-            }
+        for value in variables["variables"].as_array().unwrap() {
+            assert_native_storage_address(&ddb, &target, value, value["name"].as_str().unwrap());
         }
     }
     for (index, object_name, expected, replacement) in [
@@ -1653,9 +1644,7 @@ fn assert_variable_scope_contract(backend: &str) {
             .find(|v| v["name"] == "first")
             .expect("struct field must be expandable");
         assert_eq!(member["value"], expected);
-        if backend == "lldb" {
-            assert_native_storage_address(&ddb, &target, member, &format!("{object_name}.first"));
-        }
+        assert_native_storage_address(&ddb, &target, member, &format!("{object_name}.first"));
         let assigned = completed_control(
             &ddb,
             "SetVariable",
@@ -1678,14 +1667,12 @@ fn assert_variable_scope_contract(backend: &str) {
             }),
         );
         assert_eq!(evaluated["result"]["evaluation"]["value"], replacement);
-        if backend == "lldb" {
-            assert_native_storage_address(
-                &ddb,
-                &target,
-                &evaluated["result"]["evaluation"],
-                &format!("{object_name}.first"),
-            );
-        }
+        assert_native_storage_address(
+            &ddb,
+            &target,
+            &evaluated["result"]["evaluation"],
+            &format!("{object_name}.first"),
+        );
         if index == 2 {
             let shadowed = all.iter().find(|v| v["name"] == "shadowed").unwrap();
             assert_eq!(shadowed["value"], "41", "must not resolve the local shadow");

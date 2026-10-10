@@ -247,9 +247,10 @@ scroll long register values horizontally; `z` expands the register pane alone.
 `M` in Variables reads 256 bytes at the selected variable or watch's API-provided
 address, using the owning distributed frame. Values without an address report
 that limitation; the TUI does not interpret their display text as an address.
-LLDB supplies native storage addresses for addressable values. GDB address
-metadata is still pending; use `m` to enter an address for those values. Register-only,
-unavailable, and other values without native storage can have no address.
+GDB and LLDB supply native storage addresses for addressable values. GDB resolves
+only native symbol/field/pointer/array paths and does not re-evaluate a watch to
+find its address. Register-only, unavailable, synthetic, and unsupported expression
+values can have no address; use `m` when you want to enter an address explicitly.
 
 `m` reads memory and focuses its pane. Memory has independent row selection;
 Up/Down, Page Up/Down, and the mouse wheel reach every returned row. Left/Right
