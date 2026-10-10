@@ -520,6 +520,9 @@ pub struct App {
     pub output: crate::output::OutputBuffer,
     pub show_output: bool,
     pub status: String,
+    /// Preserve a still-displayed error against routine snapshot summaries.
+    /// Explicit action/result status changes supersede it without resurrecting it.
+    status_error: Option<String>,
     pub pending_commands: usize,
     pub control_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub peer_pauses: std::collections::BTreeSet<String>,
@@ -614,6 +617,7 @@ impl App {
             output: Default::default(),
             show_output: false,
             status: "connecting to DDB…".to_string(),
+            status_error: None,
             pending_commands: 0,
             control_epoch: std::sync::Arc::default(),
             peer_pauses: Default::default(),
@@ -806,12 +810,15 @@ impl App {
             self.focus = Focus::Timeline;
         }
         self.api_connected = true;
-        self.status = format!(
-            "{} sessions · {} groups · {} breakpoints",
-            self.sessions.len(),
-            self.groups.len(),
-            self.breakpoints.len()
-        );
+        if self.status_error.as_deref() != Some(self.status.as_str()) {
+            self.status_error = None;
+            self.status = format!(
+                "{} sessions · {} groups · {} breakpoints",
+                self.sessions.len(),
+                self.groups.len(),
+                self.breakpoints.len()
+            );
+        }
         self.selected_breakpoint = bounded(self.selected_breakpoint, self.breakpoints.len());
         self.selected_breakpoint_site = None;
         if let Some((id, site)) = selected_breakpoint {
@@ -2283,6 +2290,7 @@ impl App {
 
     pub fn error(&mut self, error: impl ToString) {
         self.status = error.to_string();
+        self.status_error = Some(self.status.clone());
         self.push_timeline(format!("✗ {}", self.status));
     }
 
@@ -2297,6 +2305,9 @@ impl App {
         self.supersede_automatic_control();
         self.api_connected = false;
         self.error(error);
+        // A successfully received snapshot is evidence this connection error
+        // has recovered; unlike an action error, its summary may replace it.
+        self.status_error = None;
     }
 
     pub fn logpoint_instance(&self) -> Option<String> {
@@ -2946,6 +2957,27 @@ pub enum EventStreamStatus {
 
 #[cfg(test)]
 mod v2_tests {
+    #[test]
+    fn routine_snapshots_preserve_active_errors_but_reconnect_clears_connection_errors() {
+        let mut app = super::App::new("http://localhost".into());
+        app.apply_snapshot(Default::default());
+        app.error("Selected value has no memory address");
+        for _ in 0..3 {
+            app.apply_snapshot(Default::default());
+            assert_eq!(app.status, "Selected value has no memory address");
+        }
+        // Another action/result can replace the error. A later snapshot must
+        // not resurrect the previous message or freeze the old summary.
+        app.status = "new action completed".into();
+        app.apply_snapshot(Default::default());
+        assert_eq!(app.status, "0 sessions · 0 groups · 0 breakpoints");
+        app.backend_unavailable("connection lost");
+        assert_eq!(app.status, "connection lost");
+        app.apply_snapshot(Default::default());
+        assert!(app.api_connected);
+        assert_eq!(app.status, "0 sessions · 0 groups · 0 breakpoints");
+    }
+
     use ddb_api_client::v2::{self, operation_result};
     use ratatui::layout::Rect;
 
