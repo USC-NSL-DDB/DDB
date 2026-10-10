@@ -1031,6 +1031,54 @@ fn managed_mock_one_command_workflow() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+#[ignore = "requires sibling DDB binary and a PTY"]
+fn managed_backend_arguments_reach_ddb_without_changing_transport() {
+    for dispatcher in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let config = managed_mock_config(directory.path());
+        let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
+        let ddb_binary = ddb_e2e_binary();
+        let prefix = if dispatcher {
+            format!(
+                "env DDB_TUI_PATH={} {} tui",
+                shell_quote(&tui_binary),
+                shell_quote(&ddb_binary)
+            )
+        } else {
+            format!(
+                "{} --ddb-path {}",
+                shell_quote(&tui_binary),
+                shell_quote(&ddb_binary)
+            )
+        };
+        let mut tui = Tui::spawn_shell(&format!("stty rows 40 cols 140; exec {prefix} --ddb-arg=--command-workers=4 --ddb-arg=--file-level=warn '--ddb-arg=--session-id=argument with spaces' {}", shell_quote(&config)));
+        tui.wait_for("managed_mock_session");
+        tui.wait_for_source_marker('▶', 9);
+        let pid = wait_for_managed_ddb_descendant(tui.child.id());
+        let arguments = process_cmdline(pid);
+        for expected in [
+            "--command-workers=4",
+            "--file-level=warn",
+            "--session-id=argument with spaces",
+            "--managed",
+            "--api-auth-token-file",
+            "--startup-report",
+        ] {
+            assert!(
+                arguments.iter().any(|arg| arg == expected.as_bytes()),
+                "missing {expected}"
+            );
+        }
+        assert!(!arguments
+            .iter()
+            .any(|arg| arg.starts_with(b"--api-port") || arg.starts_with(b"--api-bind")));
+        assert!(tui.quit().contains("\u{1b}[?1049l"));
+        wait_for_process_exit(pid);
+    }
+}
+
+#[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn ddb_tui_dispatcher_runs_the_managed_frontend() {
     let directory = tempfile::tempdir().expect("dispatcher test directory should exist");

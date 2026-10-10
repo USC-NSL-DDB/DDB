@@ -40,7 +40,7 @@ the canonical adapter and are not a reason to add a legacy transport to the TUI.
 | showDevDebugOutput | `--backend-log` captures managed backend stdout/stderr explicitly; inferior/debugger output remains in the Output pane. |
 | distributedStack=false | `--stack-mode local` explicitly uses paginated ListFrames. The default remains distributed; pane labeling and refresh follow the selected mode, with no error-driven fallback. |
 | printCalls | **Open:** there is no equivalent opt-in sanitized client request trace. The optional timeline is execution telemetry, not HTTP method/path/status diagnostics. |
-| debugger_args | **Open:** the managed TUI does not forward additional backend arguments. Any implementation must reject managed endpoint/authentication/report overrides rather than weakening ownership guarantees. |
+| debugger_args | Repeatable `--ddb-arg=--name=value` in managed config/launch/attach modes forwards the current backend logging, telemetry and worker options. Transport/authentication/report controls remain reserved; unknown flags and positional/subcommand injection are rejected. |
 | pairedBreakpointRequests | Adapter/extension coordination detail; TUI directly creates typed logical breakpoints with explicit group/session/multiple targets, so no paired DAP request protocol is needed. |
 
 These concrete gaps replace the vague remaining configuration sign-off. The
@@ -68,7 +68,33 @@ The final local-stack gate passed 276 unit tests, two integration helpers, stric
 Clippy, formatting and diff checks. All 26 non-greeter terminal workflows passed
 in 81.67 seconds, including both default-distributed and explicit-local native
 debugger assertions. Greeter was not rerun for this stack-read option. Sanitized
-API tracing and managed backend argument forwarding remain open parity work.
+API tracing remains open parity work; managed backend forwarding is verified below.
+
+Managed-argument verification: the new terminal workflow passed through both
+the standalone TUI and `ddb tui` dispatcher in 1.61 seconds. It launches a real
+DDB with a mock debuggee, inspects the actual child argument vector for worker
+count, logging level, a value containing spaces, and all managed ownership flags,
+then checks source rendering, terminal restoration and owned backend exit.
+Unit tests reject transport overrides, new subcommands, positional arguments,
+unknown/duplicate options, empty values, nonpositive worker counts, oversized
+values and controls. Connect mode rejects forwarding. Native-launch command
+construction retains both backend values and debuggee arguments as separate
+arguments, puts backend options before the debuggee `--`, and emits console
+logging once. Nothing executes an argument through a shell.
+
+Validation lives at the CLI and command construction remains in the existing
+supervisor, following the module-design guidance without creating a second
+launcher. The allowlist covers the current logging, telemetry and worker options in
+`ddb/core/src/arg.rs`; adding a future backend flag requires an explicit review.
+Unlike the prototype's general pass-through, unknown flags cannot change managed
+transport or process selection by introducing a new backend option later.
+
+The forwarding gate passed 277 unit tests, two integration helpers and strict
+all-target Clippy. All 27 non-greeter PTY workflows passed in 82.09 seconds,
+including credential isolation, crash/signal/terminal-loss cleanup, native
+launch/attach, and the new argument test. Formatting and diff checks passed.
+The earlier greeter all-stop evidence remains unchanged; it was not rerun for
+argument forwarding. API tracing and the final full parity sign-off remain open.
 
 Entry setup verification: the real settings workflow passed with GDB and LLDB
 in 6.56 seconds. It checks that the breakpoint is temporary and verified

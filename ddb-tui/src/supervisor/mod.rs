@@ -73,7 +73,7 @@ impl ManagedBackend {
         let executable = resolve::resolve(args.ddb_path.as_deref())?;
         let mut files = RuntimeFiles::new(args.backend_log.as_deref())?;
         let (stdout, stderr) = files.child_stdio()?;
-        let mut command = build_command(&executable, &files, &session);
+        let mut command = build_command(&executable, &files, &session, &args.ddb_args);
         command
             .stdin(Stdio::null())
             .stdout(stdout)
@@ -248,7 +248,12 @@ impl Drop for ManagedBackend {
     }
 }
 
-fn build_command(executable: &Path, files: &RuntimeFiles, session: &SessionSpec) -> Command {
+fn build_command(
+    executable: &Path,
+    files: &RuntimeFiles,
+    session: &SessionSpec,
+    extra: &[String],
+) -> Command {
     let mut command = Command::new(executable);
     command
         .arg("serve")
@@ -256,8 +261,11 @@ fn build_command(executable: &Path, files: &RuntimeFiles, session: &SessionSpec)
         .arg("--api-auth-token-file")
         .arg(files.token_path())
         .arg("--startup-report")
-        .arg(files.report_path())
-        .arg("--console-log");
+        .arg(files.report_path());
+    if !extra.iter().any(|argument| argument == "--console-log") {
+        command.arg("--console-log");
+    }
+    command.args(extra);
 
     match session {
         SessionSpec::Config(path) => {
@@ -367,7 +375,12 @@ mod tests {
         let config = dir.path().join("ddb.yaml");
         fs::write(&config, "Framework: unspecified\n").unwrap();
         let files = RuntimeFiles::new(None).unwrap();
-        let command = build_command(Path::new("/tmp/ddb"), &files, &SessionSpec::Config(config));
+        let command = build_command(
+            Path::new("/tmp/ddb"),
+            &files,
+            &SessionSpec::Config(config),
+            &[],
+        );
         let rendered = format!("{command:?}");
         assert!(!rendered.contains(files.control_token()));
         assert!(!rendered.contains(files.admin_token()));
@@ -387,6 +400,11 @@ mod tests {
                     .map(OsString::from)
                     .to_vec(),
             },
+            &[
+                "--command-workers=4".into(),
+                "--session-id=value with spaces".into(),
+                "--console-log".into(),
+            ],
         );
         let arguments = command
             .as_std()
@@ -396,6 +414,16 @@ mod tests {
         assert!(arguments
             .windows(3)
             .any(|window| window == ["./app", "--flag", "value with spaces"].map(OsString::from)));
+        let separator = arguments.iter().position(|arg| arg == "--").unwrap();
+        assert!(arguments[..separator].contains(&OsString::from("--session-id=value with spaces")));
+        assert!(arguments[..separator].contains(&OsString::from("--command-workers=4")));
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|arg| *arg == "--console-log")
+                .count(),
+            1
+        );
     }
 
     #[cfg(unix)]

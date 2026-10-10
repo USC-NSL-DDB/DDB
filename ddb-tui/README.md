@@ -53,11 +53,34 @@ Useful managed options are:
 
 ```text
 --ddb-path PATH          choose the backend executable explicitly
+--ddb-arg=ARG            repeat a supported backend option in managed mode
 --startup-timeout SECS   bound startup and readiness waiting (default: 20)
 --backend-log PATH       retain backend stdout/stderr at a new private path
 --config PATH            explicit alternative to the positional config
 --values-formatting MODE pretty-printers (default), raw, or disabled
 ```
+
+For example, adjust command workers and backend logging without changing the
+private managed transport:
+
+```bash
+ddb tui --ddb-arg=--command-workers=4 --ddb-arg=--file-level=debug ./debug.yaml
+```
+
+Use one `--ddb-arg` per option, with values attached as `--name=value`. Accepted
+backend options are `--command-workers`, `--console-level`, `--file-level`,
+`--otel-endpoint`, `--otel-level`, `--user-id`, `--session-id`, and the valueless
+flags `--console-log` and `--enable-otel`. Telemetry remains disabled unless
+explicitly enabled. Quoted values containing spaces remain a single argument;
+no shell evaluates them. Do not put credentials in these arguments.
+
+The TUI rejects duplicate options, unknown options, positional arguments,
+subcommands, and overrides of its managed transport, authentication or readiness
+report. Worker counts must be positive. Individual arguments are limited to
+4,096 bytes and cannot contain control characters. Backend-specific values such
+as logging filters are validated by DDB. These options apply to managed config,
+launch and attach modes, and are rejected in connect mode. Debuggee arguments
+after the launch `--` remain untouched.
 
 Value presentation applies to locals and watches. `pretty-printers` enables
 installed GDB visualizers through DDB's typed `ConfigureDebugger` API when a

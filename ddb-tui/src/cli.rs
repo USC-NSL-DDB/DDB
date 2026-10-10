@@ -35,6 +35,11 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub ddb_path: Option<PathBuf>,
 
+    /// Additional managed-backend option, e.g. --ddb-arg=--command-workers=4.
+    /// Only logging, telemetry and worker options are accepted; never transport.
+    #[arg(long = "ddb-arg", global = true, require_equals = true, value_parser = parse_ddb_argument)]
+    pub ddb_args: Vec<String>,
+
     /// Explicit local source roots and debugger-path mappings (YAML).
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub source_workspace: Option<PathBuf>,
@@ -174,6 +179,22 @@ impl Args {
             anyhow::bail!("the positional config and --config cannot be used together");
         }
         let config = self.config.clone().or_else(|| self.config_flag.clone());
+        if !self.ddb_args.is_empty() {
+            if matches!(&self.command, Some(Command::Connect { .. }))
+                || (self.command.is_none() && config.is_none())
+            {
+                anyhow::bail!("--ddb-arg requires a managed config, launch or attach mode");
+            }
+            anyhow::ensure!(
+                self.ddb_args.len() <= 32,
+                "at most 32 backend arguments are allowed"
+            );
+            let mut names = std::collections::HashSet::new();
+            for argument in &self.ddb_args {
+                let name = argument.split('=').next().unwrap();
+                anyhow::ensure!(names.insert(name), "duplicate backend option: {name}");
+            }
+        }
         if config.is_some() && self.api.is_some() && self.command.is_none() {
             anyhow::bail!("configuration and --api select conflicting ownership modes");
         }
@@ -233,8 +254,116 @@ fn parse_existing_path(path: &str) -> Result<PathBuf, io::Error> {
     PathBuf::from(path).canonicalize()
 }
 
+fn parse_ddb_argument(argument: &str) -> Result<String, String> {
+    if argument.len() > 4096 || argument.chars().any(char::is_control) {
+        return Err("backend arguments must contain no controls and be at most 4096 bytes".into());
+    }
+    let (name, value) = argument
+        .split_once('=')
+        .map_or((argument, None), |(name, value)| (name, Some(value)));
+    match name {
+        "--console-log" | "--enable-otel" if value.is_none() => {},
+        "--console-level" | "--file-level" | "--otel-endpoint" | "--otel-level" | "--user-id" | "--session-id"
+            if value.is_some_and(|value| !value.trim().is_empty()) => {},
+        "--command-workers" if value.and_then(|value| value.parse::<usize>().ok()).is_some_and(|count| count > 0) => {},
+        _ => return Err("unsupported backend argument: use a documented logging/telemetry option or --command-workers=N; values require --name=value, and transport/session launch options are managed by ddb-tui".into()),
+    }
+    Ok(argument.into())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn backend_arguments_require_managed_mode_and_reject_overrides() {
+        for argument in [
+            "--api-bind=0.0.0.0",
+            "--api-port=5000",
+            "--api-auth-token-file=/tmp/token",
+            "--startup-report=/tmp/report",
+            "--managed",
+            "--",
+            "launch",
+            "config.yaml",
+            "--backend=lldb",
+            "--help",
+            "--unknown=x",
+            "--command-workers=0",
+            "--command-workers=-1",
+            "--console-level",
+            "--console-level=",
+            "--console-log=true",
+            "--session-id=a\nb",
+        ] {
+            assert!(parse_ddb_argument(argument).is_err(), "{argument:?}");
+        }
+        assert!(parse_ddb_argument(&format!("--session-id={}", "x".repeat(4096))).is_err());
+        for arguments in [
+            vec!["ddb-tui", "--ddb-arg=--command-workers=4"],
+            vec![
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://localhost",
+                "--ddb-arg=--file-level=debug",
+            ],
+            vec![
+                "ddb-tui",
+                "--api",
+                "http://localhost",
+                "--ddb-arg=--file-level=debug",
+            ],
+            vec![
+                "ddb-tui",
+                "--ddb-arg=--command-workers=4",
+                "--ddb-arg=--command-workers=8",
+                "launch",
+                "--",
+                "app",
+            ],
+        ] {
+            assert!(Args::try_parse_from(arguments)
+                .unwrap()
+                .parse_mode()
+                .is_err());
+        }
+        let args = Args::try_parse_from([
+            "ddb-tui",
+            "--ddb-arg=--command-workers=4",
+            "--ddb-arg=--session-id=value with spaces",
+            "launch",
+            "--",
+            "app",
+            "--ddb-arg=debuggee-only",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.ddb_args,
+            ["--command-workers=4", "--session-id=value with spaces"]
+        );
+        let Mode::ManagedLaunch { command, .. } = args.parse_mode().unwrap() else {
+            panic!("expected managed launch")
+        };
+        assert_eq!(
+            command,
+            [
+                OsString::from("app"),
+                OsString::from("--ddb-arg=debuggee-only")
+            ]
+        );
+        for argument in [
+            "--console-log",
+            "--enable-otel",
+            "--console-level=debug",
+            "--file-level=warn",
+            "--otel-level=info",
+            "--otel-endpoint=http://localhost:4317",
+            "--user-id=user",
+            "--session-id=session",
+            "--command-workers=4",
+        ] {
+            assert_eq!(parse_ddb_argument(argument).unwrap(), argument);
+        }
+    }
     #[test]
     fn stack_mode_is_explicit_global_and_distributed_by_default() {
         assert_eq!(
