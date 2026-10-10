@@ -63,10 +63,11 @@ generic command that can produce a similar backend effect.
    worker contract tests cover ownership and stale replies. Mouse movement alone
    never evaluates code. See the verification section below for real workflows.
 2. **Alternative grouping views.** `DDBViewProvider.ts` registers session grouping
-   toggling and breakpoint file grouping/flat reset. The TUI currently always
-   builds grouped topology and logical/member breakpoint rows. Add view toggles
-   that preserve opaque selection identities, execution scope, and mouse mapping.
-   Test switching views while sessions and breakpoint members change.
+   toggling and breakpoint file grouping/flat reset. The TUI now offers grouped
+   and flat topology through `v` and a clickable header button. It preserves
+   opaque session/thread selection and execution scope across switches and
+   discovery updates. Breakpoint file grouping/flat reset remains unimplemented;
+   its selection and mouse mapping must also survive membership changes.
 3. **Details and copying.** The adapter exposes group details plus session fields
    and a copy-details command. The TUI needs an accessible, scrollable details view
    and an explicit copy/export interaction for the available canonical fields.
@@ -190,6 +191,29 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Topology grouping verification
+
+The topology pane defaults to grouped sessions. Its `Flat [v]` / `Group [v]`
+header control and focused-pane `v` key switch presentation without backend
+requests. Flat sessions sort by display name with opaque session ID as a tie
+breaker, and include ungrouped sessions and unresolved group memberships.
+Session/thread selections remain attached to their IDs. When flattening a
+selected group, its first visible member becomes highlighted while the execution
+target remains the group. The status message explicitly reports unchanged scope.
+
+Verification on 2026-10-10:
+
+- 237 unit tests and two integration helpers passed. Coverage includes duplicate
+  names, discovery replacement, group-target preservation, rendered mouse
+  hitboxes, flat thread-row mapping, and selected thread/frame preservation.
+- The mock full terminal workflow passed in 5.20 seconds. It clicks the rendered
+  header, checks the stopped source marker, restores grouping with the keyboard,
+  and continues the existing breakpoint, source, and inspection workflow.
+- Strict all-target TUI Clippy, formatting, and diff whitespace checks passed.
+
+This change does not close breakpoint grouping or the full adapter-parity goal.
+Real greeter/GDB/LLDB workflows were not rerun for this presentation-only change.
 
 #### Explicit expression inspector verification
 

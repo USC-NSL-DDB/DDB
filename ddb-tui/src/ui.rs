@@ -115,7 +115,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         .split(columns[2])
     };
 
-    draw_threads(frame, app, left[0]);
+    draw_threads(frame, app, left[0], &mut areas);
     draw_breakpoints(frame, app, left[1], &mut areas);
     draw_source(frame, app, center[0], &mut areas);
     draw_stack(frame, app, center[1]);
@@ -398,7 +398,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
         app.focus
     };
     match focus {
-        Focus::Threads => draw_threads(frame, app, area),
+        Focus::Threads => draw_threads(frame, app, area, areas),
         Focus::Breakpoints => draw_breakpoints(frame, app, area, areas),
         Focus::Source => draw_source(frame, app, area, areas),
         Focus::Stack => draw_stack(frame, app, area),
@@ -464,7 +464,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
     }
 }
 
-fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let rows = app.topology_rows();
     let selected = app.selected_topology_row();
     let lines = rows
@@ -519,6 +519,19 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         selected,
         app.focus == Focus::Threads,
     );
+    if area.width >= 26 && area.height > 0 {
+        let control = Rect::new(area.right() - 12, area.y, 11, 1);
+        frame.render_widget(
+            Paragraph::new(if app.topology_grouped {
+                " Flat [v] "
+            } else {
+                " Group [v] "
+            })
+            .style(Style::default().fg(ACCENT)),
+            control,
+        );
+        areas.topology_grouping = Some(control);
+    }
 }
 
 fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
@@ -1699,6 +1712,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("source: f follow execution   Alt+Left/Right navigation history"),
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
         Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
+        Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
         Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
         Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
         Line::from("prompt: arrows edit/history, Home/End, paste supported"),

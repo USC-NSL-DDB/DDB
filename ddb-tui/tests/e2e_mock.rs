@@ -645,6 +645,32 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for("counter");
     tui.wait_for_source_marker('▶', 9);
 
+    // Switch presentation with the rendered header control, then restore it
+    // with the keyboard. Neither operation should move the stopped frame.
+    tui.wait_for_current_frame(|screen| screen.contains("Flat [v]"));
+    let (column, row) = tui
+        .frames
+        .lock()
+        .unwrap()
+        .back()
+        .unwrap()
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("Flat [v]")
+                .map(|byte| (line[..byte].chars().count() + 1, row + 1))
+        })
+        .unwrap();
+    tui.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Group [v]") && screen.contains("mock_session")
+    });
+    tui.wait_for_source_marker('▶', 9);
+    tui.send(b"v");
+    tui.wait_for_current_frame(|screen| screen.contains("Flat [v]"));
+    // Threads -> Breakpoints -> Source.
+    tui.send(b"\t\t");
+
     // Use rendered button coordinates, including Unicode border cell widths,
     // to exercise the same mouse path as a user clicking the source pane.
     for (label, expanded) in [("[Expand]", true), ("[Restore]", false)] {

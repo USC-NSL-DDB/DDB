@@ -95,6 +95,7 @@ pub struct UiAreas {
     pub source_explorer_controls: Vec<(crate::source_explorer::Control, Rect)>,
     pub source_explorer_open: Option<Rect>,
     pub source_inspect: Option<Rect>,
+    pub topology_grouping: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -475,6 +476,7 @@ pub struct App {
     pub selected_thread: usize,
     pub selected_frame: usize,
     selected_topology: Option<TopologyRowKind>,
+    pub topology_grouped: bool,
     pub selected_variable: usize,
     pub selected_breakpoint: usize,
     pub selected_breakpoint_site: Option<usize>,
@@ -561,6 +563,7 @@ impl App {
             breakpoints: Vec::new(),
             selected_thread: 0,
             selected_topology: None,
+            topology_grouped: true,
             selected_frame: 0,
             selected_variable: 0,
             selected_breakpoint: 0,
@@ -1244,6 +1247,19 @@ impl App {
     }
 
     pub fn topology_rows(&self) -> Vec<TopologyRow> {
+        if !self.topology_grouped {
+            let mut sessions = self.sessions.iter().collect::<Vec<_>>();
+            sessions.sort_by(|left, right| {
+                left.display_name
+                    .cmp(&right.display_name)
+                    .then_with(|| left.session_id.cmp(&right.session_id))
+            });
+            let mut rows = Vec::new();
+            for session in sessions {
+                self.append_session_topology(&mut rows, session, 0);
+            }
+            return rows;
+        }
         let mut groups = self.groups.iter().collect::<Vec<_>>();
         groups.sort_by(|left, right| {
             left.display_name
@@ -1320,6 +1336,37 @@ impl App {
             }
         }
         rows
+    }
+
+    pub fn toggle_topology_grouping(&mut self) {
+        self.topology_grouped = !self.topology_grouped;
+        if !self.topology_grouped {
+            if let Some(TopologyRowKind::Group(group_id)) = self.selected_topology.clone() {
+                self.selected_topology = self.topology_rows().into_iter().find_map(|row| {
+                    let TopologyRowKind::Session(id) = &row.kind else {
+                        return None;
+                    };
+                    self.sessions
+                        .iter()
+                        .any(|session| {
+                            session.session_id == *id
+                                && session.group_id.as_deref().unwrap_or("") == group_id
+                        })
+                        .then_some(row.kind)
+                });
+            }
+        }
+        self.reconcile_topology_selection();
+        self.topology_viewport = Default::default();
+        self.status = format!(
+            "Topology: {} · execution scope unchanged ({})",
+            if self.topology_grouped {
+                "grouped"
+            } else {
+                "flat"
+            },
+            self.execution_scope_label()
+        );
     }
 
     fn append_session_topology(
@@ -3221,6 +3268,76 @@ mod v2_tests {
             .unwrap()
             .contains("0 distributed frames · truncated: max_frames limit reached"));
     }
+    #[test]
+    fn flat_topology_preserves_identity_scope_and_discovery_updates() {
+        let mut app = App::new("http://localhost".into());
+        let group = v2::Group {
+            group_id: "group/one".into(),
+            ..Default::default()
+        };
+        let session = |id: &str, group_id: Option<&str>| v2::Session {
+            session_id: id.into(),
+            display_name: "same name".into(),
+            group_id: group_id.map(str::to_string),
+            ..Default::default()
+        };
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            groups: vec![group.clone()],
+            sessions: vec![
+                session("session/b", Some("group/one")),
+                session("session/a", None),
+            ],
+            ..Default::default()
+        });
+        let index = app
+            .topology_rows()
+            .iter()
+            .position(|row| row.kind == TopologyRowKind::Session("session/b".into()))
+            .unwrap();
+        app.select_topology_row(index);
+        let target = app.execution_target();
+        app.toggle_topology_grouping();
+        assert_eq!(app.execution_target(), target);
+        let rows = app.topology_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, TopologyRowKind::Session("session/a".into()));
+        assert!(rows.iter().all(|row| row.depth == 0));
+        assert_eq!(
+            rows[app.selected_topology_row()].kind,
+            TopologyRowKind::Session("session/b".into())
+        );
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            groups: vec![group],
+            sessions: vec![
+                session("session/new", Some("group/unresolved")),
+                session("session/b", Some("group/one")),
+            ],
+            ..Default::default()
+        });
+        assert!(!app.topology_grouped);
+        assert_eq!(
+            app.topology_rows()[app.selected_topology_row()].kind,
+            TopologyRowKind::Session("session/b".into())
+        );
+        assert_eq!(app.execution_target(), target);
+        app.toggle_topology_grouping();
+        let group_row = app
+            .topology_rows()
+            .iter()
+            .position(|row| row.kind == TopologyRowKind::Group("group/one".into()))
+            .unwrap();
+        app.select_topology_row(group_row);
+        let group_target = app.execution_target();
+        app.toggle_topology_grouping();
+        assert_eq!(app.execution_target(), group_target);
+        assert_eq!(
+            app.topology_rows()[app.selected_topology_row()].kind,
+            TopologyRowKind::Session("session/b".into())
+        );
+    }
+
     #[test]
     fn topology_and_breakpoint_picker_preserve_explicit_ddb_scope() {
         let mut app = App::new("http://localhost".to_string());

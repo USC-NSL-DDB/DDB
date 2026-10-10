@@ -540,6 +540,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             start_value_edit(app)
         }
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
+        KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
         KeyCode::Char('E') => {
             if let Err(error) = app.start_expression_inspection() {
                 app.error(error);
@@ -1071,6 +1072,15 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.topology_grouping.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Threads;
+                app.toggle_topology_grouping();
+                return;
+            }
             if button == MouseButton::Left
                 && app.areas.source_inspect.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -2602,6 +2612,92 @@ mod tests {
             &tx,
         );
         assert_eq!(app.sessions[0].session_id, "session/new");
+    }
+
+    #[test]
+    fn topology_view_controls_are_local_and_flat_mouse_rows_select_correct_thread() {
+        let mut app = distributed_caller_app();
+        app.groups.push(v2::Group {
+            group_id: "group/one".into(),
+            ..Default::default()
+        });
+        app.sessions.push(v2::Session {
+            session_id: "session/child".into(),
+            group_id: Some("group/one".into()),
+            ..Default::default()
+        });
+        app.select_topology_row(0);
+        let target = app.execution_target();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                app.areas = ui::draw(frame, &mut app);
+            })
+            .unwrap();
+        let button = app.areas.topology_grouping.expect("grouping control");
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: button.x,
+                row: button.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert!(!app.topology_grouped);
+        assert_eq!(app.execution_target(), target);
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+            &tx,
+        );
+        assert!(app.topology_grouped);
+        assert_eq!(app.execution_target(), target);
+        assert!(rx.try_recv().is_err());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+            &tx,
+        );
+        terminal
+            .draw(|frame| {
+                app.areas = ui::draw(frame, &mut app);
+            })
+            .unwrap();
+        let panel = app
+            .areas
+            .panels
+            .iter()
+            .find(|panel| panel.focus == Focus::Threads)
+            .unwrap()
+            .area;
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: panel.x + 2,
+                row: panel.y + 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.selected_topology_thread_id(), Some("thread/child"));
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::InspectThread { thread_id, .. } if thread_id == "thread/child")
+        );
+        let target = app.execution_target();
+        let frame = app.current_frame().map(|frame| frame.id.clone());
+        for grouped in [true, false] {
+            app.toggle_topology_grouping();
+            assert_eq!(app.topology_grouped, grouped);
+            assert_eq!(app.selected_topology_thread_id(), Some("thread/child"));
+            assert_eq!(app.execution_target(), target);
+            assert_eq!(app.current_frame().map(|frame| frame.id.clone()), frame);
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[test]
