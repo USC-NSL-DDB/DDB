@@ -1170,6 +1170,9 @@ fn draw_variables(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn inspection_areas(app: &App, area: Rect) -> (Rect, Option<Rect>, Option<Rect>) {
+    if app.expanded_pane && app.focus == Focus::Variables {
+        return (area, None, None);
+    }
     match (app.registers.is_empty(), app.memory.is_empty()) {
         (true, true) => (area, None, None),
         (false, true) => {
@@ -2109,6 +2112,45 @@ mod v2_tests {
         assert!(!render(&mut app, 45, 14).contains("OUTPUT_END"));
         app.output.scroll_horizontal(isize::MAX);
         assert!(render(&mut app, 45, 14).contains("OUTPUT_END"));
+    }
+
+    #[test]
+    fn expanded_variables_use_the_entire_pane_and_exclude_other_inspection_hits() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Variables;
+        app.expanded_pane = true;
+        app.apply_variables(vec![v2::Variable {
+            name: "marker".into(),
+            value: "9501".into(),
+            ..Default::default()
+        }]);
+        app.registers.push(crate::model::Register {
+            name: "sp".into(),
+            value: "0x1234".into(),
+            unavailable: false,
+        });
+        app.apply_memory(v2::MemoryBlock {
+            address: "0x1234".into(),
+            data: vec![0; 256],
+            ..Default::default()
+        });
+        for (width, height) in [(140, 40), (90, 18)] {
+            let screen = render(&mut app, width, height);
+            assert!(screen.contains("Variables / Watches") && screen.contains("[Restore]"));
+            assert!(!screen.contains("Registers"), "{screen}");
+            assert!(!screen.contains("Raw Memory"), "{screen}");
+            assert_eq!(app.areas.panels.len(), 1);
+            assert_eq!(app.areas.panels[0].focus, Focus::Variables);
+            assert!(app.areas.panels[0].area.height > height / 2);
+        }
+        app.expanded_pane = false;
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("Registers") && screen.contains("Raw Memory"));
+        assert_eq!(
+            app.memory[0].bytes.len(),
+            256,
+            "expanding must not discard inspection data"
+        );
     }
 
     #[test]
