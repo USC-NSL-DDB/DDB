@@ -144,8 +144,49 @@ delivery before returning to the later stop-event trace.
 
 ### Source-loading investigation
 
+#### Latest request-flow trace and event-scope correction
+
+Following `31afc6c8`, file-only request probes showed source generation 1 starting
+in the worker immediately, with no replacement request cancelling it. In a run
+that reached the later all-stop failure, ResolveSource took 8.42 seconds for the
+server and 9.89 seconds for the client; ReadSource completed in milliseconds and
+the UI consumed each result within about 60 ms. That run's logs are retained at
+`/tmp/ddb-source-flow.552jx9/`.
+
+A backend-instrumented failure in `/tmp/ddb-source-flow.FXw7Ou/` acquired the
+per-session source gate immediately and then remained inside the command
+executor's `-file-list-exec-source-files` call until the test's source deadline.
+This identifies the command-execution boundary, not whether the delay is inside
+GDB or DDB's command dispatch/completion machinery. No catalog scope, timeout,
+or source ownership semantics were changed.
+
+The investigation also found and corrected an independently reproducible event
+projection defect. Session/group running summaries became `Running(None)`, which
+the UI interpreted as every thread resuming. That could invalidate stopped peers
+and erase the all-stop cause. Running activity now requires an explicit opaque
+thread ID. Aggregate summaries continue to update the preceding canonical
+snapshot but do not manufacture thread transitions. The new
+`aggregate_running_states_do_not_impersonate_global_thread_resumes` test failed
+before the fix and passed afterward; it also checks a real thread target still
+produces running activity.
+
+The first real greeter attempt after this correction failed while the terminal
+helper searched for the client thread, before reaching the second breakpoint.
+Its trace, `/tmp/ddb-source-flow.f5vsaB/`, shows the initial client stop queueing
+and dispatching a server-session pause, but does not prove the later all-stop
+failure fixed. Source discovery in that run returned 3,464 paths in about 6.6
+seconds. The full goal remains open. All temporary probes were removed.
+
+After cleanup, the event-scope correction passed 224 unit tests, two non-ignored
+test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formatting,
+and Clippy with warnings denied. The ordinary backend binary was rebuilt without
+the temporary diagnostic hook. The original greeter test and its deadlines are
+unchanged.
+
+#### Earlier measurements at `f2aa85ea`
+
 Four instrumented runs of `greeter_auto_attach_all_stop_terminal_workflow` passed
-on this revision. Temporary timers covered `ResolveSource`, the per-session
+on `f2aa85ea`. Temporary timers covered `ResolveSource`, the per-session
 catalog gate/provider, descriptor construction, and `ReadSource`. Observations
 for this instrumented gRPC helloworld checkout and debug backend build:
 

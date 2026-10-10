@@ -2050,14 +2050,10 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             app.push_timeline(format!("◆ {}", event.summary));
             match event.activity {
                 DebuggerActivity::Running(thread_id) => {
-                    if let Some(thread) = app
-                        .threads
-                        .iter()
-                        .find(|t| Some(&t.id) == thread_id.as_ref())
-                    {
+                    if let Some(thread) = app.threads.iter().find(|t| t.id == thread_id) {
                         app.peer_pauses.remove(&thread.session_id);
                     }
-                    app.mark_running(thread_id.as_deref());
+                    app.mark_running(Some(&thread_id));
                     if let Some(cause) = app.all_stop_cause.clone() {
                         if app
                             .threads
@@ -3118,7 +3114,7 @@ mod tests {
             UiMessage::DebuggerEvent(DebuggerEvent {
                 summary: "late peer resume".into(),
                 refresh: false,
-                activity: DebuggerActivity::Running(Some("thread/server".into())),
+                activity: DebuggerActivity::Running("thread/server".into()),
             }),
             &tx,
         );

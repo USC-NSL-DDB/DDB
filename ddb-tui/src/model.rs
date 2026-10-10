@@ -2709,7 +2709,7 @@ pub struct DebuggerEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DebuggerActivity {
     None,
-    Running(Option<String>),
+    Running(String),
     Stopped(Option<String>),
 }
 

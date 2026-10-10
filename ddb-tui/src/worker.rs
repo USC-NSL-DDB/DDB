@@ -1261,7 +1261,11 @@ fn state_event_activity(event: &v2::StateEvent) -> DebuggerActivity {
     };
     match upsert.resource.as_ref() {
         Some(resource_upsert::Resource::ExecutionState(state)) if state.running => {
-            DebuggerActivity::Running(target_thread_id(state.target.as_ref()))
+            // Session/group projections are already applied in the preceding
+            // snapshot. They are not a broadcast resume of every thread.
+            target_thread_id(state.target.as_ref())
+                .map(DebuggerActivity::Running)
+                .unwrap_or(DebuggerActivity::None)
         }
         Some(resource_upsert::Resource::ExecutionState(state)) => {
             let Some(thread_id) = target_thread_id(state.target.as_ref()) else {
@@ -1809,6 +1813,45 @@ mod tests {
         assert_eq!(
             state_event_activity(&event_for(thread_target(owner), None)),
             DebuggerActivity::Stopped(Some(owner.into()))
+        );
+    }
+
+    #[test]
+    fn aggregate_running_states_do_not_impersonate_global_thread_resumes() {
+        for target in [
+            None,
+            Some(crate::api::session_target("session/server")),
+            Some(crate::api::group_target("group/server")),
+        ] {
+            let event = v2::StateEvent {
+                payload: Some(state_event::Payload::Upsert(v2::ResourceUpsert {
+                    resource: Some(resource_upsert::Resource::ExecutionState(
+                        v2::ExecutionState {
+                            target,
+                            running: true,
+                            ..Default::default()
+                        },
+                    )),
+                })),
+                ..Default::default()
+            };
+            assert_eq!(state_event_activity(&event), DebuggerActivity::None);
+        }
+        let event = v2::StateEvent {
+            payload: Some(state_event::Payload::Upsert(v2::ResourceUpsert {
+                resource: Some(resource_upsert::Resource::ExecutionState(
+                    v2::ExecutionState {
+                        target: Some(thread_target("thread/server")),
+                        running: true,
+                        ..Default::default()
+                    },
+                )),
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            state_event_activity(&event),
+            DebuggerActivity::Running("thread/server".into())
         );
     }
 
