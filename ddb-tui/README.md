@@ -571,11 +571,22 @@ From `ddb-tui/`:
 ```bash
 cargo build -p ddb --manifest-path ../ddb/Cargo.toml
 cargo build --manifest-path ../ddb/core/tests/fixtures/real_loop/Cargo.toml
+CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_DEV_OPT_LEVEL=0 \
+  cargo build --manifest-path ../ddb/core/tests/fixtures/real_dbt/Cargo.toml \
+  --target-dir ../ddb/core/tests/fixtures/real_dbt/target
 cargo test --test e2e_mock -- --ignored --skip greeter_auto_attach --test-threads=1
 ```
 
 The PTY suite currently targets Unix and requires `script`, GDB, and LLDB.
 `DDB_E2E_BIN` may be set to test a different DDB executable.
+
+The real distributed-memory cases use two isolated fixture processes. Setup uses
+the v2 SDK to capture the caller context, resume it, and pause it at another PC.
+The TUI then selects the callee thread, reconstructs its distributed stack,
+opens a non-top caller frame, expands a variable, and reads its storage through
+`M`. Both GDB and LLDB must show the caller's expected bytes. Literal watches and
+failed evaluations must reject `M` without switching to Memory. Run only these
+cases with `cargo test --test e2e_mock distributed_caller_memory -- --ignored --test-threads=1`.
 
 The opt-in auto-attach greeter regression additionally requires an instrumented
 gRPC helloworld checkout, `ddb_runapp`, Mosquitto, and an existing

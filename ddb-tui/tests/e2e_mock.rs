@@ -22,6 +22,9 @@ const POLL: Duration = Duration::from_millis(50);
 static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
 static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
+#[path = "support/real_distributed_memory.rs"]
+mod real_distributed_memory;
+
 struct OwnedTestProcess(Option<Child>);
 impl Drop for OwnedTestProcess {
     fn drop(&mut self) {

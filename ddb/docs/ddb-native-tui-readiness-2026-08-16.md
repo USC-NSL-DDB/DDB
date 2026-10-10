@@ -9,7 +9,7 @@ descriptions, compatibility paths, and test counts must not be read as current.
 
 ## Follow-up status, 2026-10-10
 
-Current code inspected: DDB `f2aa85ea`, VS Code adapter `f3c671f`. The full requested
+Initial follow-up checkpoint: DDB `f2aa85ea`, VS Code adapter `f3c671f`. The full requested
 UI/keyboard and adapter-parity goal remains open. The sections after this follow-up
 preserve the August checkpoint; see [the TUI guide](../../ddb-tui/README.md) for
 current commands and interaction behavior.
@@ -93,9 +93,11 @@ generic command that can produce a similar backend effect.
    backends now supply storage addresses. Real GDB/LLDB scope tests compare memory
    reached through these addresses with fixture expressions. The public API's
    real distributed-caller path is now verified for both backends, including
-   non-top-frame child expansion and stale-frame rejection. A complete TUI
-   interaction through that distributed frame and additional unavailable/synthetic
-   value coverage remain open.
+   non-top-frame child expansion and stale-frame rejection. The real TUI workflow
+   now selects a cross-session, non-top caller frame, expands its marker field,
+   and verifies the exact bytes reached with `M` on GDB and LLDB. Literal watches
+   and failed evaluations reject memory navigation without changing pane focus.
+   See the distributed TUI verification section for setup and failure history.
 6. **Editor-hosted watch behavior.** Watch editing is now available with `W` or
    the Variables `Edit [W]` button, including editing from a watch child. The
    existing watch identity is retained; old evaluation replies are rejected;
@@ -156,6 +158,49 @@ were removed, including the diagnostic environment hook. No timeouts were
 increased. Next trace source request generation, enqueue/start/completion, and
 the backend resolver/catalog command to distinguish source work from message
 delivery before returning to the later stop-event trace.
+
+### Distributed TUI inspection verification, 2026-10-10
+
+`tests/support/real_distributed_memory.rs` runs two real fixture processes for
+each debugger. Setup uses only the v2 SDK for frame/register reads and execution
+control. It captures the root caller's register context, hands it to the callee,
+resumes the root and interrupts it at a different PC. The TUI selects the leaf
+thread and obtains a distributed stack. Assertions require leaf-first ordering,
+a distributed boundary, the root's saved PC, distinct owning threads, and a root
+caller frame whose local level is greater than zero. A stale local stack alone
+cannot satisfy these checks.
+
+The terminal workflow expands Stack, clicks `root_stop`, restores the layout,
+expands `memory_marker.value`, and opens its storage with `M`. Expanded Memory
+must show `9501_u64.to_ne_bytes()`, not merely some bytes. It then evaluates a
+literal and an undefined symbol. For each, `M` must report the missing address and
+leave focus in Variables, verified by immediately expanding that pane. CI now
+builds the existing `real_dbt` fixture with full debug information and no
+optimization; no new runtime dependency or compatibility API was introduced.
+
+This workflow exposed two independently reproduced UI defects:
+
+- `878c73b8`: expanded Variables still used the shared three-pane inspection
+  split. A focused rendering test failed before the fix. Expanded Variables now
+  occupies the full pane and excludes register/memory mouse targets, retaining
+  their data for Restore. Wide and short-terminal layouts are covered.
+- `0f800d31`: routine snapshots replaced an action error with session counts,
+  sometimes between the `M` input and the next expanded frame. The captured PTY
+  output showed the error followed immediately by the count summary. A model
+  regression reproduced the overwrite. A still-displayed action error now survives
+  routine snapshots; another action/result can replace it, and a recovered
+  connection error still clears on a successful snapshot.
+
+The focused GDB/LLDB workflows passed together in 7.85 seconds after both fixes.
+The unit gate passed 267 tests and two integration helpers, and strict Clippy
+passed. All 26 non-greeter terminal workflows passed on the final code in 76.90
+seconds. The instrumented greeter auto-attach all-stop workflow also passed on
+the final code in 34.52 seconds, following an earlier 31.50-second pass before the
+status fix. No test timeout was increased and no probes remain. The fixture tests
+use real debuggers and reconstructed caller contexts; the separate greeter test
+supplies evidence for the actual gRPC auto-attach/all-stop workflow. The final full-goal audit
+remains open, including large extension-data scrolling, whose renderer still
+clamps its paragraph offset to 16 bits.
 
 ### Explicit topology export verification, 2026-10-10
 

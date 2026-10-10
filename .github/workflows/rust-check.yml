@@ -336,10 +336,13 @@ jobs:
       - name: Build DDB for TUI PTY tests
         run: cargo build -p ddb --manifest-path ddb/Cargo.toml
 
-      - name: Build debuggable real fixture for TUI PTY tests
+      - name: Build debuggable real fixtures for TUI PTY tests
         env:
           CARGO_PROFILE_DEV_DEBUG: '2'
-        run: cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml
+          CARGO_PROFILE_DEV_OPT_LEVEL: '0'
+        run: |
+          cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml --target-dir ddb/core/tests/fixtures/real_loop/target
+          cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_dbt/Cargo.toml --target-dir ddb/core/tests/fixtures/real_dbt/target
 
       - name: Run ddb-tui Mock, GDB, and LLDB PTY workflows
         working-directory: ddb-tui
