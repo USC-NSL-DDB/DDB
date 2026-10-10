@@ -15,6 +15,54 @@ with patch.dict(sys.modules, {"lldb": types.ModuleType("lldb")}):
     spec.loader.exec_module(bridge_module)
 
 
+class StorageAddressTest(unittest.TestCase):
+    def value(self, address):
+        value = Mock()
+        value.IsValid.return_value = True
+        value.GetError.return_value.Fail.return_value = False
+        value.GetLoadAddress.return_value = address
+        return value
+
+    def test_storage_address_is_not_displayed_pointer_value(self):
+        value = self.value(0x1234)
+        value.GetValue.return_value = "0x9876"
+        self.assertEqual(bridge_module._storage_address_metadata(value), {"address": "0x1234"})
+        value.GetValue.assert_not_called()
+
+    def test_invalid_and_unavailable_values_have_no_address(self):
+        value = self.value(bridge_module.INVALID_ADDRESS)
+        self.assertEqual(bridge_module._storage_address_metadata(value), {})
+        value.GetLoadAddress.reset_mock()
+        value.GetError.return_value.Fail.return_value = True
+        self.assertEqual(bridge_module._storage_address_metadata(value), {})
+        value.GetLoadAddress.assert_not_called()
+
+    def test_scope_lookahead_does_not_resolve_storage(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        first, lookahead = self.value(0x1000), self.value(0x2000)
+        first.GetName.return_value = "first"
+        lookahead.GetName.return_value = "second"
+        first.GetExpressionPath.return_value = False
+        bridge._frame_and_arguments = Mock(return_value=(Mock(), ["globals", "0", "2"]))
+        bridge._scope_symbols = Mock(return_value=[
+            (("first", "file", 1), first), (("second", "file", 2), lookahead),
+        ])
+        with patch.object(bridge_module.lldb, "SBStream", Mock(), create=True):
+            _, payload = bridge._list_scope_variables([])
+        self.assertEqual(payload["variables"][0]["address"], "0x1000")
+        self.assertNotIn("address", payload["variables"][1])
+        lookahead.GetLoadAddress.assert_not_called()
+
+    def test_no_values_stack_does_not_resolve_storage(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        value = self.value(0x1000)
+        bridge._frame_and_arguments = Mock(return_value=(Mock(), ["--no-values"]))
+        bridge._lexical_variables = Mock(return_value=[value])
+        _, payload = bridge._stack_variables([])
+        self.assertNotIn("address", payload["variables"][0])
+        value.GetLoadAddress.assert_not_called()
+
+
 class ProcessMonitorTest(unittest.TestCase):
     def setUp(self):
         self.api = patch.multiple(

@@ -74,6 +74,16 @@ def _text(value):
     return str(value)
 
 
+def _storage_address_metadata(value):
+    """Storage, not a pointer's pointee; call only for requested values."""
+    if not value or not value.IsValid() or value.GetError().Fail():
+        return {}
+    address = value.GetLoadAddress()
+    if not isinstance(address, int) or address < 0 or address == INVALID_ADDRESS:
+        return {}
+    return {"address": hex(address)}
+
+
 class Emitter(object):
     def __init__(self, channel_id):
         if not re.match(r"^[0-9a-f]{32}$", channel_id):
@@ -1101,6 +1111,7 @@ class Bridge(object):
             }
             if include_values:
                 record["value"] = _value_text(value)
+                record.update(_storage_address_metadata(value))
             variables.append(record)
         return "done", {"variables": variables}
 
@@ -1264,6 +1275,8 @@ class Bridge(object):
                 unavailable = value.GetError().Fail()
                 metadata["value"] = "<unavailable>" if unavailable else rendered
                 metadata["numchild"] = "0" if unavailable else _text(value.GetNumChildren())
+                if not unavailable:
+                    metadata.update(_storage_address_metadata(value))
             variables.append(metadata)
         return "done", {"variables": variables}
 
@@ -1316,6 +1329,7 @@ class Bridge(object):
             "value": _value_text(value),
             "type": _text(value.GetTypeName()),
             "has_more": "0",
+            **_storage_address_metadata(value),
         }
 
     def _var_list_children(self, arguments):
@@ -1354,6 +1368,7 @@ class Bridge(object):
             }
             if include_values:
                 record["value"] = _value_text(child)
+                record.update(_storage_address_metadata(child))
             children.append(record)
         return "done", {
             "numchild": _text(count),

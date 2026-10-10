@@ -1407,7 +1407,7 @@ impl DdbApplicationService {
                     value: decoded.value,
                     type_name: decoded.type_name,
                     variable_id,
-                    address: None,
+                    address: decoded.address,
                     has_children: decoded.has_children,
                     child_count: decoded.child_count,
                     presentation_hint: decoded.presentation_hint,

@@ -1059,6 +1059,7 @@ impl DdbApplicationService {
                     .create_variable_object(&scope, &frame, &variable.name, None)
                     .await?;
                 variable.value = metadata.value;
+                variable.address = metadata.address.or(variable.address);
                 variable.type_name = metadata.type_name.or(variable.type_name);
                 variable.child_count = metadata.child_count;
                 variable.has_children = metadata.has_children;
@@ -1425,6 +1426,7 @@ impl DdbApplicationService {
                 child_identity.path.push(child_index);
                 let internal_id = encode_variable_identity(&child_identity)?;
                 let variable = DecodedVariable {
+                    address: child.address,
                     evaluate_name: None,
                     name: child.display_name,
                     value: child.value,

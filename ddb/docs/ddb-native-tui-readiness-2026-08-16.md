@@ -83,9 +83,10 @@ generic command that can produce a similar backend effect.
    the selected address through its owning distributed frame. Keyboard-level
    tests cover address preservation, owner targeting, watch refresh invalidation,
    and rejection of absent addresses, boundary frames, and running threads.
-   Native backend `projection.rs` and `mutations.rs` still populate these fields
-   with `None`. End-to-end native selected-value navigation therefore remains
-   incomplete; manual address reads and synthetic address tests do not prove it.
+   Backend decoders and projections now preserve address metadata, and LLDB's
+   bridge supplies native storage addresses for requested values. GDB metadata
+   remains unimplemented. Do not close this item on LLDB-only coverage; the
+   cross-backend and distributed-owner cases listed below still apply.
 6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
    adapter plus its VS Code host before declaring inspection parity. Existing
    add/remove, refresh and expansion prove only those narrower capabilities.
@@ -186,11 +187,43 @@ and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
 
+#### LLDB native storage-address verification
+
+The LLDB bridge now emits storage addresses for requested native values, and the
+backend validates and preserves them through locals/scopes, variable objects,
+children, and object-backed evaluation. It does not parse display values or
+evaluate an extra address expression. Invalid/unavailable storage is omitted;
+metadata-only scope lookahead and `--no-values` stack queries do not fetch it.
+
+Verified on 2026-10-10:
+
+- 335 backend unit tests passed, with one intentional ignored test.
+- 13 bridge tests passed, including storage versus displayed pointer value,
+  invalid/unavailable values, scope lookahead, and no-values requests.
+- The real LLDB scope contract passed with address-based memory reads checked
+  against known fixture expressions for locals, globals/statics, expanded fields,
+  and watch evaluations. The GDB scope regression also passed with addresses
+  still absent.
+- The real LLDB TUI workflow passed in 18.08 seconds. It selects `Watch: counter`,
+  presses `M`, expands Memory, and verifies all eight native-endian bytes of
+  `31337_u64`. It then scrolls the reduced Variables viewport before continuing
+  child expansion. The first extended run passed the memory check but exposed
+  the test's assumption that children were immediately visible; the final test
+  explicitly navigates to them.
+- 230 TUI unit tests and two integration helpers passed. Strict backend binary
+  Clippy, strict TUI all-target Clippy, touched-file formatting, and diff whitespace
+  checks passed.
+
+The initial API memory comparison used the fixture's insufficient read-only
+token and received 403; the corrected test uses its memory-authorized token.
+Production authorization was not changed. GDB native addresses, real distributed
+caller memory navigation, and the remaining parity requirements are still open.
+
 #### Native value-address implementation boundary after `983dac85`
 
-The frontend action is implemented, but native address support is not. A fresh
-backend trace identified the following work, rather than a frontend expression
-fallback:
+At `983dac85`, the frontend action was implemented but native address support was
+not. The following trace records the implementation boundary; LLDB metadata and
+backend propagation have since been implemented, while GDB remains outstanding:
 
 - `application/debugger_reads.rs` drops address metadata at all three decode
   boundaries: stack/scope rows, created variable objects, and expanded children.

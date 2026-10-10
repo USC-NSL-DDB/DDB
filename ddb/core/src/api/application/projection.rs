@@ -359,7 +359,7 @@ impl<'a> ProjectionContext<'a> {
             has_children: view.has_children,
             child_count: view.child_count,
             evaluate_name,
-            address: None,
+            address: view.address.clone(),
             presentation_hint,
         })
     }
