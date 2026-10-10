@@ -39,6 +39,7 @@ pub enum InputMode {
     Evaluate,
     InspectExpression,
     Watch,
+    EditWatch,
     Memory,
     Jump,
     Signal,
@@ -100,6 +101,7 @@ pub struct UiAreas {
     pub termination_confirm: Option<Rect>,
     pub termination_cancel: Option<Rect>,
     pub termination_open: Option<Rect>,
+    pub watch_edit: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -432,6 +434,7 @@ pub struct SignalPicker {
 pub struct App {
     pub watches: Vec<WatchExpression>,
     next_watch_id: u64,
+    editing_watch: Option<u64>,
     expression_inspection: Option<ExpressionInspection>,
     next_expression_id: u64,
     pub api_endpoint: String,
@@ -523,6 +526,7 @@ impl App {
         Self {
             watches: Vec::new(),
             next_watch_id: 1,
+            editing_watch: None,
             expression_inspection: None,
             next_expression_id: 1,
             api_endpoint,
@@ -1888,6 +1892,7 @@ impl App {
     }
 
     pub fn start_input(&mut self, mode: InputMode) {
+        self.editing_watch = None;
         self.input_mode = mode;
         self.input.clear();
         self.input_cursor = 0;
@@ -1896,6 +1901,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
+        self.editing_watch = None;
         if self.input_mode == InputMode::InspectExpression {
             self.clear_expression_inspection();
         }

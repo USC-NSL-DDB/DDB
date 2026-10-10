@@ -94,11 +94,12 @@ generic command that can produce a similar backend effect.
    non-top-frame child expansion and stale-frame rejection. A complete TUI
    interaction through that distributed frame and additional unavailable/synthetic
    value coverage remain open.
-6. **Editor-hosted watch behavior.** Review watch editing/persistence against the
-   adapter plus its VS Code host before declaring inspection parity. Existing
-   add/remove, refresh and expansion prove only those narrower capabilities.
-   Record missing behavior and implement the terminal equivalent rather than
-   silently excluding it.
+6. **Editor-hosted watch behavior.** Watch editing is now available with `W` or
+   the Variables `Edit [W]` button, including editing from a watch child. The
+   existing watch identity is retained; old evaluation replies are rejected;
+   only the changed expression is evaluated. Persistence across TUI restarts
+   remains unimplemented and must be addressed before declaring full parity
+   with the adapter plus its VS Code host.
 
 These findings change the next implementation work. The full goal is not ready
 for sign-off even if the current terminal suite is green.
@@ -193,6 +194,34 @@ test helpers, all 22 non-greeter terminal workflows in 135.05 seconds, formattin
 and Clippy with warnings denied. The ordinary backend binary was rebuilt without
 the temporary diagnostic hook. The original greeter test and its deadlines are
 unchanged.
+
+#### Retained watch editing verification
+
+`W` in Variables or its `Edit [W]` border button opens a prefilled expression
+prompt for the selected watch or a child row's owning watch. The prompt captures
+the watch ID, not the current row index. Esc cancels; empty input is rejected;
+unchanged input does not trigger another evaluation. Saving replaces only that
+watch's value/child tree and increments its revision before any evaluation, so
+late values and child responses from the old expression cannot restore it.
+
+Watch identity and evaluation setup remain in the watches module. The edited
+watch uses the current selected stopped frame and its distributed owner; if no
+inspectable stopped frame exists, the expression is retained for a later stop.
+Unrelated watch values and children remain intact and are not reevaluated by the
+edit action. Removed watches cannot be recreated by a late prompt submission.
+
+Verification on 2026-10-10:
+
+- 249 unit tests and two integration helpers passed, including captured identity,
+  child-row editing, old value/child rejection, cancellation, unchanged/empty
+  submissions, running targets, removal during editing, and mouse entry.
+- Real GDB and LLDB terminal workflows edited `counter` to `counter + 1`, checked
+  `31338`, cancelled a second edit, and continued existing watch/tree/step checks.
+  They passed in 13.75 and 8.87 seconds respectively.
+- Strict all-target TUI Clippy, formatting, and diff whitespace checks passed.
+
+Watch persistence, details/export, and the remaining distributed-memory TUI
+verification are still open. This is not a full-goal completion claim.
 
 #### Oversized timeline-event navigation
 

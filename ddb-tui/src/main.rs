@@ -573,6 +573,11 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             start_value_edit(app)
         }
         KeyCode::Char('w') => app.start_input(InputMode::Watch),
+        KeyCode::Char('W') if app.focus == Focus::Variables => {
+            if let Err(error) = app.start_watch_edit() {
+                app.error(error);
+            }
+        }
         KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
         KeyCode::Char('v') if app.focus == Focus::Breakpoints => app.toggle_breakpoint_grouping(),
         KeyCode::Char('K') if app.focus == Focus::Threads => {
@@ -740,7 +745,12 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
             if mode == InputMode::InspectExpression && input.is_empty() {
                 app.clear_expression_inspection();
             }
-            if !input.is_empty() || matches!(mode, InputMode::Breakpoint | InputMode::Logpoint) {
+            if !input.is_empty()
+                || matches!(
+                    mode,
+                    InputMode::Breakpoint | InputMode::Logpoint | InputMode::EditWatch
+                )
+            {
                 match mode {
                     InputMode::Logpoint => {
                         let template = if input.is_empty() {
@@ -843,6 +853,20 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                     }
                     InputMode::Watch => match app.add_watch(input) {
                         Ok(()) => refresh_watches(app, requests),
+                        Err(error) => app.error(error),
+                    },
+                    InputMode::EditWatch => match app.commit_watch_edit(input) {
+                        Ok(Some(request)) => {
+                            if let Err(error) =
+                                requests.try_send(BackendRequest::EvaluateWatch(request.clone()))
+                            {
+                                app.finish_watch(
+                                    request,
+                                    Err(format!("Could not queue evaluation: {error}")),
+                                );
+                            }
+                        }
+                        Ok(None) => {}
                         Err(error) => app.error(error),
                     },
                     InputMode::InspectExpression => {
@@ -1148,6 +1172,17 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
 
     match mouse.kind {
         MouseEventKind::Down(button) => {
+            if button == MouseButton::Left
+                && app.areas.watch_edit.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Variables;
+                if let Err(error) = app.start_watch_edit() {
+                    app.error(error);
+                }
+                return;
+            }
             if button == MouseButton::Left
                 && app.areas.termination_open.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -4519,6 +4554,172 @@ mod tests {
         app.finish_watch(third, Ok(v2::EvaluationResult::default()));
         assert!(app.variables.is_empty());
         assert!(app.watches.is_empty());
+    }
+
+    #[test]
+    fn watch_edit_preserves_identity_and_rejects_old_values_and_children() {
+        let mut app = distributed_caller_app();
+        app.add_watch("request".into()).unwrap();
+        app.add_watch("other".into()).unwrap();
+        let evaluations = app.prepare_watches();
+        for (request, id, value) in [
+            (evaluations[0].clone(), "old/request", "old"),
+            (evaluations[1].clone(), "other/value", "keep"),
+        ] {
+            app.finish_watch(
+                request,
+                Ok(v2::EvaluationResult {
+                    variable_id: Some(id.into()),
+                    value: value.into(),
+                    has_children: true,
+                    ..Default::default()
+                }),
+            );
+        }
+        app.selected_variable = 0;
+        app.toggle_selected_variable();
+        app.apply_variable_children(
+            "old/request",
+            vec![v2::Variable {
+                variable_id: "old/child".into(),
+                name: "child".into(),
+                ..Default::default()
+            }],
+        );
+        app.selected_variable = 1;
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT),
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::EditWatch);
+        assert_eq!(app.input, "request");
+        // Selection changes cannot redirect an already-open edit prompt.
+        app.selected_variable = 2;
+        app.insert_input(".field");
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        let BackendRequest::EvaluateWatch(edited) = rx.try_recv().unwrap() else {
+            panic!("watch evaluation expected")
+        };
+        assert!(
+            rx.try_recv().is_err(),
+            "unrelated watches must not be reevaluated"
+        );
+        assert_eq!(edited.watch.id, evaluations[0].watch.id);
+        assert_eq!(edited.watch.expression, "request.field");
+        assert_eq!(edited.owner_thread, "thread/parent");
+        assert_eq!(edited.origin_thread, "thread/child");
+        assert!(edited.watch.revision > evaluations[0].watch.revision);
+        assert_eq!(app.variables.len(), 2);
+        assert!(app.variables[0].id.is_empty());
+        assert_eq!(app.variables[1].value, "keep");
+        assert_eq!(app.variables[1].id, "other/value");
+        app.apply_variable_children(
+            "old/request",
+            vec![v2::Variable {
+                name: "late".into(),
+                ..Default::default()
+            }],
+        );
+        assert_eq!(app.variables.len(), 2);
+        app.finish_watch(evaluations[0].clone(), Err("stale failure".into()));
+        assert_eq!(app.variables[0].value, "Evaluating…");
+        app.finish_watch(
+            edited,
+            Ok(v2::EvaluationResult {
+                value: "new".into(),
+                ..Default::default()
+            }),
+        );
+        app.finish_watch(
+            evaluations[0].clone(),
+            Ok(v2::EvaluationResult {
+                value: "stale".into(),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(app.variables[0].value, "new");
+
+        app.start_watch_edit().unwrap();
+        app.insert_input("cancelled");
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.watches[0].expression, "request.field");
+        assert_eq!(app.variables[0].value, "new");
+        app.start_watch_edit().unwrap();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.variables[0].value, "new");
+        assert!(rx.try_recv().is_err());
+        app.start_watch_edit().unwrap();
+        while !app.input.is_empty() {
+            app.backspace_input();
+        }
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.watches[0].expression, "request.field");
+        assert!(rx.try_recv().is_err());
+
+        app.start_watch_edit().unwrap();
+        app.insert_input(".next");
+        app.mark_running(None);
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.watches[0].expression, "request.field.next");
+        assert!(rx.try_recv().is_err());
+        assert_eq!(app.variables[0].value, "Waiting for a stopped frame");
+        app.start_watch_edit().unwrap();
+        app.remove_selected_watch();
+        handle_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        assert_eq!(app.watches.len(), 1);
+        assert_eq!(app.watches[0].expression, "other");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn watch_edit_button_opens_a_prefilled_prompt_without_evaluation() {
+        let mut app = distributed_caller_app();
+        app.add_watch("counter".into()).unwrap();
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, &mut app))
+            .unwrap();
+        let button = app.areas.watch_edit.unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: button.x,
+                row: button.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+        assert_eq!(app.input_mode, InputMode::EditWatch);
+        assert_eq!(app.input, "counter");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

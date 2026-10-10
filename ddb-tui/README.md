@@ -154,6 +154,7 @@ keys, empty commands and control characters are rejected.
 | `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
 | `e` | Evaluate an expression |
 | `w` | Add a retained watch expression in Variables |
+| `W` / `Edit [W]` in Variables | Edit the selected watch or a watch child's owning expression; Esc cancels |
 | `Delete` in Variables | Remove the selected watch or dismiss the Inspect result |
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
@@ -213,6 +214,9 @@ DDB's variable API. Errors appear on the watch row. Expressions survive resume
 and reconnect within this TUI process, but old values and handles do not.
 Watches are not saved across TUI restarts. Expressions use debugger syntax and
 may have side effects; prefer expressions that only read state.
+Editing preserves the watch's identity and only evaluates that changed expression.
+Other watches keep their values and expanded children. Old replies cannot replace
+the edited result. Edits made while running wait for a stopped frame.
 
 The `:` console accepts the selected session's native debugger CLI, such as
 `print counter` in GDB or `frame variable` in LLDB. It uses the selected stack

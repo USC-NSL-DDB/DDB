@@ -1797,6 +1797,13 @@ fn real_debugger_workflow(backend: &str) {
         tui.wait_for_current_frame(|screen| !screen.contains("[Restore]"));
         tui.select_visible_variable("Watch: counter");
     }
+    tui.send(b"W + 1\r");
+    tui.wait_for_variable_value("Watch: counter + 1", "31338");
+    tui.send(b"W");
+    tui.wait_for_current_frame(|screen| screen.contains("Edit watch expression"));
+    tui.send(b"\x1b");
+    tui.wait_for_current_frame(|screen| !screen.contains("Edit watch expression"));
+    tui.wait_for_variable_value("Watch: counter + 1", "31338");
     tui.send(b"\x1b[3~");
     tui.wait_for_current_frame(|frame| !frame.contains("Watch: counter"));
     tui.send(b"wrequest\r");

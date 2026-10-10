@@ -210,6 +210,14 @@ fn draw_pane_expanders(frame: &mut Frame<'_>, app: &App, areas: &mut UiAreas) {
             button,
         );
         areas.pane_expanders.push((panel.focus, button));
+        if panel.focus == Focus::Variables && panel.area.width >= 24 {
+            let button = Rect::new(panel.area.x + 1, panel.area.bottom() - 1, 8, 1);
+            frame.render_widget(
+                Paragraph::new("Edit [W]").style(Style::default().fg(ACCENT)),
+                button,
+            );
+            areas.watch_edit = Some(button);
+        }
         if panel.focus == Focus::Threads && panel.area.width >= 24 {
             let button = Rect::new(panel.area.x + 1, panel.area.bottom() - 1, 8, 1);
             frame.render_widget(
@@ -1444,6 +1452,7 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::Command => ("Command", ":", ACCENT),
         InputMode::Evaluate => ("Evaluate", "e> ", GREEN),
         InputMode::Watch => ("Add watch expression", "w> ", GREEN),
+        InputMode::EditWatch => ("Edit watch expression (Esc cancels)", "W> ", GREEN),
         InputMode::InspectExpression => {
             ("Inspect once in selected frame (Esc cancels)", "E> ", GREEN)
         }
@@ -1773,6 +1782,7 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
         Line::from("source: f follow execution   Alt+Left/Right navigation history"),
         Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
         Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
+        Line::from("Variables: W or Edit button edits the selected watch expression; Esc cancels edits"),
         Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
         Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
         Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
