@@ -142,6 +142,7 @@ impl fmt::Debug for ClientConfig {
 }
 
 struct Inner {
+    traces: crate::trace::TraceHub,
     http: Client,
     rpc_base: Url,
     bearer_token: Option<String>,
@@ -202,6 +203,7 @@ impl DdbClient {
             .build()?;
         Ok(Self {
             inner: Arc::new(Inner {
+                traces: Default::default(),
                 http,
                 rpc_base: endpoint,
                 bearer_token: config.bearer_token,
@@ -213,6 +215,16 @@ impl DdbClient {
                 mutation_retry_delay: config.mutation_retry_delay,
             }),
         })
+    }
+
+    /// Opt into request metadata tracing. Retains at most 256 records per
+    /// client, never blocks requests, and reports lag through the receiver.
+    /// Subscribe before handshake to include discovery. No payloads, headers,
+    /// endpoint prefixes, query values or raw errors are included.
+    pub fn subscribe_request_traces(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::RequestTrace> {
+        self.inner.traces.subscribe()
     }
 
     /// Verifies v2 support and returns the initial discovery documents.
@@ -342,8 +354,8 @@ impl DdbClient {
 
     async fn unary<Req, Res>(
         &self,
-        service: &str,
-        method: &str,
+        service: &'static str,
+        method: &'static str,
         request: &Req,
         authenticated: bool,
         retry_mutation: bool,
@@ -378,9 +390,13 @@ impl DdbClient {
             if authenticated {
                 builder = self.authorize(builder);
             }
+            let trace = self.inner.traces.begin(service, method);
             let result = match builder.send().await {
                 Ok(response) => {
                     let status = response.status();
+                    if let Some(trace) = trace {
+                        trace.finish(crate::RequestTraceOutcome::Response(status.as_u16()));
+                    }
                     match read_bounded(response, self.inner.max_response_bytes).await {
                         Ok(body) if status.is_success() => serde_json::from_slice(&body)
                             .map_err(|error| ClientError::Protocol(error.to_string())),
@@ -388,7 +404,12 @@ impl DdbClient {
                         Err(error) => Err(error),
                     }
                 }
-                Err(error) => Err(ClientError::Transport(error)),
+                Err(error) => {
+                    if let Some(trace) = trace {
+                        trace.finish(crate::RequestTraceOutcome::TransportFailed);
+                    }
+                    Err(ClientError::Transport(error))
+                }
             };
             match result {
                 Ok(response) => return Ok(response),
@@ -409,8 +430,8 @@ impl DdbClient {
 
     async fn post_stream<Req, Event>(
         &self,
-        service: &str,
-        method: &str,
+        service: &'static str,
+        method: &'static str,
         request: &Req,
     ) -> Result<NdjsonStream<Event>>
     where
@@ -424,17 +445,31 @@ impl DdbClient {
                 limit: self.inner.max_request_bytes,
             });
         }
-        let response = self
-            .authorize(
-                self.inner
-                    .http
-                    .post(self.rpc_url(service, method)?)
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(ACCEPT, "application/x-ndjson")
-                    .body(body),
-            )
-            .send()
-            .await?;
+        let builder = self.authorize(
+            self.inner
+                .http
+                .post(self.rpc_url(service, method)?)
+                .header(CONTENT_TYPE, "application/json")
+                .header(ACCEPT, "application/x-ndjson")
+                .body(body),
+        );
+        let trace = self.inner.traces.begin(service, method);
+        let response = match builder.send().await {
+            Ok(response) => {
+                if let Some(trace) = trace {
+                    trace.finish(crate::RequestTraceOutcome::Response(
+                        response.status().as_u16(),
+                    ));
+                }
+                response
+            }
+            Err(error) => {
+                if let Some(trace) = trace {
+                    trace.finish(crate::RequestTraceOutcome::TransportFailed);
+                }
+                return Err(error.into());
+            }
+        };
         let status = response.status();
         if !status.is_success() {
             let body = read_bounded(response, self.inner.max_response_bytes).await?;
