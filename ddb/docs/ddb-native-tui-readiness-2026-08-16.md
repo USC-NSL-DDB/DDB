@@ -2,7 +2,69 @@
 
 Date: 2026-08-16
 
-Status: implementation and end-to-end verification complete. The work is recorded as five allowlisted local commits described below; no remote branch was updated while preparing this report.
+Status: historical checkpoint, not a completion sign-off for the current TUI work.
+The August implementation was recorded as five allowlisted local commits described
+below; no remote branch was updated while preparing that checkpoint. Its feature
+descriptions, compatibility paths, and test counts must not be read as current.
+
+## Follow-up status, 2026-10-10
+
+Current code inspected: DDB `f2aa85ea`, VS Code adapter `f3c671f`. The full requested
+UI/keyboard and adapter-parity goal remains open. The sections after this follow-up
+preserve the August checkpoint; see [the TUI guide](../../ddb-tui/README.md) for
+current commands and interaction behavior.
+
+Recent auditable changes include guarded frontend logpoints (`37599d3b`), the LLDB
+source-mapping command fix (`069424ab`), explicit debugger-session settings
+(`c61155f0`), byte-backed debugger output (`ddf7bb62`), and synchronization of
+greeter test navigation with rendered discovery (`f2aa85ea`). The latter fixes a
+test race: backend discovery could precede the TUI's projection, inserting the
+client above an already advancing scan. It does not establish a fix for every
+previous source-loading timeout.
+
+### Source-loading investigation
+
+Four instrumented runs of `greeter_auto_attach_all_stop_terminal_workflow` passed
+on this revision. Temporary timers covered `ResolveSource`, the per-session
+catalog gate/provider, descriptor construction, and `ReadSource`. Observations
+for this instrumented gRPC helloworld checkout and debug backend build:
+
+| Stage | Observed elapsed time |
+|---|---|
+| Cold debugger catalog discovery | 4.4 to 5.6 seconds |
+| Catalog gate acquisition | Tens of microseconds |
+| Cached source resolution | About 2 milliseconds |
+| Reading source contents | Under 7 milliseconds |
+
+A separate native GDB MI process took 0.32 seconds to load the greeter client
+executable and 3.15 seconds to load it and list its source files. That process did
+not attach to an inferior, so its timing is not a direct estimate of DDB overhead.
+It does show that native source enumeration itself is not instantaneous.
+
+In the measured client lookups, the server catalog was already cached. Therefore
+the serial session loop did not explain the timeout in these runs. Neither did
+filesystem reads. The previously intermittent timeout was not reproduced after
+the navigation-test synchronization change; these successful runs do not prove
+that the synchronization change fixed the source-loading problem. No production
+lookup scope, ambiguity handling, or test timeout was changed during measurement.
+All temporary timing probes were removed afterward.
+
+Reproduce the real workflow from the repository root, with the existing discovery
+port free and no other discovery session running:
+
+```sh
+DDB_GREETER_WORKSPACE=/mnt/home/ybyan/codebase/grpc/examples/cpp/helloworld \
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  greeter_auto_attach_all_stop_terminal_workflow -- --ignored --test-threads=1
+```
+
+The remaining completion audit must cover all eleven requested requirements and
+the current adapter implementation, not merely this older report's feature list.
+If the source timeout recurs, correlate the TUI request enqueue time with backend
+resolution start and catalog completion before changing execution or resolution
+semantics. Retain the native GDB measurement as a separate baseline.
+
+## August checkpoint
 
 This report closes the functional and semantic review against the prototype in /home/ybyan/projs/vscode-adapter. It supplements the earlier integrated usability report and focuses on one product rule:
 
