@@ -1,7 +1,11 @@
 # DDB TUI usability follow-up
 
 This is the sixteen-requirement follow-up on `codex/tui-next`. It is separate
-from the earlier eleven-requirement audit. The full follow-up is still open.
+from the earlier eleven-requirement audit. All unconditional requirements are
+implemented and verified. Requirement 4 does not apply because the user chose
+direct shortcuts. The table records current status; the addenda retain earlier
+failures and the evidence for their fixes. Native pretty printing requires a
+registered, trusted formatter package, as described in the closing addendum.
 
 ## Navigation decision
 
@@ -48,7 +52,7 @@ default through `--source-search exact|fuzzy`.
 | 12 | Discoverable keyboard navigation from breakpoint to paused frame | Implemented in help and hints. Alt+2, choose a breakpoint, P, choose a paused hit, Enter; Escape cancels. |
 | 13 | One-click topology expansion/collapse and individual signaling | Implemented. Disclosure clicks, Space/Enter and Left/Right fold/navigate groups/sessions. Folding preserves control scope and inspected thread. Mouse rows carry resource identities; session-label selection plus `s` submits a canonical single-session signal. Unit and two-session terminal coverage verify the target and resolved count. |
 | 14 | Show only execution actions supported for selected scope | Implemented. Toolbar filtering uses DDB's typed `execution_action_capabilities`, not only the global action list. Tests cover thread/session/group and no target. |
-| 15 | General pretty-printing solution, including greeter C++ string | Open. Existing default printer setup does not establish that greeter `prefix` is pretty-printed. Diagnose debugger formatter registration and evaluation separately; do not hard-code C++ structure parsing in the frontend. |
+| 15 | General pretty-printing solution, including greeter C++ string | Implemented and verified. DDB passes native formatter summaries, display hints, and children through the canonical API. Default GDB enabling does not install packages. An explicit trusted libstdc++ profile fixes the local installation mismatch; real auto-attached greeter tests require exactly `"Hello "` before and after stepping to the return line. No C++ layout parsing or trust-path weakening was added. |
 | 16 | Visible pending/completed/error feedback for controls and other operations | Implemented for execution controls and backend mutations. Identity-correlated queue/admission/result feedback is independent of routine status, survives snapshots and navigation, reports unconfirmed outcomes honestly, and has model, interaction, serialized-worker, and terminal coverage. |
 
 ## Source-target API guarantees
@@ -788,3 +792,99 @@ The throwaway timing script was removed. No temporary debug instrumentation
 remains in production code. Unknown or non-executable-file probes may still
 enumerate catalogs; this is a correctness-preserving path, not a promised
 constant-time operation. Requirement 15 is still open, so the goal is active.
+
+## Native formatter and snapshot all-stop closure
+
+Requirements 11 and 15 are now closed. The earlier open statements are retained
+as historical audit evidence, not the final status.
+
+### Formatter registration, not frontend C++ decoding
+
+The real `greeter_auto_attach_pretty_string_terminal_workflow` first failed in
+35.21 seconds. Its watch displayed `{...}` with children instead of the required
+exact `"Hello "` summary. A four-line, unoptimized C++ program reproduced the
+same failure in native GDB. `gdb.default_visualizer(prefix)` returned `None`, and
+MI `-var-create` returned `{...}` even after `-enable-pretty-printing`.
+
+The local GDB uses `/usr/local/share/gdb`; the installed GCC formatter package
+lives under `/usr/share/gcc/python`. Enabling MI visualizers does not register
+that package. Explicit registration changed the native result to `"Hello "`
+with `displayhint=string` and no children. This distinguishes the installation
+problem from setup ordering or loss of formatted values in DDB projection.
+
+The new `ddb-tui/examples/debugger-settings/gdb-libstdcxx.yaml` is an explicit
+opt-in profile for this trusted installation layout. Users must review and adapt
+its path for their DDB host. It uses the existing canonical debugger session
+setup and native-command API, including later auto-attached sessions. It does
+not change GDB's auto-load safe-path, download formatters, search project folders
+for Python code, or implicitly run for every TUI launch. A unit test verifies
+that the example parses, runs only for GDB, and does not add default commands.
+
+The general mechanism remains native GDB/LLDB formatters, canonical summaries,
+presentation hints, retained variable identities, and lazy child expansion.
+Other language/library packages can register trusted formatters through the
+same explicit settings file. No C++ ABI parsing or target-method invocation was
+added to the frontend. See [GDB's variable-object documentation](https://sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-Variable-Objects.html)
+and [auto-load trust documentation](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Auto_002dloading-safe-path.html).
+
+The first profile-backed real workflow passed in 25.42 seconds. It asserts the
+watch value exactly, restores thread controls explicitly, steps from message
+assignment to the return at line 60, and checks the summary again. A structure
+that merely contains `Hello` cannot pass the assertion. The test accepts
+`DDB_GREETER_FORMATTER_SETTINGS` for a different trusted installation profile.
+
+### Snapshot-only running transitions
+
+A later repeat failed before reaching the watch assertion. The server was at
+its breakpoint, but the client remained running. That failure was not hidden or
+reclassified as a printer problem.
+
+A deterministic snapshot regression reproduced the coordination defect in
+0.16 seconds. An initial snapshot established a stopped cause and stopped peer.
+A newer snapshot showed only the peer running. The cause's stop revision did
+not change, and older running events could be correctly discarded as stale.
+The previous coordinator only revisited new stops or running stream events, so
+it neither invalidated the old pause marker nor requested another peer pause.
+
+Accepted snapshots now reconcile observed stopped-to-running transitions and
+new running members. They clear old pause markers for resumed sessions, retire
+a cause that resumed or disappeared, and reevaluate a surviving stopped cause.
+Pending interrupts remain deduplicated. The regression covers repeated
+snapshots, a new running thread in a session with a pending pause, and retiring
+a resumed cause. The existing explicit-control epoch and stale-event checks
+remain intact. Targets remain exact sessions with supported interrupt scope.
+
+### Final verification and limits
+
+Two consecutive invocations each passed all four greeter workflows. The
+ordinary all-stop cases measured 4,002 and 2,799 ms. Formatter-enabled cases
+measured 11,952 and 12,386 ms. These measurements include application execution
+and distributed pause coordination. The longer formatter-enabled path remains
+an optimization opportunity; it is not claimed to be subsecond or entirely
+frontend overhead. Source navigation stayed between 679 and 826 ms for the
+server and between 936 and 1,217 ms for the client in this final matrix.
+All original 15-second readiness assertions remain unchanged.
+
+| Final check | Result |
+| --- | --- |
+| TUI unit suite | 333 passed in 2.17 seconds |
+| Terminal helper tests | 2 passed |
+| Strict TUI all-target Clippy | Passed in 5.51 seconds |
+| Native terminal suite after the runtime fix | 31 passed in 90.40 seconds |
+| Final real greeter matrix | 8 passed across two consecutive invocations |
+| Real GDB and LLDB canonical typed inspection | 2 passed in 24.07 seconds, including generic formatter/child coverage |
+| Backend/source checks | The 344 backend, 13 resolver/native, 5 source API, and 20 bridge checks recorded above remain applicable; the closing changes do not alter backend code or API schemas |
+| Formatting and staged diff checks | Passed |
+
+Closing auditable commits:
+
+1. `607f52d8`: snapshot all-stop reconciliation and deterministic regression.
+2. `cae143a3`: explicit trusted formatter example, parser/planning test,
+   exact-string real greeter watch/step proof, and usage/security guidance.
+3. This documentation-only commit closes the requirement audit with observed
+   failures, fixes, measurements, and remaining performance limits.
+
+The owned throwaway C++ probe and binary were removed. No temporary debug
+instrumentation remains. No external broker, shared discovery configuration,
+user application, or debugger trust policy was modified. The sixteen-requirement
+follow-up is complete, with conditional requirement 4 not applicable.
