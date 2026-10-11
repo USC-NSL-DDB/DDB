@@ -39,35 +39,79 @@ impl StringStream {
         &self.raw_text[start_index..self.index - 1]
     }
 
-    /// Characters that gdb escapes that should not be escaped by this parser
-    pub(crate) fn advance_past_string_with_gdb_escapes(&mut self) -> String {
-        let mut buf = String::new();
-        loop {
-            let c = self.raw_text.as_bytes()[self.index] as char;
+    /// Decode an MI C string as bytes first so both literal UTF-8 and GDB's
+    /// octal-escaped UTF-8 produce the same string. The opening quote was read
+    /// by the caller. Invalid or truncated input must not panic or invent paths.
+    pub(crate) fn advance_past_string_with_gdb_escapes(
+        &mut self,
+    ) -> Result<String, crate::parser::Error> {
+        use crate::parser::Error::InvalidCString;
+        use std::convert::TryFrom;
+
+        let bytes = self.raw_text.as_bytes();
+        let mut buf = Vec::new();
+        while let Some(&byte) = bytes.get(self.index) {
             self.index += 1;
-
-            match c {
-                '\\' => {
-                    // We are on a backslash and there is another character after the backslash
-                    // to parse. Handle this case specially since gdb escaped it for
-
-                    // Get the next char that is being escaped
-                    let c2 = self.raw_text.as_bytes()[self.index] as char;
+            match byte {
+                b'\\' => {
+                    let &escaped = bytes
+                        .get(self.index)
+                        .ok_or(InvalidCString("trailing backslash"))?;
                     self.index += 1;
-                    // only store the escaped character in the buffer; don't store the backslash
-                    // (don't leave it escaped)
-                    buf.push(c2);
+                    let decoded = match escaped {
+                        b'a' => 7,
+                        b'b' => 8,
+                        b'e' => 27,
+                        b'f' => 12,
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
+                        b'v' => 11,
+                        b'\\' | b'"' | b'\'' | b'?' => escaped,
+                        b'0'..=b'7' => {
+                            let mut value = u16::from(escaped - b'0');
+                            for _ in 0..2 {
+                                let Some(&digit @ b'0'..=b'7') = bytes.get(self.index) else {
+                                    break;
+                                };
+                                value = value * 8 + u16::from(digit - b'0');
+                                self.index += 1;
+                            }
+                            u8::try_from(value)
+                                .map_err(|_| InvalidCString("octal escape exceeds one byte"))?
+                        }
+                        b'x' => {
+                            let start = self.index;
+                            let mut value = 0u8;
+                            while let Some(&digit) = bytes.get(self.index) {
+                                let digit = match digit {
+                                    b'0'..=b'9' => digit - b'0',
+                                    b'a'..=b'f' => digit - b'a' + 10,
+                                    b'A'..=b'F' => digit - b'A' + 10,
+                                    _ => break,
+                                };
+                                value = value
+                                    .checked_mul(16)
+                                    .and_then(|value| value.checked_add(digit))
+                                    .ok_or(InvalidCString("hex escape exceeds one byte"))?;
+                                self.index += 1;
+                            }
+                            if self.index == start {
+                                return Err(InvalidCString("empty hex escape"));
+                            }
+                            value
+                        }
+                        _ => return Err(InvalidCString("unknown escape")),
+                    };
+                    buf.push(decoded);
                 }
-                '"' => {
-                    // Quote is closed. Exit (and don't include the end quote).
-                    break;
+                b'"' => {
+                    return String::from_utf8(buf)
+                        .map_err(|_| InvalidCString("decoded bytes are not UTF-8"))
                 }
-                c => {
-                    // capture this character, and keep capturing
-                    buf.push(c);
-                }
+                byte => buf.push(byte),
             }
         }
-        buf
+        Err(InvalidCString("missing closing quote"))
     }
 }
