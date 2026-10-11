@@ -840,7 +840,12 @@ fn submit_breakpoint_target_picker(app: &mut App, requests: &mpsc::Sender<Backen
                 options: draft.options,
             },
         ),
-        Err(error) => app.error(error),
+        Err(error) => {
+            if let Some(picker) = app.breakpoint_target_picker.as_mut() {
+                picker.message = Some(error.clone());
+            }
+            app.error(error);
+        }
     }
 }
 
@@ -1872,9 +1877,7 @@ fn toggle_breakpoint(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
         );
         return;
     }
-    if let Err(error) = app.start_breakpoint_target_picker(BreakpointOptions::default()) {
-        app.error(error);
-    }
+    create_breakpoint(app, requests, BreakpointOptions::default());
 }
 
 fn start_breakpoint_prompt(app: &mut App) {
@@ -1922,11 +1925,21 @@ fn toggle_breakpoint_enabled(app: &mut App, requests: &mpsc::Sender<BackendReque
 
 fn create_breakpoint(
     app: &mut App,
-    _requests: &mpsc::Sender<BackendRequest>,
+    requests: &mpsc::Sender<BackendRequest>,
     options: BreakpointOptions,
 ) {
     if let Err(error) = app.start_breakpoint_target_picker(options) {
         app.error(error);
+    } else if let Some(lookup) = app
+        .breakpoint_target_picker
+        .as_ref()
+        .and_then(|picker| picker.lookup.clone())
+    {
+        if let Err(error) =
+            requests.try_send(BackendRequest::ResolveBreakpointTargets(lookup.clone()))
+        {
+            app.finish_source_targets(lookup, Err(format!("request queue unavailable: {error}")));
+        }
     }
 }
 
@@ -2215,6 +2228,9 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
+        UiMessage::BreakpointTargets { lookup, result } => {
+            app.finish_source_targets(lookup, result)
+        }
         UiMessage::LogpointsConfigured { instance, ids } => {
             if app.logpoint_instance().as_deref() == Some(&instance) {
                 app.logpoint_ids = ids.into_iter().collect();

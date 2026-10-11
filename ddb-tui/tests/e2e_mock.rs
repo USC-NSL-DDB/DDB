@@ -2626,6 +2626,12 @@ impl Tui {
     }
 
     fn wait_for(&mut self, needle: &str) {
+        if needle == "DDB breakpoint targets" {
+            self.wait_for_current_frame(|screen| {
+                screen.contains(needle) && screen.contains("Session ·")
+            });
+            return;
+        }
         let deadline = Instant::now() + TIMEOUT;
         loop {
             self.assert_running();

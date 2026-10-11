@@ -427,6 +427,17 @@ pub struct BreakpointTargetPicker {
     pub draft: BreakpointDraft,
     pub choices: Vec<BreakpointTargetChoice>,
     pub cursor: usize,
+    pub lookup: Option<SourceTargetLookup>,
+    pub loading: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceTargetLookup {
+    pub generation: u64,
+    pub instance: Option<String>,
+    pub source: String,
+    pub default_session: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -515,6 +526,7 @@ pub struct App {
     pub source_browser: SourceBrowser,
     pub source_workspace: std::sync::Arc<crate::source_workspace::Workspace>,
     source_server_instance: Option<String>,
+    source_target_generation: u64,
     snapshot_revision: u64,
     snapshot_sequence: u64,
     pub source_explorer: crate::source_explorer::Explorer,
@@ -617,6 +629,7 @@ impl App {
             source_browser: SourceBrowser::default(),
             source_workspace: std::sync::Arc::default(),
             source_server_instance: None,
+            source_target_generation: 0,
             snapshot_revision: 0,
             snapshot_sequence: 0,
             source_explorer: crate::source_explorer::Explorer::default(),
@@ -1674,6 +1687,25 @@ impl App {
             return Err("DDB has no sessions eligible for a breakpoint".to_string());
         }
 
+        if let v2::breakpoint_spec::Location::Source(source) = &location {
+            self.source_target_generation = self.source_target_generation.wrapping_add(1);
+            let lookup = SourceTargetLookup {
+                generation: self.source_target_generation,
+                instance: self.source_server_instance.clone(),
+                source: source.source.clone(),
+                default_session: selected_session_id,
+            };
+            self.breakpoint_target_picker = Some(BreakpointTargetPicker {
+                draft: BreakpointDraft { location, options },
+                choices: Vec::new(),
+                cursor: 0,
+                lookup: Some(lookup),
+                loading: true,
+                message: Some("Discovering source-relevant sessions and groups…".into()),
+            });
+            return Ok(());
+        }
+
         let mut choices = Vec::new();
         if self.capabilities.supports_breakpoint_action("distributed") {
             choices.push(BreakpointTargetChoice {
@@ -1757,9 +1789,102 @@ impl App {
             draft: BreakpointDraft { location, options },
             choices,
             cursor,
+            lookup: None,
+            loading: false,
+            message: None,
         });
         self.status = "choose one or more DDB breakpoint targets".to_string();
         Ok(())
+    }
+
+    pub fn finish_source_targets(
+        &mut self,
+        lookup: SourceTargetLookup,
+        result: Result<v2::ResolveSourceTargetsResponse, String>,
+    ) {
+        let Some(picker) = self.breakpoint_target_picker.as_mut() else {
+            return;
+        };
+        if picker.lookup.as_ref() != Some(&lookup) {
+            return;
+        }
+        if lookup.instance != self.source_server_instance {
+            picker.loading = false;
+            picker.message =
+                Some("DDB restarted during discovery. Cancel and reopen this picker.".into());
+            return;
+        }
+        picker.loading = false;
+        let response = match result {
+            Ok(response) => response,
+            Err(error) => {
+                picker.message = Some(format!(
+                    "Source target discovery failed: {error}. Cancel and retry."
+                ));
+                return;
+            }
+        };
+        if lookup.instance.as_ref().is_some_and(|instance| {
+            response
+                .context
+                .as_ref()
+                .is_none_or(|context| &context.server_instance_id != instance)
+        }) {
+            picker.message = Some(
+                "Source target response belongs to another DDB instance. Cancel and retry.".into(),
+            );
+            return;
+        }
+        picker.choices = response
+            .targets
+            .into_iter()
+            .filter_map(|entry| {
+                let (target, kind, selected) = match entry.target?.selector? {
+                    target::Selector::Session(session) => {
+                        let selected = lookup.default_session.as_ref() == Some(&session.session_id);
+                        (
+                            BreakpointTarget::Session(session.session_id),
+                            "Session",
+                            selected,
+                        )
+                    }
+                    target::Selector::Group(group)
+                        if self
+                            .capabilities
+                            .supports_breakpoint_action("group_inheritance") =>
+                    {
+                        (BreakpointTarget::Group(group.group_id), "Group", false)
+                    }
+                    _ => return None,
+                };
+                Some(BreakpointTargetChoice {
+                    target,
+                    label: format!("{kind} · {}", entry.display_name),
+                    detail: format!("{} matching sessions", entry.matching_session_count),
+                    selected,
+                })
+            })
+            .collect();
+        picker.cursor = picker
+            .choices
+            .iter()
+            .position(|choice| choice.selected)
+            .unwrap_or(0);
+        picker.message = if !response.complete {
+            Some(format!(
+                "Incomplete discovery: {}",
+                response
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+        } else if picker.choices.is_empty() {
+            Some("No debugger sessions use this exact source path.".into())
+        } else {
+            None
+        };
     }
 
     pub fn move_breakpoint_target_picker(&mut self, delta: isize) {
@@ -1822,6 +1947,9 @@ impl App {
         let Some(picker) = self.breakpoint_target_picker.as_ref() else {
             return Err("no breakpoint target selection is active".to_string());
         };
+        if picker.loading {
+            return Err("Source target discovery is still pending".into());
+        }
         let mut targets = picker
             .choices
             .iter()
@@ -2745,6 +2873,7 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    ResolveBreakpointTargets(SourceTargetLookup),
     ExportDetails(DetailsExport),
     ConfigureLogpoint {
         id: String,
@@ -2858,6 +2987,10 @@ pub struct BreakpointOptions {
 
 #[derive(Debug)]
 pub enum UiMessage {
+    BreakpointTargets {
+        lookup: SourceTargetLookup,
+        result: Result<v2::ResolveSourceTargetsResponse, String>,
+    },
     ExpressionInspected {
         request: ExpressionInspection,
         result: Result<v2::EvaluationResult, String>,
@@ -2975,6 +3108,46 @@ pub enum EventStreamStatus {
 
 #[cfg(test)]
 mod v2_tests {
+    fn finish_source_targets(app: &mut super::App) {
+        use ddb_api_client::v2;
+        let lookup = app
+            .breakpoint_target_picker
+            .as_ref()
+            .unwrap()
+            .lookup
+            .clone()
+            .unwrap();
+        let mut targets = app
+            .groups
+            .iter()
+            .map(|group| v2::SourceTarget {
+                target: Some(crate::api::group_target(group.group_id.clone())),
+                display_name: group.display_name.clone(),
+                matching_session_count: 1,
+            })
+            .collect::<Vec<_>>();
+        targets.extend(app.sessions.iter().map(|session| v2::SourceTarget {
+            target: Some(crate::api::session_target(session.session_id.clone())),
+            display_name: session.display_name.clone(),
+            matching_session_count: 1,
+        }));
+        let context = lookup
+            .instance
+            .as_ref()
+            .map(|instance| v2::ResponseContext {
+                server_instance_id: instance.clone(),
+                ..Default::default()
+            });
+        app.finish_source_targets(
+            lookup,
+            Ok(v2::ResolveSourceTargetsResponse {
+                context,
+                targets,
+                complete: true,
+                warnings: Vec::new(),
+            }),
+        );
+    }
     #[test]
     fn routine_snapshots_preserve_active_errors_but_reconnect_clears_connection_errors() {
         let mut app = super::App::new("http://localhost".into());
@@ -3619,6 +3792,7 @@ mod v2_tests {
 
         app.start_breakpoint_target_picker(BreakpointOptions::default())
             .unwrap();
+        finish_source_targets(&mut app);
         let group_index = app
             .breakpoint_target_picker
             .as_ref()
@@ -3750,6 +3924,7 @@ mod v2_tests {
 
         app.start_breakpoint_target_picker(BreakpointOptions::default())
             .unwrap();
+        finish_source_targets(&mut app);
         let picker = app.breakpoint_target_picker.as_ref().unwrap();
         assert_eq!(picker.choices.len(), 2);
         assert!(picker

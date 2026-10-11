@@ -1755,7 +1755,20 @@ fn draw_breakpoint_target_picker(
     ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let rows = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(if picker.message.is_some() { 3 } else { 0 }),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    if let Some(message) = &picker.message {
+        frame.render_widget(
+            Paragraph::new(terminal_text(message))
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(YELLOW)),
+            rows[1],
+        );
+    }
     let visible = rows[0].height.max(1) as usize;
     let first = picker
         .cursor
@@ -1814,7 +1827,7 @@ fn draw_breakpoint_target_picker(
         Constraint::Percentage(25),
         Constraint::Percentage(25),
     ])
-    .split(rows[1]);
+    .split(rows[2]);
     frame.render_widget(
         Paragraph::new("Space toggle · ↑↓ move").style(Style::default().fg(MUTED)),
         actions[0],
@@ -1822,7 +1835,17 @@ fn draw_breakpoint_target_picker(
     frame.render_widget(
         Paragraph::new("[ Apply ]")
             .alignment(Alignment::Center)
-            .style(Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+            .style(
+                Style::default()
+                    .fg(
+                        if picker.loading || !picker.choices.iter().any(|choice| choice.selected) {
+                            MUTED
+                        } else {
+                            GREEN
+                        },
+                    )
+                    .add_modifier(Modifier::BOLD),
+            ),
         actions[1],
     );
     frame.render_widget(
@@ -1831,7 +1854,9 @@ fn draw_breakpoint_target_picker(
             .style(Style::default().fg(YELLOW)),
         actions[2],
     );
-    areas.breakpoint_target_apply = Some(actions[1]);
+    if !picker.loading && picker.choices.iter().any(|choice| choice.selected) {
+        areas.breakpoint_target_apply = Some(actions[1]);
+    }
     areas.breakpoint_target_cancel = Some(actions[2]);
 }
 fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
@@ -2969,6 +2994,9 @@ mod v2_tests {
                 },
             ],
             cursor: 1,
+            lookup: None,
+            loading: false,
+            message: None,
         });
         let screen = render(&mut app, 140, 40);
         assert!(screen.contains("DDB breakpoint targets"), "{screen}");

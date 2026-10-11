@@ -187,6 +187,11 @@ fn breakpoint_creation_defaults_to_the_document_owner_without_changing_selection
     let mut app = app(&["a"], true);
     let (sender, mut receiver) = mpsc::channel(2);
     toggle_breakpoint(&mut app, &sender);
+    let BackendRequest::ResolveBreakpointTargets(lookup) = receiver.try_recv().unwrap() else {
+        panic!("source breakpoints must discover their targets through DDB")
+    };
+    assert_eq!(lookup.source, "/build/main.rs");
+    finish_targets(&mut app, lookup, &["a"]);
     let picker = app.breakpoint_target_picker.as_ref().unwrap();
     assert!(
         matches!(&picker.draft.location, v2::breakpoint_spec::Location::Source(source)
@@ -218,6 +223,14 @@ fn unbound_and_multi_owner_documents_require_explicit_breakpoint_scope() {
         let mut app = app(owners, true);
         app.start_breakpoint_target_picker(BreakpointOptions::default())
             .unwrap();
+        let lookup = app
+            .breakpoint_target_picker
+            .as_ref()
+            .unwrap()
+            .lookup
+            .clone()
+            .unwrap();
+        finish_targets(&mut app, lookup, &["a", "b"]);
         assert!(app
             .breakpoint_target_picker
             .as_ref()
@@ -237,6 +250,145 @@ fn unbound_and_multi_owner_documents_require_explicit_breakpoint_scope() {
         .contains("no debugger path mapping"));
 }
 
+fn finish_targets(app: &mut App, lookup: crate::model::SourceTargetLookup, sessions: &[&str]) {
+    let context = lookup
+        .instance
+        .as_ref()
+        .map(|instance| v2::ResponseContext {
+            server_instance_id: instance.clone(),
+            ..Default::default()
+        });
+    app.finish_source_targets(
+        lookup,
+        Ok(v2::ResolveSourceTargetsResponse {
+            context,
+            targets: sessions
+                .iter()
+                .map(|id| v2::SourceTarget {
+                    target: Some(api::session_target(*id)),
+                    display_name: (*id).into(),
+                    matching_session_count: 1,
+                })
+                .collect(),
+            complete: true,
+            warnings: Vec::new(),
+        }),
+    );
+}
+
+#[test]
+fn source_target_errors_and_incomplete_empty_results_are_visible_inside_the_modal() {
+    let mut app = app(&["a"], true);
+    app.start_breakpoint_target_picker(Default::default())
+        .unwrap();
+    let lookup = app
+        .breakpoint_target_picker
+        .as_ref()
+        .unwrap()
+        .lookup
+        .clone()
+        .unwrap();
+    let render = |app: &mut App| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| app.areas = ui::draw(frame, app))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    };
+    assert!(render(&mut app).contains("Discovering source-relevant"));
+    assert!(app.areas.breakpoint_target_apply.is_none());
+    app.finish_source_targets(lookup.clone(), Err("request timed out".into()));
+    assert!(render(&mut app).contains("request timed out"));
+    assert!(!app.breakpoint_target_picker.as_ref().unwrap().loading);
+    app.finish_source_targets(
+        lookup.clone(),
+        Ok(v2::ResolveSourceTargetsResponse {
+            complete: false,
+            warnings: vec![v2::SourceDiscoveryWarning {
+                session_id: "a".into(),
+                message: "running target is unknown".into(),
+            }],
+            ..Default::default()
+        }),
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("Incomplete discovery"));
+    assert!(screen.contains("running target is unknown"));
+    assert!(!screen.contains("No debugger sessions use"));
+    finish_targets(&mut app, lookup, &[]);
+    assert!(render(&mut app).contains("No debugger sessions use this exact source path"));
+    assert!(app.areas.breakpoint_target_apply.is_none());
+}
+
+#[test]
+fn full_request_queue_does_not_leave_source_targets_loading() {
+    let mut app = app(&["a"], true);
+    let (sender, _receiver) = mpsc::channel(1);
+    sender.try_send(BackendRequest::Refresh).unwrap();
+    toggle_breakpoint(&mut app, &sender);
+    let picker = app.breakpoint_target_picker.as_ref().unwrap();
+    assert!(!picker.loading);
+    assert!(picker
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("queue unavailable"));
+    assert!(picker.choices.is_empty());
+}
+
+#[test]
+fn source_targets_are_server_owned_and_old_picker_replies_cannot_replace_them() {
+    let mut app = app(&["a"], true);
+    app.start_breakpoint_target_picker(Default::default())
+        .unwrap();
+    let old = app
+        .breakpoint_target_picker
+        .as_ref()
+        .unwrap()
+        .lookup
+        .clone()
+        .unwrap();
+    assert!(app
+        .breakpoint_target_picker
+        .as_ref()
+        .unwrap()
+        .choices
+        .is_empty());
+    assert!(app
+        .commit_breakpoint_target_picker()
+        .unwrap_err()
+        .contains("pending"));
+    app.cancel_breakpoint_target_picker();
+    app.start_breakpoint_target_picker(Default::default())
+        .unwrap();
+    let current = app
+        .breakpoint_target_picker
+        .as_ref()
+        .unwrap()
+        .lookup
+        .clone()
+        .unwrap();
+    finish_targets(&mut app, old, &["a"]);
+    assert!(app.breakpoint_target_picker.as_ref().unwrap().loading);
+    finish_targets(&mut app, current, &["b"]);
+    let picker = app.breakpoint_target_picker.as_ref().unwrap();
+    assert_eq!(picker.choices.len(), 1);
+    assert_eq!(
+        picker.choices[0].target,
+        BreakpointTarget::Session("b".into())
+    );
+    assert!(
+        !picker.choices[0].selected,
+        "a local owner cannot override DDB's discovery result"
+    );
+}
+
 #[test]
 fn breakpoint_toggle_never_deletes_an_unrelated_owner_or_an_ambiguous_match() {
     let mut app = app(&["a"], true);
@@ -244,7 +396,10 @@ fn breakpoint_toggle_never_deletes_an_unrelated_owner_or_an_ambiguous_match() {
     app.breakpoints
         .push(breakpoint("b", api::session_target("b")));
     toggle_breakpoint(&mut app, &sender);
-    assert!(receiver.try_recv().is_err());
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(BackendRequest::ResolveBreakpointTargets(_))
+    ));
     assert!(app.breakpoint_target_picker.is_some());
     app.cancel_breakpoint_target_picker();
     app.breakpoints

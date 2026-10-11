@@ -38,6 +38,7 @@ pub async fn run(
     let mut inspections = JoinSet::new();
     let mut sources = JoinSet::new();
     let mut discoveries = JoinSet::new();
+    let mut breakpoint_discoveries = JoinSet::new();
     let mut logpoint_tasks = JoinSet::new();
     let mut exports = JoinSet::new();
     let mut logpoints = crate::logpoints::Registry::default();
@@ -62,6 +63,10 @@ pub async fn run(
         let request = match ready {
             Some(request) => request,
             None => tokio::select! {
+                result = breakpoint_discoveries.join_next(), if !breakpoint_discoveries.is_empty() => {
+                    if let Some(result) = result { report_inspection_failure(result, &messages).await; }
+                    continue;
+                }
                 result = exports.join_next(), if !exports.is_empty() => {
                     if let Some(result) = result { report_export(result, &messages).await; }
                     continue;
@@ -167,7 +172,28 @@ pub async fn run(
             }
         }
 
-        if let BackendRequest::LoadSource(request) = request {
+        if let BackendRequest::ResolveBreakpointTargets(lookup) = request {
+            breakpoint_discoveries.abort_all();
+            while let Some(result) = breakpoint_discoveries.try_join_next() {
+                report_inspection_failure(result, &messages).await;
+            }
+            let client = client.clone();
+            let messages = messages.clone();
+            breakpoint_discoveries.spawn(async move {
+                let result = client
+                    .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                        context: None,
+                        source: lookup.source.clone(),
+                        target: None,
+                        refresh: false,
+                    })
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = messages
+                    .send(UiMessage::BreakpointTargets { lookup, result })
+                    .await;
+            });
+        } else if let BackendRequest::LoadSource(request) = request {
             sources.abort_all();
             while let Some(result) = sources.try_join_next() {
                 report_inspection_failure(result, &messages).await;
@@ -516,7 +542,8 @@ async fn handle(
                 })
                 .await?;
         }
-        BackendRequest::LoadSource(_)
+        BackendRequest::ResolveBreakpointTargets(_)
+        | BackendRequest::LoadSource(_)
         | BackendRequest::ExploreSources(_)
         | BackendRequest::CancelSourceDiscovery => {
             unreachable!("source requests have their own task lanes")
