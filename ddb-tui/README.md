@@ -780,3 +780,11 @@ DDB_GREETER_WORKSPACE=/absolute/path/to/grpc/examples/cpp/helloworld \
   cargo test --test e2e_mock greeter_auto_attach_all_stop_terminal_workflow \
   -- --ignored --test-threads=1
 ```
+
+Use the `greeter_auto_attach` filter to also run the server-only and two-session
+client source-readiness regressions. Add `--nocapture` to print stage timings.
+Source readiness measures navigation through the rendered cursor; all-stop
+measures continue through a canonical snapshot showing the server breakpoint
+and every thread stopped. The subsequent hit-owner timing includes snapshot
+verification and explicit owner navigation, not just terminal painting. These
+tests retain the ordinary 15-second readiness deadlines.

@@ -39,19 +39,42 @@ impl Drop for OwnedTestProcess {
     }
 }
 
+struct OwnedBrokerProcess(Child);
+impl Drop for OwnedBrokerProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        // The broker is not ptraced. Reap it before releasing the test lock so
+        // the next workflow cannot race the previous listener's shutdown.
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 #[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
 fn greeter_auto_attach_all_stop_terminal_workflow() {
-    greeter_auto_attach_terminal_workflow(false);
+    greeter_auto_attach_terminal_workflow(GreeterWorkflow::AllStop);
 }
 
 #[test]
 #[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
 fn greeter_auto_attach_source_readiness_terminal_workflow() {
-    greeter_auto_attach_terminal_workflow(true);
+    greeter_auto_attach_terminal_workflow(GreeterWorkflow::ServerSource);
 }
 
-fn greeter_auto_attach_terminal_workflow(source_only: bool) {
+#[test]
+#[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
+fn greeter_auto_attach_client_source_readiness_terminal_workflow() {
+    greeter_auto_attach_terminal_workflow(GreeterWorkflow::ClientSource);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum GreeterWorkflow {
+    ServerSource,
+    ClientSource,
+    AllStop,
+}
+
+fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     let _guard = REAL_DEBUGGER_LOCK.lock().unwrap();
     let workspace = PathBuf::from(
         std::env::var_os("DDB_GREETER_WORKSPACE").expect("set DDB_GREETER_WORKSPACE"),
@@ -75,7 +98,7 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
     )
     .unwrap();
     drop(reserved);
-    let mut broker = OwnedTestProcess(Some(
+    let mut broker = OwnedBrokerProcess(
         Command::new("mosquitto")
             .arg("-c")
             .arg(&broker_config)
@@ -83,10 +106,10 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
             .stderr(Stdio::null())
             .spawn()
             .unwrap(),
-    ));
+    );
     let deadline = Instant::now() + TIMEOUT;
     while std::net::TcpStream::connect(("127.0.0.1", broker_port)).is_err() {
-        assert!(broker.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert!(broker.0.try_wait().unwrap().is_none());
         assert!(Instant::now() < deadline, "broker did not start");
         thread::sleep(POLL);
     }
@@ -125,9 +148,14 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
         .position(|line| line.contains("reply->set_message"))
         .unwrap()
         + 1;
+    let source_started = Instant::now();
     tui.send(format!("g{}:{server_line}\r", server_source.display()).as_bytes());
     tui.wait_for_source_marker('▸', server_line);
-    if source_only {
+    eprintln!(
+        "ddb_tui_greeter_timing stage=server_source_ready elapsed_ms={}",
+        source_started.elapsed().as_millis()
+    );
+    if workflow == GreeterWorkflow::ServerSource {
         tui.quit();
         ddb.shutdown();
         return;
@@ -169,8 +197,18 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
         .position(|line| line.contains("Status status = stub_->SayHello"))
         .unwrap()
         + 1;
+    let source_started = Instant::now();
     tui.send(format!("g{}:{client_line}\r", client_source.display()).as_bytes());
     tui.wait_for_source_marker('▸', client_line);
+    eprintln!(
+        "ddb_tui_greeter_timing stage=client_source_ready elapsed_ms={}",
+        source_started.elapsed().as_millis()
+    );
+    if workflow == GreeterWorkflow::ClientSource {
+        tui.quit();
+        ddb.shutdown();
+        return;
+    }
     tui.send(b"b");
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
@@ -189,6 +227,7 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
             .iter()
             .all(|t| t.state == v2::ThreadState::Stopped as i32)
     });
+    let server_hit_started = Instant::now();
     tui.send(b"\x1b[15~");
     ddb.wait_for_snapshot(|s| {
         s.threads.iter().any(|t| {
@@ -203,6 +242,11 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
             .iter()
             .all(|t| t.state == v2::ThreadState::Stopped as i32)
     });
+    eprintln!(
+        "ddb_tui_greeter_timing stage=server_hit_all_stopped elapsed_ms={}",
+        server_hit_started.elapsed().as_millis()
+    );
+    let hit_render_started = Instant::now();
     let stopped = ddb
         .runtime
         .block_on(ddb.client.get_snapshot(v2::GetSnapshotRequest {
@@ -258,6 +302,10 @@ fn greeter_auto_attach_terminal_workflow(source_only: bool) {
     tui.wait_for_current_frame(|screen| {
         screen.contains("Paused breakpoint hits") && screen.contains("tui-server (")
     });
+    eprintln!(
+        "ddb_tui_greeter_timing stage=all_stop_to_hit_owner_render elapsed_ms={}",
+        hit_render_started.elapsed().as_millis()
+    );
     tui.clear_capture();
     tui.send(b"\r");
     tui.wait_for_source_marker('▶', server_line);
