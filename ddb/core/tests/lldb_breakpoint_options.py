@@ -15,6 +15,66 @@ with patch.dict(sys.modules, {"lldb": types.ModuleType("lldb")}):
     spec.loader.exec_module(bridge_module)
 
 
+class SourceDirectoryPatternTest(unittest.TestCase):
+    def setUp(self):
+        self.paths = [
+            "/repo/src[x]/requested.c",
+            "/repo/src[x]/nested/child.c",
+            "/repo/src[x]-other/other.c",
+            "/other/repo/src[x]/unrelated.c",
+            r'/repo/src+(){}^$?*|\"/quoted.c',
+            "/root_file.c",
+        ]
+        units = []
+        for path in self.paths:
+            unit = Mock()
+            unit.GetFileSpec.return_value = path
+            units.append(unit)
+        module = Mock()
+        module.compile_unit_iter.return_value = units
+        target = Mock()
+        target.module_iter.return_value = [module]
+        self.bridge = object.__new__(bridge_module.Bridge)
+        self.bridge._target = Mock(return_value=target)
+        self.file_path = patch.object(bridge_module, "_file_path", side_effect=lambda path: path)
+        self.file_path.start()
+        self.addCleanup(self.file_path.stop)
+
+    def sources(self, arguments):
+        result, payload = self.bridge._source_files(arguments)
+        self.assertEqual(result, "done")
+        return [source["fullname"] for source in payload["files"]]
+
+    def test_literal_directory_expression_matches_exact_parent(self):
+        self.assertEqual(
+            self.sources(["--dirname", r"^/repo/src\[x\]$"]),
+            self.paths[:1],
+        )
+
+    def test_directory_expression_matches_directory_not_basename(self):
+        self.assertEqual(self.sources(["--dirname", "nested$"]), [self.paths[1]])
+        self.assertEqual(self.sources(["--dirname", "requested"]), [])
+
+    def test_unfiltered_and_exact_root_queries(self):
+        self.assertEqual(self.sources([]), sorted(self.paths))
+        self.assertEqual(self.sources(["--dirname", "^/$"]), [self.paths[-1]])
+
+    def test_portable_literals_survive_mi_command_tokenization(self):
+        pattern = r'^/repo/src[+][(][)][{][}]\^\$[?]\*[|]\\' + '"$'
+        command = "-file-list-exec-source-files --dirname " + bridge_module.json.dumps(pattern)
+        self.bridge._select_thread = Mock()
+        result, payload = self.bridge.execute(command)
+        self.assertEqual(result, "done")
+        self.assertEqual([source["fullname"] for source in payload["files"]], [self.paths[-2]])
+
+    def test_missing_or_invalid_expression_is_not_an_empty_listing(self):
+        with self.assertRaisesRegex(ValueError, "requires a regular expression"):
+            self.sources(["--dirname"])
+        with self.assertRaises(bridge_module.re.error):
+            self.sources(["--dirname", "["])
+        self.bridge._target.assert_not_called()
+
+
 class StorageAddressTest(unittest.TestCase):
     def value(self, address):
         value = Mock()

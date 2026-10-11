@@ -232,6 +232,10 @@ jobs:
         working-directory: ddb
         run: cargo test --workspace --all-targets
 
+      - name: Verify literal debugger source directories
+        working-directory: ddb
+        run: cargo test --locked -p ddb --bin ddb real_gdb_source_directory_is_literal_and_exact -- --ignored
+
       - name: Verify optimized thread state transitions
         working-directory: ddb
         run: cargo test -p ddb --release thread_status_mutation_is_not_debug_only

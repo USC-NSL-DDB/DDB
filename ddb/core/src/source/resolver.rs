@@ -45,6 +45,7 @@ impl SourceResolutionPolicy {
 
 #[async_trait]
 trait SourceListingProvider: Send + Sync {
+    /// List all sources, or only those in an exact literal parent directory.
     async fn list_sources(&self, sid: u64, dirname: Option<&str>) -> Result<Vec<String>>;
 }
 
@@ -55,14 +56,7 @@ struct DebuggerSourceListingProvider {
 #[async_trait]
 impl SourceListingProvider for DebuggerSourceListingProvider {
     async fn list_sources(&self, sid: u64, dirname: Option<&str>) -> Result<Vec<String>> {
-        let command = match dirname {
-            Some(dirname) => {
-                let dirname = serde_json::to_string(dirname)
-                    .context("failed to quote source directory for debugger command")?;
-                format!("-file-list-exec-source-files --dirname {dirname}")
-            }
-            None => "-file-list-exec-source-files".to_owned(),
-        };
+        let command = source_listing_command(dirname)?;
         let completion = self
             .executor
             .execute(&command, Target::Session(sid))
@@ -76,6 +70,44 @@ impl SourceListingProvider for DebuggerSourceListingProvider {
             ));
         }
         Ok(paths)
+    }
+}
+
+fn source_listing_command(dirname: Option<&str>) -> Result<String> {
+    match dirname {
+        Some(dirname) => {
+            // GDB's source-listing operand uses basic regular expressions.
+            // Encode literals in the BRE/Python common subset used by GDB and
+            // the LLDB bridge. Exact-directory discovery is sufficient for the
+            // requested path; a full catalog query remains unfiltered.
+            if dirname.is_empty() {
+                return Ok("-file-list-exec-source-files".to_owned());
+            }
+            let trimmed = dirname.trim_end_matches('/');
+            let directory = if trimmed.is_empty() { "/" } else { trimmed };
+            let mut pattern = String::from("^");
+            for character in directory.chars() {
+                match character {
+                    '\\' | '.' | '^' | '$' | '[' | ']' | '*' => {
+                        pattern.push('\\');
+                        pattern.push(character);
+                    }
+                    // Backslash-escaping these changes their meaning in BRE.
+                    // A single-character class is literal in both engines.
+                    '(' | ')' | '|' | '+' | '?' | '{' | '}' => {
+                        pattern.push('[');
+                        pattern.push(character);
+                        pattern.push(']');
+                    }
+                    _ => pattern.push(character),
+                }
+            }
+            pattern.push('$');
+            let pattern = serde_json::to_string(&pattern)
+                .context("failed to quote source directory pattern for debugger command")?;
+            Ok(format!("-file-list-exec-source-files --dirname {pattern}"))
+        }
+        None => Ok("-file-list-exec-source-files".to_owned()),
     }
 }
 
@@ -422,6 +454,185 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires cc and real GDB"]
+    async fn real_gdb_source_directory_is_literal_and_exact() {
+        use std::process::Stdio;
+        use tokio::io::AsyncWriteExt;
+
+        for directory in [
+            "src[x]",
+            "src.v1",
+            "src+plus",
+            "src (copy)",
+            r#"src{a}^$|?*\"quote"#,
+            "源码",
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            let requested = fixture.path().join(directory);
+            let nested = requested.join("nested");
+            let sibling = fixture.path().join(format!("{directory}-other"));
+            std::fs::create_dir_all(&nested).unwrap();
+            std::fs::create_dir_all(&sibling).unwrap();
+            let source = requested.join("requested.c");
+            let child = nested.join("child.c");
+            let other = sibling.join("other.c");
+            std::fs::write(
+                &source,
+                "int child(void); int other(void); int main(void) { return child() + other(); }\n",
+            )
+            .unwrap();
+            std::fs::write(&child, "int child(void) { return 1; }\n").unwrap();
+            std::fs::write(&other, "int other(void) { return 2; }\n").unwrap();
+            let executable = fixture.path().join("fixture");
+            let compilation = std::process::Command::new("cc")
+                .args(["-g", "-O0"])
+                .args([&source, &child, &other])
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(
+                compilation.status.success(),
+                "{}",
+                String::from_utf8_lossy(&compilation.stderr)
+            );
+            let mut gdb = tokio::process::Command::new("gdb")
+                .args(["--nx", "--quiet", "--interpreter=mi2"])
+                .arg(&executable)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let command = source_listing_command(Some(requested.to_str().unwrap())).unwrap();
+            let mut input = gdb.stdin.take().unwrap();
+            input
+                .write_all(
+                    format!("1-file-list-exec-source-files\n2{command}\n3-gdb-exit\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+            drop(input);
+            let output = tokio::time::timeout(Duration::from_secs(10), gdb.wait_with_output())
+                .await
+                .expect("GDB source listing timed out")
+                .unwrap();
+            assert!(output.status.success());
+            let output = String::from_utf8(output.stdout).unwrap();
+            let complete = output
+                .lines()
+                .find(|line| line.starts_with("1^done"))
+                .unwrap();
+            let filtered = output
+                .lines()
+                .find(|line| line.starts_with("2^done"))
+                .unwrap();
+            let decode = |line: &str| {
+                use crate::{
+                    cmd_flow::{FinishedCmd, ParsedSessionResponse},
+                    debugger::gdb::parser::{normalize_dict, GdbParser},
+                };
+                use gdbmi::parser::{Message, Response};
+                let Message::Response(Response::Result {
+                    message, payload, ..
+                }) = GdbParser::parse(line).unwrap()
+                else {
+                    panic!("expected a result record");
+                };
+                assert_eq!(message, "done");
+                SourceFiles::decode(&FinishedCmd::new(
+                    None,
+                    1,
+                    vec![ParsedSessionResponse::new(
+                        1,
+                        message,
+                        payload.map(normalize_dict),
+                    )],
+                ))
+                .unwrap()
+                .paths
+            };
+            let complete = decode(complete);
+            let filtered = decode(filtered);
+            for path in [&source, &child, &other] {
+                assert!(
+                    complete
+                        .iter()
+                        .any(|actual| actual == path.to_str().unwrap()),
+                    "fixture source is absent: {path:?}"
+                );
+            }
+            assert!(
+                filtered
+                    .iter()
+                    .any(|actual| actual == source.to_str().unwrap()),
+                "literal directory {directory:?} omitted its source: {filtered:?}"
+            );
+            assert!(
+                !filtered
+                    .iter()
+                    .any(|actual| actual == child.to_str().unwrap()),
+                "exact directory {directory:?} included a descendant: {filtered:?}"
+            );
+            assert!(
+                !filtered
+                    .iter()
+                    .any(|actual| actual == other.to_str().unwrap()),
+                "directory filter matched sibling {directory:?}: {filtered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_listing_command_quotes_patterns_and_handles_root() {
+        assert_eq!(
+            source_listing_command(None).unwrap(),
+            "-file-list-exec-source-files"
+        );
+        for directory in ["/", "///"] {
+            assert_eq!(
+                source_listing_command(Some(directory)).unwrap(),
+                r#"-file-list-exec-source-files --dirname "^/$""#
+            );
+        }
+        assert_eq!(
+            source_listing_command(Some("/src///")).unwrap(),
+            r#"-file-list-exec-source-files --dirname "^/src$""#
+        );
+        // No path prefix is known for a relative basename. Do not turn that
+        // into a root-only query, or treat a leading '-' as an MI option.
+        assert_eq!(
+            source_listing_command(Some("")).unwrap(),
+            "-file-list-exec-source-files"
+        );
+        assert_eq!(
+            source_listing_command(Some("-src")).unwrap(),
+            r#"-file-list-exec-source-files --dirname "^-src$""#
+        );
+        for (directory, expected_pattern) in [
+            ("src[x]", r"^/repo/src\[x\]$"),
+            ("src.v1", r"^/repo/src\.v1$"),
+            ("src+plus", "^/repo/src[+]plus$"),
+            ("src (copy)", "^/repo/src [(]copy[)]$"),
+            (
+                r#"src{a}^$|?*\"quote"#,
+                r#"^/repo/src[{]a[}]\^\$[|][?]\*\\"quote$"#,
+            ),
+            ("源码", "^/repo/源码$"),
+        ] {
+            let command = source_listing_command(Some(&format!("/repo/{directory}"))).unwrap();
+            let argument = command
+                .strip_prefix("-file-list-exec-source-files --dirname ")
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<String>(argument).unwrap(),
+                expected_pattern
+            );
+        }
+    }
 
     struct InFlightGuard<'a>(&'a AtomicUsize);
 

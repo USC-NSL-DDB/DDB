@@ -1472,11 +1472,14 @@ class Bridge(object):
         }
 
     def _source_files(self, arguments):
-        dirname = None
+        directory_pattern = None
         if "--dirname" in arguments:
             index = arguments.index("--dirname")
-            if index + 1 < len(arguments):
-                dirname = os.path.realpath(arguments[index + 1])
+            if index + 1 >= len(arguments):
+                raise ValueError("--dirname requires a regular expression")
+            # Match MI semantics. DDB escapes literal directories before sending
+            # them; interpreting that expression as a realpath loses sources.
+            directory_pattern = re.compile(arguments[index + 1])
         paths = set()
         target = self._target()
         for module in target.module_iter():
@@ -1485,8 +1488,8 @@ class Bridge(object):
                 if not path:
                     continue
                 full_path = os.path.realpath(_normalized_source_path(path))
-                if dirname and not (
-                    full_path == dirname or full_path.startswith(dirname + os.sep)
+                if directory_pattern is not None and not directory_pattern.search(
+                    os.path.dirname(full_path)
                 ):
                     continue
                 paths.add(full_path)
