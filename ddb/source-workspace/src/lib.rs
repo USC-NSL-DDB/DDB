@@ -20,11 +20,16 @@ use std::{
 use cap_std::{ambient_authority, fs::Dir};
 use sha2::{Digest, Sha256};
 
+mod search;
 #[cfg(test)]
 mod tests;
 
+pub use search::{SearchMatch, SearchMode, SearchQuery};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid source search: {0}")]
+    InvalidSearch(&'static str),
     #[error("source paths must be relative to their root and cannot contain parent traversal")]
     InvalidPath,
     #[error("source resource exceeds the configured {0} limit")]
