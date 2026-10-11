@@ -1166,9 +1166,32 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for_source_marker('▶', 10);
     tui.wait_for_source_marker('▸', 11);
 
+    // A snapshot refresh and an unrelated source action must not erase the
+    // completed control feedback. The stable footer is separate from Status.
+    tui.wait_for_current_frame(|screen| {
+        screen
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("completed · next"))
+    });
+    tui.send(b"r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("1 sessions · 1 groups · 0 breakpoints")
+            && screen
+                .lines()
+                .last()
+                .is_some_and(|line| line.contains("completed · next"))
+    });
+
     tui.clear_capture();
     tui.send(b"f");
     tui.wait_for_source_marker('▸', 10);
+    tui.wait_for_current_frame(|screen| {
+        screen
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("completed · next"))
+    });
 
     let output = tui.quit();
     assert!(
