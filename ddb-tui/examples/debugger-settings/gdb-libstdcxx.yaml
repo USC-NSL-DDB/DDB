@@ -1,0 +1,6 @@
+# Explicitly load the system-installed GCC libstdc++ visualizers on the DDB host.
+# Only use this profile when this is a trusted installation directory. Adjust
+# it for your distribution. This does not broaden GDB's auto-load safe-path.
+gdb:
+  commands:
+    - 'python import sys; sys.path.insert(0, "/usr/share/gcc/python"); from libstdcxx.v6 import register_libstdcxx_printers; register_libstdcxx_printers(None)'

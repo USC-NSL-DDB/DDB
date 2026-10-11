@@ -202,6 +202,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn libstdcxx_example_is_explicit_and_only_runs_on_gdb() {
+        let settings = Settings::parse(include_str!(
+            "../examples/debugger-settings/gdb-libstdcxx.yaml"
+        ))
+        .unwrap();
+        let plan = settings
+            .plan(
+                v2::BackendKind::Gdb as i32,
+                ValuesFormatting::PrettyPrinters,
+            )
+            .unwrap();
+        assert_eq!(plan.settings.len(), 1);
+        assert_eq!(plan.commands.len(), 1);
+        assert!(plan.commands[0].contains("register_libstdcxx_printers(None)"));
+        assert!(settings
+            .plan(
+                v2::BackendKind::Lldb as i32,
+                ValuesFormatting::PrettyPrinters
+            )
+            .is_none());
+        assert!(Settings::default()
+            .plan(
+                v2::BackendKind::Gdb as i32,
+                ValuesFormatting::PrettyPrinters
+            )
+            .unwrap()
+            .commands
+            .is_empty());
+    }
+
+    #[test]
     fn entry_only_setup_is_planned_for_both_native_backends() {
         let settings =
             Settings::parse("entry_function: 'Widget::operator new(unsigned long)'\n").unwrap();

@@ -125,6 +125,31 @@ DDB backend. Use `--values-formatting raw` to avoid that configuration change.
 Setup is attempted once per eligible session and backend instance; failures are
 shown in status and the diagnostic timeline, without repeated automatic retries.
 
+Enabling pretty printing does not install or register a formatter package. For
+example, a locally built GDB may use `/usr/local/share/gdb` while the distribution
+installs its libstdc++ printers under `/usr/share/gcc/python`. In that case a
+`std::string` can still display `{...}` despite successful setup. DDB returns
+native formatter summaries, display hints, and expandable children; the TUI
+does not decode C++ layouts or invoke target methods to obtain a string.
+
+If `/usr/share/gcc/python` is a trusted formatter installation on the **DDB host**,
+opt in with:
+
+```bash
+--debugger-settings /absolute/path/to/ddb-tui/examples/debugger-settings/gdb-libstdcxx.yaml
+```
+
+This example explicitly imports the installed GCC printers through the existing
+session setup commands. Review it and adjust the installation path for your
+distribution. It applies to each GDB session, including later automatic
+attachments. It does not change GDB's auto-load safe-path, search your workspace
+for Python scripts, download code, or run for LLDB. For other libraries or
+languages, use their trusted native GDB/LLDB formatter registration commands in
+the same settings file. Startup commands execute code on the debugger host, so
+only use settings and formatter packages you trust. See
+[GDB variable-object formatting](https://sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-Variable-Objects.html)
+and [auto-load trust](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Auto_002dloading-safe-path.html).
+
 Managed credentials are independent random control/admin tokens stored only in a
 private temporary file. Token values are never placed in argv, child environment,
 startup reports, logs, or status text. Managed mode always suppresses configured
@@ -788,3 +813,10 @@ measures continue through a canonical snapshot showing the server breakpoint
 and every thread stopped. The subsequent hit-owner timing includes snapshot
 verification and explicit owner navigation, not just terminal painting. These
 tests retain the ordinary 15-second readiness deadlines.
+
+The `greeter_auto_attach_pretty_string_terminal_workflow` case uses the explicit
+libstdc++ profile above and requires its formatter package on the DDB host. Set
+`DDB_GREETER_FORMATTER_SETTINGS=/absolute/path/to/settings.yaml` to test a
+different trusted installation profile. It asserts an exact `"Hello "` watch
+summary, steps from the message assignment to the return, and verifies the
+summary again. A raw structure merely containing that text does not pass.

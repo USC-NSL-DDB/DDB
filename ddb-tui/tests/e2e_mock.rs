@@ -67,11 +67,18 @@ fn greeter_auto_attach_client_source_readiness_terminal_workflow() {
     greeter_auto_attach_terminal_workflow(GreeterWorkflow::ClientSource);
 }
 
+#[test]
+#[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
+fn greeter_auto_attach_pretty_string_terminal_workflow() {
+    greeter_auto_attach_terminal_workflow(GreeterWorkflow::PrettyValues);
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum GreeterWorkflow {
     ServerSource,
     ClientSource,
     AllStop,
+    PrettyValues,
 }
 
 fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
@@ -137,7 +144,23 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
         &config,
         &[],
     );
-    let mut tui = Tui::spawn(&ddb.base_url());
+    let mut tui = if workflow == GreeterWorkflow::PrettyValues {
+        let settings = std::env::var_os("DDB_GREETER_FORMATTER_SETTINGS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("examples/debugger-settings/gdb-libstdcxx.yaml")
+            });
+        Tui::spawn_shell(&format!(
+            "stty rows 40 cols 140; exec {} --debugger-settings {} connect --api {} --refresh-ms 10000",
+            shell_quote(Path::new(env!("CARGO_BIN_EXE_ddb-tui"))),
+            shell_quote(&settings),
+            shell_quote(Path::new(&ddb.base_url())),
+        ))
+        .with_timeline()
+    } else {
+        Tui::spawn(&ddb.base_url())
+    };
     let _server = spawn_app("server", format!("--port={app_port}"));
     ddb.wait_for_snapshot(|s| s.sessions.len() == 1 && !s.threads.is_empty());
     tui.click_topology_thread("tui-server");
@@ -309,6 +332,30 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     tui.clear_capture();
     tui.send(b"\r");
     tui.wait_for_source_marker('▶', server_line);
+    if workflow == GreeterWorkflow::PrettyValues {
+        tui.send(b"wprefix\r");
+        let pretty_prefix = |screen: &str| {
+            screen.lines().collect::<Vec<_>>().windows(2).any(|rows| {
+                rows[0]
+                    .chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .contains("Watch: prefix :")
+                    && rows[1]
+                        .chars()
+                        .skip(105)
+                        .collect::<String>()
+                        .trim_matches(|c: char| c == '│' || c.is_whitespace())
+                        == "\"Hello \""
+            })
+        };
+        tui.wait_for_current_frame(pretty_prefix);
+        // Global continue was selected earlier. Explicitly restore controls to
+        // the inspected breakpoint-hit thread before stepping the C++ method.
+        tui.send(b"c\x1b[21~");
+        tui.wait_for_source_marker('▶', server_line + 1);
+        tui.wait_for_current_frame(pretty_prefix);
+    }
     tui.quit();
     ddb.shutdown();
     assert_eq!(
