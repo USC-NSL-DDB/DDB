@@ -287,7 +287,7 @@ fn topology_reached_top(current: Option<&Vec<String>>) -> bool {
     // Identical captures alone do not acknowledge that an input was processed.
     current
         .and_then(|rows| rows.first())
-        .is_some_and(|row| row.contains('▸'))
+        .is_some_and(|row| row.chars().nth(1) == Some('▸'))
 }
 
 #[test]
@@ -295,6 +295,9 @@ fn unchanged_topology_capture_is_not_an_acknowledgement_of_page_up() {
     let rows = vec!["│      • 16 stopped".into(), "│▸     • 5 stopped".into()];
     assert!(!topology_reached_top(Some(&rows)));
     assert!(!topology_reached_top(None));
+    assert!(!topology_reached_top(Some(&vec![
+        "│    ▸ ◇ collapsed session".into()
+    ])));
     assert!(topology_reached_top(Some(&vec![
         "│▸▾ client 1 sessions".into()
     ])));
@@ -784,6 +787,116 @@ fn watch_file_survives_terminal_restart_and_tracks_edits_and_deletions() {
     assert!(second.quit().contains("\u{1b}[?1049l"));
     let saved: Value = serde_json::from_slice(&fs::read(&watch_file).unwrap()).unwrap();
     assert_eq!(saved, serde_json::json!({"version":1,"expressions":[]}));
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
+fn topology_folding_and_single_session_signal_terminal_workflow() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let port = reserve_port();
+        let mut config = format!(
+            "Framework: unspecified\nConf:\n  auto_shutdown: false\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: mock\nStaticSessions:\n", directory.path().display(), directory.path().display()
+        );
+        for (index, owner) in ["alpha", "beta"].into_iter().enumerate() {
+            config.push_str(&format!(
+                "  - tag: {owner}\n    alias: {owner}-worker\n    hash: shared-program\n    pid: {}\n    start_delay_ms: 0\n    mock:\n      source_file: tests/api_v1.rs\n      source_line: 9\n      function: {owner}_work\n      exit_on_continue: false\n      exit_on_bootstrap: false\n", 1900 + index
+            ));
+        }
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    let snapshot = ddb
+        .wait_for_snapshot(|snapshot| snapshot.sessions.len() == 2 && snapshot.threads.len() == 2);
+    let alpha = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.display_name.contains("alpha-worker"))
+        .unwrap()
+        .session_id
+        .clone();
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("counter");
+    // Alt+1 selects Topology. PageUp explicitly selects the group before Space
+    // folds it; hidden inspection and current controls must not trigger work.
+    tui.send(b"\x1b1\x1b[5~ ");
+    tui.wait_for_current_frame(|screen| {
+        let topology = screen
+            .lines()
+            .skip(4)
+            .take(4)
+            .map(|line| line.chars().take(33).collect::<String>())
+            .collect::<String>();
+        !topology.contains('◇') && !topology.contains('•')
+    });
+    tui.send(b"\x1b[C");
+    tui.wait_for_current_frame(|screen| topology_thread_row(screen, "alpha-worker").is_some());
+    tui.send(b"\x1b[B ");
+    tui.wait_for_current_frame(|screen| {
+        topology_thread_row(screen, "alpha-worker").is_none() && screen.contains("alpha-worker")
+    });
+    // The disclosure triangle is separate from the session's diamond and label.
+    let (column, row) = tui
+        .frames
+        .lock()
+        .unwrap()
+        .back()
+        .unwrap()
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            let cells = line.chars().take(33).collect::<Vec<_>>();
+            if !cells.iter().collect::<String>().contains("alpha-worker") {
+                return None;
+            }
+            cells
+                .windows(3)
+                .position(|cells| cells == ['▸', ' ', '◇'])
+                .map(|column| (column + 1, row + 1))
+        })
+        .expect("collapsed session disclosure should be visible");
+    tui.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    tui.wait_for_current_frame(|screen| topology_thread_row(screen, "alpha-worker").is_some());
+    tui.send(b"s");
+    tui.wait_for_current_frame(|screen| screen.contains("DDB signal catalog"));
+    tui.send(b"\x1b[B\x1b[B\r");
+    tui.wait_for("signal SIGUSR1");
+    let snapshot = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.operations.iter().any(|operation| {
+            operation.kind == v2::OperationKind::Execute as i32
+                && operation.state == v2::OperationState::Completed as i32
+        })
+    });
+    let operation = snapshot
+        .operations
+        .iter()
+        .find(|operation| {
+            operation.kind == v2::OperationKind::Execute as i32
+                && operation.state == v2::OperationState::Completed as i32
+        })
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .operations
+            .iter()
+            .filter(|operation| operation.kind == v2::OperationKind::Execute as i32)
+            .count(),
+        1,
+        "this fixture must issue only the requested signal execution operation"
+    );
+    assert!(
+        matches!(operation.target.as_ref().and_then(|summary| summary.target.as_ref()).and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Session(session)) if session.session_id == alpha),
+        "signal must target one selected session, not its group: {operation:?}"
+    );
+    assert_eq!(operation.target.as_ref().unwrap().resolved_target_count, 1);
+    tui.quit();
+    ddb.shutdown();
 }
 
 #[test]
