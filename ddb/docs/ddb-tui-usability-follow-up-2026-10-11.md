@@ -42,11 +42,11 @@ default through `--source-search exact|fuzzy`.
 | 6 | Ctrl+u/Ctrl+d half-page source movement | Implemented. Uses actual pane height and the existing source-window request path. Ctrl+d never falls through to plain `d` stack refresh. |
 | 7 | Organized searchable help | Implemented. Categorized shortcut catalog; `/` searches keys, categories, and descriptions with case-insensitive word matching. Prompt editing is separate from help navigation. |
 | 8 | Exact/fuzzy source text search, configurable default | Implemented. `/`, Ctrl+f in the prompt, `n`/`N`, mouse controls, and `--source-search exact\|fuzzy`. Whole-file matching runs at the source owner and returns version-pinned context. Local and remote providers share the indexed matcher. |
-| 9 | Switchable breakpoint-hits-only pane | Open. The existing `P` hit-picker modal is not a persistent hits-only view. |
+| 9 | Switchable breakpoint-hits-only pane | Implemented. `H` / Hits-All button switches the persistent Alt+2 pane to current stops grouped by DDB group/session. Stop-identity selection, stale-click rejection, read-only mutation guards, lifecycle/interaction tests, and real GDB/LLDB frame/source/watch navigation are covered. |
 | 10 | Indicate frames whose source is unavailable | Partial. Frames without a file/line are dimmed and labeled `no source location`. A file/line does not prove source content is readable; missing/unreadable files still need explicit availability handling. |
 | 11 | Measure and improve pause/resume/all-stop refresh latency | Open. Do not infer improvements from test duration. Separate backend operation/event timing from frontend inspection/source/render timing. An intermittent real-greeter source timeout remains recorded below. |
 | 12 | Discoverable keyboard navigation from breakpoint to paused frame | Implemented in help and hints. Alt+2, choose a breakpoint, P, choose a paused hit, Enter; Escape cancels. |
-| 13 | One-click topology expansion/collapse and individual signaling | Open. Grouped/flat presentation alone is not folding. Preserve selected scope and explicit session identity when folding. |
+| 13 | One-click topology expansion/collapse and individual signaling | Implemented. Disclosure clicks, Space/Enter and Left/Right fold/navigate groups/sessions. Folding preserves control scope and inspected thread. Mouse rows carry resource identities; session-label selection plus `s` submits a canonical single-session signal. Unit and two-session terminal coverage verify the target and resolved count. |
 | 14 | Show only execution actions supported for selected scope | Implemented. Toolbar filtering uses DDB's typed `execution_action_capabilities`, not only the global action list. Tests cover thread/session/group and no target. |
 | 15 | General pretty-printing solution, including greeter C++ string | Open. Existing default printer setup does not establish that greeter `prefix` is pretty-printed. Diagnose debugger formatter registration and evaluation separately; do not hard-code C++ structure parsing in the frontend. |
 | 16 | Visible pending/completed/error feedback for controls and other operations | Open. Source-picker loading/error feedback is implemented, but does not satisfy execution-operation feedback. |
@@ -114,6 +114,10 @@ investigation and reproduce it with request timing before changing timeouts.
 ## Remaining implementation and quality checks
 
 Continue in independently reviewable commits:
+
+This list records the original sequence. Source search and the persistent
+hits/topology work are now implemented in the later addenda. Source availability,
+operation feedback, measured latency, pretty-printing, and the final audit remain.
 
 1. Source text search: exact default, explicit fuzzy toggle, configurable default,
    repeated forward/backward search, and clear search feedback. Cover Unicode,
@@ -233,7 +237,8 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
   whole_source_search_terminal_workflow -- --ignored --test-threads=1
 ```
 
-Requirements 9, 11, 13, 15, and 16 remain open. Requirement 10 remains partial.
+At the end of the search batch, requirements 9, 11, 13, 15, and 16 remained open.
+Requirement 10 remained partial. The current statuses are in the audit table.
 The sixteen-requirement goal is not complete.
 
 ## Source-readiness latency investigation
@@ -319,3 +324,85 @@ The optimization and its application regression are isolated in commit
 `059fafa1`. The minimized real-app regression and this evidence are separate
 test/documentation commits. None of these results closes the remaining open
 requirements or establishes a fully passing real distributed-app workflow.
+
+## Persistent breakpoint hits and topology folding
+
+Requirement 9 now has a persistent mode in the existing numbered Breakpoints
+pane. `H` and the Hits/All footer button switch it without changing pane numbers
+or the all-breakpoints selection. Rows come from canonical thread execution
+states, not cumulative counters. DDB group and session headers organize the
+currently hitting threads. Automatically paused all-stop peers remain excluded.
+
+The selected hit retains breakpoint, member, session, thread, execution-state,
+and revision identity. Resume, replacement, or deletion cannot redirect Enter
+to another row. Mouse hit areas retain that same stop identity and revalidate it
+at click time. A disconnected backend has no verified live hits. Reconnecting
+does not silently restore a discarded selection. Navigation loads the owning
+thread's ordinary stack/source/values without changing the control scope.
+Mutation keys cannot act on the hidden all-breakpoints selection.
+
+Requirement 13 now has identity-keyed group/session folding. Disclosure clicks,
+Space/Enter, and Left/Right share the model's fold/navigation methods. Folding
+does not execute debugger commands or change the inspected thread/control
+target. A hidden selection is represented by its nearest visible ancestor.
+Explicit hit navigation unfolds its ancestors. Preferences survive flat/grouped
+view changes and refreshes, are pruned for removed resources, and reset when the
+DDB server instance changes.
+
+Topology labels select canonical resources; disclosure arrows only fold. Mouse
+areas carry the rendered resource identity instead of using a mutable row
+offset. Reordering cannot turn a session click into a different session/group
+target. Hidden or removed rendered rows are rejected. The two-session terminal
+test folds a group and session with keyboard/mouse input, selects a signal for
+one session, and verifies both the completed signal receipt and the canonical
+operation target with `resolved_target_count == 1`.
+
+Plain Left/Right now navigate Topology. Shift+Left/Right and the horizontal wheel
+scroll it; Home resets the horizontal position. Help and README document this
+deliberate conflict resolution. Session identity diamonds remain separate from
+disclosure arrows. The terminal fixture's top-of-list acknowledgement now checks
+the selection-marker column, so a collapsed disclosure cannot falsely satisfy
+it. This is test-driver correctness, not a production timeout adjustment.
+
+The shared hit and topology model methods keep keyboard and mouse behavior at
+the same interface. Tests cover concurrent hits, stale stops/clicks, hidden
+mutation protection, backend replacement/disconnection, empty/tiny layouts,
+flat/grouped/unresolved/ungrouped topology, folding during signal selection, and
+resource retirement. No compatibility API fallback or backend schema change was
+needed for these features.
+
+Reviewable implementation and test commits:
+
+- `7ea6370b`: persistent hit-view implementation and model/interaction tests.
+- `79f3c044`: real GDB/LLDB terminal navigation through the persistent hit view.
+- `d20fb5dd`: topology folding, identity-based selection, and interaction tests.
+- `f20743d8`: two-session terminal folding and exact single-session signal proof.
+
+This audit and the user guide are a separate allowlisted documentation commit.
+
+Final checks on the combined batch:
+
+| Check | Result |
+| --- | --- |
+| TUI unit tests | 310 passed in 2.15 seconds |
+| Non-ignored terminal helpers | 2 passed |
+| Strict all-target Clippy | Passed in 5.33 seconds |
+| Complete non-greeter terminal suite | 30 passed in 88.14 seconds |
+| Real function-breakpoint/hit navigation | GDB and LLDB passed, both isolated and in the full suite |
+| Two-session fold and signal workflow | Passed in the full suite; isolated run passed in 0.98 seconds |
+| Formatting and staged diff checks | Passed |
+| Real auto-attached greeter | Not rerun in this batch; the previously reproduced cold-discovery timeout remains unresolved |
+
+Reproduce the relevant terminal checks:
+
+```sh
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  real_function_breakpoint_terminal_workflow -- --ignored --test-threads=1
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  topology_folding_and_single_session_signal_terminal_workflow \
+  -- --ignored --test-threads=1
+```
+
+Requirements 11, 15, and 16 remain open, and requirement 10 remains partial.
+The source-directory regexp semantic mismatch recorded above also remains a
+correctness follow-up. The sixteen-requirement goal is not complete.

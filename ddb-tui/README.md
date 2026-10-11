@@ -232,11 +232,15 @@ normal DDB-native view.
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
 | `v` in Topology / header `Flat [v]` or `Group [v]` | Toggle grouped/flat session view without changing execution scope |
+| `Space` / `Enter` in Topology, or click a disclosure arrow | Expand/collapse the selected group/session without changing execution scope |
+| `Left` / `Right` in Topology | Collapse or visit the parent / expand or visit the first child |
+| Click a session label, then `s` | Choose a signal for exactly that session; disclosure clicks only fold |
 | `i` in Topology / right-click a row | Open a frozen canonical group/session details snapshot; arrows or hjkl, PageUp/PageDown, Home/End and wheel scroll; Esc or right-click closes |
 | `e` in topology details / `Export` button | Export the captured JSON snapshot to a new local file; enter a path and press Enter, or Esc/empty Enter to cancel |
 | `y` in topology details / `Copy` button | Send the captured JSON to the terminal clipboard using OSC 52 |
 | `K` in Topology / `Kill [K]` | Confirm SIGKILL for one selected session or a thread's owning session; `y`/Terminate accepts, Enter/Esc cancels |
 | `v` in Breakpoints / header `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
+| `H` in Breakpoints / `Hits [H]` or `All [H]` | Switch all breakpoints / persistent current hits grouped by DDB group and session |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
 | `g` | Go to a source line (loads another source window when needed) |
 | `Left` / `Right` in Source | Scroll long source lines horizontally, keeping the gutter fixed |
@@ -429,10 +433,21 @@ has no acknowledgement. If paste does not work, use Export. Write errors are
 reported and are not retried automatically. This targets the clipboard of the
 terminal displaying the TUI, including when the TUI runs over SSH.
 
-In Topology, Breakpoints, Stack, Variables, Registers, and Memory, Left/Right or a horizontal mouse wheel reveals clipped
-names and values. Home returns to the start. Each pane remembers its position;
+In Breakpoints, Stack, Variables, Registers, and Memory, Left/Right or a horizontal
+mouse wheel reveals clipped names and values. Topology uses Shift+Left/Right for
+horizontal scrolling because plain Left/Right navigates the tree. Home returns to the start. Each pane remembers its position;
 resizing clamps scrolling to the available content. Horizontal navigation does
 not select another frame or issue debugger commands.
+
+Topology groups and sessions have disclosure triangles. Clicking a triangle or
+pressing Space/Enter folds only that node. Labels select the explicit group,
+session, or thread for execution controls. Folding preserves the control target
+and inspected thread, even if their row becomes hidden. The highlight moves to
+the nearest visible ancestor; the toolbar continues to name the actual control
+scope. Right expands a folded node or visits its first child. Left collapses an
+expanded node or visits its parent. Fold preferences survive grouped/flat view
+changes and refreshes, are pruned when resources disappear, and reset for a new
+DDB server instance. Revealing a paused breakpoint hit opens its hidden ancestors.
 
 Press `O` to show/hide the Output pane. Native console and one-shot evaluation
 results open it automatically. Program output is collected there even while it
@@ -594,6 +609,20 @@ paused hitting thread. Enter or a click loads that thread's stack, source and
 variables. Esc or Cancel closes the picker. The picker validates the stop revision
 before navigating and rejects hits that resumed or changed while it was open.
 This navigation does not change the execution-control target.
+
+For a persistent view of all current breakpoint stops, focus Breakpoints with
+Alt+2 and press `H`, or click `Hits [H]`. It shows hitting threads grouped by DDB
+group and session, excluding historical hits and automatically paused all-stop
+peers. Up/Down, PageUp/PageDown, and Home/End choose hits; Enter or a click opens
+the owning frame through ordinary DDB inspection. The mode stays active when
+switching panes and updates as threads stop/resume. A resumed or replaced stop
+loses its selection rather than silently selecting another thread. Disconnection
+removes all unverified hits; a new backend discards the old selection.
+
+The live hits view is navigation-only. Breakpoint mutation keys do not act on the
+hidden all-breakpoints selection. Press `H` or `All [H]` to manage breakpoints;
+the previous logical breakpoint/member selection and grouping remain intact.
+Browsing hits does not change the execution-control scope.
 
 The variables panel preserves the scopes returned by DDB. Non-expensive scopes
 load automatically; expensive scopes (such as globals and file statics) load
