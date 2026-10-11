@@ -27,8 +27,8 @@ opens it. Unavailable inspection panes report their prerequisite.
 
 The layered prefix configuration/settings-page requirement was explicitly
 conditional on choosing a prefix. That condition is false. No prefix or prefix
-configuration system was added. The separate source-search requirement still
-needs a configurable exact/fuzzy default.
+configuration system was added. Source search has a separate configurable
+default through `--source-search exact|fuzzy`.
 
 ## Requirement audit
 
@@ -41,7 +41,7 @@ needs a configurable exact/fuzzy default.
 | 5 | Remove duplicate paused labels | Implemented. Logical breakpoint rows show the current paused count; member rows show hit markers, not another paused label. Both grouping modes share this renderer. |
 | 6 | Ctrl+u/Ctrl+d half-page source movement | Implemented. Uses actual pane height and the existing source-window request path. Ctrl+d never falls through to plain `d` stack refresh. |
 | 7 | Organized searchable help | Implemented. Categorized shortcut catalog; `/` searches keys, categories, and descriptions with case-insensitive word matching. Prompt editing is separate from help navigation. |
-| 8 | Exact/fuzzy source text search, configurable default | Open. File-catalog search is not source text search and does not satisfy this requirement. |
+| 8 | Exact/fuzzy source text search, configurable default | Implemented. `/`, Ctrl+f in the prompt, `n`/`N`, mouse controls, and `--source-search exact\|fuzzy`. Whole-file matching runs at the source owner and returns version-pinned context. Local and remote providers share the indexed matcher. |
 | 9 | Switchable breakpoint-hits-only pane | Open. The existing `P` hit-picker modal is not a persistent hits-only view. |
 | 10 | Indicate frames whose source is unavailable | Partial. Frames without a file/line are dimmed and labeled `no source location`. A file/line does not prove source content is readable; missing/unreadable files still need explicit availability handling. |
 | 11 | Measure and improve pause/resume/all-stop refresh latency | Open. Do not infer improvements from test duration. Separate backend operation/event timing from frontend inspection/source/render timing. An intermittent real-greeter source timeout remains recorded below. |
@@ -178,3 +178,60 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
 The real greeter test additionally requires the existing instrumented workspace,
 `ddb_runapp`, and a free configured loopback discovery port. It refuses to replace
 an occupied broker and must not overwrite the shared discovery configuration.
+
+## Whole-source search follow-up
+
+Reviewable commits:
+
+1. `f2ec2d41`: shared immutable indexed matcher, exact/fuzzy modes, Unicode
+   scalar columns, whole-file directional wraparound, and library tests.
+2. `c8f576e8`: canonical `DebuggerService.SearchSource`, HTTP/gRPC transports,
+   typed Rust client, generated contracts and SDK types, authorization and
+   bounded source I/O, pinned match/context responses, API guide and tests.
+3. `3fa8ffa2`: asynchronous TUI search lane, keyboard/mouse controls,
+   configurable default, stale-response and cancellation guards, persistent
+   feedback, grapheme-safe highlights, correct horizontal positioning and
+   search-bar-aware paging, unit and terminal regression tests.
+
+Exact search is a case-sensitive substring. Fuzzy search is a Unicode lowercase
+subsequence, not edit distance. Searches return one match per matching line.
+The source owner scans the whole bounded file once; the TUI does not fetch every
+240-line source window. Matching and returned context use the same immutable
+document version. No-match responses also replace stale source text.
+
+Final checks for this follow-up:
+
+| Check | Result |
+| --- | --- |
+| Shared source-workspace library | 19 tests passed; strict all-target Clippy passed |
+| Backend source API integration | 5 passed in 1.04 seconds |
+| Native gRPC preview compilation | Passed |
+| Generated contract drift | Exact reproduction |
+| TUI unit tests | 299 passed in 2.16 seconds |
+| TUI non-ignored integration helpers | 2 passed |
+| Full non-greeter terminal suite | 29 passed in 88.71 seconds |
+| Final local/remote source-search terminal checks | Both passed in 1.60 seconds after final hit-area changes |
+| Strict all-target TUI Clippy | Passed |
+| Backend/TUI formatting and diff checks | Passed |
+| Real greeter auto-attach/all-stop | Failed before breakpoint creation, waiting for source cursor at server line 59 |
+
+The greeter failure reproduced the earlier intermittent source-loading finding.
+The failure screen showed `Loading source` / `Resolving or reading source`,
+while stack, scopes, and registers were populated. The test ran for 19.80 seconds
+and its source wait limit was 15 seconds. No source search had been requested.
+This is not evidence of a search regression or a diagnosed root cause. Do not
+close requirement 11 or advertise full real-greeter verification on this basis.
+The next diagnosis should minimize this auto-attach-to-source-readiness path,
+measure its request/inspection stages, and establish a regression loop before
+changing production scheduling or timeouts. The shared discovery configuration
+was not modified, and only test-owned processes were cleaned up.
+
+Reproduce search-specific terminal coverage:
+
+```sh
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  whole_source_search_terminal_workflow -- --ignored --test-threads=1
+```
+
+Requirements 9, 11, 13, 15, and 16 remain open. Requirement 10 remains partial.
+The sixteen-requirement goal is not complete.
