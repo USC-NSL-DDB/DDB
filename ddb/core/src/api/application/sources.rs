@@ -811,24 +811,39 @@ impl DdbApplicationService {
             } else {
                 None
             };
+            // An exact path needs membership evidence, not a complete source
+            // catalog. Reuse positive/negative observations and discover only
+            // its directory when unknown. Never interrupt a running session.
+            let selected_sessions = sessions
+                .iter()
+                .filter(|session| {
+                    selected
+                        .as_ref()
+                        .is_none_or(|selected| selected.contains(&session.sid))
+                })
+                .map(|session| (session.sid, session.all_threads_stopped))
+                .collect::<Vec<_>>();
+            let discovery = stream::iter(selected_sessions.into_iter().map(
+                |(sid, stopped)| async move {
+                    let found = match self.queries.cached_source_membership(sid, path) {
+                        Some(found) => found,
+                        None if stopped => {
+                            self.queries
+                                .source_membership(sid, path, false)
+                                .await
+                                .map_err(|_| ApplicationError::backend("source discovery failed"))?
+                        }
+                        None => false,
+                    };
+                    Ok::<_, ApplicationError>(found.then_some(sid))
+                },
+            ))
+            .buffer_unordered(4);
+            futures::pin_mut!(discovery);
             let mut owners = Vec::new();
-            for session in &sessions {
-                if selected
-                    .as_ref()
-                    .is_some_and(|selected| !selected.contains(&session.sid))
-                {
-                    continue;
-                }
-                let sources = if session.all_threads_stopped {
-                    self.queries
-                        .source_listing(session.sid, false)
-                        .await
-                        .map_err(|_| ApplicationError::backend("source discovery failed"))?
-                } else {
-                    self.queries.cached_sources(session.sid)
-                };
-                if sources.iter().any(|candidate| candidate == path) {
-                    owners.push(session.sid);
+            while let Some(result) = scope.wait(discovery.next()).await? {
+                if let Some(owner) = result? {
+                    owners.push(owner);
                 }
             }
             match owners.as_slice() {

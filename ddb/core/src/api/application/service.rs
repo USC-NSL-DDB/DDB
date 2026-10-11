@@ -2860,7 +2860,14 @@ mod tests {
         config.conf.debugger.backend = DebuggerBackendKind::Mock;
         let config = Arc::new(config);
         let plugin = resolve_framework_plugin(config.as_ref());
-        service_with_components(model, command_port, output, config, plugin)
+        service_with_components(
+            model,
+            command_port,
+            output,
+            config,
+            plugin,
+            Arc::new(SourceCatalog::new()),
+        )
     }
 
     fn service_with_plugin(
@@ -2875,6 +2882,7 @@ mod tests {
             crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
             Arc::new(config),
             plugin,
+            Arc::new(SourceCatalog::new()),
         )
     }
 
@@ -2884,10 +2892,11 @@ mod tests {
         output: Arc<crate::cmd_flow::output_hub::OutputHub>,
         config: Arc<Config>,
         plugin: Arc<dyn FrameworkPlugin>,
+        catalog: Arc<SourceCatalog>,
     ) -> Arc<DdbApplicationService> {
         let router = Arc::new(Router::new(Arc::clone(&model)));
         let resolver = SourceResolver::new(
-            Arc::new(SourceCatalog::new()),
+            catalog,
             Arc::clone(&model) as _,
             CommandExecutor::new(Arc::clone(&router)),
             SourceResolutionPolicy::OnDemand,
@@ -2984,6 +2993,62 @@ mod tests {
         })
         .await
         .expect("resource event should arrive")
+    }
+
+    #[tokio::test]
+    async fn exact_source_resolution_uses_partial_membership_without_full_catalog_io() {
+        let model = RuntimeModel::new();
+        let identity = crate::state::ServiceIdentity::new("binary", "worker");
+        model
+            .register_session(42, "worker", Some(identity.clone()))
+            .await;
+        drop(model.register_service_group(42, &identity).await);
+        let group = model.group_id_by_session(42).unwrap();
+        let catalog = Arc::new(SourceCatalog::new());
+        catalog
+            .record_path_listing("/src/main.rs", 42, group, ["/src/main.rs".into()])
+            .unwrap();
+        catalog
+            .record_path_listing("/src/missing.rs", 42, group, [])
+            .unwrap();
+        assert!(!catalog.has_full_listing(42));
+        let mut config = Config::default();
+        config.conf.debugger.backend = DebuggerBackendKind::Mock;
+        let plugin = resolve_framework_plugin(&config);
+        // No backend is registered in the fixture router. Any unnecessary
+        // full enumeration therefore fails immediately instead of hiding
+        // behind a generous timeout or a fake fast debugger.
+        let service = service_with_components(
+            model,
+            Arc::new(super::super::NoopCommandPort),
+            crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
+            Arc::new(config),
+            plugin,
+            catalog.clone(),
+        );
+        assert!(service.queries.sessions().await[0].all_threads_stopped);
+        let request = |path: &str| ddb_api_types::v2::ResolveSourceRequest {
+            location: Some(ddb_api_types::v2::SourceLocation {
+                path: Some(path.into()),
+                line: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let source = service
+            .resolve_source(request("/src/main.rs"))
+            .await
+            .unwrap()
+            .source
+            .unwrap();
+        assert_eq!(source.debugger_path.as_deref(), Some("/src/main.rs"));
+        let missing = service
+            .resolve_source(request("/src/missing.rs"))
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code(), DdbErrorCode::NotFound);
+        assert!(!catalog.has_full_listing(42));
+        assert_eq!(catalog.membership("/other/unknown.rs", 42), None);
     }
 
     async fn public_session_id(service: &DdbApplicationService) -> String {
