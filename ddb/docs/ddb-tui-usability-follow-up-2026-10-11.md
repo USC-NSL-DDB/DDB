@@ -44,7 +44,7 @@ default through `--source-search exact|fuzzy`.
 | 8 | Exact/fuzzy source text search, configurable default | Implemented. `/`, Ctrl+f in the prompt, `n`/`N`, mouse controls, and `--source-search exact\|fuzzy`. Whole-file matching runs at the source owner and returns version-pinned context. Local and remote providers share the indexed matcher. |
 | 9 | Switchable breakpoint-hits-only pane | Implemented. `H` / Hits-All button switches the persistent Alt+2 pane to current stops grouped by DDB group/session. Stop-identity selection, stale-click rejection, read-only mutation guards, lifecycle/interaction tests, and real GDB/LLDB frame/source/watch navigation are covered. |
 | 10 | Indicate frames whose source is unavailable | Implemented. Unusable locations are dimmed; real source loads distinguish unchecked, loading, readable, and failed states per backend/session/path. Failed loads dim the function name and retain a visible reason; retries recover. Filesystem, stale-result, lifecycle, style, and native-DDB terminal coverage are recorded below. |
-| 11 | Measure and improve pause/resume/all-stop refresh latency | Open. Do not infer improvements from test duration. Separate backend operation/event timing from frontend inspection/source/render timing. An intermittent real-greeter source timeout remains recorded below. |
+| 11 | Measure and improve pause/resume/all-stop refresh latency | Implemented and measured. Backend exact-path ownership probes remove cold catalog enumeration from ordinary source refreshes, including unrelated stopped sessions. Repeated real greeter runs verify source readiness, canonical all-stop, and hit-owner navigation separately. Limits and timings appear in the latency addendum below. |
 | 12 | Discoverable keyboard navigation from breakpoint to paused frame | Implemented in help and hints. Alt+2, choose a breakpoint, P, choose a paused hit, Enter; Escape cancels. |
 | 13 | One-click topology expansion/collapse and individual signaling | Implemented. Disclosure clicks, Space/Enter and Left/Right fold/navigate groups/sessions. Folding preserves control scope and inspected thread. Mouse rows carry resource identities; session-label selection plus `s` submits a canonical single-session signal. Unit and two-session terminal coverage verify the target and resolved count. |
 | 14 | Show only execution actions supported for selected scope | Implemented. Toolbar filtering uses DDB's typed `execution_action_capabilities`, not only the global action list. Tests cover thread/session/group and no target. |
@@ -694,3 +694,97 @@ probe was removed; no temporary debug instrumentation remains in these changes.
 Requirements 11 and 15 remain open. These correctness fixes do not establish a
 latency improvement or prove greeter C++ pretty printing. The sixteen-requirement
 goal is not complete.
+
+## Source discovery and real distributed latency addendum
+
+Requirement 11 is now addressed by a measured backend optimization. Requirement
+15 remains open. This does not claim that every distributed stop has no delay.
+
+### Cause and backend change
+
+Four initial real-greeter source-readiness runs passed, taking 17.26, 9.06,
+10.06, and 10.35 seconds overall. Overall test duration is not the optimization
+metric. Isolated cold GDB queries showed that exact-directory enumeration still
+performed expensive catalog work. Two separate-process measurements took
+16,089.552 and 3,713.015 ms; exact-path probes took 184.622 and 184.534 ms.
+These measurements exclude binary loading and do not measure terminal rendering.
+
+DDB now owns an internal `-ddb-probe-source` command with present, absent, and
+unknown results. The provider accepts only a matching exact positive path or an
+empty proven-negative result. Unknown results still perform ordinary directory
+discovery. Malformed proofs and transport failures are errors, not empty catalogs.
+Complete catalog and relative-path requests retain ordinary enumeration.
+
+GDB uses its structured `-symbol-list-lines` result and validates each candidate
+PC's actual symtab fullname. It does not trust basename fallback or construct a
+quoted linespec. Only the specific native unknown-source diagnostic establishes
+absence. Other diagnostics, including localized/unrecognized errors, remain
+unknown. Native tests verify that data-only files and code-free headers do not
+become false negatives. LLDB establishes positives from exact compile-unit paths;
+a miss is unknown because that quick scan does not establish complete absence.
+No inferior locale or debugger auto-load policy is changed.
+
+A positive-only prototype fixed server navigation but still failed the full
+workflow at client source loading. Global navigation correctly checked the
+unrelated stopped server too. Its inconclusive empty probe caused expensive
+enumeration. The final tri-state policy removes that work only when GDB proves
+absence. Manual global navigation and ambiguity detection remain unchanged.
+
+The private production discovery function takes a command executor for tests.
+Regression tests verify actual command policy, malformed/foreign paths,
+inconclusive results, and error handling. Native coverage extends the six
+punctuation/Unicode fixtures through the real command registration, MI parser,
+and source decoder. Resolver lifecycle checks, cancellation, single-flight
+discovery, resource bounds, and cache publication guarantees are unchanged.
+No public API contract or generated schema changed.
+
+### End-to-end evidence
+
+Three consecutive runs each passed the full distributed workflow, the minimized
+two-session client-source workflow, and the server-only source workflow. All
+retain the original 15-second readiness assertions. The full runs measured:
+
+| Stage | Run 1 | Run 2 | Run 3 |
+| --- | ---: | ---: | ---: |
+| Server navigation to rendered source cursor | 812 ms | 902 ms | 1,000 ms |
+| Client navigation to rendered source cursor | 951 ms | 939 ms | 956 ms |
+| Continue to server breakpoint with all threads canonically stopped | 3,950 ms | 3,471 ms | 3,467 ms |
+| All-stop through explicit paused-hit owner rendering | 61 ms | 66 ms | 60 ms |
+
+The last measurement includes verification snapshots and explicit hit-owner
+navigation, not pure paint latency. The all-stop measurement includes actual
+application execution and distributed pause coordination. No claim is made that
+all remaining 3.5–4 seconds come from the TUI or that this patch removes them.
+No fixed microbenchmark threshold is imposed on shared CI hardware.
+
+Running the workflows back-to-back exposed a separate fixture race: its broker
+guard killed the owned broker but deferred reaping. The next workflow could
+start before its listener closed. The broker is not ptraced, so its dedicated
+guard now kills and reaps it before releasing the test lock. Traced application
+guards retain non-blocking cleanup. An occupied external discovery port still
+causes refusal; shared discovery configuration is never rewritten.
+
+| Check | Result |
+| --- | --- |
+| Backend unit suite | 344 passed, 2 explicitly ignored, 0.40 seconds |
+| Resolver suite including native GDB | 13 passed, 1.48 seconds |
+| Canonical source API integration | 5 passed, 0.97 seconds |
+| LLDB bridge suite | 20 passed, 0.017 seconds |
+| Strict backend test-target Clippy | Passed with `--no-deps`, 20.49 seconds |
+| TUI unit suite | 331 passed; 2 terminal helper tests passed |
+| Strict TUI all-target Clippy and formatting | Passed |
+| Native terminal suite against rebuilt DDB | 31 passed, 92.16 seconds |
+| Repeated real-greeter workflows | 9 passed across 3 consecutive invocations |
+
+Auditable commits, staged by explicit file allowlists:
+
+1. `34db3359`: backend exact ownership probes, conservative discovery policy,
+   native/bridge/provider regressions, and test documentation.
+2. `301f76dc`: minimized two-session regression, stage measurements, broker
+   cleanup fix, and running instructions.
+3. This documentation-only commit records the measurements and limitations.
+
+The throwaway timing script was removed. No temporary debug instrumentation
+remains in production code. Unknown or non-executable-file probes may still
+enumerate catalogs; this is a correctness-preserving path, not a promised
+constant-time operation. Requirement 15 is still open, so the goal is active.
