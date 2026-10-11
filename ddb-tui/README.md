@@ -378,6 +378,23 @@ scope. A thread-only Next action is not offered for a session or group. Stack
 frames without a source file/line are dimmed and labeled `no source location`.
 A reported file/line can still refer to missing or unreadable source content.
 
+The bottom line shows the latest user mutation as `queued`, `pending admission`,
+`pending`, `completed`, `error`, or `cancelled`. It captures the requested target
+when submitted and includes the DDB operation ID after admission. Continue,
+stepping, jumps, signals, breakpoint changes, evaluations, assignments, native
+commands, extension actions, and logpoint configuration use this feedback.
+Snapshots and frame navigation do not replace it. It stays visible until another
+tracked action is submitted, including while editing a prompt. Timeline records
+each transition with its local intent number and target identity; concurrent
+pending actions are counted even when the latest action has completed.
+
+An admitted operation whose wait times out is `outcome unconfirmed`, not an
+execution failure. Connection loss also leaves pending outcomes unconfirmed.
+There is no automatic retry. A final receipt from the same backend can resolve
+the outcome; a replacement backend cannot complete the old backend's intent.
+Partial fanout failures are reported as errors with failed-target counts.
+History is bounded to 64 intents; active intents are never silently evicted.
+
 Click `[Expand]` on a pane's bottom border or press `z` to expand the focused
 pane; click `[Restore]`, press `z` again, or press `Esc` to restore
 the layout. `Tab` still changes the focused pane while expanded. The diagnostic

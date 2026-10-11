@@ -49,7 +49,7 @@ default through `--source-search exact|fuzzy`.
 | 13 | One-click topology expansion/collapse and individual signaling | Implemented. Disclosure clicks, Space/Enter and Left/Right fold/navigate groups/sessions. Folding preserves control scope and inspected thread. Mouse rows carry resource identities; session-label selection plus `s` submits a canonical single-session signal. Unit and two-session terminal coverage verify the target and resolved count. |
 | 14 | Show only execution actions supported for selected scope | Implemented. Toolbar filtering uses DDB's typed `execution_action_capabilities`, not only the global action list. Tests cover thread/session/group and no target. |
 | 15 | General pretty-printing solution, including greeter C++ string | Open. Existing default printer setup does not establish that greeter `prefix` is pretty-printed. Diagnose debugger formatter registration and evaluation separately; do not hard-code C++ structure parsing in the frontend. |
-| 16 | Visible pending/completed/error feedback for controls and other operations | Open. Source-picker loading/error feedback is implemented, but does not satisfy execution-operation feedback. |
+| 16 | Visible pending/completed/error feedback for controls and other operations | Implemented for execution controls and backend mutations. Identity-correlated queue/admission/result feedback is independent of routine status, survives snapshots and navigation, reports unconfirmed outcomes honestly, and has model, interaction, serialized-worker, and terminal coverage. |
 
 ## Source-target API guarantees
 
@@ -403,6 +403,97 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
   -- --ignored --test-threads=1
 ```
 
-Requirements 11, 15, and 16 remain open, and requirement 10 remains partial.
+At the end of the hits/topology batch, requirements 11, 15, and 16 remained open,
+and requirement 10 remained partial.
 The source-directory regexp semantic mismatch recorded above also remains a
 correctness follow-up. The sixteen-requirement goal is not complete.
+
+## Operation feedback addendum
+
+Requirement 16 now has a bounded feedback module separate from the general
+status message and backend pending-command count. A local monotonically
+increasing intent number exists before a request enters the worker queue.
+The worker reports when it starts admission, the canonical DDB operation ID
+when admitted, and the final receipt when available. It continues to use the
+current v2 mutations and SDK operation wait, without a compatibility fallback,
+automatic retry, or changes to execution ordering.
+
+The visible states are queued, pending admission, pending, completed, error,
+cancelled, and outcome unconfirmed. The latest submitted intent remains in the
+footer; finishing an older operation cannot replace it. A count identifies older
+pending work even if the latest intent has completed. Full target identities and
+operation IDs are retained in the wrapped Timeline. Target labels are captured
+at submission instead of being inferred from the currently inspected frame.
+Expressions, assignment values, and raw-command text are not copied into the new
+feedback labels.
+
+Covered actions are Continue/Interrupt/stepping, jumps, signals, session
+termination, breakpoint creation/deletion/enablement, expression evaluation,
+value/register assignment, native commands, extension actions, and local
+logpoint configuration. Existing source/search/picker and value-inspection
+loading/error states remain independent. This is not a new general task runner
+or an operation cancellation UI.
+
+Queue rejection explicitly says the request was not sent. An error after DDB
+admission leaves the result unconfirmed instead of declaring backend execution
+failed. Connection loss cannot prove failure either. A same-instance final
+receipt may resolve the uncertainty; backend replacement retires previous
+intents so late replies cannot complete them. Canonical failed/cancelled receipts
+and failed fanout members produce visible errors. No failed member is represented
+as an all-success result.
+
+History is limited to 64 intents. Active intents are not silently evicted;
+overload rejects the new command before sending. General status and prompt input
+remain visible alongside feedback, including in the tiny layout. Routine
+snapshots, inspection statuses, automatic all-stop receipts, and stale value-edit
+contexts do not determine the tracked operation's state.
+
+Verification includes five feedback-model tests, four interaction/rendering
+tests, and two serialized-worker tests. Controlled v2 admission and operation
+polling prove that admission is reported before completion, the second control
+stays queued behind the first, distinct intents retain distinct operation IDs,
+and a rejected admission never emits a success receipt. Existing request tests
+still assert their original canonical targets and payloads after unwrapping the
+internal tracking envelope.
+
+The mock full-terminal workflow now checks that completed Next feedback remains
+in the current footer after a snapshot refresh and source navigation. Existing
+real GDB/LLDB terminal workflows also exercise the tracked mutations.
+
+Reviewable commits:
+
+- `5821f3be`: feedback module, queue/worker/UI integration, model/interaction/
+  serialized-worker tests, and unchanged target/payload assertions through the
+  internal request envelope.
+- `d1ca0d1c`: durable completed-Next footer assertions in the full terminal
+  workflow.
+- This audit and the README are a separate allowlisted documentation commit.
+
+Final checks on the committed implementation and terminal regression:
+
+| Check | Result |
+| --- | --- |
+| TUI unit tests | 321 passed in 2.27 seconds |
+| Non-ignored terminal helpers | 2 passed |
+| Strict all-target Clippy | Passed in 6.14 seconds |
+| Complete non-greeter terminal suite | 30 passed in 89.34 seconds |
+| Real GDB and LLDB workflows | Passed in the full suite |
+| Focused mock full-terminal workflow | Passed in 4.51 seconds before the final compact-layout adjustment; passed again in the final full suite |
+| Formatting and staged diff checks | Passed |
+| Real auto-attached greeter | Not rerun; the recorded cold-source discovery timeout remains unresolved |
+
+Reproduce the checks:
+
+```sh
+cargo test --manifest-path ddb-tui/Cargo.toml --locked
+cargo clippy --manifest-path ddb-tui/Cargo.toml --locked --all-targets -- -D warnings
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  -- --ignored --skip greeter_auto_attach --test-threads=1
+```
+
+Requirements 11 and 15 remain open, and requirement 10 remains partial. The
+source-directory regexp correctness follow-up is still open. Control-target
+retirement needs a separate regression check: current thread reconciliation can
+replace an explicit disappeared target with the newly inspected thread. This
+batch captures queued targets correctly but does not change that reconciliation
+policy. The full sixteen-requirement goal remains active.
