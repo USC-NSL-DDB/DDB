@@ -2605,6 +2605,19 @@ mod v2_tests {
     #[test]
     fn toolbar_only_exposes_execution_actions_supported_for_the_selected_scope() {
         let mut app = App::new("http://localhost".into());
+        app.sessions.push(v2::Session {
+            session_id: "session".into(),
+            ..Default::default()
+        });
+        app.groups.push(v2::Group {
+            group_id: "group".into(),
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread".into(),
+            session_id: "session".into(),
+            ..Default::default()
+        }]);
         app.capabilities.execution_actions = vec![
             v2::ExecutionAction::Continue as i32,
             v2::ExecutionAction::Next as i32,
@@ -2648,6 +2661,7 @@ mod v2_tests {
             .iter()
             .any(|(control, _)| *control == Control::Next));
         app.execution_target = None;
+        app.threads.clear();
         render(&mut app, 140, 40);
         assert!(!app
             .areas

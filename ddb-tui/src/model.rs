@@ -552,6 +552,7 @@ pub struct App {
     pub breakpoints: Vec<Breakpoint>,
     pub breakpoint_target_picker: Option<BreakpointTargetPicker>,
     pub execution_target: Option<v2::Target>,
+    execution_target_retired: bool,
     pub selected_thread: usize,
     pub selected_frame: usize,
     selected_topology: Option<TopologyRowKind>,
@@ -660,6 +661,7 @@ impl App {
             extension_document: None,
             breakpoint_target_picker: None,
             execution_target: None,
+            execution_target_retired: false,
             breakpoints: Vec::new(),
             selected_thread: 0,
             selected_topology: None,
@@ -839,6 +841,7 @@ impl App {
                 .is_some_and(|previous| previous != &snapshot.server_instance_id)
             {
                 self.source_browser.invalidate_server();
+                self.execution_target_retired = self.execution_target.is_some();
                 for message in self.operations.disconnected(true) {
                     self.push_timeline(message);
                 }
@@ -946,6 +949,7 @@ impl App {
         } else {
             self.reconcile_topology_selection();
         }
+        self.reconcile_execution_target();
         self.prune_topology_folds();
     }
 
@@ -987,37 +991,15 @@ impl App {
             .or(reported_selected_id)
             .and_then(|id| self.threads.iter().position(|thread| thread.id == id))
             .unwrap_or_else(|| bounded(self.selected_thread, self.threads.len()));
-        let target_is_valid =
-            self.execution_target
-                .as_ref()
-                .is_some_and(|target| match target.selector.as_ref() {
-                    Some(target::Selector::Thread(value)) => self
-                        .threads
-                        .iter()
-                        .any(|thread| thread.id == value.thread_id),
-                    Some(target::Selector::Session(value)) => self
-                        .sessions
-                        .iter()
-                        .any(|session| session.session_id == value.session_id),
-                    Some(target::Selector::Group(value)) => self
-                        .groups
-                        .iter()
-                        .any(|group| group.group_id == value.group_id),
-                    Some(target::Selector::SessionSet(value)) => {
-                        value.session_ids.iter().all(|id| {
-                            self.sessions
-                                .iter()
-                                .any(|session| session.session_id == *id)
-                        })
-                    }
-                    Some(target::Selector::Broadcast(_) | target::Selector::Multiple(_)) => true,
-                    _ => false,
-                });
-        if !target_is_valid {
+        // Establish the initial default once. Inspection recovery must never
+        // replace a previously selected control target with another resource.
+        if self.execution_target.is_none() {
             self.execution_target = self
                 .current_thread()
                 .map(|thread| thread_target(thread.id.clone()));
+            self.execution_target_retired = false;
         }
+        self.reconcile_execution_target();
         let current_id = self.current_thread().map(|thread| thread.id.clone());
         let current_is_stopped = self
             .current_thread()
@@ -1282,14 +1264,69 @@ impl App {
     }
 
     pub fn execution_target(&self) -> Option<v2::Target> {
-        self.execution_target.clone().or_else(|| {
-            self.current_thread()
-                .map(|thread| thread_target(thread.id.clone()))
-        })
+        if self.execution_target_retired {
+            return None;
+        }
+        match &self.execution_target {
+            Some(target) => self.target_is_present(target).then(|| target.clone()),
+            None => self
+                .current_thread()
+                .map(|thread| thread_target(thread.id.clone())),
+        }
+    }
+
+    fn target_is_present(&self, target: &v2::Target) -> bool {
+        match target.selector.as_ref() {
+            Some(target::Selector::Thread(value)) => self
+                .threads
+                .iter()
+                .any(|thread| thread.id == value.thread_id),
+            Some(target::Selector::Session(value)) => self
+                .sessions
+                .iter()
+                .any(|session| session.session_id == value.session_id),
+            Some(target::Selector::Group(value)) => self
+                .groups
+                .iter()
+                .any(|group| group.group_id == value.group_id),
+            Some(target::Selector::SessionSet(value)) => {
+                !value.session_ids.is_empty()
+                    && value.session_ids.iter().all(|id| {
+                        self.sessions
+                            .iter()
+                            .any(|session| &session.session_id == id)
+                    })
+            }
+            Some(target::Selector::Multiple(value)) => {
+                !value.targets.is_empty()
+                    && value
+                        .targets
+                        .iter()
+                        .all(|target| self.target_is_present(target))
+            }
+            Some(target::Selector::Broadcast(_)) => !self.sessions.is_empty(),
+            _ => false,
+        }
+    }
+
+    fn reconcile_execution_target(&mut self) {
+        if self
+            .execution_target
+            .as_ref()
+            .is_some_and(|target| !self.target_is_present(target))
+        {
+            self.execution_target_retired = true;
+        }
     }
 
     pub fn execution_scope_label(&self) -> String {
         let target = self.execution_target();
+        if target.is_none() && self.execution_target.is_some() {
+            return format!(
+                "unavailable {} · select target",
+                self.target_label(self.execution_target.as_ref())
+            );
+        }
         self.target_label(target.as_ref())
     }
 
@@ -1342,8 +1379,10 @@ impl App {
 
     pub fn cycle_execution_scope(&mut self) {
         let next = match self.execution_target().and_then(|target| target.selector) {
-            Some(target::Selector::Thread(_)) => self
-                .current_thread()
+            Some(target::Selector::Thread(value)) => self
+                .threads
+                .iter()
+                .find(|thread| thread.id == value.thread_id)
                 .map(|thread| session_target(thread.session_id.clone())),
             Some(target::Selector::Session(value)) => self
                 .sessions
@@ -1369,6 +1408,7 @@ impl App {
                 .map(|thread| thread_target(thread.id.clone())),
         };
         self.execution_target = next;
+        self.execution_target_retired = false;
         self.status = format!("execution scope: {}", self.execution_scope_label());
     }
 
@@ -1586,6 +1626,7 @@ impl App {
             }
             TopologyRowKind::Group(group_id) => Some(group_target(group_id.clone())),
         };
+        self.execution_target_retired = false;
         if let TopologyRowKind::Thread(thread_id) = kind {
             if let Some(index) = self
                 .threads

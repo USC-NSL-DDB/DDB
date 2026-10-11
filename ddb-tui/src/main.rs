@@ -6370,6 +6370,10 @@ mod tests {
             ..Default::default()
         });
         app.execution_target = Some(api::group_target("group/a"));
+        app.groups.push(v2::Group {
+            group_id: "group/a".into(),
+            ..Default::default()
+        });
         let (requests, mut receiver) = mpsc::channel(1);
         dispatch_control(&mut app, &requests, Control::Next);
         assert!(app.status.contains("not available for group"));
@@ -6520,6 +6524,15 @@ mod tests {
     #[tokio::test]
     async fn extension_prompt_emits_declared_typed_action_request() {
         let mut app = App::new("http://127.0.0.1:5000".to_string());
+        app.sessions.push(v2::Session {
+            session_id: "session/17".into(),
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread/17".into(),
+            session_id: "session/17".into(),
+            ..Default::default()
+        }]);
         app.extension_actions.push(model::ExtensionActionView {
             extension_id: "ddb.example".to_string(),
             extension_version: "1.2.0".to_string(),
@@ -6546,7 +6559,10 @@ mod tests {
             request_schema_uri,
             payload_json,
             ..
-        }) = receiver.recv().await.map(BackendRequest::untracked)
+        }) = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .expect("extension prompt did not queue its request")
+            .map(BackendRequest::untracked)
         else {
             panic!("extension prompt should emit a typed extension action");
         };

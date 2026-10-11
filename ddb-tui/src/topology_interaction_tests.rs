@@ -125,6 +125,152 @@ fn topology_folding_preserves_hidden_thread_inspection_scope_and_reconnect_prefe
 }
 
 #[test]
+fn retired_explicit_control_target_does_not_redirect_to_another_session() {
+    for selected in [
+        TopologyRowKind::Session("session/a".into()),
+        TopologyRowKind::Thread("thread/a".into()),
+    ] {
+        let mut app = fixture();
+        app.select_visible_topology(&selected).unwrap();
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            groups: app.groups.clone(),
+            sessions: app
+                .sessions
+                .iter()
+                .filter(|session| session.session_id == "session/b")
+                .cloned()
+                .collect(),
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread/b".into(),
+            session_id: "session/b".into(),
+            state: v2::ThreadState::Stopped as i32,
+            ..Default::default()
+        }]);
+        assert_eq!(
+            app.current_thread().unwrap().id,
+            "thread/b",
+            "inspection may recover independently"
+        );
+        assert!(
+            app.execution_target().is_none(),
+            "retired explicit target must not redirect controls to the surviving session"
+        );
+        assert!(app.execution_scope_label().contains("unavailable"));
+        render(&mut app, 140, 42);
+        assert!(!app
+            .areas
+            .controls
+            .iter()
+            .any(|(control, _)| control.action_name().is_some()));
+        let (tx, mut rx) = mpsc::channel(8);
+        key(&mut app, &tx, KeyCode::Char('s'));
+        assert!(
+            rx.try_recv().is_err(),
+            "sending a signal needs explicit target reselection"
+        );
+        app.select_visible_topology(&TopologyRowKind::Session("session/b".into()))
+            .unwrap();
+        key(&mut app, &tx, KeyCode::Char('s'));
+        assert!(
+            matches!(rx.try_recv().unwrap(), BackendRequest::ListSignals { target }
+            if target == api::session_target("session/b"))
+        );
+    }
+}
+
+#[test]
+fn execution_scope_cycles_from_the_control_thread_not_a_different_inspected_thread() {
+    let mut app = fixture();
+    app.select_visible_topology(&TopologyRowKind::Thread("thread/a".into()))
+        .unwrap();
+    app.selected_thread = app
+        .threads
+        .iter()
+        .position(|thread| thread.id == "thread/b")
+        .unwrap();
+    app.cycle_execution_scope();
+    assert_eq!(
+        app.execution_target(),
+        Some(api::session_target("session/a"))
+    );
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+}
+
+#[test]
+fn retired_compound_targets_and_groups_require_reselection_even_if_ids_reappear() {
+    for target in [
+        api::group_target("group/workers"),
+        v2::Target {
+            selector: Some(v2::target::Selector::SessionSet(v2::SessionSetTarget {
+                session_ids: vec!["session/a".into(), "session/b".into()],
+            })),
+        },
+        v2::Target {
+            selector: Some(v2::target::Selector::Multiple(v2::MultipleTarget {
+                targets: vec![
+                    api::session_target("session/a"),
+                    api::thread_target("thread/b"),
+                ],
+            })),
+        },
+    ] {
+        let mut app = fixture();
+        let sessions = app.sessions.clone();
+        let groups = app.groups.clone();
+        app.execution_target = Some(target);
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            ..Default::default()
+        });
+        assert!(app.execution_target().is_none());
+        app.apply_snapshot(v2::Snapshot {
+            server_instance_id: "backend".into(),
+            sessions,
+            groups,
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread/b".into(),
+            session_id: "session/b".into(),
+            ..Default::default()
+        }]);
+        assert!(
+            app.execution_target().is_none(),
+            "old target IDs must not silently reactivate controls"
+        );
+        app.select_visible_topology(&TopologyRowKind::Session("session/b".into()))
+            .unwrap();
+        assert_eq!(
+            app.execution_target(),
+            Some(api::session_target("session/b"))
+        );
+    }
+}
+
+#[test]
+fn replaced_backend_does_not_reactivate_identically_named_control_targets() {
+    let mut app = fixture();
+    app.select_visible_topology(&TopologyRowKind::Session("session/a".into()))
+        .unwrap();
+    app.apply_snapshot(v2::Snapshot {
+        server_instance_id: "replacement".into(),
+        sessions: app.sessions.clone(),
+        groups: app.groups.clone(),
+        ..Default::default()
+    });
+    assert!(app.execution_target().is_none());
+    app.select_visible_topology(&TopologyRowKind::Session("session/a".into()))
+        .unwrap();
+    assert_eq!(
+        app.execution_target(),
+        Some(api::session_target("session/a"))
+    );
+}
+
+#[test]
 fn topology_keyboard_tree_navigation_and_shift_scroll_do_not_conflict() {
     let mut app = fixture();
     let (tx, mut rx) = mpsc::channel(8);
