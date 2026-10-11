@@ -43,7 +43,7 @@ default through `--source-search exact|fuzzy`.
 | 7 | Organized searchable help | Implemented. Categorized shortcut catalog; `/` searches keys, categories, and descriptions with case-insensitive word matching. Prompt editing is separate from help navigation. |
 | 8 | Exact/fuzzy source text search, configurable default | Implemented. `/`, Ctrl+f in the prompt, `n`/`N`, mouse controls, and `--source-search exact\|fuzzy`. Whole-file matching runs at the source owner and returns version-pinned context. Local and remote providers share the indexed matcher. |
 | 9 | Switchable breakpoint-hits-only pane | Implemented. `H` / Hits-All button switches the persistent Alt+2 pane to current stops grouped by DDB group/session. Stop-identity selection, stale-click rejection, read-only mutation guards, lifecycle/interaction tests, and real GDB/LLDB frame/source/watch navigation are covered. |
-| 10 | Indicate frames whose source is unavailable | Partial. Frames without a file/line are dimmed and labeled `no source location`. A file/line does not prove source content is readable; missing/unreadable files still need explicit availability handling. |
+| 10 | Indicate frames whose source is unavailable | Implemented. Unusable locations are dimmed; real source loads distinguish unchecked, loading, readable, and failed states per backend/session/path. Failed loads dim the function name and retain a visible reason; retries recover. Filesystem, stale-result, lifecycle, style, and native-DDB terminal coverage are recorded below. |
 | 11 | Measure and improve pause/resume/all-stop refresh latency | Open. Do not infer improvements from test duration. Separate backend operation/event timing from frontend inspection/source/render timing. An intermittent real-greeter source timeout remains recorded below. |
 | 12 | Discoverable keyboard navigation from breakpoint to paused frame | Implemented in help and hints. Alt+2, choose a breakpoint, P, choose a paused hit, Enter; Escape cancels. |
 | 13 | One-click topology expansion/collapse and individual signaling | Implemented. Disclosure clicks, Space/Enter and Left/Right fold/navigate groups/sessions. Folding preserves control scope and inspected thread. Mouse rows carry resource identities; session-label selection plus `s` submits a canonical single-session signal. Unit and two-session terminal coverage verify the target and resolved count. |
@@ -491,9 +491,122 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
   -- --ignored --skip greeter_auto_attach --test-threads=1
 ```
 
-Requirements 11 and 15 remain open, and requirement 10 remains partial. The
-source-directory regexp correctness follow-up is still open. Control-target
-retirement needs a separate regression check: current thread reconciliation can
-replace an explicit disappeared target with the newly inspected thread. This
-batch captures queued targets correctly but does not change that reconciliation
-policy. The full sixteen-requirement goal remains active.
+At the end of the operation-feedback batch, requirements 11 and 15 and the
+source-directory regexp follow-up remained open, and requirement 10 was partial.
+Control-target retirement still needed a regression check: thread reconciliation
+could replace a disappeared explicit target with the newly inspected thread.
+That batch captured queued targets correctly but did not change reconciliation.
+The fixes below supersede those remaining-work notes for target safety and
+requirement 10.
+
+## Target retirement and source-read evidence addendum
+
+The control-target follow-up is fixed in `1a5714a2`. The regression selected a
+session/thread in A, removed A while B survived, and observed the target accessor
+return B. It failed twice before the implementation change, in 0.23 and 0.00
+seconds. `apply_threads` was overwriting the unavailable explicit target with
+the recovered inspection thread.
+
+The initial default is still established once. Subsequent retirement preserves
+the target identity and disables execution until explicit reselection. The scope
+label explains that it is unavailable. Session sets and recursive compound
+targets validate their members. Disappeared IDs cannot automatically reactivate
+controls if they reappear; replacement instances cannot revive old targets.
+Inspection selection is allowed to recover independently. Scope cycling now
+uses the captured control thread's owning session instead of an unrelated
+inspected thread.
+
+Four new lifecycle/scope regressions passed. Existing advertised-scope and
+extension-action fixtures now create the topology resources their targets
+reference. The asynchronous extension assertion has a two-second failure bound
+instead of waiting indefinitely. The target-only batch passed 325 unit tests,
+strict all-target Clippy, and the two-session signal terminal workflow in 1.30
+seconds. No debugger API or compatibility behavior changed.
+
+Requirement 10 now uses actual source-read evidence, not inference from a
+reported file/line. The frame label distinguishes these states:
+
+| Evidence | Presentation |
+| --- | --- |
+| No usable file/line, including empty paths, zero lines, and API-overflow lines | Dim function name and `no source location` |
+| Reported location, no retained read evidence | `source unchecked` |
+| Current source request for this owner/path | `loading source` |
+| Accepted successful source read | Normal function name, no availability warning |
+| Accepted failed load | Dim function name, `source load failed`, and the reason on the scrollable row |
+
+The Source pane retains the detailed error. Enter/F8 remains available to retry;
+failed loads are not treated as a permanent filesystem diagnosis. Network,
+permission, missing-file, invalid-UTF-8, and queue failures can prevent loading
+without changing debugger-provided location metadata. No unrelated owner is
+marked unavailable on an ambiguous group/broadcast resolution failure.
+
+Evidence is bounded to 128 session/path entries and belongs to the current DDB
+instance. It is discarded on session retirement or instance replacement.
+Generation checks cover request registration, accepted browser results, and
+queue rejection. Stale/cancelled results and foreign backend owner hints cannot
+alter current-frame evidence. Identical debugger paths in different sessions are
+independent. A successful retry replaces the prior failure. Rendering compares
+borrowed identities rather than allocating an owner/path key per frame.
+
+No eager per-frame source enumeration or content reads were introduced. Frames
+without evidence remain explicitly unchecked. This avoids adding source-query
+traffic to the pause/stack-refresh path; it is not a claim that requirement 11's
+latency investigation is complete. Explicitly revealing an unusable location
+now clears the previous source view instead of silently leaving it visible.
+
+Six new tests cover actual missing/invalid-UTF-8 local files and restoration
+through the source worker, per-owner isolation, stale/cancelled replies,
+ambiguous/foreign ownership, backend/session replacement, invalid locations,
+bounded evidence, small layouts, and the actual dimmed function-name color.
+The new native-DDB terminal workflow reports a file/line for a genuinely absent
+file, checks the stack failure label, then restores the file and requires a
+successful retry and execution marker. An unchanged old failure screen is not
+accepted as a retry acknowledgement.
+
+Source retry also clears its own still-displayed status error after a successful
+read. It does not erase a different action's error. Help explicitly describes
+Enter in Stack and F8 as source-retry paths.
+
+One final full-suite run passed 30 workflows but failed the existing SIGTERM
+fixture before SIGTERM was sent. It waited for the transient `managed DDB`
+startup status, while the captured screen already showed a connected debugger.
+The unchanged isolated test passed in 0.46 seconds, confirming the predicate's
+timing sensitivity. Managed-startup waits now acknowledge the persistent
+connected state in the current frame. The owned-process, terminal-restoration,
+and stopped-session assertions remain intact; no deadline increased. The fixed
+SIGTERM workflow passed in 0.50 seconds and again in the final complete suite.
+This is a test-readiness correction, not a claimed production shutdown fix.
+
+Reviewable commits:
+
+- `1a5714a2`: target-retirement safety, correct owner-based scope cycling, and
+  lifecycle/interaction regressions.
+- `9aa00324`: source-read evidence, UI indicators and retry fixes, searchable help,
+  and filesystem/model/interaction tests.
+- `2411b6cd`: actual native-DDB missing-file restoration/source-marker proof and
+  persistent managed-startup readiness assertions.
+- This audit and the README are a separate allowlisted documentation commit.
+
+Final combined checks:
+
+| Check | Result |
+| --- | --- |
+| TUI unit tests | 331 passed in 2.17 seconds |
+| Non-ignored terminal helpers | 2 passed |
+| Strict all-target Clippy | Passed in 2.05 seconds |
+| Complete non-greeter terminal suite | 31 passed in 89.92 seconds |
+| Native-DDB missing-file recovery | Passed in the final suite; focused recovery run passed in 1.03 seconds |
+| Real GDB/LLDB, managed launch/attach, signals, source ownership, and distributed inspection workflows | Passed in the complete suite |
+| Formatting and staged diff checks | Passed |
+| Real auto-attached greeter | Not rerun; its recorded cold-source discovery timeout remains unresolved |
+
+Reproduce the new terminal test:
+
+```sh
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  unreadable_source_is_identified_on_its_stack_frame_terminal_workflow \
+  -- --ignored --test-threads=1
+```
+
+Requirements 11 and 15 and the source-directory regexp follow-up remain open.
+The sixteen-requirement goal is not complete.

@@ -375,8 +375,28 @@ Alt-number combinations for DDB rather than binding them to another action.
 
 The toolbar shows execution actions supported by DDB for the selected target
 scope. A thread-only Next action is not offered for a session or group. Stack
-frames without a source file/line are dimmed and labeled `no source location`.
-A reported file/line can still refer to missing or unreadable source content.
+frames without a usable source file/line are dimmed and labeled `no source
+location`. A reported location starts as `source unchecked`; the active read is
+`loading source`. Failed loads dim the function name and show `source load
+failed`, with the reason at the end of the horizontally scrollable row. The
+Source pane also shows the error. A failed load is not a permanent claim about
+the file: select the frame and press Enter or F8 to retry. A successful read
+removes the failure/unchecked label.
+
+Read evidence is scoped to the DDB instance, owning session, and exact debugger
+path. The same path in another session is independent. Stale/cancelled replies
+cannot change the indicator; session retirement and backend replacement discard
+the corresponding evidence. The cache is bounded to 128 owner/path entries.
+Other frames are not eagerly fetched, so this indication adds no source probes
+to pause or distributed-backtrace refreshes.
+
+If a selected execution target disappears, controls stay disabled and the scope
+is labeled unavailable until you explicitly select a target or cycle scope.
+Inspection may move to a surviving thread, but it cannot silently redirect
+Continue or signals. A retired target does not reactivate merely because the
+same ID reappears or a replacement backend uses an identical ID. Scope cycling
+from a thread follows the control thread's owner, not a different inspected
+distributed frame.
 
 The bottom line shows the latest user mutation as `queued`, `pending admission`,
 `pending`, `completed`, `error`, or `cancelled`. It captures the requested target
