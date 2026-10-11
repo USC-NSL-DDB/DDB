@@ -235,3 +235,87 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
 
 Requirements 9, 11, 13, 15, and 16 remain open. Requirement 10 remains partial.
 The sixteen-requirement goal is not complete.
+
+## Source-readiness latency investigation
+
+The direct Alt-number navigation decision remains unchanged. No prefix or
+layered prefix configuration was introduced.
+
+The real auto-attach test now has a minimized source-readiness variant. It shares
+the original broker, backend, auto-attached server, and TUI setup, then exits as
+soon as the requested server line is visible. The original all-stop workflow
+continues past that same assertion. Both retain the existing 15-second source
+deadline. Neither changes the shared discovery configuration or takes ownership
+of an existing broker.
+
+Temporary request and command-stage probes established the following:
+
+- One successful run spent 5,706 ms in `ResolveSource`, followed by approximately
+  4 ms in `ReadSource`. The TUI applied the same source generation it requested.
+- Failing minimized runs also issued a single source generation. DDB admitted,
+  wrote, and acknowledged the source-list command, but no corresponding debugger
+  result arrived before the source deadline. Earlier command state barriers
+  completed. There was no observed stale-generation rejection or cancellation
+  of the manual source request.
+- During a successful sampled run, the test-owned GDB process consumed CPU and
+  briefly waited in filesystem RPCs. This supports investigating debugger source
+  discovery; it does not quantify how much each filesystem operation contributed.
+- A separate GDB/MI measurement loaded the real greeter binary before timing each
+  query. Full, directory-filtered, and basename-filtered source enumeration took
+  3.420, 3.512, and 3.452 seconds respectively. Smaller response payloads alone
+  did not remove the cold-query cost in this experiment.
+
+The implemented optimization is deliberately narrower than a cold-path fix.
+`ResolveSource` previously asked for a complete listing even when an exact path
+already had positive or negative membership evidence in a partial catalog. It
+now uses that evidence directly. Unknown stopped-session paths use the existing
+single-flight path discovery, with at most four session requests in flight and
+the request deadline applied to collection. Unknown running-session paths never
+trigger discovery. Ambiguous ownership still requires an explicit session.
+
+The application-level regression seeds only a partial catalog and deliberately
+registers no debugger in the fixture router. It failed on the original code with
+`BackendFailed`, then passed with the optimization. Both positive and negative
+cached membership avoid backend I/O, without falsely completing the catalog.
+
+The matching optimized backend still reproduced a cold source-readiness timeout.
+Therefore requirement 11 remains open. All temporary tagged probes were removed;
+no production deadline or correctness assertion was relaxed. Another observation
+for subsequent correctness work is that GDB's `--dirname` operand is a regular
+expression, while the current resolver passes a quoted literal directory and
+the LLDB bridge treats it as a literal prefix. Directories containing regular
+expression metacharacters need explicit cross-backend coverage and aligned
+filter semantics. See the [GDB/MI file command documentation](https://www.sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-File-Commands.html).
+
+Reproduce the minimized real-app regression:
+
+```sh
+DDB_GREETER_WORKSPACE=/mnt/home/ybyan/codebase/grpc/examples/cpp/helloworld \
+cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
+  greeter_auto_attach_source_readiness_terminal_workflow \
+  -- --ignored --test-threads=1 --nocapture
+```
+
+This test is intentionally capable of exposing the unresolved cold-discovery
+delay. A passing rerun is not proof that the intermittent problem is fixed.
+
+Final checks after removing every temporary probe:
+
+| Check | Result |
+| --- | --- |
+| Application service unit tests | 28 passed in 0.18 seconds, including the partial-membership regression |
+| Source API integration tests | 5 passed in 0.93 seconds |
+| Matching backend debug binary | Built successfully |
+| TUI unit tests and integration helpers | 299 unit tests and 2 helpers passed |
+| Strict all-target TUI Clippy | Passed |
+| Strict DDB-only Clippy with `--no-deps` | Passed in 32.59 seconds |
+| Strict backend Clippy including path dependencies | Failed in untouched `gdbmi` with 38 lint errors; no broad lint cleanup included |
+| Backend/TUI formatting and diff checks | Passed |
+| Cleaned original real-greeter all-stop workflow | Failed waiting for the source cursor at line 59, 19.87 seconds total |
+| Cleaned minimized real-greeter source workflow | Reproduced the same timeout, 18.96 seconds total |
+| Temporary probe search | No `[DEBUG-source-11]` instrumentation remains in backend/frontend source or tests |
+
+The optimization and its application regression are isolated in commit
+`059fafa1`. The minimized real-app regression and this evidence are separate
+test/documentation commits. None of these results closes the remaining open
+requirements or establishes a fully passing real distributed-app workflow.
