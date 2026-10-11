@@ -42,6 +42,16 @@ impl Drop for OwnedTestProcess {
 #[test]
 #[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
 fn greeter_auto_attach_all_stop_terminal_workflow() {
+    greeter_auto_attach_terminal_workflow(false);
+}
+
+#[test]
+#[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
+fn greeter_auto_attach_source_readiness_terminal_workflow() {
+    greeter_auto_attach_terminal_workflow(true);
+}
+
+fn greeter_auto_attach_terminal_workflow(source_only: bool) {
     let _guard = REAL_DEBUGGER_LOCK.lock().unwrap();
     let workspace = PathBuf::from(
         std::env::var_os("DDB_GREETER_WORKSPACE").expect("set DDB_GREETER_WORKSPACE"),
@@ -117,6 +127,11 @@ fn greeter_auto_attach_all_stop_terminal_workflow() {
         + 1;
     tui.send(format!("g{}:{server_line}\r", server_source.display()).as_bytes());
     tui.wait_for_source_marker('▸', server_line);
+    if source_only {
+        tui.quit();
+        ddb.shutdown();
+        return;
+    }
     tui.send(b"b");
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
