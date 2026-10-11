@@ -3,6 +3,8 @@ mod cli;
 mod debugger_setup;
 mod display_text;
 mod help;
+#[cfg(test)]
+mod live_hits_interaction_tests;
 mod logpoints;
 mod model;
 mod output;
@@ -625,6 +627,16 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         return;
     }
 
+    if app.focus == Focus::Breakpoints
+        && app.breakpoint_hit_view.visible
+        && matches!(
+            key.code,
+            KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('x' | ' ' | 'L' | 'v')
+        )
+    {
+        app.status = "The live hits view is navigation-only; press H to manage breakpoints".into();
+        return;
+    }
     match key.code {
         KeyCode::Char('/') if app.focus == Focus::Source => {
             start_source_search_prompt(app, requests)
@@ -703,6 +715,15 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Home if app.focus == Focus::Source => {
             app.source_browser.scroll_horizontal(isize::MIN);
         }
+        KeyCode::Home | KeyCode::End
+            if app.focus == Focus::Breakpoints && app.breakpoint_hit_view.visible =>
+        {
+            app.move_visible_hit(if key.code == KeyCode::Home {
+                isize::MIN
+            } else {
+                isize::MAX
+            });
+        }
         KeyCode::Left | KeyCode::Right | KeyCode::Home
             if matches!(
                 app.focus,
@@ -764,6 +785,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
         }
         KeyCode::Char('v') if app.focus == Focus::Breakpoints => app.toggle_breakpoint_grouping(),
+        KeyCode::Char('H') if app.focus == Focus::Breakpoints => app.toggle_hit_view(),
         KeyCode::Char('K') if app.focus == Focus::Threads => {
             if let Err(error) = app.open_session_termination() {
                 app.error(error);
@@ -815,7 +837,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
         }
         KeyCode::Char('P') if app.focus == Focus::Breakpoints => {
-            if let Err(error) = app.open_breakpoint_hits() {
+            if app.breakpoint_hit_view.visible {
+                reveal_breakpoint_hit(app, requests);
+            } else if let Err(error) = app.open_breakpoint_hits() {
                 app.error(error);
             }
         }
@@ -866,7 +890,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 app.error(error);
             }
         }
-        KeyCode::Enter if app.focus == Focus::Breakpoints => reveal_breakpoint(app, requests),
+        KeyCode::Enter if app.focus == Focus::Breakpoints => {
+            if app.breakpoint_hit_view.visible {
+                reveal_breakpoint_hit(app, requests);
+            } else {
+                reveal_breakpoint(app, requests);
+            }
+        }
         KeyCode::Enter | KeyCode::Right if app.focus == Focus::Variables => {
             toggle_selected_variable(app, requests)
         }
@@ -1494,6 +1524,15 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                 return;
             }
             if button == MouseButton::Left
+                && app.areas.breakpoint_hit_view_toggle.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Breakpoints;
+                app.toggle_hit_view();
+                return;
+            }
+            if button == MouseButton::Left
                 && app.areas.breakpoint_grouping.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 })
@@ -1555,6 +1594,18 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     if let Err(error) = app.start_extension_action_input() {
                         app.error(error);
                     }
+                }
+                return;
+            }
+            if let Some((hit, _)) = app.areas.current_hit_rows.iter().find(|(_, area)| {
+                area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+            }) {
+                let hit = hit.clone();
+                app.focus = Focus::Breakpoints;
+                match app.select_visible_hit(hit) {
+                    Ok(()) if button == MouseButton::Left => reveal_breakpoint_hit(app, requests),
+                    Ok(()) => {}
+                    Err(error) => app.error(error),
                 }
                 return;
             }
@@ -1883,7 +1934,12 @@ fn inspect_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 }
 
 fn reveal_breakpoint_hit(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
-    match app.commit_breakpoint_hit() {
+    let result = if app.breakpoint_hit_view.visible {
+        app.commit_visible_hit()
+    } else {
+        app.commit_breakpoint_hit()
+    };
+    match result {
         Ok(thread_id) => {
             app.focus = Focus::Source;
             inspect_thread(app, requests, thread_id);
@@ -2010,6 +2066,7 @@ fn refresh_stack(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 fn toggle_breakpoint(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
     let indices = app.source_breakpoint_indices();
     if indices.len() > 1 {
+        app.breakpoint_hit_view.visible = false;
         app.focus = Focus::Breakpoints;
         app.selected_breakpoint = indices[0];
         app.status =

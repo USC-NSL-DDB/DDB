@@ -571,6 +571,10 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
 }
 
 fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
+    if app.breakpoint_hit_view.visible {
+        draw_current_hits(frame, app, area, areas);
+        return;
+    }
     let mut rows = Vec::new();
     let hits = app.breakpoint_hits();
     let mut previous_file = None;
@@ -785,6 +789,95 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
             Rect::new(inner.x, inner.y.saturating_add(row as u16), inner.width, 1),
         ));
     }
+    draw_hit_view_toggle(frame, app, area, areas);
+}
+
+fn draw_hit_view_toggle(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
+    if area.width >= 24 && area.height >= 3 {
+        let button = Rect::new(area.x + 1, area.bottom() - 1, 9, 1);
+        frame.render_widget(
+            Paragraph::new(if app.breakpoint_hit_view.visible {
+                "All [H]"
+            } else {
+                "Hits [H]"
+            })
+            .style(Style::default().fg(ACCENT)),
+            button,
+        );
+        areas.breakpoint_hit_view_toggle = Some(button);
+    }
+}
+
+fn draw_current_hits(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
+    let rows = app.hit_view_rows();
+    let current = app.current_visible_hit();
+    let selected = rows
+        .iter()
+        .position(|row| row.hit.as_ref().is_some_and(|hit| Some(hit) == current));
+    let first = list_first(selected.unwrap_or(0), rows.len(), area, 1);
+    let lines = rows
+        .iter()
+        .map(|row| {
+            Line::from(vec![
+                Span::raw("  ".repeat(row.depth)),
+                Span::styled(
+                    terminal_text(&row.label),
+                    Style::default().fg(if row.hit.is_some() {
+                        YELLOW
+                    } else if row.depth == 0 {
+                        ACCENT
+                    } else {
+                        Color::White
+                    }),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+    app.breakpoint_viewport.fit(
+        lines.iter().map(Line::width).max().unwrap_or(0),
+        area.width.saturating_sub(4) as usize,
+    );
+    if rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new(if app.api_connected {
+                "No current breakpoint hits\n\nOnly threads paused at a breakpoint appear here.\nH: all breakpoints"
+            } else {
+                "Disconnected: no verified current hits\n\nH: all breakpoints"
+            }).block(panel_block(&title(app, Focus::Breakpoints, "DDB Breakpoint Hits"), app.focus == Focus::Breakpoints))
+                .style(Style::default().fg(MUTED)), area,
+        );
+    } else {
+        draw_selectable_list(
+            frame,
+            area,
+            title(app, Focus::Breakpoints, "DDB Breakpoint Hits"),
+            lines
+                .into_iter()
+                .map(|line| ListItem::new(horizontal_line(line, app.breakpoint_viewport.column())))
+                .collect(),
+            selected,
+            app.focus == Focus::Breakpoints,
+        );
+    }
+    areas.add_focus_panel(Focus::Breakpoints, area);
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    for (offset, row) in rows
+        .iter()
+        .skip(first)
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        if let Some(hit) = row.hit.as_ref() {
+            areas.current_hit_rows.push((
+                hit.clone(),
+                Rect::new(inner.x, inner.y + offset as u16, inner.width, 1),
+            ));
+        }
+    }
+    draw_hit_view_toggle(frame, app, area, areas);
 }
 
 fn session_display_name(app: &App, session_id: &str) -> String {
@@ -2059,12 +2152,16 @@ fn draw_selectable_list(
     area: Rect,
     title: String,
     items: Vec<ListItem<'_>>,
-    selected: usize,
+    selected: impl Into<Option<usize>>,
     focused: bool,
 ) {
     let mut state = ListState::default();
     if !items.is_empty() {
-        state.select(Some(selected.min(items.len() - 1)));
+        state.select(
+            selected
+                .into()
+                .map(|selected| selected.min(items.len() - 1)),
+        );
     }
     let list = List::new(items)
         .block(panel_block(&title, focused))

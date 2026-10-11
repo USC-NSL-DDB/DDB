@@ -115,6 +115,8 @@ pub struct UiAreas {
     pub panels: Vec<PanelHitArea>,
     pub pane_expanders: Vec<(Focus, Rect)>,
     pub breakpoint_hit_rows: Vec<(usize, Rect)>,
+    pub current_hit_rows: Vec<(breakpoint_hits::BreakpointHit, Rect)>,
+    pub breakpoint_hit_view_toggle: Option<Rect>,
     pub breakpoint_hit_cancel: Option<Rect>,
     pub controls: Vec<(Control, Rect)>,
     pub details_export: Option<Rect>,
@@ -557,6 +559,7 @@ pub struct App {
     pub breakpoints_grouped: bool,
     pub selected_breakpoint_site: Option<usize>,
     pub breakpoint_hit_picker: Option<breakpoint_hits::BreakpointHitPicker>,
+    pub breakpoint_hit_view: breakpoint_hits::HitView,
     pub inspection_generation: u64,
     pub stack_mode: crate::cli::StackMode,
     pub trace_api: bool,
@@ -663,6 +666,7 @@ impl App {
             breakpoints_grouped: false,
             selected_breakpoint_site: None,
             breakpoint_hit_picker: None,
+            breakpoint_hit_view: Default::default(),
             inspection_generation: 0,
             stack_mode: Default::default(),
             trace_api: false,
@@ -814,7 +818,7 @@ impl App {
             .state_event_cursor
             .as_ref()
             .map_or(0, |cursor| cursor.sequence);
-        let selected_breakpoint = self.current_breakpoint().map(|bp| {
+        let selected_breakpoint = self.breakpoints.get(self.selected_breakpoint).map(|bp| {
             (
                 bp.id.clone(),
                 self.selected_breakpoint_site
@@ -836,6 +840,7 @@ impl App {
                 self.source_explorer.invalidate_server();
                 self.breakpoint_target_picker = None;
                 self.breakpoint_hit_picker = None;
+                self.clear_hit_selection();
                 self.signal_picker = None;
                 self.session_termination = None;
                 self.invalidate_inspection();
@@ -1597,6 +1602,11 @@ impl App {
     }
 
     pub fn current_breakpoint(&self) -> Option<&Breakpoint> {
+        // The live hits view is navigation-only. Preserve the all-breakpoints
+        // selection but never let hidden selection receive mutations.
+        if self.breakpoint_hit_view.visible {
+            return None;
+        }
         self.breakpoints.get(self.selected_breakpoint)
     }
 
@@ -2320,6 +2330,10 @@ impl App {
         match self.focus {
             Focus::Threads => self.move_topology_selection(delta),
             Focus::Breakpoints => {
+                if self.breakpoint_hit_view.visible {
+                    self.move_visible_hit(delta);
+                    return;
+                }
                 let rows = self
                     .breakpoint_order()
                     .into_iter()
@@ -2514,6 +2528,7 @@ impl App {
 
     pub fn backend_unavailable(&mut self, error: impl ToString) {
         self.supersede_automatic_control();
+        self.clear_hit_selection();
         self.api_connected = false;
         self.error(error);
         // A successfully received snapshot is evidence this connection error

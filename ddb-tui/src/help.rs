@@ -126,8 +126,13 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Breakpoints",
+        keys: "H / Hits button",
+        description: "Switch all breakpoints / live hits grouped by DDB group and session; Enter/click opens the owning frame",
+    },
+    Entry {
+        section: "Breakpoints",
         keys: "v",
-        description: "Toggle flat / file-grouped view",
+        description: "Toggle flat / file-grouped view in all breakpoints",
     },
     Entry {
         section: "Breakpoints",
