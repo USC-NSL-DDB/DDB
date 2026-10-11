@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    future::Future,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,7 +20,12 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    cmd_flow::{api::CommandExecutor, decoder::SourceFiles, router::Target},
+    cmd_flow::{
+        api::CommandExecutor,
+        decoder::{Payload, SourceFiles},
+        router::Target,
+        FinishedCmd,
+    },
     state::{GroupId, GroupMeta, RuntimeModel},
 };
 
@@ -45,8 +51,8 @@ impl SourceResolutionPolicy {
 
 #[async_trait]
 trait SourceListingProvider: Send + Sync {
-    /// List all sources, or only those in an exact literal parent directory.
-    async fn list_sources(&self, sid: u64, dirname: Option<&str>) -> Result<Vec<String>>;
+    /// Discover an exact path's membership, or list the complete source catalog.
+    async fn list_sources(&self, sid: u64, path: Option<&str>) -> Result<Vec<String>>;
 }
 
 struct DebuggerSourceListingProvider {
@@ -55,22 +61,54 @@ struct DebuggerSourceListingProvider {
 
 #[async_trait]
 impl SourceListingProvider for DebuggerSourceListingProvider {
-    async fn list_sources(&self, sid: u64, dirname: Option<&str>) -> Result<Vec<String>> {
-        let command = source_listing_command(dirname)?;
-        let completion = self
-            .executor
-            .execute(&command, Target::Session(sid))
-            .await
-            .with_context(|| format!("failed to list sources from session {sid}"))?;
-        let paths = SourceFiles::decode(&completion)?.paths;
-        if paths.len() > 100_000 || paths.iter().map(String::len).sum::<usize>() > 16 * 1024 * 1024
-        {
-            return Err(anyhow!(
-                "debugger source catalog exceeds its resource bound"
-            ));
-        }
-        Ok(paths)
+    async fn list_sources(&self, sid: u64, path: Option<&str>) -> Result<Vec<String>> {
+        discover_source_paths(path, |command| async move {
+            self.executor.execute(&command, Target::Session(sid)).await
+        })
+        .await
+        .with_context(|| format!("failed to discover sources from session {sid}"))
     }
+}
+
+async fn discover_source_paths<F, Fut>(path: Option<&str>, mut execute: F) -> Result<Vec<String>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<FinishedCmd>>,
+{
+    let dirname = path
+        .map(|path| {
+            Path::new(path)
+                .parent()
+                .and_then(Path::to_str)
+                .ok_or_else(|| anyhow!("source path has no UTF-8 parent"))
+        })
+        .transpose()?;
+    if let Some(path) = path.filter(|path| Path::new(path).is_absolute()) {
+        let command = format!("-ddb-probe-source {}", serde_json::to_string(path)?);
+        let completion = execute(command).await?;
+        let proof = SourceFiles::decode(&completion)?.paths;
+        ensure_source_budget(&proof)?;
+        let payload = Payload::first(&completion)?;
+        match (payload.string("source_status")?, proof.as_slice()) {
+            ("present", [known]) if known == path => return Ok(proof),
+            ("absent", []) => return Ok(proof),
+            ("unknown", []) => {} // No proof is not a negative. Discover below.
+            _ => return Err(anyhow!("debugger source probe returned an unexpected path")),
+        }
+    }
+    let completion = execute(source_listing_command(dirname)?).await?;
+    let paths = SourceFiles::decode(&completion)?.paths;
+    ensure_source_budget(&paths)?;
+    Ok(paths)
+}
+
+fn ensure_source_budget(paths: &[String]) -> Result<()> {
+    if paths.len() > 100_000 || paths.iter().map(String::len).sum::<usize>() > 16 * 1024 * 1024 {
+        return Err(anyhow!(
+            "debugger source catalog exceeds its resource bound"
+        ));
+    }
+    Ok(())
 }
 
 fn source_listing_command(dirname: Option<&str>) -> Result<String> {
@@ -231,13 +269,6 @@ impl SourceResolver {
             return Ok(());
         }
 
-        let dirname = Path::new(path)
-            .parent()
-            .ok_or_else(|| anyhow!("source path has no parent directory: {path}"))?
-            .to_str()
-            .ok_or_else(|| anyhow!("source path is not valid UTF-8: {path}"))?
-            .to_owned();
-
         let sessions = unresolved
             .iter()
             .flat_map(|group| {
@@ -251,7 +282,7 @@ impl SourceResolver {
             .collect::<Vec<_>>();
         let jobs = sessions
             .into_iter()
-            .map(|(group_id, sid)| self.resolve_session_path(path, &dirname, group_id, sid));
+            .map(|(group_id, sid)| self.resolve_session_path(path, group_id, sid));
         let failures = join_all(jobs)
             .await
             .into_iter()
@@ -270,13 +301,7 @@ impl SourceResolver {
         }
     }
 
-    async fn resolve_session_path(
-        &self,
-        path: &str,
-        dirname: &str,
-        group_id: GroupId,
-        sid: u64,
-    ) -> Result<()> {
+    async fn resolve_session_path(&self, path: &str, group_id: GroupId, sid: u64) -> Result<()> {
         let gate = self
             .discovery_gates
             .entry((group_id, sid))
@@ -293,7 +318,7 @@ impl SourceResolver {
             .acquire()
             .await
             .context("source resolver is shutting down")?;
-        let sources = self.provider.list_sources(sid, Some(dirname)).await?;
+        let sources = self.provider.list_sources(sid, Some(path)).await?;
 
         let _lifecycle = self.lifecycle.read().await;
         if self.discovery_is_current(group_id, sid, &gate) {
@@ -325,11 +350,7 @@ impl SourceResolver {
                 .groups
                 .group_id_by_session(sid)
                 .ok_or_else(|| anyhow!("session {sid} has no source group"))?;
-            let dirname = Path::new(path)
-                .parent()
-                .and_then(Path::to_str)
-                .ok_or_else(|| anyhow!("source path has no UTF-8 parent"))?;
-            self.resolve_session_path(path, dirname, group, sid).await?;
+            self.resolve_session_path(path, group, sid).await?;
         }
         self.catalog
             .membership(path, sid)
@@ -455,6 +476,144 @@ mod tests {
 
     use super::*;
 
+    fn source_completion(paths: &[&str]) -> FinishedCmd {
+        source_probe_completion(
+            if paths.is_empty() {
+                "unknown"
+            } else {
+                "present"
+            },
+            paths,
+        )
+    }
+
+    fn source_probe_completion(status: &str, paths: &[&str]) -> FinishedCmd {
+        use crate::{
+            cmd_flow::ParsedSessionResponse,
+            debugger::protocol::{Dict, Value},
+        };
+        let files = paths
+            .iter()
+            .map(|path| {
+                Value::Dict(Dict::from(HashMap::from([(
+                    "fullname".to_owned(),
+                    Value::String((*path).to_owned()),
+                )])))
+            })
+            .collect();
+        let payload = Dict::from(HashMap::from([
+            ("files".to_owned(), Value::List(files)),
+            ("source_status".to_owned(), Value::String(status.to_owned())),
+        ]));
+        FinishedCmd::new(
+            None,
+            1,
+            vec![ParsedSessionResponse::new(
+                1,
+                "done".to_owned(),
+                Some(payload),
+            )],
+        )
+    }
+
+    #[tokio::test]
+    async fn exact_positive_source_probe_avoids_catalog_enumeration() {
+        let mut commands = Vec::new();
+        let paths = discover_source_paths(Some("/src/main.c"), |command| {
+            commands.push(command);
+            std::future::ready(Ok(source_completion(&["/src/main.c"])))
+        })
+        .await
+        .unwrap();
+        assert_eq!(paths, ["/src/main.c"]);
+        assert_eq!(commands, [r#"-ddb-probe-source "/src/main.c""#]);
+    }
+
+    #[tokio::test]
+    async fn proven_absent_source_avoids_catalog_enumeration() {
+        let mut commands = Vec::new();
+        let paths = discover_source_paths(Some("/src/not_owned.c"), |command| {
+            commands.push(command);
+            std::future::ready(Ok(source_probe_completion("absent", &[])))
+        })
+        .await
+        .unwrap();
+        assert!(paths.is_empty());
+        assert_eq!(commands, [r#"-ddb-probe-source "/src/not_owned.c""#]);
+    }
+
+    #[tokio::test]
+    async fn inconclusive_source_probe_discovers_the_directory_without_caching_a_false_negative() {
+        let mut replies = std::collections::VecDeque::from([
+            source_completion(&[]),
+            source_completion(&["/src/main.c", "/src/other.c"]),
+        ]);
+        let mut commands = Vec::new();
+        let paths = discover_source_paths(Some("/src/main.c"), |command| {
+            commands.push(command);
+            std::future::ready(Ok(replies.pop_front().expect("unexpected discovery I/O")))
+        })
+        .await
+        .unwrap();
+        assert_eq!(paths, ["/src/main.c", "/src/other.c"]);
+        assert_eq!(
+            commands,
+            [
+                r#"-ddb-probe-source "/src/main.c""#,
+                r#"-file-list-exec-source-files --dirname "^/src$""#
+            ]
+        );
+        assert!(replies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_or_failed_source_probes_do_not_fall_back_or_invent_ownership() {
+        use crate::cmd_flow::ParsedSessionResponse;
+        for response in [
+            Ok(source_completion(&["/foreign/main.c"])),
+            Ok(source_completion(&["/src/main.c", "/src/other.c"])),
+            Ok(source_probe_completion("absent", &["/src/main.c"])),
+            Ok(source_probe_completion("unknown", &["/src/main.c"])),
+            Ok(source_probe_completion("present", &[])),
+            Ok(source_probe_completion("invalid", &[])),
+            Ok(FinishedCmd::new(
+                None,
+                1,
+                vec![ParsedSessionResponse::new(1, "done".to_owned(), None)],
+            )),
+            Err(anyhow!("debugger transport is unavailable")),
+        ] {
+            let mut response = Some(response);
+            let mut commands = Vec::new();
+            assert!(discover_source_paths(Some("/src/main.c"), |command| {
+                commands.push(command);
+                std::future::ready(
+                    response
+                        .take()
+                        .expect("failed probes must not issue catalog I/O"),
+                )
+            })
+            .await
+            .is_err());
+            assert_eq!(commands, [r#"-ddb-probe-source "/src/main.c""#]);
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_and_relative_source_queries_do_not_use_absolute_path_probes() {
+        for path in [None, Some("main.c")] {
+            let mut commands = Vec::new();
+            let paths = discover_source_paths(path, |command| {
+                commands.push(command);
+                std::future::ready(Ok(source_completion(&["/src/main.c"])))
+            })
+            .await
+            .unwrap();
+            assert_eq!(paths, ["/src/main.c"]);
+            assert_eq!(commands, ["-file-list-exec-source-files"]);
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires cc and real GDB"]
     async fn real_gdb_source_directory_is_literal_and_exact() {
@@ -478,9 +637,20 @@ mod tests {
             let source = requested.join("requested.c");
             let child = nested.join("child.c");
             let other = sibling.join("other.c");
+            let data_only = requested.join("data_only.c");
+            std::fs::write(&data_only, "int data_only = 5;\n").unwrap();
+            let header = requested.join("types.h");
+            std::fs::write(
+                &header,
+                "typedef struct HeaderOnly { int field; } HeaderOnly;\n",
+            )
+            .unwrap();
+            let unowned = fixture.path().join("not-compiled/requested.c");
+            std::fs::create_dir_all(unowned.parent().unwrap()).unwrap();
+            std::fs::write(&unowned, "int not_compiled(void) { return 0; }\n").unwrap();
             std::fs::write(
                 &source,
-                "int child(void); int other(void); int main(void) { return child() + other(); }\n",
+                "#include \"types.h\"\nHeaderOnly header_value;\nint child(void); int other(void); int main(void) { return child() + other(); }\n",
             )
             .unwrap();
             std::fs::write(&child, "int child(void) { return 1; }\n").unwrap();
@@ -488,7 +658,7 @@ mod tests {
             let executable = fixture.path().join("fixture");
             let compilation = std::process::Command::new("cc")
                 .args(["-g", "-O0"])
-                .args([&source, &child, &other])
+                .args([&source, &child, &other, &data_only])
                 .arg("-o")
                 .arg(&executable)
                 .output()
@@ -508,10 +678,23 @@ mod tests {
                 .spawn()
                 .unwrap();
             let command = source_listing_command(Some(requested.to_str().unwrap())).unwrap();
+            let runtime =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/gdb_ext/runtime-gdb.py");
+            let load = serde_json::to_string(&format!("source {}", runtime.display())).unwrap();
+            let probe = serde_json::to_string(source.to_str().unwrap()).unwrap();
+            let wrong_probe = serde_json::to_string(unowned.to_str().unwrap()).unwrap();
+            let data_probe = serde_json::to_string(data_only.to_str().unwrap()).unwrap();
+            let header_probe = serde_json::to_string(header.to_str().unwrap()).unwrap();
+            let localized_error_test = "original = gdb.execute_mi\ndef localized_error(*args):\n    raise gdb.error('localized or unrecognized lookup error')\ntry:\n    gdb.execute_mi = localized_error\n    assert ProbeSourceMICommand.invoke(None, ['/missing/file.c']) == {'files': [], 'source_status': 'unknown'}\nfinally:\n    gdb.execute_mi = original\n";
+            let localized_error_test = serde_json::to_string(&format!(
+                "python exec({})",
+                serde_json::to_string(localized_error_test).unwrap()
+            ))
+            .unwrap();
             let mut input = gdb.stdin.take().unwrap();
             input
                 .write_all(
-                    format!("1-file-list-exec-source-files\n2{command}\n3-gdb-exit\n").as_bytes(),
+                    format!("0-interpreter-exec console {load}\n1-file-list-exec-source-files\n2{command}\n4-ddb-probe-source {probe}\n5-ddb-probe-source {wrong_probe}\n7-ddb-probe-source {data_probe}\n8-ddb-probe-source {header_probe}\n9-interpreter-exec console {localized_error_test}\n6-gdb-exit\n").as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -557,6 +740,32 @@ mod tests {
             };
             let complete = decode(complete);
             let filtered = decode(filtered);
+            let probe = output.lines().find(|line| line.starts_with("4^")).unwrap();
+            let wrong_probe = output.lines().find(|line| line.starts_with("5^")).unwrap();
+            assert_eq!(decode(probe), vec![source.to_str().unwrap().to_owned()]);
+            assert!(
+                decode(wrong_probe).is_empty(),
+                "a same-basename file outside the binary must not establish ownership"
+            );
+            assert!(
+                wrong_probe.contains(r#"source_status="absent""#),
+                "a native unknown-source lookup must prove absence: {wrong_probe}"
+            );
+            let data_probe = output.lines().find(|line| line.starts_with("7^")).unwrap();
+            assert!(
+                !data_probe.contains(r#"source_status="absent""#),
+                "a file without executable lines must not be classified absent: {data_probe}"
+            );
+            assert!(complete
+                .iter()
+                .any(|path| path == data_only.to_str().unwrap()));
+            let header_probe = output.lines().find(|line| line.starts_with("8^")).unwrap();
+            assert!(
+                !header_probe.contains(r#"source_status="absent""#),
+                "a header without executable lines must not be classified absent: {header_probe}"
+            );
+            assert!(complete.iter().any(|path| path == header.to_str().unwrap()));
+            assert!(output.lines().any(|line| line.starts_with("9^done")));
             for path in [&source, &child, &other] {
                 assert!(
                     complete
@@ -692,7 +901,7 @@ mod tests {
 
     #[async_trait]
     impl SourceListingProvider for FakeProvider {
-        async fn list_sources(&self, _sid: u64, _dirname: Option<&str>) -> Result<Vec<String>> {
+        async fn list_sources(&self, _sid: u64, _path: Option<&str>) -> Result<Vec<String>> {
             self.calls.fetch_add(1, Ordering::AcqRel);
             let current = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
             self.max_in_flight.fetch_max(current, Ordering::AcqRel);

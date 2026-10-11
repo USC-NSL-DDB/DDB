@@ -74,6 +74,20 @@ class SourceDirectoryPatternTest(unittest.TestCase):
             self.sources(["--dirname", "["])
         self.bridge._target.assert_not_called()
 
+    def test_source_probe_accepts_only_an_exact_debugger_path(self):
+        self.bridge._select_thread = Mock()
+        for path, expected in [(self.paths[0], [self.paths[0]]), ("/not-compiled/requested.c", [])]:
+            result, payload = self.bridge.execute("-ddb-probe-source " + bridge_module.json.dumps(path))
+            self.assertEqual(result, "done")
+            self.assertEqual([source["fullname"] for source in payload["files"]], expected)
+            self.assertEqual(payload["source_status"], "present" if expected else "unknown")
+
+    def test_source_probe_rejects_missing_and_relative_paths(self):
+        self.bridge._select_thread = Mock()
+        for command in ["-ddb-probe-source", "-ddb-probe-source requested.c"]:
+            with self.assertRaises(ValueError):
+                self.bridge.execute(command)
+
 
 class StorageAddressTest(unittest.TestCase):
     def value(self, address):

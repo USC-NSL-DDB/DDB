@@ -749,6 +749,23 @@ impl MockAttachController {
                 };
                 Self::send_result(&out_tx, token, "done", Some(payload)).await?;
             }
+            "-ddb-probe-source" => {
+                let requested: String = serde_json::from_str(args.trim())?;
+                let mut payload = {
+                    let state = state.lock().await;
+                    if requested == state.config.source_file {
+                        let mut payload = Self::source_files_payload(&state);
+                        payload.insert("source_status".to_owned(), "present".into());
+                        payload
+                    } else {
+                        vec![("files".to_string(), Value::List(Vec::new()))].into()
+                    }
+                };
+                if !payload.contains_key("source_status") {
+                    payload.insert("source_status".to_owned(), "absent".into());
+                }
+                Self::send_result(&out_tx, token, "done", Some(payload)).await?;
+            }
             "-stack-list-frames" => {
                 let payload = {
                     let state = state.lock().await;

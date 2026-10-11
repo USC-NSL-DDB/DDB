@@ -673,6 +673,7 @@ class Bridge(object):
             "-data-evaluate-expression": self._evaluate_expression,
             "-data-read-memory-bytes": self._read_memory_bytes,
             "-file-list-exec-source-files": self._source_files,
+            "-ddb-probe-source": self._probe_source,
             "-file-list-lines": self._source_lines,
             "-break-insert": self._break_insert,
             "-break-list": self._break_list,
@@ -1470,6 +1471,18 @@ class Bridge(object):
                 }
             ]
         }
+
+    def _probe_source(self, arguments):
+        if len(arguments) != 1 or not os.path.isabs(arguments[0]):
+            raise ValueError("source probe requires one absolute debugger path")
+        requested = arguments[0]
+        for module in self._target().module_iter():
+            for unit in module.compile_unit_iter():
+                path = _normalized_source_path(_file_path(unit.GetFileSpec()))
+                if path == requested:
+                    return "done", {"files": [{"fullname": path}], "source_status": "present"}
+        # A miss never establishes absence from the full debugger catalog.
+        return "done", {"files": [], "source_status": "unknown"}
 
     def _source_files(self, arguments):
         directory_pattern = None

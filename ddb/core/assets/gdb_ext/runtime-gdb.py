@@ -723,6 +723,37 @@ def storage_metadata(expression):
         return {}
 
 
+class ProbeSourceMICommand(gdb.MICommand):
+    """Probe exact-path membership without canonicalizing the entire catalog."""
+
+    def __init__(self):
+        super().__init__("-ddb-probe-source")
+
+    def invoke(self, arguments):
+        if len(arguments) != 1 or not os.path.isabs(arguments[0]):
+            raise gdb.GdbError("source probe requires one absolute debugger path")
+        requested = arguments[0]
+        try:
+            result = gdb.execute_mi("-symbol-list-lines", requested)
+        except gdb.error as error:
+            # This native error specifically means lookup_symtab found no file.
+            # Other failures, including localized/unrecognized diagnostics, are
+            # inconclusive. Never turn an arbitrary debugger error into absence.
+            status = "absent" if str(error) == "-symbol-list-lines: Unknown source file name." else "unknown"
+            return {"files": [], "source_status": status}
+        for entry in result["lines"]:
+            if int(entry["line"]) == 0:
+                continue
+            location = gdb.find_pc_line(int(entry["pc"], 0))
+            if location.symtab is not None:
+                fullname = location.symtab.fullname()
+                if fullname == requested:
+                    return {"files": [{"fullname": fullname}], "source_status": "present"}
+        # Files with debug information but no executable lines reach this path.
+        # A full directory listing can still establish their membership.
+        return {"files": [], "source_status": "unknown"}
+
+
 class VariableCreateMICommand(gdb.MICommand):
     def __init__(self):
         super().__init__("-ddb-var-create")
@@ -1341,3 +1372,4 @@ ListScopeVariablesMICommand()
 ScopeVarCreateMICommand()
 VariableCreateMICommand()
 VariableChildrenMICommand()
+ProbeSourceMICommand()
