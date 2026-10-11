@@ -58,8 +58,25 @@ Useful managed options are:
 --backend-log PATH       retain backend stdout/stderr at a new private path
 --config PATH            explicit alternative to the positional config
 --values-formatting MODE pretty-printers (default), raw, or disabled
+--source-search MODE     exact (default) or fuzzy whole-file source text matching
 --trace-api             show sanitized API request metadata in Output
 ```
+
+In Source, `/` opens text search, Enter finds a matching line, and `n` / `N`
+find the next / previous matching line with wraparound. The search covers the
+whole bounded file, not only the visible window. In the prompt, Ctrl+f toggles
+exact/fuzzy matching, Ctrl+u clears the query, and Escape cancels editing.
+Submitting an empty query clears the search. Escape also cancels a pending
+search. The Source header's Search button opens the prompt, and the persistent
+search bar's mode button toggles matching with the mouse.
+
+Exact matching is case-sensitive contiguous text. Fuzzy matching is a
+case-insensitive Unicode lowercase subsequence, with the bounding range
+highlighted. Both return one match per line. Use `--source-search fuzzy` to
+change the initial mode. Queries preserve spaces and are limited to 1,024
+UTF-8 bytes on one line. Searching changes the browsing cursor, never execution.
+Remote files use DDB's typed `SearchSource` operation; local workspace files
+use the same indexed matcher without requiring a connected backend.
 
 `--trace-api` works in managed and connect modes and is off by default. Press
 `O` to view request attempts, canonical RPC names and HTTP statuses, including

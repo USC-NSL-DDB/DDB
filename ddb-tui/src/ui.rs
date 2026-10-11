@@ -145,7 +145,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         ),
         1,
     );
-    areas.add_panel(Focus::Source, center[0], source_start(app), 1);
+    areas.add_panel(
+        Focus::Source,
+        source_hit_area(&areas, center[0]),
+        source_start(app),
+        1,
+    );
     areas.add_panel(
         Focus::Stack,
         center[1],
@@ -462,7 +467,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
             list_first(app.selected_memory_row, app.memory_row_count(), area, 1),
             1,
         ),
-        Focus::Source => (area, source_start(app), 1),
+        Focus::Source => (source_hit_area(areas, area), source_start(app), 1),
         Focus::Stack => (
             area,
             list_first(app.selected_frame, app.frames.len(), area, 1),
@@ -889,6 +894,39 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
     let block = panel_block(&source_title, app.focus == Focus::Source);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let search_visible =
+        !app.source_search.query.is_empty() || app.input_mode == InputMode::SourceSearch;
+    let inner = if search_visible && inner.height >= 2 {
+        let search_rows =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+        let buttons =
+            Layout::horizontal([Constraint::Length(9), Constraint::Min(0)]).split(search_rows[1]);
+        frame.render_widget(
+            Paragraph::new(format!("[{}]", app.source_search.mode.label()))
+                .style(Style::default().fg(ACCENT)),
+            buttons[0],
+        );
+        let status = app
+            .source_browser
+            .document()
+            .and_then(|document| app.source_search.status(&document.source.id()))
+            .unwrap_or("/ edit · Ctrl+f toggles mode in prompt");
+        let query = if app.input_mode == InputMode::SourceSearch {
+            &app.input
+        } else {
+            &app.source_search.query
+        };
+        frame.render_widget(
+            Paragraph::new(terminal_text(&format!("{status} · /{query}")))
+                .style(Style::default().fg(YELLOW)),
+            buttons[1],
+        );
+        areas.source_search_mode = Some(buttons[0]);
+        areas.source_search_bar = Some(search_rows[1]);
+        search_rows[0]
+    } else {
+        inner
+    };
     if area.width >= 12 && area.height > 0 {
         let open = Rect::new(area.right() - 11, area.y, 10, 1);
         frame.render_widget(
@@ -904,6 +942,21 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
             inspect,
         );
         areas.source_inspect = Some(inspect);
+    }
+    if area.width >= 56 && area.height > 0 {
+        let search = Rect::new(area.right() - 38, area.y, 12, 1);
+        let available = app.source_browser.document().is_some();
+        frame.render_widget(
+            Paragraph::new(" Search [/] ").style(Style::default().fg(if available {
+                ACCENT
+            } else {
+                MUTED
+            })),
+            search,
+        );
+        if available {
+            areas.source_search = Some(search);
+        }
     }
     app.source_browser.fit_viewport(inner.height as usize);
     app.source_browser
@@ -974,7 +1027,7 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
             } else {
                 Style::default()
             };
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     if is_executing {
                         "▶"
@@ -997,9 +1050,17 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
                     format!(" {:>5} │ ", line_number),
                     Style::default().fg(MUTED),
                 ),
-                Span::raw(horizontal_text(text, source.column)),
-            ])
-            .style(style)
+            ];
+            spans.extend(
+                source_search_text(
+                    text,
+                    source.column,
+                    app.source_search
+                        .highlight(&source.source.id(), line_number, text),
+                )
+                .spans,
+            );
+            Line::from(spans).style(style)
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
@@ -1015,6 +1076,54 @@ fn draw_source(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiA
             &mut scrollbar,
         );
     }
+}
+
+fn source_hit_area(areas: &UiAreas, mut area: Rect) -> Rect {
+    if areas.source_search_bar.is_some() {
+        area.height = area.height.saturating_sub(1);
+    }
+    area
+}
+
+fn source_search_text(
+    text: &str,
+    column: usize,
+    highlight: Option<(usize, usize)>,
+) -> Line<'static> {
+    let text = terminal_text(text);
+    let Some((start, end)) = highlight else {
+        return horizontal_line(Line::from(text), column);
+    };
+    let mut parts = [String::new(), String::new(), String::new()];
+    let mut position = 0;
+    let span = Span::raw(text);
+    for grapheme in span.styled_graphemes(Style::default()) {
+        let next = position + grapheme.symbol.chars().count();
+        let part = if next <= start {
+            0
+        } else if position < end {
+            1
+        } else {
+            2
+        };
+        parts[part].push_str(grapheme.symbol);
+        position = next;
+    }
+    let [before, matched, after] = parts;
+    horizontal_line(
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(
+                matched,
+                Style::default()
+                    .fg(YELLOW)
+                    .bg(Color::Rgb(70, 60, 20))
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw(after),
+        ]),
+        column,
+    )
 }
 
 fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -1505,6 +1614,14 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         InputMode::Jump => ("Jump execution location", "J> ", YELLOW),
         InputMode::Signal => ("Send signal", "s> ", RED),
         InputMode::GotoLine => ("Open source (line or path:line)", "g> ", ACCENT),
+        InputMode::SourceSearch => (
+            match app.source_search.mode {
+                crate::source_search::Mode::Exact => "Search source · exact (Ctrl+f toggles fuzzy)",
+                crate::source_search::Mode::Fuzzy => "Search source · fuzzy (Ctrl+f toggles exact)",
+            },
+            "/ ",
+            YELLOW,
+        ),
         InputMode::Breakpoint => (
             "Breakpoint (-t -h --ignore-count N if CONDITION)",
             "B> ",
@@ -2039,6 +2156,29 @@ mod v2_tests {
         Breakpoint, BreakpointDraft, BreakpointLocation, BreakpointOptions, BreakpointTargetChoice,
         BreakpointTargetPicker,
     };
+
+    #[test]
+    fn source_match_highlighting_preserves_graphemes_and_horizontal_clipping() {
+        let line = source_search_text("a🦀e\u{301}z", 0, Some((3, 4)));
+        let matched = line
+            .spans
+            .iter()
+            .find(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+            .unwrap();
+        assert_eq!(matched.content, "e\u{301}");
+        let line = source_search_text("a🦀e\u{301}z", 2, Some((1, 4)));
+        assert_eq!(
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            " e\u{301}z"
+        );
+        assert!(line
+            .spans
+            .iter()
+            .any(|span| span.style.add_modifier.contains(Modifier::UNDERLINED)));
+    }
 
     fn render(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);

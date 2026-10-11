@@ -65,6 +65,11 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Source",
+        keys: "/ / Ctrl+f / n / N",
+        description: "Search whole-file text; toggle exact/fuzzy in prompt; next / previous match",
+    },
+    Entry {
+        section: "Source",
         keys: "g",
         description: "Go to a line or open path:line without moving execution",
     },

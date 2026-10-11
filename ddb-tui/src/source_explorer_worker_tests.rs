@@ -4,6 +4,92 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 #[tokio::test]
+async fn a_blocked_source_search_does_not_block_refresh_and_can_be_canceled() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let started = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let router = Router::new()
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource",
+                post({
+                    let started = started.clone();
+                    let release = release.clone();
+                    move || {
+                        let started = started.clone();
+                        let release = release.clone();
+                        async move {
+                            started.add_permits(1);
+                            release.acquire().await.unwrap().forget();
+                            Json(v2::SearchSourceResponse::default())
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/v2/rpc/ddb.api.v2.DebuggerService/GetSnapshot",
+                post(|| async {
+                    Json(v2::GetSnapshotResponse {
+                        snapshot: Some(v2::Snapshot::default()),
+                        ..Default::default()
+                    })
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = ApiClient::new(crate::api::ClientConfig::new(endpoint)).unwrap();
+        let (requests, receiver) = mpsc::channel(8);
+        let (messages, mut updates) = mpsc::channel(8);
+        let worker = tokio::spawn(run(client, Arc::default(), receiver, messages));
+        requests
+            .send(BackendRequest::SearchSource(
+                crate::source_search::Request {
+                    generation: 1,
+                    source: crate::source_browser::tests::remote_source(v2::SourceFile {
+                        source_reference: "file".into(),
+                        ..Default::default()
+                    }),
+                    cursor: 1,
+                    browser_revision: 1,
+                    query: "needle".into(),
+                    mode: crate::source_search::Mode::Exact,
+                    backward: false,
+                    include_origin: true,
+                },
+            ))
+            .await
+            .unwrap();
+        started.acquire().await.unwrap().forget();
+        requests.send(BackendRequest::Refresh).await.unwrap();
+        assert!(matches!(
+            updates.recv().await.unwrap(),
+            UiMessage::RefreshSnapshot(_)
+        ));
+        requests
+            .send(BackendRequest::CancelSourceSearch)
+            .await
+            .unwrap();
+        // The second snapshot is an ordered barrier after cancellation.
+        requests.send(BackendRequest::Refresh).await.unwrap();
+        assert!(matches!(
+            updates.recv().await.unwrap(),
+            UiMessage::RefreshSnapshot(_)
+        ));
+        release.add_permits(1);
+        drop(requests);
+        worker.await.unwrap();
+        assert!(
+            updates.try_recv().is_err(),
+            "canceled search must not publish a result"
+        );
+        server.abort();
+        let _ = server.await;
+    })
+    .await
+    .expect("source search must not serialize refresh behind file scanning");
+}
+
+#[tokio::test]
 async fn register_assignment_uses_typed_evaluation_with_owning_frame() {
     let router = Router::new().route(
         "/api/v2/rpc/ddb.api.v2.DebuggerControlService/Evaluate",

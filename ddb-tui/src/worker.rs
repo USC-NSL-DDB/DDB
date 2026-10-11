@@ -37,6 +37,7 @@ pub async fn run(
 ) {
     let mut inspections = JoinSet::new();
     let mut sources = JoinSet::new();
+    let mut source_searches = JoinSet::new();
     let mut discoveries = JoinSet::new();
     let mut breakpoint_discoveries = JoinSet::new();
     let mut logpoint_tasks = JoinSet::new();
@@ -46,6 +47,9 @@ pub async fn run(
     let mut pending_inspections = VecDeque::new();
     let mut inspection_generation = None;
     loop {
+        while let Some(result) = source_searches.try_join_next() {
+            report_inspection_failure(result, &messages).await;
+        }
         while let Some(result) = exports.try_join_next() {
             report_export(result, &messages).await;
         }
@@ -63,6 +67,10 @@ pub async fn run(
         let request = match ready {
             Some(request) => request,
             None => tokio::select! {
+                result = source_searches.join_next(), if !source_searches.is_empty() => {
+                    if let Some(result) = result { report_inspection_failure(result, &messages).await; }
+                    continue;
+                }
                 result = breakpoint_discoveries.join_next(), if !breakpoint_discoveries.is_empty() => {
                     if let Some(result) = result { report_inspection_failure(result, &messages).await; }
                     continue;
@@ -172,7 +180,23 @@ pub async fn run(
             }
         }
 
-        if let BackendRequest::ResolveBreakpointTargets(lookup) = request {
+        if let BackendRequest::SearchSource(request) = request {
+            source_searches.abort_all();
+            let client = client.clone();
+            let messages = messages.clone();
+            let workspace = workspace.clone();
+            source_searches.spawn(async move {
+                let generation = request.generation;
+                let result = crate::source_provider::search(&client, &workspace, request)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = messages
+                    .send(UiMessage::SourceSearch { generation, result })
+                    .await;
+            });
+        } else if matches!(request, BackendRequest::CancelSourceSearch) {
+            source_searches.abort_all();
+        } else if let BackendRequest::ResolveBreakpointTargets(lookup) = request {
             breakpoint_discoveries.abort_all();
             while let Some(result) = breakpoint_discoveries.try_join_next() {
                 report_inspection_failure(result, &messages).await;
@@ -542,7 +566,9 @@ async fn handle(
                 })
                 .await?;
         }
-        BackendRequest::ResolveBreakpointTargets(_)
+        BackendRequest::SearchSource(_)
+        | BackendRequest::CancelSourceSearch
+        | BackendRequest::ResolveBreakpointTargets(_)
         | BackendRequest::LoadSource(_)
         | BackendRequest::ExploreSources(_)
         | BackendRequest::CancelSourceDiscovery => {

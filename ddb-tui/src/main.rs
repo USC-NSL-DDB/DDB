@@ -15,6 +15,7 @@ mod source_explorer_input;
 #[cfg(test)]
 mod source_explorer_interaction_tests;
 mod source_provider;
+mod source_search;
 mod source_types;
 mod source_workspace;
 mod supervisor;
@@ -92,6 +93,7 @@ async fn main() -> Result<()> {
     app.source_workspace = workspace;
     app.values_formatting = args.values_formatting;
     app.stack_mode = args.stack_mode;
+    app.source_search.mode = args.source_search;
     app.trace_api = args.trace_api;
     app.debugger_settings = debugger_settings;
     for expression in saved_watches {
@@ -624,6 +626,17 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
     }
 
     match key.code {
+        KeyCode::Char('/') if app.focus == Focus::Source => {
+            start_source_search_prompt(app, requests)
+        }
+        KeyCode::Char('n' | 'N') if app.focus == Focus::Source => {
+            find_source(app, requests, None, key.code == KeyCode::Char('N'));
+        }
+        KeyCode::Esc if app.source_search.pending() => {
+            app.source_search.cancel();
+            queue_request(app, requests, BackendRequest::CancelSourceSearch);
+            app.status = "Source search canceled".into();
+        }
         KeyCode::Char('z') => app.expanded_pane = !app.expanded_pane,
         KeyCode::Char('O') => {
             app.show_output = !app.show_output;
@@ -911,6 +924,21 @@ fn submit_breakpoint_target_picker(app: &mut App, requests: &mpsc::Sender<Backen
 }
 
 fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
+    if app.input_mode == InputMode::SourceSearch
+        && key.code == KeyCode::Char('u')
+        && key.modifiers == KeyModifiers::CONTROL
+    {
+        app.input.clear();
+        app.set_input_cursor(0);
+        return;
+    }
+    if app.input_mode == InputMode::SourceSearch
+        && key.code == KeyCode::Char('f')
+        && key.modifiers == KeyModifiers::CONTROL
+    {
+        app.source_search.toggle_mode();
+        return;
+    }
     match key.code {
         KeyCode::Esc => {
             app.cancel_input();
@@ -928,9 +956,18 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         | InputMode::Logpoint
                         | InputMode::EditWatch
                         | InputMode::ExportDetails
+                        | InputMode::SourceSearch
                 )
             {
                 match mode {
+                    InputMode::SourceSearch => {
+                        if input.is_empty() {
+                            app.source_search.clear();
+                            queue_request(app, requests, BackendRequest::CancelSourceSearch);
+                        } else {
+                            find_source(app, requests, Some(input), false);
+                        }
+                    }
                     InputMode::ExportDetails => match app.commit_details_export(input) {
                         Ok(Some(export)) => {
                             queue_request(app, requests, BackendRequest::ExportDetails(export))
@@ -1410,6 +1447,31 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
     match mouse.kind {
         MouseEventKind::Down(button) => {
             if button == MouseButton::Left
+                && app.areas.source_search_bar.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                if app.areas.source_search_mode.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                }) {
+                    app.source_search.toggle_mode();
+                    if app.input_mode != InputMode::SourceSearch {
+                        let query = app.source_search.query.clone();
+                        find_source(app, requests, Some(query), false);
+                    }
+                }
+                return;
+            }
+            if button == MouseButton::Left
+                && app.areas.source_search.is_some_and(|area| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                })
+            {
+                app.focus = Focus::Source;
+                start_source_search_prompt(app, requests);
+                return;
+            }
+            if button == MouseButton::Left
                 && app.areas.watch_edit.is_some_and(|area| {
                     area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 })
@@ -1734,6 +1796,44 @@ fn move_selection(app: &mut App, requests: &mpsc::Sender<BackendRequest>, delta:
         }
     } else {
         app.move_selection(delta);
+    }
+}
+
+fn start_source_search_prompt(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    if app.source_browser.document().is_none() {
+        app.error("Open a source file before searching");
+        return;
+    }
+    app.source_search.cancel();
+    queue_request(app, requests, BackendRequest::CancelSourceSearch);
+    let query = app.source_search.query.clone();
+    app.start_input(InputMode::SourceSearch);
+    app.insert_input(&query);
+}
+
+fn find_source(
+    app: &mut App,
+    requests: &mpsc::Sender<BackendRequest>,
+    query: Option<String>,
+    backward: bool,
+) {
+    match app
+        .source_search
+        .begin(&mut app.source_browser, query, backward)
+    {
+        Ok(request) => {
+            let generation = request.generation;
+            if let Err(error) = requests.try_send(BackendRequest::SearchSource(request)) {
+                if let Some(message) = app.source_search.finish(
+                    &mut app.source_browser,
+                    generation,
+                    Err(format!("request queue unavailable: {error}")),
+                ) {
+                    app.error(message);
+                }
+            }
+        }
+        Err(error) => app.error(error),
     }
 }
 
@@ -2289,6 +2389,14 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
+        UiMessage::SourceSearch { generation, result } => {
+            if let Some(message) =
+                app.source_search
+                    .finish(&mut app.source_browser, generation, result)
+            {
+                app.status = message;
+            }
+        }
         UiMessage::BreakpointTargets { lookup, result } => {
             app.finish_source_targets(lookup, result)
         }

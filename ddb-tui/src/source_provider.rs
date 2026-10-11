@@ -132,6 +132,62 @@ async fn read_remote(
     Content::from_ddb(instance, content)
 }
 
+pub async fn search(
+    client: &DdbClient,
+    workspace: &Workspace,
+    request: crate::source_search::Request,
+) -> Result<crate::source_search::Outcome> {
+    match &request.source {
+        Source::Local(source) => workspace.search(source.clone(), request).await,
+        Source::Ddb {
+            instance: expected,
+            file,
+        } => {
+            let response = client
+                .search_source(v2::SearchSourceRequest {
+                    source_reference: file.source_reference.clone(),
+                    query: request.query,
+                    mode: match request.mode {
+                        crate::source_search::Mode::Exact => v2::SourceSearchMode::Exact as i32,
+                        crate::source_search::Mode::Fuzzy => v2::SourceSearchMode::Fuzzy as i32,
+                    },
+                    origin_line: u32::try_from(request.cursor)
+                        .context("source search line exceeds the API limit")?,
+                    backward: request.backward,
+                    include_origin: request.include_origin,
+                    max_lines: 240,
+                    context: None,
+                })
+                .await?;
+            let instance = instance(response.context, Some(expected))?;
+            let content = response
+                .source
+                .context("SearchSource omitted pinned context")?;
+            ensure!(
+                content
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.source_reference == file.source_reference
+                        && source.content_hash.as_deref() == Some(response.content_hash.as_str()))
+                    && !response.content_hash.is_empty()
+                    && content.total_lines == response.total_lines,
+                "SearchSource returned inconsistent source identity or version"
+            );
+            Ok(crate::source_search::Outcome {
+                found: response
+                    .result
+                    .map(|hit| ddb_source_workspace::SearchMatch {
+                        line: hit.line,
+                        start_column: hit.start_column,
+                        end_column: hit.end_column,
+                        wrapped: hit.wrapped,
+                    }),
+                content: Content::from_ddb(instance, content)?,
+            })
+        }
+    }
+}
+
 pub async fn discover(client: &DdbClient, workspace: &Workspace, request: Request) -> Result<Page> {
     let mut page = v2::PageRequest {
         page_size: PAGE_SIZE,

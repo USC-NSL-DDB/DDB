@@ -492,6 +492,92 @@ fn local_source_explorer_terminal_workflow_without_sessions() {
     source_explorer_workflow_without_sessions(true);
 }
 
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn remote_whole_source_search_terminal_workflow() {
+    whole_source_search_terminal_workflow(false);
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn local_whole_source_search_terminal_workflow() {
+    whole_source_search_terminal_workflow(true);
+}
+
+fn whole_source_search_terminal_workflow(local: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let checkout = directory.path().join("checkout");
+    fs::create_dir(&checkout).unwrap();
+    fs::write(
+        checkout.join("large.rs"),
+        (1..=1000)
+            .map(|line| format!("large file line {line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let workspace = directory.path().join("workspace.yaml");
+    let roots = "  - name: checkout\n    path: ./checkout\n";
+    let exports = if local {
+        fs::write(&workspace, format!("roots:\n{roots}")).unwrap();
+        String::new()
+    } else {
+        format!("SourceRoots:\n{roots}")
+    };
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let port = reserve_port();
+        let config = format!(
+            "Framework: unspecified\nConf:\n  auto_shutdown: false\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: mock\n{exports}StaticSessions: []\n",
+            directory.path().display(), directory.path().display()
+        );
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    let mut tui = if local {
+        Tui::spawn_with_workspace(&ddb.base_url(), &workspace)
+    } else {
+        Tui::spawn(&ddb.base_url())
+    };
+    tui.wait_for("connected");
+    // Direct Alt+3 focuses Source before opening a file without a session.
+    tui.send(b"\x1b3o");
+    tui.wait_for(&format!(
+        "[{}] checkout",
+        if local { "Local" } else { "DDB" }
+    ));
+    tui.send(b"\r");
+    tui.wait_for("large.rs");
+    tui.send(b"\r");
+    tui.wait_for_source_marker('▸', 1);
+    tui.send(b"/large file line 1000\r");
+    tui.wait_for_source_marker('▸', 1000);
+    tui.wait_for("[exact]");
+    tui.send(b"n");
+    tui.wait_for("Wrapped");
+    tui.wait_for_source_marker('▸', 1000);
+    tui.send(b"/\x15LFL999\x06\r");
+    tui.wait_for("[fuzzy]");
+    tui.wait_for_source_marker('▸', 999);
+    tui.send(b"/\x15no_such_source_text\r");
+    tui.wait_for("No matching line");
+    tui.wait_for_source_marker('▸', 999);
+    // Clearing a search removes its bar and leaves navigation usable.
+    tui.send(b"/\x15\r");
+    tui.send(b"g1\r");
+    tui.wait_for_source_marker('▸', 1);
+    assert!(ddb
+        .wait_for_snapshot(|snapshot| snapshot.sessions.is_empty())
+        .sessions
+        .is_empty());
+    tui.quit();
+    ddb.shutdown();
+}
+
 fn source_explorer_workflow_without_sessions(local_workspace: bool) {
     let directory = tempfile::tempdir().unwrap();
     let checkout = directory.path().join("checkout");

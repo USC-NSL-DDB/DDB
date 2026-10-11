@@ -76,6 +76,7 @@ pub enum InputMode {
     Jump,
     Signal,
     GotoLine,
+    SourceSearch,
     Breakpoint,
     FunctionBreakpoint,
     ExtensionAction,
@@ -132,6 +133,9 @@ pub struct UiAreas {
     pub source_explorer_controls: Vec<(crate::source_explorer::Control, Rect)>,
     pub source_explorer_open: Option<Rect>,
     pub source_inspect: Option<Rect>,
+    pub source_search: Option<Rect>,
+    pub source_search_mode: Option<Rect>,
+    pub source_search_bar: Option<Rect>,
     pub topology_grouping: Option<Rect>,
     pub breakpoint_grouping: Option<Rect>,
     pub termination_confirm: Option<Rect>,
@@ -479,6 +483,7 @@ pub struct SignalPicker {
 }
 
 pub struct App {
+    pub source_search: crate::source_search::Search,
     pub watches: Vec<WatchExpression>,
     pub watches_revision: u64,
     next_watch_id: u64,
@@ -585,6 +590,7 @@ pub struct App {
 impl App {
     pub fn new(api_endpoint: String) -> Self {
         Self {
+            source_search: Default::default(),
             watches: Vec::new(),
             next_watch_id: 1,
             watches_revision: 0,
@@ -2186,7 +2192,11 @@ impl App {
     }
 
     pub fn commit_input(&mut self) -> String {
-        let input = self.input.trim().to_string();
+        let input = if self.input_mode == InputMode::SourceSearch {
+            self.input.clone()
+        } else {
+            self.input.trim().to_string()
+        };
         if !input.is_empty()
             && self
                 .input_history
@@ -2931,6 +2941,8 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    SearchSource(crate::source_search::Request),
+    CancelSourceSearch,
     ResolveBreakpointTargets(SourceTargetLookup),
     ExportDetails(DetailsExport),
     ConfigureLogpoint {
@@ -3045,6 +3057,10 @@ pub struct BreakpointOptions {
 
 #[derive(Debug)]
 pub enum UiMessage {
+    SourceSearch {
+        generation: u64,
+        result: Result<crate::source_search::Outcome, String>,
+    },
     BreakpointTargets {
         lookup: SourceTargetLookup,
         result: Result<v2::ResolveSourceTargetsResponse, String>,

@@ -61,6 +61,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_enum, default_value_t = StackMode::Distributed)]
     pub stack_mode: StackMode,
 
+    /// Default source text matching; Ctrl+f toggles it in the source search prompt.
+    #[arg(long, global = true, value_enum, default_value_t = crate::source_search::Mode::Exact)]
+    pub source_search: crate::source_search::Mode,
+
     /// Show sanitized API request metadata in Output (no payloads or credentials).
     #[arg(long, global = true)]
     pub trace_api: bool,
@@ -277,6 +281,30 @@ fn parse_ddb_argument(argument: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_search_default_is_exact_and_fuzzy_is_an_explicit_global_option() {
+        use clap::Parser;
+        assert_eq!(
+            super::Args::try_parse_from(["ddb-tui"])
+                .unwrap()
+                .source_search,
+            crate::source_search::Mode::Exact
+        );
+        assert_eq!(
+            super::Args::try_parse_from([
+                "ddb-tui",
+                "connect",
+                "--api",
+                "http://localhost",
+                "--source-search",
+                "fuzzy"
+            ])
+            .unwrap()
+            .source_search,
+            crate::source_search::Mode::Fuzzy
+        );
+        assert!(super::Args::try_parse_from(["ddb-tui", "--source-search", "typo"]).is_err());
+    }
     #[test]
     fn backend_arguments_require_managed_mode_and_reject_overrides() {
         for argument in [

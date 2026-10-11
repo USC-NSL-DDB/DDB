@@ -169,6 +169,10 @@ impl SourceBrowser {
         self.pending.as_ref().map(|request| request.generation)
     }
 
+    pub fn revision(&self) -> u64 {
+        self.generation
+    }
+
     pub fn navigate(
         &mut self,
         target: Option<v2::Target>,

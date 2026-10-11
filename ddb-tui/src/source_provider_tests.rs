@@ -74,6 +74,134 @@ fn disconnected_client() -> DdbClient {
     DdbClient::new(ClientConfig::new("http://127.0.0.1:1")).unwrap()
 }
 
+#[tokio::test]
+async fn whole_local_source_search_needs_no_backend_and_reads_fresh_pinned_context() {
+    let directory = checkout();
+    let path = directory.path().join("checkout/large.rs");
+    fs::write(
+        &path,
+        format!("first café\n{}x🦀 café_Δelta\n", "unrelated\n".repeat(997)),
+    )
+    .unwrap();
+    let workspace = config(&directory, json!([{"name":"local", "path":"checkout"}])).unwrap();
+    let source = Source::Local(local(workspace.roots()[0].clone(), "large.rs"));
+    let mut request = crate::source_search::Request {
+        generation: 1,
+        source,
+        cursor: 1,
+        browser_revision: 1,
+        query: "café".into(),
+        mode: crate::source_search::Mode::Exact,
+        backward: false,
+        include_origin: false,
+    };
+    let client = disconnected_client();
+    let result = search(&client, &workspace, request.clone()).await.unwrap();
+    assert_eq!(result.found.unwrap().line, 999);
+    assert!(result.content.start_line > 240);
+    assert!(result.content.line_count <= 240);
+    assert!(result.content.content.contains("x🦀 café_Δelta"));
+    request.cursor = 999;
+    let found = search(&client, &workspace, request.clone())
+        .await
+        .unwrap()
+        .found
+        .unwrap();
+    assert_eq!(found.line, 1);
+    assert!(found.wrapped);
+    request.query = "🦀CÉΔL".into();
+    request.mode = crate::source_search::Mode::Fuzzy;
+    request.include_origin = true;
+    assert_eq!(
+        search(&client, &workspace, request.clone())
+            .await
+            .unwrap()
+            .found
+            .unwrap()
+            .line,
+        999
+    );
+    fs::write(&path, "replacement\n").unwrap();
+    let result = search(&client, &workspace, request).await.unwrap();
+    assert!(result.found.is_none());
+    assert_eq!(result.content.total_lines, 1);
+    assert_eq!(result.content.content, "replacement");
+}
+
+#[tokio::test]
+async fn remote_search_uses_one_typed_rpc_and_rejects_inconsistent_identity_or_version() {
+    use axum::{routing::post, Json, Router};
+    for corruption in 0..4 {
+        let router = Router::new().route(
+            "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource",
+            post(
+                move |Json(request): Json<v2::SearchSourceRequest>| async move {
+                    assert_eq!(request.source_reference, "ref");
+                    assert_eq!(request.query, "CÉ");
+                    assert_eq!(request.mode, v2::SourceSearchMode::Fuzzy as i32);
+                    assert_eq!(request.origin_line, 1);
+                    assert!(request.include_origin);
+                    assert_eq!(request.max_lines, 240);
+                    Json(v2::SearchSourceResponse {
+                        context: Some(v2::ResponseContext {
+                            server_instance_id: if corruption == 1 { "changed" } else { "test" }
+                                .into(),
+                            ..Default::default()
+                        }),
+                        result: Some(v2::SourceSearchMatch {
+                            line: 900,
+                            start_column: 1,
+                            end_column: 5,
+                            wrapped: false,
+                        }),
+                        source: Some(v2::SourceContent {
+                            source: Some(v2::SourceFile {
+                                source_reference: if corruption == 2 { "other" } else { "ref" }
+                                    .into(),
+                                content_hash: Some(
+                                    if corruption == 3 { "other" } else { "hash" }.into(),
+                                ),
+                                ..Default::default()
+                            }),
+                            content: "café".into(),
+                            start_line: 900,
+                            line_count: 1,
+                            total_lines: 900,
+                            has_more: false,
+                        }),
+                        content_hash: "hash".into(),
+                        total_lines: 900,
+                    })
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = DdbClient::new(ClientConfig::new(endpoint)).unwrap();
+        let request = crate::source_search::Request {
+            generation: 1,
+            source: source("main.rs", &[]),
+            cursor: 1,
+            browser_revision: 1,
+            query: "CÉ".into(),
+            mode: crate::source_search::Mode::Fuzzy,
+            backward: false,
+            include_origin: true,
+        };
+        let result = search(&client, &Workspace::default(), request).await;
+        if corruption == 0 {
+            let result = result.unwrap();
+            assert_eq!(result.found.unwrap().line, 900);
+            assert_eq!(result.content.content, "café");
+        } else {
+            assert!(result.is_err());
+        }
+        server.abort();
+        let _ = server.await;
+    }
+}
+
 #[test]
 fn configuration_requires_explicit_valid_grants_and_resolves_paths_from_its_file() {
     let directory = checkout();

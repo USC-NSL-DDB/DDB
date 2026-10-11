@@ -28,6 +28,108 @@ fn key(app: &mut App, sender: &mpsc::Sender<BackendRequest>, code: KeyCode) {
 }
 
 #[test]
+fn source_text_search_keyboard_mouse_and_overload_states_are_discoverable() {
+    let mut app = App::new("http://localhost".into());
+    let source = remote_source(v2::SourceFile {
+        source_reference: "file/search".into(),
+        ..Default::default()
+    });
+    let request = app.source_browser.open_source(source.clone());
+    assert!(app.source_browser.apply(
+        request.generation,
+        crate::source_types::Content {
+            source,
+            content: "let prefix = hello;".into(),
+            start_line: 1,
+            line_count: 1,
+            total_lines: 1000,
+        }
+    ));
+    app.focus = Focus::Source;
+    let (sender, mut receiver) = mpsc::channel(8);
+    key(&mut app, &sender, KeyCode::Char('/'));
+    assert_eq!(app.input_mode, InputMode::SourceSearch);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(BackendRequest::CancelSourceSearch)
+    ));
+    app.insert_input(" prefix ");
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        &sender,
+    );
+    assert_eq!(app.source_search.mode, crate::source_search::Mode::Fuzzy);
+    key(&mut app, &sender, KeyCode::Enter);
+    assert_eq!(app.input_mode, InputMode::Normal);
+    let Ok(BackendRequest::SearchSource(request)) = receiver.try_recv() else {
+        panic!("missing search")
+    };
+    assert_eq!(request.query, " prefix ");
+    assert!(request.include_origin);
+    key(&mut app, &sender, KeyCode::Esc);
+    assert!(!app.source_search.pending());
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(BackendRequest::CancelSourceSearch)
+    ));
+    key(&mut app, &sender, KeyCode::Char('N'));
+    let Ok(BackendRequest::SearchSource(request)) = receiver.try_recv() else {
+        panic!("missing repeat")
+    };
+    assert!(request.backward && !request.include_origin);
+    key(&mut app, &sender, KeyCode::Esc);
+    receiver.try_recv().unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal
+        .draw(|frame| app.areas = ui::draw(frame, &mut app))
+        .unwrap();
+    let mode = app.areas.source_search_mode.unwrap();
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: mode.x,
+            row: mode.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &sender,
+    );
+    assert_eq!(app.source_search.mode, crate::source_search::Mode::Exact);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(BackendRequest::SearchSource(_))
+    ));
+    // A full worker queue must clear the spinner and show a useful error.
+    let (full, _blocked) = mpsc::channel(1);
+    full.try_send(BackendRequest::CancelSourceSearch).unwrap();
+    find_source(&mut app, &full, Some("x".into()), false);
+    assert!(!app.source_search.pending());
+    assert!(app.status.contains("queue"));
+    terminal
+        .draw(|frame| app.areas = ui::draw(frame, &mut app))
+        .unwrap();
+    let panel = app
+        .areas
+        .panels
+        .iter()
+        .find(|panel| panel.focus == Focus::Source)
+        .unwrap();
+    let bar = app.areas.source_search_bar.unwrap();
+    let visible_lines = bar.y - panel.area.y - 1;
+    assert_eq!(panel.area.height - 2, visible_lines);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        &sender,
+    );
+    let Ok(BackendRequest::LoadSource(request)) = receiver.try_recv() else {
+        panic!("missing half-page source request")
+    };
+    assert_eq!(request.line, 1 + visible_lines as usize / 2);
+}
+
+#[test]
 fn direct_pane_shortcuts_are_stable_and_do_not_steal_prompt_input() {
     let mut app = App::new("http://localhost".into());
     let (sender, mut receiver) = mpsc::channel(4);

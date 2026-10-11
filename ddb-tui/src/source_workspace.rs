@@ -254,6 +254,41 @@ impl Workspace {
         .context("local source read task failed")?
     }
 
+    pub async fn search(
+        &self,
+        source: LocalSource,
+        request: crate::source_search::Request,
+    ) -> Result<crate::source_search::Outcome> {
+        let directory = self.grant(&source.root)?;
+        let query =
+            ddb_source_workspace::SearchQuery::new(&request.query, request.mode.matching())?;
+        let origin =
+            u32::try_from(request.cursor).context("source search line exceeds the API limit")?;
+        let permit = self.slots.clone().acquire_owned().await?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let document = directory.read(&source.path)?;
+            let found = document.search(&query, origin, request.backward, request.include_origin);
+            let line = found
+                .as_ref()
+                .map_or(origin, |hit| hit.line)
+                .clamp(1, document.total_lines().max(1));
+            let window = document.window(line.saturating_sub(120).max(1), 240)?;
+            Ok(crate::source_search::Outcome {
+                found,
+                content: Content {
+                    source: Source::Local(source),
+                    start_line: window.start_line,
+                    content: window.content,
+                    line_count: window.line_count,
+                    total_lines: window.total_lines,
+                },
+            })
+        })
+        .await
+        .context("local source search task failed")?
+    }
+
     pub async fn list(
         &self,
         root: LocalRoot,
