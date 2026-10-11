@@ -306,6 +306,7 @@ implement_grpc_api! {
         resolve_source: v2::ResolveSourceRequest => v2::ResolveSourceResponse,
         resolve_source_targets: v2::ResolveSourceTargetsRequest => v2::ResolveSourceTargetsResponse,
         read_source: v2::ReadSourceRequest => v2::ReadSourceResponse,
+        search_source: v2::SearchSourceRequest => v2::SearchSourceResponse,
         list_breakpoints: v2::ListBreakpointsRequest => v2::ListBreakpointsResponse,
         list_pending_commands: v2::ListPendingCommandsRequest => v2::ListPendingCommandsResponse,
         list_operations: v2::ListOperationsRequest => v2::ListOperationsResponse,

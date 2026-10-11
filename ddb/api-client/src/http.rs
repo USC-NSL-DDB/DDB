@@ -920,6 +920,14 @@ impl DdbClient {
         true
     );
     unary_method!(
+        search_source,
+        v2::SearchSourceRequest,
+        v2::SearchSourceResponse,
+        DEBUGGER_SERVICE,
+        "SearchSource",
+        true
+    );
+    unary_method!(
         list_breakpoints,
         v2::ListBreakpointsRequest,
         v2::ListBreakpointsResponse,

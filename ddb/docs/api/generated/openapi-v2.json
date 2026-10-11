@@ -3275,6 +3275,66 @@
           "SCOPE_KIND_OTHER"
         ]
       },
+      "SearchSourceRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "backward": {
+            "type": "boolean"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "includeOrigin": {
+            "type": "boolean"
+          },
+          "maxLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SourceSearchMode"
+          },
+          "originLine": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          },
+          "sourceReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SearchSourceResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "contentHash": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/SourceSearchMatch"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceContent"
+          },
+          "totalLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "SelectThreadRequest": {
         "additionalProperties": true,
         "properties": {
@@ -3798,6 +3858,42 @@
           }
         },
         "type": "object"
+      },
+      "SourceSearchMatch": {
+        "additionalProperties": true,
+        "properties": {
+          "endColumn": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "startColumn": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wrapped": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "SourceSearchMode": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SOURCE_SEARCH_MODE_UNSPECIFIED",
+          "SOURCE_SEARCH_MODE_EXACT",
+          "SOURCE_SEARCH_MODE_FUZZY"
+        ]
       },
       "SourceTarget": {
         "additionalProperties": true,
@@ -8374,6 +8470,89 @@
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ResolveSourceTargets",
         "x-ddb-registry-key": "DebuggerService.ResolveSourceTargets",
+        "x-ddb-required-scope": "read"
+      }
+    },
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource": {
+      "post": {
+        "description": "Searches a whole source and returns matching context from the same version.",
+        "operationId": "DebuggerService_SearchSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/SearchSourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSourceResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "$ref": "#/components/responses/DdbError400"
+          },
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Searches a whole source and returns matching context from the same version.",
+        "tags": [
+          "DebuggerService"
+        ],
+        "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/SearchSource",
+        "x-ddb-registry-key": "DebuggerService.SearchSource",
         "x-ddb-required-scope": "read"
       }
     }

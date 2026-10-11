@@ -22136,6 +22136,397 @@ impl<'de> serde::Deserialize<'de> for ScopeKind {
         deserializer.deserialize_any(GeneratedVisitor)
     }
 }
+impl serde::Serialize for SearchSourceRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.context.is_some() {
+            len += 1;
+        }
+        if !self.source_reference.is_empty() {
+            len += 1;
+        }
+        if !self.query.is_empty() {
+            len += 1;
+        }
+        if self.mode != 0 {
+            len += 1;
+        }
+        if self.origin_line != 0 {
+            len += 1;
+        }
+        if self.backward {
+            len += 1;
+        }
+        if self.include_origin {
+            len += 1;
+        }
+        if self.max_lines != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.SearchSourceRequest", len)?;
+        if let Some(v) = self.context.as_ref() {
+            struct_ser.serialize_field("context", v)?;
+        }
+        if !self.source_reference.is_empty() {
+            struct_ser.serialize_field("sourceReference", &self.source_reference)?;
+        }
+        if !self.query.is_empty() {
+            struct_ser.serialize_field("query", &self.query)?;
+        }
+        if self.mode != 0 {
+            let v = SourceSearchMode::try_from(self.mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.mode)))?;
+            struct_ser.serialize_field("mode", &v)?;
+        }
+        if self.origin_line != 0 {
+            struct_ser.serialize_field("originLine", &self.origin_line)?;
+        }
+        if self.backward {
+            struct_ser.serialize_field("backward", &self.backward)?;
+        }
+        if self.include_origin {
+            struct_ser.serialize_field("includeOrigin", &self.include_origin)?;
+        }
+        if self.max_lines != 0 {
+            struct_ser.serialize_field("maxLines", &self.max_lines)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SearchSourceRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "context",
+            "source_reference",
+            "sourceReference",
+            "query",
+            "mode",
+            "origin_line",
+            "originLine",
+            "backward",
+            "include_origin",
+            "includeOrigin",
+            "max_lines",
+            "maxLines",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Context,
+            SourceReference,
+            Query,
+            Mode,
+            OriginLine,
+            Backward,
+            IncludeOrigin,
+            MaxLines,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "context" => Ok(GeneratedField::Context),
+                            "sourceReference" | "source_reference" => Ok(GeneratedField::SourceReference),
+                            "query" => Ok(GeneratedField::Query),
+                            "mode" => Ok(GeneratedField::Mode),
+                            "originLine" | "origin_line" => Ok(GeneratedField::OriginLine),
+                            "backward" => Ok(GeneratedField::Backward),
+                            "includeOrigin" | "include_origin" => Ok(GeneratedField::IncludeOrigin),
+                            "maxLines" | "max_lines" => Ok(GeneratedField::MaxLines),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SearchSourceRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.SearchSourceRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SearchSourceRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut context__ = None;
+                let mut source_reference__ = None;
+                let mut query__ = None;
+                let mut mode__ = None;
+                let mut origin_line__ = None;
+                let mut backward__ = None;
+                let mut include_origin__ = None;
+                let mut max_lines__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Context => {
+                            if context__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("context"));
+                            }
+                            context__ = map_.next_value()?;
+                        }
+                        GeneratedField::SourceReference => {
+                            if source_reference__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sourceReference"));
+                            }
+                            source_reference__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Query => {
+                            if query__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("query"));
+                            }
+                            query__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Mode => {
+                            if mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mode"));
+                            }
+                            mode__ = Some(map_.next_value::<SourceSearchMode>()? as i32);
+                        }
+                        GeneratedField::OriginLine => {
+                            if origin_line__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("originLine"));
+                            }
+                            origin_line__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Backward => {
+                            if backward__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("backward"));
+                            }
+                            backward__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::IncludeOrigin => {
+                            if include_origin__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeOrigin"));
+                            }
+                            include_origin__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MaxLines => {
+                            if max_lines__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxLines"));
+                            }
+                            max_lines__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(SearchSourceRequest {
+                    context: context__,
+                    source_reference: source_reference__.unwrap_or_default(),
+                    query: query__.unwrap_or_default(),
+                    mode: mode__.unwrap_or_default(),
+                    origin_line: origin_line__.unwrap_or_default(),
+                    backward: backward__.unwrap_or_default(),
+                    include_origin: include_origin__.unwrap_or_default(),
+                    max_lines: max_lines__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.SearchSourceRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SearchSourceResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.context.is_some() {
+            len += 1;
+        }
+        if self.result.is_some() {
+            len += 1;
+        }
+        if self.source.is_some() {
+            len += 1;
+        }
+        if !self.content_hash.is_empty() {
+            len += 1;
+        }
+        if self.total_lines != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.SearchSourceResponse", len)?;
+        if let Some(v) = self.context.as_ref() {
+            struct_ser.serialize_field("context", v)?;
+        }
+        if let Some(v) = self.result.as_ref() {
+            struct_ser.serialize_field("result", v)?;
+        }
+        if let Some(v) = self.source.as_ref() {
+            struct_ser.serialize_field("source", v)?;
+        }
+        if !self.content_hash.is_empty() {
+            struct_ser.serialize_field("contentHash", &self.content_hash)?;
+        }
+        if self.total_lines != 0 {
+            struct_ser.serialize_field("totalLines", &self.total_lines)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SearchSourceResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "context",
+            "result",
+            "source",
+            "content_hash",
+            "contentHash",
+            "total_lines",
+            "totalLines",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Context,
+            Result,
+            Source,
+            ContentHash,
+            TotalLines,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "context" => Ok(GeneratedField::Context),
+                            "result" => Ok(GeneratedField::Result),
+                            "source" => Ok(GeneratedField::Source),
+                            "contentHash" | "content_hash" => Ok(GeneratedField::ContentHash),
+                            "totalLines" | "total_lines" => Ok(GeneratedField::TotalLines),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SearchSourceResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.SearchSourceResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SearchSourceResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut context__ = None;
+                let mut result__ = None;
+                let mut source__ = None;
+                let mut content_hash__ = None;
+                let mut total_lines__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Context => {
+                            if context__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("context"));
+                            }
+                            context__ = map_.next_value()?;
+                        }
+                        GeneratedField::Result => {
+                            if result__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("result"));
+                            }
+                            result__ = map_.next_value()?;
+                        }
+                        GeneratedField::Source => {
+                            if source__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("source"));
+                            }
+                            source__ = map_.next_value()?;
+                        }
+                        GeneratedField::ContentHash => {
+                            if content_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contentHash"));
+                            }
+                            content_hash__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TotalLines => {
+                            if total_lines__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalLines"));
+                            }
+                            total_lines__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(SearchSourceResponse {
+                    context: context__,
+                    result: result__,
+                    source: source__,
+                    content_hash: content_hash__.unwrap_or_default(),
+                    total_lines: total_lines__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.SearchSourceResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for SelectThreadRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -25680,6 +26071,234 @@ impl<'de> serde::Deserialize<'de> for SourceRoot {
             }
         }
         deserializer.deserialize_struct("ddb.api.v2.SourceRoot", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SourceSearchMatch {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.line != 0 {
+            len += 1;
+        }
+        if self.start_column != 0 {
+            len += 1;
+        }
+        if self.end_column != 0 {
+            len += 1;
+        }
+        if self.wrapped {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.SourceSearchMatch", len)?;
+        if self.line != 0 {
+            struct_ser.serialize_field("line", &self.line)?;
+        }
+        if self.start_column != 0 {
+            struct_ser.serialize_field("startColumn", &self.start_column)?;
+        }
+        if self.end_column != 0 {
+            struct_ser.serialize_field("endColumn", &self.end_column)?;
+        }
+        if self.wrapped {
+            struct_ser.serialize_field("wrapped", &self.wrapped)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SourceSearchMatch {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "line",
+            "start_column",
+            "startColumn",
+            "end_column",
+            "endColumn",
+            "wrapped",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Line,
+            StartColumn,
+            EndColumn,
+            Wrapped,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "line" => Ok(GeneratedField::Line),
+                            "startColumn" | "start_column" => Ok(GeneratedField::StartColumn),
+                            "endColumn" | "end_column" => Ok(GeneratedField::EndColumn),
+                            "wrapped" => Ok(GeneratedField::Wrapped),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SourceSearchMatch;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.SourceSearchMatch")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SourceSearchMatch, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut line__ = None;
+                let mut start_column__ = None;
+                let mut end_column__ = None;
+                let mut wrapped__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Line => {
+                            if line__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("line"));
+                            }
+                            line__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartColumn => {
+                            if start_column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startColumn"));
+                            }
+                            start_column__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::EndColumn => {
+                            if end_column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("endColumn"));
+                            }
+                            end_column__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Wrapped => {
+                            if wrapped__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("wrapped"));
+                            }
+                            wrapped__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(SourceSearchMatch {
+                    line: line__.unwrap_or_default(),
+                    start_column: start_column__.unwrap_or_default(),
+                    end_column: end_column__.unwrap_or_default(),
+                    wrapped: wrapped__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.SourceSearchMatch", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SourceSearchMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "SOURCE_SEARCH_MODE_UNSPECIFIED",
+            Self::Exact => "SOURCE_SEARCH_MODE_EXACT",
+            Self::Fuzzy => "SOURCE_SEARCH_MODE_FUZZY",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for SourceSearchMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "SOURCE_SEARCH_MODE_UNSPECIFIED",
+            "SOURCE_SEARCH_MODE_EXACT",
+            "SOURCE_SEARCH_MODE_FUZZY",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = SourceSearchMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok().or_else(|| Some(SourceSearchMode::default())))
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok().or_else(|| Some(SourceSearchMode::default())))
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "SOURCE_SEARCH_MODE_UNSPECIFIED" => Ok(SourceSearchMode::Unspecified),
+                    "SOURCE_SEARCH_MODE_EXACT" => Ok(SourceSearchMode::Exact),
+                    "SOURCE_SEARCH_MODE_FUZZY" => Ok(SourceSearchMode::Fuzzy),
+                    _ => Ok(SourceSearchMode::default()),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for SourceTarget {

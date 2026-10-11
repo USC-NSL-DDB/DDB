@@ -251,6 +251,38 @@ impl DdbApplicationService {
         serde_json::from_str(&internal).map_err(|_| ApplicationError::not_found("source identity"))
     }
 
+    async fn with_source_document<T: Send + 'static>(
+        &self,
+        identity: Identity,
+        sessions: &[SessionView],
+        read: impl FnOnce(&ddb_source_workspace::Document) -> ddb_source_workspace::Result<T>
+            + Send
+            + 'static,
+    ) -> Result<T, ApplicationError> {
+        let tag = match &identity {
+            Identity::Debugger { session, path } => {
+                let owner = sessions
+                    .iter()
+                    .find(|owner| owner.sid == *session)
+                    .ok_or_else(|| ApplicationError::not_found("source owner"))?;
+                if self.queries.cached_source_membership(*session, path) != Some(true) {
+                    return Err(ApplicationError::not_found("source in current catalog"));
+                }
+                Some(owner.tag.clone())
+            }
+            Identity::Workspace { .. } => None,
+        };
+        self.source_io(move |store| {
+            let location = store.content_location(&identity, tag.as_deref())?;
+            let document = location
+                .directory
+                .read(&location.path)
+                .map_err(source_error)?;
+            read(&document).map_err(source_error)
+        })
+        .await
+    }
+
     async fn describe_source(
         &self,
         identity: Identity,
@@ -854,30 +886,13 @@ impl DdbApplicationService {
         }
         let identity = self.source_identity(&request.source_reference)?;
         let sessions = self.queries.sessions().await;
-        let tag = match &identity {
-            Identity::Debugger { session, path } => {
-                let owner = sessions
-                    .iter()
-                    .find(|owner| owner.sid == *session)
-                    .ok_or_else(|| ApplicationError::not_found("source owner"))?;
-                if !self.queries.cached_sources(*session).contains(path) {
-                    return Err(ApplicationError::not_found("source in current catalog"));
-                }
-                Some(owner.tag.clone())
-            }
-            Identity::Workspace { .. } => None,
-        };
-        let content_identity = identity.clone();
-        let window = self
-            .source_io(move |store| {
-                let location = store.content_location(&content_identity, tag.as_deref())?;
-                location
-                    .directory
-                    .read(&location.path)
-                    .and_then(|document| document.window(request.start_line, request.max_lines))
-                    .map_err(source_error)
-            })
-            .await?;
+        let window = scope
+            .wait(
+                self.with_source_document(identity.clone(), &sessions, move |document| {
+                    document.window(request.start_line, request.max_lines)
+                }),
+            )
+            .await??;
         scope.ensure_active()?;
         let mut source = self.describe_source(identity, &sessions).await?;
         source.content_hash = Some(window.content_hash);
@@ -891,6 +906,80 @@ impl DdbApplicationService {
                 has_more: window.has_more,
                 total_lines: window.total_lines,
             }),
+        })
+    }
+
+    pub(crate) async fn search_source(
+        &self,
+        request: v2::SearchSourceRequest,
+    ) -> Result<v2::SearchSourceResponse, ApplicationError> {
+        use ddb_source_workspace::{SearchMode, SearchQuery};
+        let scope = RequestScope::begin(request.context.as_ref())?;
+        if request.origin_line == 0
+            || request.max_lines == 0
+            || request.max_lines > self.api_config.limits.max_source_lines
+        {
+            return Err(ApplicationError::invalid(
+                "origin_line/max_lines",
+                "requires a one-based origin and a nonzero window within the advertised line limit",
+            ));
+        }
+        let mode = match v2::SourceSearchMode::try_from(request.mode) {
+            Ok(v2::SourceSearchMode::Exact) => SearchMode::Exact,
+            Ok(v2::SourceSearchMode::Fuzzy) => SearchMode::Fuzzy,
+            _ => return Err(ApplicationError::invalid("mode", "requires EXACT or FUZZY")),
+        };
+        let query = SearchQuery::new(&request.query, mode).map_err(source_error)?;
+        let identity = self.source_identity(&request.source_reference)?;
+        let sessions = self.queries.sessions().await;
+        let (found, window, content_hash, total_lines) = scope
+            .wait(
+                self.with_source_document(identity.clone(), &sessions, move |document| {
+                    let found = document.search(
+                        &query,
+                        request.origin_line,
+                        request.backward,
+                        request.include_origin,
+                    );
+                    let line = found
+                        .as_ref()
+                        .map_or(request.origin_line, |found| found.line)
+                        .clamp(1, document.total_lines().max(1));
+                    let window = document.window(
+                        line.saturating_sub(request.max_lines / 2).max(1),
+                        request.max_lines,
+                    )?;
+                    Ok((
+                        found,
+                        window,
+                        document.content_hash().to_owned(),
+                        document.total_lines(),
+                    ))
+                }),
+            )
+            .await??;
+        let mut source = self.describe_source(identity, &sessions).await?;
+        source.content_hash = Some(content_hash.clone());
+        let source = Some(v2::SourceContent {
+            source: Some(source),
+            start_line: window.start_line,
+            content: window.content,
+            line_count: window.line_count,
+            has_more: window.has_more,
+            total_lines: window.total_lines,
+        });
+        scope.ensure_active()?;
+        Ok(v2::SearchSourceResponse {
+            context: Some(scope.response_context(&self.server_instance_id)),
+            result: found.map(|found| v2::SourceSearchMatch {
+                line: found.line,
+                start_column: found.start_column,
+                end_column: found.end_column,
+                wrapped: found.wrapped,
+            }),
+            source,
+            content_hash,
+            total_lines,
         })
     }
 }
@@ -926,6 +1015,7 @@ fn revision(value: &str) -> u64 {
 fn source_error(error: ddb_source_workspace::Error) -> ApplicationError {
     use ddb_source_workspace::Error;
     match error {
+        Error::InvalidSearch(message) => ApplicationError::invalid("query", message),
         Error::InvalidPath => {
             ApplicationError::invalid("source path", "path must remain within its root")
         }

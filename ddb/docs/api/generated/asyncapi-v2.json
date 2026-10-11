@@ -3163,6 +3163,66 @@
           "SCOPE_KIND_OTHER"
         ]
       },
+      "SearchSourceRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "backward": {
+            "type": "boolean"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "includeOrigin": {
+            "type": "boolean"
+          },
+          "maxLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SourceSearchMode"
+          },
+          "originLine": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          },
+          "sourceReference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SearchSourceResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "contentHash": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/SourceSearchMatch"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceContent"
+          },
+          "totalLines": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "SelectThreadRequest": {
         "additionalProperties": true,
         "properties": {
@@ -3686,6 +3746,42 @@
           }
         },
         "type": "object"
+      },
+      "SourceSearchMatch": {
+        "additionalProperties": true,
+        "properties": {
+          "endColumn": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "startColumn": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wrapped": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "SourceSearchMode": {
+        "description": "Extensible Protobuf enum. Clients must tolerate values added by newer servers.",
+        "type": "string",
+        "x-extensible-enum": [
+          "SOURCE_SEARCH_MODE_UNSPECIFIED",
+          "SOURCE_SEARCH_MODE_EXACT",
+          "SOURCE_SEARCH_MODE_FUZZY"
+        ]
       },
       "SourceTarget": {
         "additionalProperties": true,

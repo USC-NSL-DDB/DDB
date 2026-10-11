@@ -71,12 +71,30 @@ HTTP/ProtoJSON and gRPC transports, with `READ` permission:
 | `ListSourceEntries` | List one root-relative directory, including files absent from debug information. |
 | `ResolveSource` | Resolve an exact debugger path with an owner, an opaque source reference, or a root reference plus relative path. |
 | `ReadSource` | Read a bounded, one-based line window using a source reference. |
+| `SearchSource` | Search the entire bounded file, returning one matching line and a version-pinned context window. |
 
-The Rust SDK has typed methods for all five operations. `collect_sources` follows
+The Rust SDK has typed methods for these operations. `collect_sources` follows
 pages with a caller-supplied bound and retains discovery warnings. It requests
 refresh only on the first page. `collect_source_roots` and `collect_source_entries`
 also bound the collected result. The generated TypeScript and Python contracts
 contain the same operations and resource types.
+
+`SearchSource` accepts an exact case-sensitive substring or fuzzy
+case-insensitive Unicode lowercase subsequence, an origin line, direction, and
+whether to include the origin. It visits each line at most once, wrapping at
+the file boundary. Repeats normally exclude the origin until wraparound.
+There is one match per matching line, not per occurrence. Queries contain
+1–1,024 UTF-8 bytes, permit tabs, and reject other control characters. The
+origin and context line limit must be nonzero; an unspecified mode is invalid.
+
+Match columns are one-based Unicode scalar positions, inclusive start and
+exclusive end. Fuzzy columns bound the matched subsequence, including gaps.
+The response always includes a bounded context window and content hash from
+the same immutable document used for matching. No-match responses also include
+fresh context around the clamped origin, including for empty or shortened files.
+Clients must not highlight an old cached window after receiving a search result.
+Search reuses source reference authorization, confinement, file-size limits,
+and bounded blocking I/O. It does not resume or interrupt a debuggee.
 
 Source references are server-instance-local opaque identities. Debugger sources
 include their owning session, even when sessions share a group or path. Workspace

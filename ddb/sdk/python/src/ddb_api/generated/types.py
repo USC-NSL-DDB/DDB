@@ -241,6 +241,12 @@ class SourceOriginValues:
     SOURCE_ORIGIN_DEBUGGER = "SOURCE_ORIGIN_DEBUGGER"
     SOURCE_ORIGIN_WORKSPACE = "SOURCE_ORIGIN_WORKSPACE"
 
+SourceSearchMode: TypeAlias = str
+class SourceSearchModeValues:
+    SOURCE_SEARCH_MODE_UNSPECIFIED = "SOURCE_SEARCH_MODE_UNSPECIFIED"
+    SOURCE_SEARCH_MODE_EXACT = "SOURCE_SEARCH_MODE_EXACT"
+    SOURCE_SEARCH_MODE_FUZZY = "SOURCE_SEARCH_MODE_FUZZY"
+
 StateEventKind: TypeAlias = str
 class StateEventKindValues:
     STATE_EVENT_KIND_UNSPECIFIED = "STATE_EVENT_KIND_UNSPECIFIED"
@@ -1679,6 +1685,31 @@ Scope = TypedDict(
     },
 )
 
+SearchSourceRequest = TypedDict(
+    "SearchSourceRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "sourceReference": NotRequired["str"],
+        "query": NotRequired["str"],
+        "mode": NotRequired["SourceSearchMode"],
+        "originLine": NotRequired["int"],
+        "backward": NotRequired["bool"],
+        "includeOrigin": NotRequired["bool"],
+        "maxLines": NotRequired["int"],
+    },
+)
+
+SearchSourceResponse = TypedDict(
+    "SearchSourceResponse",
+    {
+        "context": NotRequired["ResponseContext"],
+        "result": NotRequired["SourceSearchMatch"],
+        "source": NotRequired["SourceContent"],
+        "contentHash": NotRequired["str"],
+        "totalLines": NotRequired["int"],
+    },
+)
+
 SelectThreadRequest = TypedDict(
     "SelectThreadRequest",
     {
@@ -1877,6 +1908,16 @@ SourceRoot = TypedDict(
         "name": NotRequired["str"],
         "debuggerPath": NotRequired["str"],
         "owners": NotRequired["list[SourceOwner]"],
+    },
+)
+
+SourceSearchMatch = TypedDict(
+    "SourceSearchMatch",
+    {
+        "line": NotRequired["int"],
+        "startColumn": NotRequired["int"],
+        "endColumn": NotRequired["int"],
+        "wrapped": NotRequired["bool"],
     },
 )
 

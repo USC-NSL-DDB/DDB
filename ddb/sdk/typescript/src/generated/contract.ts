@@ -29,6 +29,7 @@ export interface MethodMap {
   "DebuggerService.ResolveSource": { request: t.ResolveSourceRequest; response: t.ResolveSourceResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ResolveSourceTargets": { request: t.ResolveSourceTargetsRequest; response: t.ResolveSourceTargetsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ReadSource": { request: t.ReadSourceRequest; response: t.ReadSourceResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.SearchSource": { request: t.SearchSourceRequest; response: t.SearchSourceResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListBreakpoints": { request: t.ListBreakpointsRequest; response: t.ListBreakpointsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.GetBreakpoint": { request: t.GetBreakpointRequest; response: t.GetBreakpointResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListPendingCommands": { request: t.ListPendingCommandsRequest; response: t.ListPendingCommandsResponse; serverStreaming: false; scope: "read" };
@@ -89,6 +90,7 @@ export const METHODS = {
   "DebuggerService.ResolveSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource", serverStreaming: false, scope: "read" },
   "DebuggerService.ResolveSourceTargets": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets", serverStreaming: false, scope: "read" },
   "DebuggerService.ReadSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource", serverStreaming: false, scope: "read" },
+  "DebuggerService.SearchSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource", serverStreaming: false, scope: "read" },
   "DebuggerService.ListBreakpoints": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints", serverStreaming: false, scope: "read" },
   "DebuggerService.GetBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/GetBreakpoint", serverStreaming: false, scope: "read" },
   "DebuggerService.ListPendingCommands": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListPendingCommands", serverStreaming: false, scope: "read" },

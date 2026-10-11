@@ -619,6 +619,12 @@ v2_async_handler!(
     read_source
 );
 v2_async_handler!(
+    v2_search_source,
+    v2::SearchSourceRequest,
+    v2::SearchSourceResponse,
+    search_source
+);
+v2_async_handler!(
     v2_list_groups,
     v2::ListGroupsRequest,
     v2::ListGroupsResponse,

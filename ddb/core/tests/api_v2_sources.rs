@@ -191,6 +191,140 @@ fn source_targets_include_only_exact_catalog_owners_without_requiring_content() 
 }
 
 #[test]
+fn whole_source_search_is_versioned_bounded_authenticated_and_independent_of_loaded_windows() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut lines = vec!["unrelated"; 1000];
+    lines[0] = "first needle";
+    lines[998] = "🦀 café_Δelta";
+    lines[999] = "last needle";
+    let file = directory.path().join("main.cc");
+    std::fs::write(&file, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let ddb = DdbProcess::spawn_with_source_roots(
+        &[],
+        &format!(
+            "\nSourceRoots:\n{}",
+            root_yaml("project", directory.path(), &[])
+        ),
+    );
+    let client = client(&ddb);
+    runtime().block_on(async {
+        let root = client
+            .collect_source_roots(Default::default(), 10)
+            .await
+            .unwrap()
+            .remove(0);
+        let source = client
+            .resolve_source(v2::ResolveSourceRequest {
+                root_reference: Some(root.root_reference),
+                location: Some(v2::SourceLocation {
+                    path: Some("main.cc".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .source
+            .unwrap();
+        let request = v2::SearchSourceRequest {
+            source_reference: source.source_reference,
+            query: "needle".into(),
+            mode: v2::SourceSearchMode::Exact as i32,
+            origin_line: 1,
+            include_origin: false,
+            max_lines: 12,
+            ..Default::default()
+        };
+        let found = client.search_source(request.clone()).await.unwrap();
+        let hit = found.result.as_ref().unwrap();
+        assert_eq!(hit.line, 1000);
+        assert!(!hit.wrapped);
+        let content = found.source.as_ref().unwrap();
+        assert!(content.line_count <= 12);
+        assert_eq!(content.total_lines, 1000);
+        assert!(content.content.contains("last needle"));
+        assert_eq!(
+            content.source.as_ref().unwrap().content_hash.as_deref(),
+            Some(found.content_hash.as_str())
+        );
+        let wrapped = client
+            .search_source(v2::SearchSourceRequest {
+                origin_line: 1000,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(wrapped.result.as_ref().unwrap().line, 1);
+        assert!(wrapped.result.as_ref().unwrap().wrapped);
+        let backward = client
+            .search_source(v2::SearchSourceRequest {
+                origin_line: 1000,
+                backward: true,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(backward.result.as_ref().unwrap().line, 1);
+        assert!(!backward.result.as_ref().unwrap().wrapped);
+        let fuzzy = client
+            .search_source(v2::SearchSourceRequest {
+                query: "🦀CÉΔL".into(),
+                mode: v2::SourceSearchMode::Fuzzy as i32,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(fuzzy.result.as_ref().unwrap().line, 999);
+        for invalid in [
+            v2::SearchSourceRequest {
+                query: String::new(),
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                query: "x\ny".into(),
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                query: "x".repeat(1025),
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                mode: 0,
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                origin_line: 0,
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                max_lines: 0,
+                ..request.clone()
+            },
+            v2::SearchSourceRequest {
+                max_lines: u32::MAX,
+                ..request.clone()
+            },
+        ] {
+            assert_eq!(
+                code(client.search_source(invalid).await.unwrap_err()),
+                v2::DdbErrorCode::InvalidArgument
+            );
+        }
+        let anonymous = DdbClient::new(ClientConfig::new(ddb.api_endpoint())).unwrap();
+        assert_eq!(
+            code(anonymous.search_source(request.clone()).await.unwrap_err()),
+            v2::DdbErrorCode::Unauthenticated
+        );
+        std::fs::write(&file, "changed source\n").unwrap();
+        let missing = client.search_source(request).await.unwrap();
+        assert!(missing.result.is_none());
+        assert_eq!(missing.source.as_ref().unwrap().content, "changed source");
+        assert_eq!(missing.total_lines, 1);
+        assert_ne!(missing.content_hash, found.content_hash);
+    });
+}
+
+#[test]
 fn workspace_browsing_needs_no_session_and_reads_only_explicit_exports() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("src")).unwrap();

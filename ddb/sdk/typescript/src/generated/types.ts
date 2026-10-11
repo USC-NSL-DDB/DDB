@@ -261,6 +261,13 @@ export const SourceOriginValues = {
 } as const;
 export type SourceOrigin = (typeof SourceOriginValues)[keyof typeof SourceOriginValues] | (string & {});
 
+export const SourceSearchModeValues = {
+  SOURCE_SEARCH_MODE_UNSPECIFIED: "SOURCE_SEARCH_MODE_UNSPECIFIED",
+  SOURCE_SEARCH_MODE_EXACT: "SOURCE_SEARCH_MODE_EXACT",
+  SOURCE_SEARCH_MODE_FUZZY: "SOURCE_SEARCH_MODE_FUZZY",
+} as const;
+export type SourceSearchMode = (typeof SourceSearchModeValues)[keyof typeof SourceSearchModeValues] | (string & {});
+
 export const StateEventKindValues = {
   STATE_EVENT_KIND_UNSPECIFIED: "STATE_EVENT_KIND_UNSPECIFIED",
   STATE_EVENT_KIND_RESOURCE_UPSERTED: "STATE_EVENT_KIND_RESOURCE_UPSERTED",
@@ -1278,6 +1285,25 @@ export interface Scope {
   "variableCount"?: string;
 }
 
+export interface SearchSourceRequest {
+  "context"?: RequestContext;
+  "sourceReference"?: string;
+  "query"?: string;
+  "mode"?: SourceSearchMode;
+  "originLine"?: number;
+  "backward"?: boolean;
+  "includeOrigin"?: boolean;
+  "maxLines"?: number;
+}
+
+export interface SearchSourceResponse {
+  "context"?: ResponseContext;
+  "result"?: SourceSearchMatch;
+  "source"?: SourceContent;
+  "contentHash"?: string;
+  "totalLines"?: number;
+}
+
 export interface SelectThreadRequest {
   "context"?: RequestContext;
   "target"?: Target;
@@ -1423,6 +1449,13 @@ export interface SourceRoot {
   "name"?: string;
   "debuggerPath"?: string;
   "owners"?: SourceOwner[];
+}
+
+export interface SourceSearchMatch {
+  "line"?: number;
+  "startColumn"?: number;
+  "endColumn"?: number;
+  "wrapped"?: boolean;
 }
 
 export interface SourceTarget {

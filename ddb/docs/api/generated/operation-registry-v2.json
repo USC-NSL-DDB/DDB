@@ -832,6 +832,35 @@
       "successStatus": 200
     },
     {
+      "description": "Searches a whole source and returns matching context from the same version.",
+      "errorStatuses": [
+        400,
+        401,
+        403,
+        404,
+        409,
+        410,
+        412,
+        429,
+        499,
+        500,
+        501,
+        502,
+        503,
+        504
+      ],
+      "httpMethod": "post",
+      "key": "DebuggerService.SearchSource",
+      "operationId": "DebuggerService_SearchSource",
+      "path": "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource",
+      "permission": "read",
+      "protobufMethod": "/ddb.api.v2.DebuggerService/SearchSource",
+      "requestType": ".ddb.api.v2.SearchSourceRequest",
+      "responseType": ".ddb.api.v2.SearchSourceResponse",
+      "serverStreaming": false,
+      "successStatus": 200
+    },
+    {
       "description": "Lists logical breakpoints. Requires READ permission.",
       "errorStatuses": [
         400,

@@ -3358,6 +3358,68 @@ pub struct ResolveSourceTargetsResponse {
     #[prost(bool, tag = "4")]
     pub complete: bool,
 }
+/// SearchSourceRequest searches the entire bounded source document, not a window.
+/// Each line is considered once, in the requested direction, wrapping at EOF.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SearchSourceRequest {
+    /// Request controls; READ permission is required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Existing source capability from discovery or source reads.
+    #[prost(string, tag = "2")]
+    pub source_reference: ::prost::alloc::string::String,
+    /// Nonempty single-line text, at most 1024 UTF-8 bytes. Tabs are allowed.
+    #[prost(string, tag = "3")]
+    pub query: ::prost::alloc::string::String,
+    /// Explicit matching mode; UNSPECIFIED is invalid.
+    #[prost(enumeration = "SourceSearchMode", tag = "4")]
+    pub mode: i32,
+    /// One-based origin line, clamped to the current document if the file changed.
+    #[prost(uint32, tag = "5")]
+    pub origin_line: u32,
+    /// Search previous matching lines rather than following lines.
+    #[prost(bool, tag = "6")]
+    pub backward: bool,
+    /// Include the origin line, normally true for a new query and false for repeat.
+    #[prost(bool, tag = "7")]
+    pub include_origin: bool,
+    /// Bound the returned context window by the advertised source line limit.
+    #[prost(uint32, tag = "8")]
+    pub max_lines: u32,
+}
+/// SourceSearchMatch identifies a matching line. Columns are one-based Unicode
+/// scalar positions, not bytes or UTF-16 units; the end column is exclusive.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourceSearchMatch {
+    #[prost(uint32, tag = "1")]
+    pub line: u32,
+    #[prost(uint32, tag = "2")]
+    pub start_column: u32,
+    /// Fuzzy matches report the bounding range, including gaps.
+    #[prost(uint32, tag = "3")]
+    pub end_column: u32,
+    /// The matching line was found after wrapping past the document boundary.
+    #[prost(bool, tag = "4")]
+    pub wrapped: bool,
+}
+/// SearchSourceResponse pins the match and returned window to one file version.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SearchSourceResponse {
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<ResponseContext>,
+    /// Absent if no line matches. One result per line, not per occurrence.
+    #[prost(message, optional, tag = "2")]
+    pub result: ::core::option::Option<SourceSearchMatch>,
+    /// Context from the same immutable snapshot. Centered on the match, or on the
+    /// clamped origin if no line matches. Empty documents return an empty window.
+    #[prost(message, optional, tag = "3")]
+    pub source: ::core::option::Option<SourceContent>,
+    /// Version of the searched document, including no-match responses.
+    #[prost(string, tag = "4")]
+    pub content_hash: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "5")]
+    pub total_lines: u32,
+}
 /// ReadSourceRequest reads one bounded source window.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadSourceRequest {
@@ -3948,6 +4010,38 @@ impl RawCommandDialect {
             "RAW_COMMAND_DIALECT_GDB_MI" => Some(Self::GdbMi),
             "RAW_COMMAND_DIALECT_GDB_CLI" => Some(Self::GdbCli),
             "RAW_COMMAND_DIALECT_LLDB_CLI" => Some(Self::LldbCli),
+            _ => None,
+        }
+    }
+}
+/// SourceSearchMode defines matching within individual source lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SourceSearchMode {
+    Unspecified = 0,
+    /// Case-sensitive contiguous text.
+    Exact = 1,
+    /// Case-insensitive Unicode lowercase subsequence, not edit distance.
+    Fuzzy = 2,
+}
+impl SourceSearchMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SOURCE_SEARCH_MODE_UNSPECIFIED",
+            Self::Exact => "SOURCE_SEARCH_MODE_EXACT",
+            Self::Fuzzy => "SOURCE_SEARCH_MODE_FUZZY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SOURCE_SEARCH_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SOURCE_SEARCH_MODE_EXACT" => Some(Self::Exact),
+            "SOURCE_SEARCH_MODE_FUZZY" => Some(Self::Fuzzy),
             _ => None,
         }
     }

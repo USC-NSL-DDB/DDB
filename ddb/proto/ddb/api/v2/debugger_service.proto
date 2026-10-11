@@ -519,6 +519,60 @@ message ResolveSourceTargetsResponse {
   bool complete = 4;
 }
 
+// SourceSearchMode defines matching within individual source lines.
+enum SourceSearchMode {
+  SOURCE_SEARCH_MODE_UNSPECIFIED = 0;
+  // Case-sensitive contiguous text.
+  SOURCE_SEARCH_MODE_EXACT = 1;
+  // Case-insensitive Unicode lowercase subsequence, not edit distance.
+  SOURCE_SEARCH_MODE_FUZZY = 2;
+}
+
+// SearchSourceRequest searches the entire bounded source document, not a window.
+// Each line is considered once, in the requested direction, wrapping at EOF.
+message SearchSourceRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Existing source capability from discovery or source reads.
+  string source_reference = 2;
+  // Nonempty single-line text, at most 1024 UTF-8 bytes. Tabs are allowed.
+  string query = 3;
+  // Explicit matching mode; UNSPECIFIED is invalid.
+  SourceSearchMode mode = 4;
+  // One-based origin line, clamped to the current document if the file changed.
+  uint32 origin_line = 5;
+  // Search previous matching lines rather than following lines.
+  bool backward = 6;
+  // Include the origin line, normally true for a new query and false for repeat.
+  bool include_origin = 7;
+  // Bound the returned context window by the advertised source line limit.
+  uint32 max_lines = 8;
+}
+
+// SourceSearchMatch identifies a matching line. Columns are one-based Unicode
+// scalar positions, not bytes or UTF-16 units; the end column is exclusive.
+message SourceSearchMatch {
+  uint32 line = 1;
+  uint32 start_column = 2;
+  // Fuzzy matches report the bounding range, including gaps.
+  uint32 end_column = 3;
+  // The matching line was found after wrapping past the document boundary.
+  bool wrapped = 4;
+}
+
+// SearchSourceResponse pins the match and returned window to one file version.
+message SearchSourceResponse {
+  ResponseContext context = 1;
+  // Absent if no line matches. One result per line, not per occurrence.
+  SourceSearchMatch result = 2;
+  // Context from the same immutable snapshot. Centered on the match, or on the
+  // clamped origin if no line matches. Empty documents return an empty window.
+  SourceContent source = 3;
+  // Version of the searched document, including no-match responses.
+  string content_hash = 4;
+  uint32 total_lines = 5;
+}
+
 // ReadSourceRequest reads one bounded source window.
 message ReadSourceRequest {
   // Request controls; READ permission is required.
@@ -942,6 +996,8 @@ service DebuggerService {
   rpc ResolveSourceTargets(ResolveSourceTargetsRequest) returns (ResolveSourceTargetsResponse);
   // Reads a bounded source window. Requires READ permission.
   rpc ReadSource(ReadSourceRequest) returns (ReadSourceResponse);
+  // Searches a whole source and returns matching context from the same version.
+  rpc SearchSource(SearchSourceRequest) returns (SearchSourceResponse);
   // Lists logical breakpoints. Requires READ permission.
   rpc ListBreakpoints(ListBreakpointsRequest) returns (ListBreakpointsResponse);
   // Gets one logical breakpoint. Requires READ permission.
