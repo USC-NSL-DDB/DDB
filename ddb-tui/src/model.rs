@@ -22,6 +22,37 @@ pub enum Focus {
 }
 
 impl Focus {
+    pub fn shortcut(self) -> char {
+        match self {
+            Self::Threads => '1',
+            Self::Breakpoints => '2',
+            Self::Source => '3',
+            Self::Stack => '4',
+            Self::Variables => '5',
+            Self::Registers => '6',
+            Self::Memory => '7',
+            Self::Timeline => '8',
+            Self::Output => '9',
+            Self::Extensions => '0',
+        }
+    }
+
+    pub fn from_shortcut(shortcut: char) -> Option<Self> {
+        [
+            Self::Threads,
+            Self::Breakpoints,
+            Self::Source,
+            Self::Stack,
+            Self::Variables,
+            Self::Registers,
+            Self::Memory,
+            Self::Timeline,
+            Self::Output,
+            Self::Extensions,
+        ]
+        .into_iter()
+        .find(|focus| focus.shortcut() == shortcut)
+    }
     const CORE: [Self; 6] = [
         Self::Threads,
         Self::Breakpoints,
@@ -485,6 +516,8 @@ pub struct App {
     history_index: Option<usize>,
     history_draft: String,
     pub show_help: bool,
+    pub help_query: String,
+    pub help_searching: bool,
     pub help_scroll: usize,
     pub help_max_scroll: usize,
     pub help_page_height: usize,
@@ -589,6 +622,8 @@ impl App {
             history_index: None,
             history_draft: String::new(),
             show_help: false,
+            help_query: String::new(),
+            help_searching: false,
             help_scroll: 0,
             help_max_scroll: 0,
             help_page_height: 1,
@@ -2351,6 +2386,29 @@ impl App {
         } else {
             visible[(index + 1) % visible.len()]
         };
+    }
+
+    pub fn focus_numbered_pane(&mut self, focus: Focus) {
+        match focus {
+            Focus::Registers if self.registers.is_empty() => {
+                self.status = "Registers are unavailable for the current frame".into();
+                return;
+            }
+            Focus::Memory if self.memory.is_empty() => {
+                self.status = "Read memory with m before opening the Memory pane".into();
+                return;
+            }
+            Focus::Extensions
+                if self.extension_panels.is_empty() && self.extension_actions.is_empty() =>
+            {
+                self.status = "No DDB extension panes are available".into();
+                return;
+            }
+            Focus::Timeline => self.show_timeline = true,
+            Focus::Output => self.show_output = true,
+            _ => {}
+        }
+        self.focus = focus;
     }
 
     pub fn move_extension_action(&mut self, delta: isize) {

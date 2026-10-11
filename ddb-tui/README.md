@@ -237,7 +237,9 @@ normal DDB-native view.
 | `Home` / `End` in Extensions | Jump to the first/last page of extension data; `Shift+Home` still resets only the action label |
 | `:` | Run a native GDB/LLDB command in the selected frame |
 | `r` | Refresh all state |
-| `?` | Toggle the in-app help overlay |
+| `Alt+1` … `Alt+9`, `Alt+0` | Focus the numbered pane; numbers remain stable when optional panes are hidden |
+| `Ctrl+u` / `Ctrl+d` in Source | Move half a visible page, loading another source window when necessary |
+| `?` | Open the categorized help overlay; `/` searches shortcuts and descriptions |
 | `q` / `Ctrl+C` | Quit |
 
 ### Logpoints and value inspection
@@ -322,6 +324,12 @@ the logical breakpoint and its session-specific sites. If a logical breakpoint
 has multiple sites, select a child row to choose the source owner explicitly.
 Opening breakpoint source does not change the execution target.
 
+Source breakpoint creation asks DDB's `ResolveSourceTargets` API for the sessions
+and groups that actually use the exact debugger source path. The picker does not
+infer ownership from local filenames or show unrelated sessions. Loading,
+incomplete discovery, and errors appear inside the picker. Function breakpoints
+retain explicit symbol-based session, group, and broadcast scopes.
+
 Source horizontal scrolling also accepts horizontal mouse-wheel events. It
 preserves the source cursor and execution-following mode. Navigation history
 restores each file's horizontal offset; resizing clamps it to the content width.
@@ -329,9 +337,25 @@ Vertical movement keeps the viewport stable until the cursor reaches an edge.
 Loading another source window preserves that edge instead of recentering the
 cursor; pending loads use the current pane height if the terminal is resized.
 
-`?` opens scrollable help. Use Up/Down, `j`/`k`, Page Up/Down, Home/End,
-or the mouse wheel; `Esc` or `?` closes it. Help wraps to the terminal width
-and blocks clicks on debugger controls underneath it.
+`?` opens categorized, scrollable help. Press `/` to search categories, shortcut
+keys, or descriptions. Search words match regardless of case or order. Enter
+keeps the filter, Backspace edits it, and Ctrl+u clears it while editing.
+Esc first stops search editing; when not editing, Esc or ? closes help.
+Use Up/Down, j/k, Page Up/Down, Home/End, or the mouse wheel to scroll. Help wraps
+to the terminal width and blocks clicks on debugger controls underneath it.
+
+Direct pane shortcuts are Alt+1 Topology, Alt+2 Breakpoints, Alt+3 Source,
+Alt+4 Stack, Alt+5 Variables, Alt+6 Registers, Alt+7 Memory, Alt+8 Timeline,
+Alt+9 Output, and Alt+0 Extensions. Hidden Timeline and Output panes open when
+selected; unavailable inspection panes report why they cannot open. Shortcuts
+do not switch panes while editing a prompt or interacting with a modal dialog.
+No prefix sequence is required. In tmux or a terminal emulator, reserve these
+Alt-number combinations for DDB rather than binding them to another action.
+
+The toolbar shows execution actions supported by DDB for the selected target
+scope. A thread-only Next action is not offered for a session or group. Stack
+frames without a source file/line are dimmed and labeled `no source location`.
+A reported file/line can still refer to missing or unreadable source content.
 
 Click `[Expand]` on a pane's bottom border or press `z` to expand the focused
 pane; click `[Restore]`, press `z` again, or press `Esc` to restore

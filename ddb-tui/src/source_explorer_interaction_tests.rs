@@ -28,6 +28,133 @@ fn key(app: &mut App, sender: &mpsc::Sender<BackendRequest>, code: KeyCode) {
 }
 
 #[test]
+fn direct_pane_shortcuts_are_stable_and_do_not_steal_prompt_input() {
+    let mut app = App::new("http://localhost".into());
+    let (sender, mut receiver) = mpsc::channel(4);
+    for (number, focus) in [
+        ('1', Focus::Threads),
+        ('2', Focus::Breakpoints),
+        ('3', Focus::Source),
+        ('4', Focus::Stack),
+        ('5', Focus::Variables),
+        ('8', Focus::Timeline),
+        ('9', Focus::Output),
+    ] {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(number), KeyModifiers::ALT),
+            &sender,
+        );
+        assert_eq!(app.focus, focus);
+        assert_eq!(Focus::from_shortcut(number), Some(focus));
+    }
+    assert!(app.show_output && app.show_timeline);
+    key(&mut app, &sender, KeyCode::Char('z'));
+    assert!(app.expanded_pane);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT),
+        &sender,
+    );
+    assert!(app.expanded_pane);
+    assert_eq!(app.focus, Focus::Source);
+    key(&mut app, &sender, KeyCode::Esc);
+    assert!(!app.expanded_pane);
+    app.input_mode = InputMode::Evaluate;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT),
+        &sender,
+    );
+    assert_eq!(app.focus, Focus::Source);
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn half_page_source_navigation_loads_missing_windows_and_never_refreshes_the_stack() {
+    let mut app = App::new("http://localhost".into());
+    let source = remote_source(v2::SourceFile {
+        source_reference: "file/one".into(),
+        ..Default::default()
+    });
+    let request = app.source_browser.open_source(source);
+    app.source_browser.apply(
+        request.generation,
+        crate::source_browser::tests::remote_content(v2::SourceContent {
+            source: Some(v2::SourceFile {
+                source_reference: "file/one".into(),
+                ..Default::default()
+            }),
+            start_line: 1,
+            line_count: 3,
+            total_lines: 100,
+            content: "one\ntwo\nthree".into(),
+            has_more: true,
+        }),
+    );
+    app.areas.add_panel(
+        Focus::Source,
+        ratatui::layout::Rect::new(0, 0, 80, 22),
+        0,
+        1,
+    );
+    let (sender, mut receiver) = mpsc::channel(4);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        &sender,
+    );
+    let BackendRequest::LoadSource(request) = receiver.try_recv().unwrap() else {
+        panic!("expected another source window")
+    };
+    assert_eq!(request.line, 11);
+    app.focus = Focus::Stack;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        &sender,
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "Ctrl+d must not invoke plain d"
+    );
+}
+
+#[test]
+fn searchable_help_keeps_navigation_keys_as_text_while_editing() {
+    let mut app = App::new("http://localhost".into());
+    let (sender, mut receiver) = mpsc::channel(4);
+    app.show_help = true;
+    key(&mut app, &sender, KeyCode::Char('/'));
+    for character in "jump".chars() {
+        key(&mut app, &sender, KeyCode::Char(character));
+    }
+    assert_eq!(app.help_query, "jump");
+    assert_eq!(app.help_scroll, 0);
+    key(&mut app, &sender, KeyCode::Enter);
+    assert!(!app.help_searching);
+    assert!(app.show_help);
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| {
+            ui::draw(frame, &mut app);
+        })
+        .unwrap();
+    let screen = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(screen.contains("owning frame"));
+    assert!(!screen.contains("Toggle Timeline"));
+    key(&mut app, &sender, KeyCode::Esc);
+    assert!(!app.show_help);
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
 fn explorer_and_goto_shortcuts_work_without_debugger_selection() {
     let mut app = App::new("http://localhost".into());
     let (sender, mut receiver) = mpsc::channel(4);

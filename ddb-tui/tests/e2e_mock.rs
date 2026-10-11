@@ -851,7 +851,7 @@ fn mock_backend_full_terminal_workflow() {
     // Source -> Stack -> Variables -> Registers -> Timeline -> Threads -> Breakpoints.
     tui.clear_capture();
     tui.send(b"\t\t\t\t\t\t");
-    tui.wait_for("\u{25c6} DDB Breakpoints");
+    tui.wait_for("\u{25c6} 2 DDB Breakpoints");
     tui.send(b"v");
     tui.wait_for_current_frame(|screen| screen.contains("File: "));
     tui.send(b"x");

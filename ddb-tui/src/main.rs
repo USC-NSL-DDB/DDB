@@ -2,6 +2,7 @@ mod api;
 mod cli;
 mod debugger_setup;
 mod display_text;
+mod help;
 mod logpoints;
 mod model;
 mod output;
@@ -510,7 +511,36 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         return;
     }
     if app.show_help {
+        if app.help_searching {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => app.help_searching = false,
+                KeyCode::Backspace => {
+                    app.help_query.pop();
+                    app.help_scroll = 0;
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.help_query.clear();
+                    app.help_scroll = 0;
+                }
+                KeyCode::Char(character)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && app.help_query.len() < 512
+                        && !character.is_control() =>
+                {
+                    app.help_query.push(character);
+                    app.help_scroll = 0;
+                }
+                _ => {}
+            }
+            return;
+        }
         match key.code {
+            KeyCode::Char('/') => {
+                app.help_searching = true;
+                app.help_scroll = 0;
+            }
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.show_help = false,
             KeyCode::Up | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
@@ -559,6 +589,37 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
     }
     if app.input_mode != InputMode::Normal {
         handle_prompt_key(app, key, requests);
+        return;
+    }
+
+    if key.modifiers == KeyModifiers::ALT {
+        if let KeyCode::Char(shortcut) = key.code {
+            if let Some(focus) = Focus::from_shortcut(shortcut) {
+                app.focus_numbered_pane(focus);
+                return;
+            }
+        }
+    }
+    if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('u' | 'd')) {
+        if app.focus == Focus::Source {
+            let half_page = app
+                .areas
+                .panels
+                .iter()
+                .find(|panel| panel.focus == Focus::Source)
+                .map_or(1, |panel| {
+                    (panel.area.height.saturating_sub(2) as isize / 2).max(1)
+                });
+            move_selection(
+                app,
+                requests,
+                if key.code == KeyCode::Char('u') {
+                    -half_page
+                } else {
+                    half_page
+                },
+            );
+        }
         return;
     }
 

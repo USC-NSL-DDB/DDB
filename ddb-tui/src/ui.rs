@@ -360,9 +360,11 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
                     .supports_ddb_feature("distributed_backtrace")
         }
         Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
-        control => control
-            .action_name()
-            .is_some_and(|action| app.capabilities.supports_execution(action)),
+        control => control.action_name().is_some_and(|action| {
+            app.execution_target()
+                .as_ref()
+                .is_some_and(|target| app.capabilities.supports_execution_target(action, target))
+        }),
     });
     let status_width = 38.min(inner.width);
     let status_start = inner
@@ -692,7 +694,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                         if site_hits == 0 {
                             String::new()
                         } else {
-                            format!("▶ {site_hits} paused · ")
+                            format!("● {site_hits} hit · ")
                         },
                         Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
                     ),
@@ -1051,7 +1053,25 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 ),
                 Span::styled(
                     terminal_text(&stack_frame.function),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(
+                        if stack_frame.file.as_ref().is_none_or(|file| file.is_empty())
+                            || stack_frame.line.is_none_or(|line| line == 0)
+                        {
+                            MUTED
+                        } else {
+                            Color::White
+                        },
+                    ),
+                ),
+                Span::styled(
+                    if stack_frame.file.as_ref().is_none_or(|file| file.is_empty())
+                        || stack_frame.line.is_none_or(|line| line == 0)
+                    {
+                        " [no source location]"
+                    } else {
+                        ""
+                    },
+                    Style::default().fg(MUTED),
                 ),
                 Span::styled(
                     format!(
@@ -1230,7 +1250,7 @@ fn draw_registers(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     draw_selectable_list(
         frame,
         area,
-        "Registers · = edit".into(),
+        title(app, Focus::Registers, "Registers · = edit"),
         lines,
         app.selected_register,
         app.focus == Focus::Registers,
@@ -1267,7 +1287,7 @@ fn draw_memory(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .iter()
         .map(|block| block.bytes.len())
         .sum::<usize>();
-    let memory_title = format!("Raw Memory · {byte_count} B");
+    let memory_title = title(app, Focus::Memory, &format!("Raw Memory · {byte_count} B"));
     let mut lines = Vec::new();
     for memory in &app.memory {
         let base = u64::from_str_radix(memory.begin.trim_start_matches("0x"), 16).ok();
@@ -1545,9 +1565,11 @@ fn input_line(prefix: &str, input: &str, cursor: usize, color: Color) -> Line<'s
 
 fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new(" Tab panels  ↑↓ navigate  b/B breakpoint  c execution scope  d refresh DDB stack  e eval  ? help ")
-            .style(Style::default().fg(MUTED))
-            .alignment(Alignment::Center),
+        Paragraph::new(
+            " Alt+1…9/0 panes  z expand  ↑↓ navigate  b/B breakpoint  P inspect hit  ? help ",
+        )
+        .style(Style::default().fg(MUTED))
+        .alignment(Alignment::Center),
         area,
     );
 }
@@ -1862,76 +1884,36 @@ fn draw_breakpoint_target_picker(
 fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
     let area = centered(root, 96, 94);
     frame.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" DDB TUI shortcuts ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(inner);
-    let text = vec![
-        Line::from(Span::styled(
-            "DDB TUI shortcuts",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("Execution", Style::default().fg(ACCENT))),
-        Line::from("F5 continue     F6 pause       F10 next"),
-        Line::from("F11 step in     Shift+F11 out"),
-        Line::from("F8 reveal selected stack frame in Source"),
-        Line::from("c cycle target: thread / session / group / all"),
-        Line::from("s choose signal; J opens the execution-jump prompt"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Source and breakpoints",
-            Style::default().fg(ACCENT),
-        )),
-        Line::from("source gutter: ▶ execution  ▸ cursor  ● breakpoint"),
-        Line::from("b toggle breakpoint at source cursor"),
-        Line::from("B conditional/temporary/hardware/ignore-count breakpoint"),
-        Line::from("Breakpoints: P/right-click picks a paused hit; Enter/click opens source"),
-        Line::from("F function breakpoint, then choose session/group targets"),
-        Line::from("Delete remove selected breakpoint"),
-        Line::from("x / Space enable or disable selected breakpoint"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Inspection and navigation",
-            Style::default().fg(ACCENT),
-        )),
-        Line::from("d refresh DDB distributed stack   e evaluate expression"),
-        Line::from("Variables / Registers: = assign the selected value; Esc cancels"),
-        Line::from("Breakpoints: L sets a log message with {expressions}; empty removes it"),
-        Line::from("m memory: ADDRESS or ADDRESS ; BYTE_COUNT"),
-        Line::from("E / source Inspect: one-shot expression inspection; expand in Variables; Delete dismisses"),
-        Line::from("M in Variables: read selected variable/watch address in its owning frame"),
-        Line::from("memory: Up/Down or wheel browse rows; Left/Right scroll columns; Home resets; z expand"),
-        Line::from("g open source: line or path:line   J jump execution   s signal"),
-        Line::from("j/k or Up/Down navigate; Page Up/Down moves one visible page"),
-        Line::from("source: f follow execution   Alt+Left/Right navigation history"),
-        Line::from("source: Left/Right scroll horizontally; Home returns to left edge"),
-        Line::from("w add watch; Variables: Delete removes a watch/Inspect result; Enter expands"),
-        Line::from("Variables: W or Edit button edits the selected watch expression; Esc cancels edits"),
-        Line::from("Topology: v or header button toggles grouped/flat sessions; execution scope stays unchanged"),
-        Line::from("Topology: i or right-click opens a details snapshot; arrows/hjkl, PgUp/PgDn and wheel scroll; Esc closes"),
-        Line::from("Details: y or Copy sends captured JSON to the terminal clipboard; e or Export saves a new local file"),
-        Line::from("Extensions: Home/End jumps to the first/last data page; Shift+Home resets only the action label"),
-        Line::from("Stack: distributed by default; start with --stack-mode local for local-only frames; d refreshes the selected mode"),
-        Line::from("Topology: K or Kill button confirms termination of one selected session; y accepts, Enter/Esc cancels"),
-        Line::from("Breakpoints: v or header button toggles file grouping; headers are not action targets"),
-        Line::from("o source explorer · Ctrl-P debugger files · type to search · Enter/click open"),
-        Line::from("extensions: Up/Down scroll data; Left/Right select action; a/Enter/click invokes"),
-        Line::from("extensions: Shift+Left/Right or Shift+horizontal wheel scroll action label; Shift+Home resets"),
-        Line::from("prompt: arrows edit/history, Home/End, paste supported"),
-        Line::from(": native debugger command in selected frame   r refresh"),
-        Line::from("Tab / Shift+Tab move focus      arrows / wheel navigate"),
-        Line::from("z expand/restore pane   Esc restore   t toggle timeline"),
-        Line::from("O output pane; Up/Down/Page scroll; Home oldest; End follow; Left/Right"),
-        Line::from("registers: Up/Down browse; Left/Right or horizontal wheel scroll; Home resets; z expand"),
-        Line::from("Topology/Breakpoints/Stack/Variables: Left/Right scroll; Home resets"),
-        Line::from("click a panel or toolbar control to activate it"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press ? or Esc to close",
-            Style::default().fg(YELLOW),
-        )),
-    ];
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(inner);
+    let entries = crate::help::entries(&app.help_query);
+    let mut text = Vec::new();
+    let mut section = "";
+    for entry in &entries {
+        if entry.section != section {
+            if !text.is_empty() {
+                text.push(Line::from(""));
+            }
+            text.push(Line::from(Span::styled(
+                entry.section,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )));
+            section = entry.section;
+        }
+        text.push(Line::from(vec![
+            Span::styled(format!("  {}  ", entry.keys), Style::default().fg(YELLOW)),
+            Span::raw(entry.description),
+        ]));
+    }
+    if entries.is_empty() {
+        text.push(Line::from(
+            "No matching shortcuts. Press / to edit the filter.",
+        ));
+    }
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     app.help_page_height = usize::from(rows[0].height).max(1);
     app.help_max_scroll = paragraph
@@ -1944,7 +1926,9 @@ fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "Up/Down, PgUp/PgDn, wheel | {}/{}\nEsc or ? closes help",
+            "Search /{}{}\n↑↓ PgUp/PgDn wheel | {}/{}\n/ search · Esc or ? closes help",
+            terminal_text(&app.help_query),
+            if app.help_searching { "▏" } else { "" },
             app.help_scroll + 1,
             app.help_max_scroll + 1
         ))
@@ -1994,9 +1978,9 @@ fn panel_block<'a>(title: &'a str, focused: bool) -> Block<'a> {
 
 fn title(app: &App, focus: Focus, label: &str) -> String {
     if app.focus == focus {
-        format!("◆ {label}")
+        format!("◆ {} {label}", focus.shortcut())
     } else {
-        label.to_string()
+        format!("{} {label}", focus.shortcut())
     }
 }
 
@@ -2311,6 +2295,60 @@ mod v2_tests {
     }
 
     #[test]
+    fn toolbar_only_exposes_execution_actions_supported_for_the_selected_scope() {
+        let mut app = App::new("http://localhost".into());
+        app.capabilities.execution_actions = vec![
+            v2::ExecutionAction::Continue as i32,
+            v2::ExecutionAction::Next as i32,
+        ];
+        app.capabilities.execution_action_capabilities = vec![
+            v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Continue as i32,
+                scopes: vec![
+                    v2::ExecutionScopeKind::Thread as i32,
+                    v2::ExecutionScopeKind::Session as i32,
+                    v2::ExecutionScopeKind::Group as i32,
+                ],
+            },
+            v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Next as i32,
+                scopes: vec![v2::ExecutionScopeKind::Thread as i32],
+            },
+        ];
+        for target in [
+            crate::api::session_target("session"),
+            crate::api::group_target("group"),
+        ] {
+            app.execution_target = Some(target);
+            render(&mut app, 140, 40);
+            assert!(app
+                .areas
+                .controls
+                .iter()
+                .any(|(control, _)| *control == Control::Continue));
+            assert!(!app
+                .areas
+                .controls
+                .iter()
+                .any(|(control, _)| *control == Control::Next));
+        }
+        app.execution_target = Some(crate::api::thread_target("thread"));
+        render(&mut app, 140, 40);
+        assert!(app
+            .areas
+            .controls
+            .iter()
+            .any(|(control, _)| *control == Control::Next));
+        app.execution_target = None;
+        render(&mut app, 140, 40);
+        assert!(!app
+            .areas
+            .controls
+            .iter()
+            .any(|(control, _)| control.action_name().is_some()));
+    }
+
+    #[test]
     fn source_loading_is_visible_until_completion_or_failure() {
         let mut app = App::new("http://localhost".into());
         app.focus = Focus::Source;
@@ -2482,7 +2520,7 @@ mod v2_tests {
         app.help_scroll = usize::MAX;
         let last = render(&mut app, 45, 14);
         assert_eq!(app.help_scroll, app.help_max_scroll);
-        assert!(last.contains("Press ? or Esc to close"));
+        assert!(last.contains("Esc or ? closes help"));
         render(&mut app, 200, 100);
         assert_eq!(app.help_scroll, 0);
         assert_eq!(app.help_max_scroll, 0);
