@@ -608,5 +608,89 @@ cargo test --manifest-path ddb-tui/Cargo.toml --locked --test e2e_mock \
   -- --ignored --test-threads=1
 ```
 
-Requirements 11 and 15 and the source-directory regexp follow-up remain open.
-The sixteen-requirement goal is not complete.
+At the end of the source-availability batch, requirements 11 and 15 and the
+source-directory regexp follow-up remained open.
+
+## Literal source-directory discovery addendum
+
+The source-directory regexp follow-up is now fixed. Requirement 1 still uses
+the canonical source-target API; no frontend ownership filtering or fallback
+API was introduced.
+
+### Reproduction and cause
+
+The new real-GDB regression first failed in 0.36 seconds. An unfiltered listing
+contained the compiled source, but `--dirname` with its literal `src[x]` parent
+returned an empty list. This could incorrectly cache negative ownership.
+[GDB documents that this operand is a regular expression](https://www.sourceware.org/gdb/current/onlinedocs/gdb.html/GDB_002fMI-File-Commands.html).
+A separate isolated GDB 14.2 probe confirmed basic-regex behavior for this
+command. An extended-regex directory boundary was not valid here.
+
+The provider now generates an escaped, anchored exact-parent-directory
+expression. Single-character classes represent punctuation whose backslash
+semantics differ between basic regex and Python regex. Full-catalog requests
+remain unfiltered. Empty relative parents do not become root-only queries;
+root paths and trailing separators have explicit tests.
+
+The LLDB bridge previously interpreted the operand as a literal realpath.
+It now applies the generated expression to the source's directory, not its
+basename. Missing and malformed expressions are errors, not empty successful
+listings. The shared generated-pattern convention is tested through its actual
+command tokenizer. This does not claim general equivalence between GDB's basic
+regex language and Python's regex language for arbitrary native commands.
+
+### Unicode and malformed MI values
+
+The six-directory native test also exposed a separate result-value decoder
+defect. Bytewise conversion corrupted literal UTF-8, and octal byte escapes
+were not decoded. Two minimized parser regressions failed in 0.06 seconds;
+truncated quoted input also panicked.
+
+Result-value strings now decode C escapes into bytes before UTF-8 validation.
+Invalid byte sequences, oversized escapes, and truncated strings return typed
+errors. The backend test that previously expected a panic now requires safe
+rejection. Stream-record handling is unchanged. The source regression verifies
+paths through the production MI parser and source decoder, not raw JSON-like
+text comparisons.
+
+### Verification and audit trail
+
+| Check | Result |
+| --- | --- |
+| MI parser crate | 28 tests passed in 1.32 seconds; 4 doc tests passed in 0.36 seconds |
+| Backend unit suite on the final tree | 339 passed in 0.40 seconds; 2 explicitly ignored |
+| Real-GDB literal-directory regression | Passed in 1.02 seconds across six compiled fixtures |
+| LLDB bridge suite | 18 passed in 0.015 seconds |
+| Strict backend test-target Clippy, `--no-deps` | Passed in 14.54 seconds |
+| Native terminal suite against rebuilt backend | 31 passed in 98.82 seconds; 4 filtered out |
+| Real GDB and LLDB | Stepping, watches, function breakpoints, logpoints, distributed caller memory, and managed launch/attach passed in that terminal suite |
+| Formatting and staged diff checks | Passed |
+| Real auto-attached greeter | Not rerun in this batch; the recorded cold-discovery timeout remains unresolved |
+
+The parser crate's broader Clippy scan completed, but crate-wide strict lint
+cleanliness is not claimed. It still reports existing warnings outside the new
+decoder/tests, including 38 library warnings. No unrelated lint cleanup was
+included.
+
+The real-directory regression is explicitly invoked by the Rust CI workflow,
+which already installs GDB and runs the LLDB bridge suite. It covers brackets,
+periods, plus signs, spaces, parentheses, braces, anchors, alternation characters,
+question marks, stars, backslashes, quotes, and Unicode. Exact-parent filtering
+excludes sibling and descendant directories. Complete catalog queries remain
+available when a complete listing is required.
+
+Auditable commits, staged by explicit file allowlists:
+
+1. `888849f2`: MI string decoding, focused regressions, and safe backend error
+   handling assertions.
+2. `826135c2`: literal parent-directory discovery, LLDB semantics, real-GDB and
+   bridge regressions, CI invocation, and test documentation.
+3. This documentation-only audit commit records the evidence and limitations.
+
+No generated API contract changed. Resolver concurrency, lifecycle validation,
+cache bounds, and cancellation policy are unchanged. The isolated throwaway
+probe was removed; no temporary debug instrumentation remains in these changes.
+
+Requirements 11 and 15 remain open. These correctness fixes do not establish a
+latency improvement or prove greeter C++ pretty printing. The sixteen-requirement
+goal is not complete.
