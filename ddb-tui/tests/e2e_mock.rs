@@ -1630,6 +1630,22 @@ fn real_function_breakpoint_terminal_workflow() {
         tui.wait_for_current_frame(|screen| !screen.contains("Paused breakpoint hits"));
         tui.wait_for_variable_value("Watch: counter", "3");
         tui.wait_for_source_marker('▶', stopped_line);
+        // The persistent pane is a live, session-owned view, not a modal or
+        // a filter on historical hit counts. Exercise it against both backends.
+        tui.send(b"\x1b2H");
+        tui.wait_for_current_frame(|screen| screen.contains("DDB Breakpoint Hits"));
+        let owner = ddb
+            .wait_for_snapshot(|snapshot| !snapshot.sessions.is_empty())
+            .sessions[0]
+            .session_id
+            .clone();
+        tui.send(b"z");
+        tui.wait_for_current_frame(|screen| screen.contains("stop ") && screen.contains(&owner));
+        tui.send(b"z\r");
+        tui.wait_for_variable_value("Watch: counter", "3");
+        tui.wait_for_source_marker('▶', stopped_line);
+        tui.send(b"\x1b2H");
+        tui.wait_for_current_frame(|screen| screen.contains("DDB Breakpoints"));
         tui.quit();
         ddb.shutdown();
     }
