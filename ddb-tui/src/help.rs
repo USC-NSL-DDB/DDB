@@ -86,7 +86,7 @@ const ENTRIES: &[Entry] = &[
     Entry {
         section: "Source",
         keys: "f / F8",
-        description: "Follow execution / reveal the selected stack frame",
+        description: "Follow execution / reveal or retry the selected frame's source",
     },
     Entry {
         section: "Source",
@@ -179,6 +179,11 @@ const ENTRIES: &[Entry] = &[
         keys: "d",
         description:
             "Refresh the DDB distributed stack; --stack-mode local selects local-only frames",
+    },
+    Entry {
+        section: "Stack and values",
+        keys: "Enter (Stack)",
+        description: "Inspect the selected frame and load or retry its source",
     },
     Entry {
         section: "Stack and values",

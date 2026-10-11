@@ -2,6 +2,8 @@ mod api;
 mod cli;
 mod debugger_setup;
 mod display_text;
+#[cfg(test)]
+mod frame_source_interaction_tests;
 mod help;
 #[cfg(test)]
 mod live_hits_interaction_tests;
@@ -2270,9 +2272,11 @@ fn reveal_selected_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
             app.source_browser.unavailable(app.status.clone());
             app.focus = Focus::Source;
         }
-        Some(frame) if frame.file.is_none() || frame.line.is_none() => {
+        Some(frame)
+            if app.frame_source_status(frame).state == model::frame_sources::State::NoLocation =>
+        {
             app.status = format!(
-                "Source unavailable for {}: debugger supplied no file/line location.",
+                "Source unavailable for {}: debugger supplied no usable file/line location.",
                 frame.function
             );
             app.source_browser.unavailable(app.status.clone());
@@ -2365,14 +2369,17 @@ fn reveal_frame(app: &mut App, requests: &mpsc::Sender<BackendRequest>, navigati
         app.current_frame().filter(|frame| !frame.boundary)
     };
     let Some(frame) = frame.cloned() else { return };
-    let (Some(path), Some(line)) = (frame.file, frame.line) else {
+    let (Some(path), Some(line)) = (
+        frame.file.filter(|path| !path.is_empty()),
+        frame
+            .line
+            .and_then(|line| u32::try_from(line).ok())
+            .filter(|line| *line > 0),
+    ) else {
         app.source_browser.unavailable(format!(
-            "Source unavailable for {}: debugger supplied no file/line location.",
+            "Source unavailable for {}: debugger supplied no usable file/line location.",
             frame.function
         ));
-        return;
-    };
-    let Ok(line) = u32::try_from(line) else {
         return;
     };
     let target = Some(thread_target(frame.thread_id));
@@ -2711,13 +2718,16 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
         },
         UiMessage::Source { generation, source } => {
-            app.source_browser.apply(generation, source);
+            if app.source_browser.apply(generation, source) {
+                app.finish_frame_source_read(generation, None);
+            }
         }
         UiMessage::SourceError { generation, error } => {
             if app
                 .source_browser
                 .fail_with_error(generation, error.clone())
             {
+                app.finish_frame_source_read(generation, Some(error.clone()));
                 app.error(error);
             }
         }
@@ -2966,6 +2976,9 @@ fn configure_sessions(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 }
 
 fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request: BackendRequest) {
+    if let BackendRequest::LoadSource(request) = &request {
+        app.begin_frame_source_read(request);
+    }
     // Explicit execution intent supersedes automatic work even if the queue is
     // full. The user must never be resumed/paused by an older automatic task
     // while retrying their command. Inspection and automatic peer pauses do not
@@ -3036,7 +3049,12 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
                     "DDB request queue is full; retry the source request".into(),
                 );
             } else if let BackendRequest::LoadSource(request) = request {
-                app.source_browser.fail(request.generation);
+                if app.source_browser.fail(request.generation) {
+                    app.finish_frame_source_read(
+                        request.generation,
+                        Some("request queue is full; retry source loading".into()),
+                    );
+                }
             }
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
@@ -3067,7 +3085,12 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
                     "DDB request worker is unavailable".into(),
                 );
             } else if let BackendRequest::LoadSource(request) = request {
-                app.source_browser.fail(request.generation);
+                if app.source_browser.fail(request.generation) {
+                    app.finish_frame_source_read(
+                        request.generation,
+                        Some("request worker is unavailable; retry source loading".into()),
+                    );
+                }
             }
             app.backend_unavailable("DDB request worker is unavailable");
         }

@@ -538,6 +538,7 @@ pub struct App {
     pub threads: Vec<ThreadItem>,
     execution_states: Vec<v2::ExecutionState>,
     pub frames: Vec<StackFrame>,
+    pub frame_sources: frame_sources::Sources,
     pub distributed_stack_truncation: Option<String>,
     pub variables: Vec<Variable>,
     pub memory: Vec<MemoryBlock>,
@@ -652,6 +653,7 @@ impl App {
             selected_extension_action: 0,
             pending_extension_action: None,
             frames: Vec::new(),
+            frame_sources: Default::default(),
             distributed_stack_truncation: None,
             variables: Vec::new(),
             memory: Vec::new(),
@@ -841,6 +843,7 @@ impl App {
                 .is_some_and(|previous| previous != &snapshot.server_instance_id)
             {
                 self.source_browser.invalidate_server();
+                self.frame_sources.clear();
                 self.execution_target_retired = self.execution_target.is_some();
                 for message in self.operations.disconnected(true) {
                     self.push_timeline(message);
@@ -870,6 +873,7 @@ impl App {
             self.apply_capabilities(capabilities);
         }
         self.sessions = snapshot.sessions;
+        self.frame_sources.retain_sessions(&self.sessions);
         self.source_workspace.update_sessions(&self.sessions);
         self.session_setup_attempted.retain(|id| {
             self.sessions
@@ -4227,5 +4231,7 @@ pub use topology_details::{DetailsExport, TopologyDetails};
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;
+#[path = "frame_sources.rs"]
+pub mod frame_sources;
 #[path = "topology_navigation.rs"]
 mod topology_navigation;

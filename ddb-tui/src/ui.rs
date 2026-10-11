@@ -1302,6 +1302,7 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     ),
                 ]);
             }
+            let source = app.frame_source_status(stack_frame);
             Line::from(vec![
                 Span::styled(
                     format!("#{:<3}", stack_frame.distributed_index),
@@ -1309,26 +1310,9 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 ),
                 Span::styled(
                     terminal_text(&stack_frame.function),
-                    Style::default().fg(
-                        if stack_frame.file.as_ref().is_none_or(|file| file.is_empty())
-                            || stack_frame.line.is_none_or(|line| line == 0)
-                        {
-                            MUTED
-                        } else {
-                            Color::White
-                        },
-                    ),
+                    Style::default().fg(if source.dimmed() { MUTED } else { Color::White }),
                 ),
-                Span::styled(
-                    if stack_frame.file.as_ref().is_none_or(|file| file.is_empty())
-                        || stack_frame.line.is_none_or(|line| line == 0)
-                    {
-                        " [no source location]"
-                    } else {
-                        ""
-                    },
-                    Style::default().fg(MUTED),
-                ),
+                Span::styled(source.label(), Style::default().fg(MUTED)),
                 Span::styled(
                     format!(
                         "  [{} · local #{}]  {}:{}  {}",
@@ -1338,6 +1322,12 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                         stack_frame.line.unwrap_or(0),
                         terminal_text(&stack_frame.address)
                     ),
+                    Style::default().fg(MUTED),
+                ),
+                Span::styled(
+                    source
+                        .error
+                        .map_or_else(String::new, |error| format!(" · {}", terminal_text(error))),
                     Style::default().fg(MUTED),
                 ),
             ])
