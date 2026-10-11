@@ -900,6 +900,70 @@ fn topology_folding_and_single_session_signal_terminal_workflow() {
 }
 
 #[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn unreadable_source_is_identified_on_its_stack_frame_terminal_workflow() {
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let directory = tempfile::tempdir().unwrap();
+        let port = reserve_port();
+        let missing = directory.path().join("missing_source.rs");
+        assert!(!missing.exists());
+        let config = format!(
+            "Framework: unspecified\nConf:\n  auto_shutdown: false\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: mock\nStaticSessions:\n  - tag: missing-source\n    alias: missing-source\n    hash: missing-source\n    pid: 1909\n    mock:\n      source_file: {}\n      source_line: 9\n      function: missing_source_frame\n      exit_on_continue: false\n      exit_on_bootstrap: false\n",
+            directory.path().display(), directory.path().display(), missing.display()
+        );
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    let snapshot = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.threads.iter().any(|thread| {
+            thread
+                .location
+                .as_ref()
+                .is_some_and(|location| location.line == 9)
+        })
+    });
+    assert!(snapshot.threads.iter().any(|thread| thread
+        .location
+        .as_ref()
+        .and_then(|location| location.path.as_deref())
+        .is_some_and(|path| path.ends_with("missing_source.rs"))));
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("missing_source_frame");
+    tui.send(b"\x1b4z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("missing_source_frame [source load failed]")
+    });
+    // Require a changed result. An unchanged failure screen cannot acknowledge
+    // an explicit retry. The new file is inside this fixture's owned directory.
+    fs::write(
+        ddb._tempdir.path().join("missing_source.rs"),
+        format!(
+            "{}fn recovered_source() {{}}\n",
+            "// source context\n".repeat(8)
+        ),
+    )
+    .unwrap();
+    tui.send(b"\r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("missing_source_frame")
+            && !screen.contains("[source load failed]")
+            && !screen.contains("[loading source]")
+            && !screen.contains("[source unchecked]")
+    });
+    tui.send(b"\x1b3");
+    tui.wait_for_current_frame(|screen| screen.contains("fn recovered_source()"));
+    tui.wait_for_source_marker('▶', 9);
+    tui.quit();
+    ddb.shutdown();
+}
+
+#[test]
 #[ignore = "requires the sibling DDB binary; see ddb-tui/README.md#end-to-end-tests"]
 fn topology_details_export_terminal_workflow() {
     let mut ddb = Ddb::spawn_mock();
@@ -1215,7 +1279,7 @@ fn managed_backend_crash_is_visible_and_terminal_stays_recoverable() {
     let backend_log = directory.path().join("backend-crash.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     let ddb_pid = wait_for_managed_ddb_descendant(tui.child.id());
     assert_eq!(
         unsafe { libc::kill(ddb_pid as libc::pid_t, libc::SIGKILL) },
@@ -1238,7 +1302,9 @@ fn managed_sigterm_restores_terminal_and_stops_owned_ddb() {
     let backend_log = directory.path().join("sigterm-backend.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
-    tui.wait_for("managed DDB");
+    // Readiness must outlive a routine snapshot. The startup status text is
+    // transient and can disappear before a PTY reader observes it.
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     let root_pid = tui.child.id();
     let frontend_pid = wait_for_ddb_tui_descendant(root_pid);
     let ddb_pid = wait_for_managed_ddb_descendant(root_pid);
@@ -1284,7 +1350,7 @@ fn managed_mock_one_command_workflow() {
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
     tui.wait_for("DDB Debugger");
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("managed_mock_session");
     tui.wait_for_source_marker('▶', 9);
 
@@ -1362,7 +1428,7 @@ fn ddb_tui_dispatcher_runs_the_managed_frontend() {
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, true);
     tui.wait_for("DDB Debugger");
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("managed_mock_session");
 
     let output = tui.quit();
@@ -1423,7 +1489,7 @@ fn managed_credentials_never_cross_process_or_diagnostic_boundaries() {
     let (ddb_shim, token_capture) = credential_capture_shim(directory.path());
 
     let mut tui = Tui::spawn_managed_with_ddb(&config, &backend_log, false, &ddb_shim);
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     let ddb_pid = wait_for_managed_ddb_descendant(tui.child.id());
     let cmdline = fs::read(format!("/proc/{ddb_pid}/cmdline")).unwrap();
     let environment = fs::read(format!("/proc/{ddb_pid}/environ")).unwrap();
@@ -1834,7 +1900,7 @@ fn managed_real_gdb_attach_detaches_on_quit() {
 
     let mut tui = Tui::spawn_managed_attach(pid, &backend_log);
     tui.wait_for("DDB Debugger");
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("stopped");
     let output = tui.quit();
     assert!(output.contains("\u{1b}[?1049l"));
@@ -1857,7 +1923,7 @@ fn managed_real_launch_workflow(backend: &str) {
     let mut tui = Tui::spawn_managed_launch(backend, &fixture.binary, &pid_file, &backend_log);
 
     tui.wait_for("DDB Debugger");
-    tui.wait_for("managed DDB");
+    tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
     // Startup symbol names vary across debugger and linker versions; assert the
