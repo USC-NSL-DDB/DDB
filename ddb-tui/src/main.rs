@@ -7,6 +7,9 @@ mod help;
 mod live_hits_interaction_tests;
 mod logpoints;
 mod model;
+mod operation_feedback;
+#[cfg(test)]
+mod operation_feedback_interaction_tests;
 mod output;
 mod source_binding;
 #[cfg(test)]
@@ -2495,6 +2498,11 @@ fn parse_breakpoint_options(input: &str) -> Result<BreakpointOptions, String> {
 
 fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<BackendRequest>) {
     match message {
+        UiMessage::OperationFeedback { ticket, update } => {
+            if let Some(message) = app.operations.update(ticket, update) {
+                app.push_timeline(message);
+            }
+        }
         UiMessage::SourceSearch { generation, result } => {
             if let Some(message) =
                 app.source_search
@@ -2975,12 +2983,43 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
     ) {
         app.supersede_automatic_control();
     }
+    let ticket = if let Some(label) = request.feedback_label(app) {
+        match app.operations.queue(label) {
+            Ok((ticket, message)) => {
+                app.push_timeline(message);
+                Some(ticket)
+            }
+            Err(error) => {
+                app.error(error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let request = match ticket {
+        Some(ticket) => BackendRequest::Tracked {
+            ticket,
+            request: Box::new(request),
+        },
+        None => request,
+    };
     match requests.try_send(request) {
         Ok(()) => {}
         Err(mpsc::error::TrySendError::Full(
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
         Err(mpsc::error::TrySendError::Full(request)) => {
+            if let Some(ticket) = ticket {
+                if let Some(message) = app.operations.update(
+                    ticket,
+                    operation_feedback::Update::Error(
+                        "request queue is full; not sent to DDB".into(),
+                    ),
+                ) {
+                    app.push_timeline(message);
+                }
+            }
             if let BackendRequest::ClassifyStop(stop) = &request {
                 if let Some(v2::target::Selector::Thread(thread)) = stop
                     .state
@@ -3002,6 +3041,16 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
         Err(mpsc::error::TrySendError::Closed(request)) => {
+            if let Some(ticket) = ticket {
+                if let Some(message) = app.operations.update(
+                    ticket,
+                    operation_feedback::Update::Error(
+                        "request worker is unavailable; not sent to DDB".into(),
+                    ),
+                ) {
+                    app.push_timeline(message);
+                }
+            }
             if let BackendRequest::ClassifyStop(stop) = &request {
                 if let Some(v2::target::Selector::Thread(thread)) = stop
                     .state
@@ -3763,7 +3812,7 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::TerminateSession(request)
+            matches!(rx.try_recv().unwrap().untracked(), BackendRequest::TerminateSession(request)
             if request.session.session_id == "session/a" && request.instance == "backend")
         );
         assert!(app.session_termination.is_none());
@@ -3837,7 +3886,7 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::TerminateSession(request)
+            matches!(rx.try_recv().unwrap().untracked(), BackendRequest::TerminateSession(request)
             if request.session.session_id == "session/a")
         );
         app.open_session_termination().unwrap();
@@ -5232,7 +5281,7 @@ mod tests {
             &requests,
         );
         assert!(
-            matches!(receiver.try_recv().unwrap(), BackendRequest::Evaluate {
+            matches!(receiver.try_recv().unwrap().untracked(), BackendRequest::Evaluate {
             thread_id, frame_id: Some(frame_id), expression,
         } if thread_id == "thread/parent" && frame_id == "frame/parent" && expression == "value")
         );
@@ -5349,7 +5398,7 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::RawCommand { command, target, frame_id }
+            matches!(rx.try_recv().unwrap().untracked(), BackendRequest::RawCommand { command, target, frame_id }
             if command == "print value + 1" && target == thread_target("thread/parent") && frame_id.as_deref() == Some("frame/parent"))
         );
         app.frames[0].boundary = true;
@@ -5686,7 +5735,7 @@ mod tests {
             );
             if valid {
                 assert!(
-                    matches!(rx.try_recv().unwrap(), BackendRequest::ConfigureLogpoint { id, instance, template }
+                    matches!(rx.try_recv().unwrap().untracked(), BackendRequest::ConfigureLogpoint { id, instance, template }
                     if id == "breakpoint/log" && instance == "instance" && template.is_some() != input.is_empty())
                 );
             } else {
@@ -5721,7 +5770,7 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::AssignValue { edit, value }
+            matches!(rx.try_recv().unwrap().untracked(), BackendRequest::AssignValue { edit, value }
             if matches!(&edit.target, model::ValueEditTarget::Register(name) if name == "rax")
                 && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child"
                 && edit.frame_id == "frame/parent" && value == "42")
@@ -5768,7 +5817,7 @@ mod tests {
             &tx,
         );
         assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::AssignValue { edit, value }
+            matches!(rx.try_recv().unwrap().untracked(), BackendRequest::AssignValue { edit, value }
             if matches!(&edit.target, model::ValueEditTarget::Variable(id) if id == "var/parent") && edit.owner_thread == "thread/parent" && edit.origin_thread == "thread/child" && value == "42")
         );
         start_value_edit(&mut app);
@@ -6497,7 +6546,7 @@ mod tests {
             request_schema_uri,
             payload_json,
             ..
-        }) = receiver.recv().await
+        }) = receiver.recv().await.map(BackendRequest::untracked)
         else {
             panic!("extension prompt should emit a typed extension action");
         };

@@ -212,7 +212,7 @@ fn breakpoint_creation_defaults_to_the_document_owner_without_changing_selection
         &sender,
     );
     assert!(
-        matches!(receiver.try_recv(), Ok(BackendRequest::CreateBreakpoint { location: v2::breakpoint_spec::Location::Source(source), target, .. }) if source.source == "/build/main.rs" && target == BreakpointTarget::Session("a".into()))
+        matches!(receiver.try_recv().map(BackendRequest::untracked), Ok(BackendRequest::CreateBreakpoint { location: v2::breakpoint_spec::Location::Source(source), target, .. }) if source.source == "/build/main.rs" && target == BreakpointTarget::Session("a".into()))
     );
     assert_eq!(app.current_thread().unwrap().session_id, "b");
 }
@@ -406,7 +406,7 @@ fn breakpoint_toggle_never_deletes_an_unrelated_owner_or_an_ambiguous_match() {
         .push(breakpoint("a", api::session_target("a")));
     toggle_breakpoint(&mut app, &sender);
     assert!(
-        matches!(receiver.try_recv(), Ok(BackendRequest::DeleteBreakpoint { id, target }) if id == "a" && target == api::session_target("a"))
+        matches!(receiver.try_recv().map(BackendRequest::untracked), Ok(BackendRequest::DeleteBreakpoint { id, target }) if id == "a" && target == api::session_target("a"))
     );
     app.breakpoints
         .push(breakpoint("group", api::group_target("group")));

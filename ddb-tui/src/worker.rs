@@ -29,6 +29,10 @@ mod source_explorer_tests;
 #[path = "session_termination_worker_tests.rs"]
 mod session_termination_tests;
 
+#[cfg(test)]
+#[path = "operation_feedback_worker_tests.rs"]
+mod operation_feedback_tests;
+
 pub async fn run(
     client: ApiClient,
     workspace: std::sync::Arc<crate::source_workspace::Workspace>,
@@ -95,6 +99,18 @@ pub async fn run(
                 },
             },
         };
+        let (request, ticket) = match request {
+            BackendRequest::Tracked { ticket, request } => (*request, Some(ticket)),
+            request => (request, None),
+        };
+        if let Some(ticket) = ticket {
+            let _ = messages
+                .send(UiMessage::OperationFeedback {
+                    ticket,
+                    update: crate::operation_feedback::Update::Started,
+                })
+                .await;
+        }
         let request = match request {
             BackendRequest::ExportDetails(export) => {
                 if exports.len() >= 2 {
@@ -116,6 +132,17 @@ pub async fn run(
             } => {
                 let result =
                     configure_logpoint(&client, &mut logpoints, id, template, &instance).await;
+                if let Some(ticket) = ticket {
+                    let update = match &result {
+                        Ok(_) => crate::operation_feedback::Update::LocalCompleted,
+                        Err(error) => {
+                            crate::operation_feedback::Update::Error(format!("{error:#}"))
+                        }
+                    };
+                    let _ = messages
+                        .send(UiMessage::OperationFeedback { ticket, update })
+                        .await;
+                }
                 let update = match result {
                     Ok(ids) => UiMessage::LogpointsConfigured { instance, ids },
                     Err(error) => {
@@ -288,8 +315,16 @@ pub async fn run(
             });
         } else {
             let connection_probe = is_recovery(&request);
-            if let Err(error) = handle(&client, &messages, request).await {
+            if let Err(error) = handle_with_feedback(&client, &messages, request, ticket).await {
                 let message = format!("{error:#}");
+                if let Some(ticket) = ticket {
+                    let _ = messages
+                        .send(UiMessage::OperationFeedback {
+                            ticket,
+                            update: crate::operation_feedback::Update::Error(message.clone()),
+                        })
+                        .await;
+                }
                 let update = if connection_probe {
                     UiMessage::BackendUnavailable(message)
                 } else {
@@ -470,7 +505,19 @@ async fn handle(
     messages: &mpsc::Sender<UiMessage>,
     request: BackendRequest,
 ) -> anyhow::Result<()> {
+    handle_with_feedback(client, messages, request, None).await
+}
+
+async fn handle_with_feedback(
+    client: &ApiClient,
+    messages: &mpsc::Sender<UiMessage>,
+    request: BackendRequest,
+    ticket: Option<u64>,
+) -> anyhow::Result<()> {
     match request {
+        BackendRequest::Tracked { .. } => {
+            bail!("operation envelopes must be unwrapped by the worker")
+        }
         BackendRequest::ExportDetails(_) => {
             bail!("details exports require the local export worker")
         }
@@ -531,10 +578,18 @@ async fn handle(
                             .await?
                     }
                 };
-                complete_operation(client, admission).await
+                finish_operation(client, messages, ticket, admission).await
             }
             .await
             .map_err(|error| format!("{error:#}"));
+            if let (Some(ticket), Err(error)) = (ticket, &result) {
+                messages
+                    .send(UiMessage::OperationFeedback {
+                        ticket,
+                        update: crate::operation_feedback::Update::Error(error.clone()),
+                    })
+                    .await?;
+            }
             messages
                 .send(UiMessage::ValueAssigned { edit, result })
                 .await?;
@@ -648,8 +703,10 @@ async fn handle(
                 .action_name()
                 .expect("execution action has a stable UI name")
                 .to_string();
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .execute(v2::ExecuteRequest {
                         context: None,
@@ -666,8 +723,10 @@ async fn handle(
         }
         BackendRequest::Jump { location, target } => {
             let jump_location = parse_jump_location(&location)?;
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .execute(v2::ExecuteRequest {
                         context: None,
@@ -685,8 +744,10 @@ async fn handle(
                 .await?;
         }
         BackendRequest::SendSignal { signal, target } => {
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .execute(v2::ExecuteRequest {
                         context: None,
@@ -715,8 +776,10 @@ async fn handle(
             request
                 .validate(&snapshot.server_instance_id, &snapshot.sessions)
                 .map_err(anyhow::Error::msg)?;
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .execute(v2::ExecuteRequest {
                         context: None,
@@ -748,8 +811,10 @@ async fn handle(
                 breakpoint_spec::Location::Function(function) => function.function_name.clone(),
                 breakpoint_spec::Location::Address(address) => address.address.clone(),
             };
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .create_breakpoint(v2::CreateBreakpointRequest {
                         context: None,
@@ -772,8 +837,10 @@ async fn handle(
                 .await?;
         }
         BackendRequest::DeleteBreakpoint { id, target } => {
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .delete_breakpoint(v2::DeleteBreakpointRequest {
                         context: None,
@@ -796,8 +863,10 @@ async fn handle(
             target,
             enabled,
         } => {
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .update_breakpoint(v2::UpdateBreakpointRequest {
                         context: None,
@@ -828,8 +897,10 @@ async fn handle(
             thread_id,
             frame_id,
         } => {
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .evaluate(v2::EvaluateRequest {
                         context: None,
@@ -927,8 +998,10 @@ async fn handle(
             target,
         } => {
             let label = format!("{extension_id}/{action_id}");
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .invoke_extension_action(v2::InvokeExtensionActionRequest {
                         context: None,
@@ -956,8 +1029,10 @@ async fn handle(
             target,
             frame_id,
         } => {
-            let receipt = complete_operation(
+            let receipt = finish_operation(
                 client,
+                messages,
+                ticket,
                 client
                     .execute_raw_command(v2::ExecuteRawCommandRequest {
                         context: None,
@@ -1224,6 +1299,32 @@ async fn list_scope_variables(
             MAX_COLLECTION_ITEMS,
         )
         .await?)
+}
+
+async fn finish_operation(
+    client: &ApiClient,
+    messages: &mpsc::Sender<UiMessage>,
+    ticket: Option<u64>,
+    admission: v2::OperationAdmissionResponse,
+) -> anyhow::Result<v2::Operation> {
+    if let (Some(ticket), Some(operation)) = (ticket, admission.operation.as_ref()) {
+        messages
+            .send(UiMessage::OperationFeedback {
+                ticket,
+                update: crate::operation_feedback::Update::Admitted(operation.clone()),
+            })
+            .await?;
+    }
+    let receipt = complete_operation(client, admission).await?;
+    if let Some(ticket) = ticket {
+        messages
+            .send(UiMessage::OperationFeedback {
+                ticket,
+                update: crate::operation_feedback::Update::Finished(receipt.clone()),
+            })
+            .await?;
+    }
+    Ok(receipt)
 }
 
 pub(crate) async fn complete_operation(

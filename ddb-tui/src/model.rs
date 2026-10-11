@@ -587,6 +587,7 @@ pub struct App {
     /// Explicit action/result status changes supersede it without resurrecting it.
     status_error: Option<String>,
     pub pending_commands: usize,
+    pub operations: crate::operation_feedback::Feedback,
     pub control_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub peer_pauses: std::collections::BTreeSet<String>,
     pub all_stop_cause: Option<String>,
@@ -692,6 +693,7 @@ impl App {
             status: "connecting to DDB…".to_string(),
             status_error: None,
             pending_commands: 0,
+            operations: Default::default(),
             control_epoch: std::sync::Arc::default(),
             peer_pauses: Default::default(),
             all_stop_cause: None,
@@ -837,6 +839,9 @@ impl App {
                 .is_some_and(|previous| previous != &snapshot.server_instance_id)
             {
                 self.source_browser.invalidate_server();
+                for message in self.operations.disconnected(true) {
+                    self.push_timeline(message);
+                }
                 self.logpoint_ids.clear();
                 self.logpoint_edit = None;
                 self.session_setup_attempted.clear();
@@ -1288,7 +1293,7 @@ impl App {
         self.target_label(target.as_ref())
     }
 
-    fn target_label(&self, target: Option<&v2::Target>) -> String {
+    pub(crate) fn target_label(&self, target: Option<&v2::Target>) -> String {
         match target.and_then(|target| target.selector.as_ref()) {
             Some(target::Selector::Thread(value)) => self
                 .threads
@@ -2533,6 +2538,9 @@ impl App {
     }
 
     pub fn backend_unavailable(&mut self, error: impl ToString) {
+        for message in self.operations.disconnected(false) {
+            self.push_timeline(message);
+        }
         self.supersede_automatic_control();
         self.clear_hit_selection();
         self.api_connected = false;
@@ -2962,6 +2970,10 @@ fn extension_cell(value: &Value) -> String {
 
 #[derive(Debug)]
 pub enum BackendRequest {
+    Tracked {
+        ticket: u64,
+        request: Box<BackendRequest>,
+    },
     SearchSource(crate::source_search::Request),
     CancelSourceSearch,
     ResolveBreakpointTargets(SourceTargetLookup),
@@ -3078,6 +3090,10 @@ pub struct BreakpointOptions {
 
 #[derive(Debug)]
 pub enum UiMessage {
+    OperationFeedback {
+        ticket: u64,
+        update: crate::operation_feedback::Update,
+    },
     SourceSearch {
         generation: u64,
         result: Result<crate::source_search::Outcome, String>,

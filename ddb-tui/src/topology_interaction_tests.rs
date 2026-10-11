@@ -220,7 +220,7 @@ fn topology_disclosure_clicks_are_local_and_session_label_selects_exact_signal_t
     app.toggle_topology_fold(&group);
     key(&mut app, &tx, KeyCode::Enter);
     assert!(
-        matches!(rx.try_recv().unwrap(), BackendRequest::SendSignal { signal, target }
+        matches!(rx.try_recv().unwrap().untracked(), BackendRequest::SendSignal { signal, target }
         if signal == "SIGINT" && matches!(&target.selector, Some(v2::target::Selector::Session(value)) if value.session_id == "session/b"))
     );
 }

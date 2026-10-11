@@ -67,7 +67,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_compact_panel(frame, app, rows[1], &mut areas);
         draw_pane_expanders(frame, app, &mut areas);
         draw_prompt(frame, app, rows[2]);
-        draw_hints(frame, rows[3]);
+        draw_hints(frame, app, rows[3]);
         if app.show_help {
             draw_help(frame, app, root);
         }
@@ -183,7 +183,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
 
     draw_pane_expanders(frame, app, &mut areas);
     draw_prompt(frame, app, rows[2]);
-    draw_hints(frame, rows[3]);
+    draw_hints(frame, app, rows[3]);
     if app.show_help {
         draw_help(frame, app, root);
     }
@@ -305,6 +305,10 @@ fn draw_breakpoint_hits(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mu
 }
 
 fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.operations.display().is_some() {
+        draw_operation_feedback(frame, app, area);
+        return;
+    }
     let state = if app.api_connected {
         "connected"
     } else {
@@ -1823,7 +1827,24 @@ fn input_line(prefix: &str, input: &str, cursor: usize, color: Color) -> Line<'s
     ])
 }
 
-fn draw_hints(frame: &mut Frame<'_>, area: Rect) {
+fn draw_operation_feedback(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let color = if app.operations.has_error() {
+        RED
+    } else {
+        YELLOW
+    };
+    frame.render_widget(
+        Paragraph::new(terminal_text(&app.operations.display().unwrap_or_default()))
+            .style(Style::default().fg(color)),
+        area,
+    );
+}
+
+fn draw_hints(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.operations.display().is_some() {
+        draw_operation_feedback(frame, app, area);
+        return;
+    }
     frame.render_widget(
         Paragraph::new(
             " Alt+1…9/0 panes  z expand  ↑↓ navigate  b/B breakpoint  P inspect hit  ? help ",
