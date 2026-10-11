@@ -2602,6 +2602,28 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
             let new_stop = app.has_new_inspection_stop(&snapshot);
             let stopped_threads = app.new_stopped_threads(&snapshot);
+            // Snapshots can overtake running events. Reconcile only observed
+            // transitions, not every refresh, so pending interrupts stay deduped.
+            let mut resumed_sessions = std::collections::BTreeSet::new();
+            let mut new_running_thread = false;
+            for next in snapshot
+                .threads
+                .iter()
+                .filter(|thread| thread.state == v2::ThreadState::Running as i32)
+            {
+                match app
+                    .threads
+                    .iter()
+                    .find(|thread| thread.id == next.thread_id)
+                {
+                    Some(previous) if previous.state == "stopped" => {
+                        resumed_sessions.insert(next.session_id.clone());
+                    }
+                    None => new_running_thread = true,
+                    _ => {}
+                }
+            }
+            let reconcile_peers = !resumed_sessions.is_empty() || new_running_thread;
             let previous = app.current_thread().map(|thread| thread.id.clone());
             let thread_membership_changed = app.threads.len() != snapshot.threads.len()
                 || app.threads.iter().any(|current| {
@@ -2620,6 +2642,16 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             let threads = snapshot.threads.clone();
             app.apply_snapshot(snapshot);
             app.apply_threads(threads);
+            for session in resumed_sessions {
+                app.peer_pauses.remove(&session);
+            }
+            if app.all_stop_cause.as_ref().is_some_and(|cause| {
+                !app.threads
+                    .iter()
+                    .any(|thread| thread.id == *cause && thread.state == "stopped")
+            }) {
+                app.all_stop_cause = None;
+            }
             configure_sessions(app, requests);
             let current = app.current_thread().map(|thread| thread.id.clone());
             if (session_membership_changed
@@ -2639,6 +2671,11 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
             for thread in stopped_threads {
                 handle_stopped_thread(app, requests, thread);
+            }
+            if reconcile_peers {
+                if let Some(cause) = app.all_stop_cause.clone() {
+                    pause_running_peers(app, requests, &cause);
+                }
             }
         }
         UiMessage::Signals { target, signals } => {
@@ -3572,6 +3609,112 @@ mod tests {
             1,
             "an older stream projection must not undo a newer refresh"
         );
+    }
+
+    #[test]
+    fn snapshot_running_peer_reopens_all_stop_without_a_new_cause_stop() {
+        let mut app = App::new("http://localhost".into());
+        app.capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Interrupt as i32],
+            execution_action_capabilities: vec![v2::ExecutionActionCapability {
+                action: v2::ExecutionAction::Interrupt as i32,
+                scopes: vec![v2::ExecutionScopeKind::Session as i32],
+            }],
+            ..Default::default()
+        };
+        let snapshot = |running: bool| {
+            let mut snapshot = topology_snapshot(vec![
+                v2::Thread {
+                    thread_id: "thread/server".into(),
+                    session_id: "session/server".into(),
+                    state: v2::ThreadState::Stopped as i32,
+                    ..Default::default()
+                },
+                v2::Thread {
+                    thread_id: "thread/client".into(),
+                    session_id: "session/client".into(),
+                    state: if running {
+                        v2::ThreadState::Running
+                    } else {
+                        v2::ThreadState::Stopped
+                    } as i32,
+                    ..Default::default()
+                },
+            ]);
+            snapshot.server_instance_id = "backend/one".into();
+            snapshot.base_state_revision = if running { 31 } else { 30 };
+            snapshot.state_event_cursor = Some(v2::Cursor {
+                server_instance_id: "backend/one".into(),
+                sequence: snapshot.base_state_revision,
+            });
+            snapshot.execution_states = vec![
+                v2::ExecutionState {
+                    execution_state_id: "execution/server".into(),
+                    target: Some(thread_target("thread/server")),
+                    revision: 5,
+                    stop_reason: Some(v2::StopReason {
+                        kind: v2::StopReasonKind::Breakpoint as i32,
+                        thread_id: Some("thread/server".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                v2::ExecutionState {
+                    execution_state_id: "execution/client".into(),
+                    target: Some(thread_target("thread/client")),
+                    revision: if running { 6 } else { 5 },
+                    running,
+                    ..Default::default()
+                },
+            ];
+            snapshot
+        };
+        let (tx, mut rx) = mpsc::channel(16);
+        apply_message(&mut app, UiMessage::Snapshot(snapshot(false)), &tx);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(app.all_stop_cause.as_deref(), Some("thread/server"));
+        for _ in 0..2 {
+            apply_message(&mut app, UiMessage::Snapshot(snapshot(true)), &tx);
+        }
+        let mut peers = Vec::new();
+        while let Ok(request) = rx.try_recv() {
+            if let BackendRequest::PausePeer { session_id, .. } = request {
+                peers.push(session_id);
+            }
+        }
+        assert_eq!(
+            peers,
+            ["session/client"],
+            "a newer snapshot must enforce the existing stop even if running events were overtaken"
+        );
+        let mut joined = snapshot(true);
+        joined.base_state_revision = 32;
+        joined.state_event_cursor.as_mut().unwrap().sequence = 32;
+        joined.threads.push(v2::Thread {
+            thread_id: "thread/client-worker".into(),
+            session_id: "session/client".into(),
+            state: v2::ThreadState::Running as i32,
+            ..Default::default()
+        });
+        apply_message(&mut app, UiMessage::Snapshot(joined.clone()), &tx);
+        assert!(
+            !std::iter::from_fn(|| rx.try_recv().ok())
+                .any(|request| matches!(request, BackendRequest::PausePeer { .. })),
+            "a new running thread must not duplicate its session's pending pause"
+        );
+
+        joined.base_state_revision = 33;
+        joined.state_event_cursor.as_mut().unwrap().sequence = 33;
+        joined.threads[0].state = v2::ThreadState::Running as i32;
+        joined.execution_states[0].running = true;
+        joined.execution_states[0].revision += 1;
+        apply_message(&mut app, UiMessage::Snapshot(joined), &tx);
+        assert!(
+            app.all_stop_cause.is_none(),
+            "a resumed cause must retire the old all-stop policy"
+        );
+        assert!(!std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|request| matches!(request, BackendRequest::PausePeer { .. })));
     }
 
     #[test]
