@@ -607,6 +607,12 @@ v2_async_handler!(
     resolve_source
 );
 v2_async_handler!(
+    v2_resolve_source_targets,
+    v2::ResolveSourceTargetsRequest,
+    v2::ResolveSourceTargetsResponse,
+    resolve_source_targets
+);
+v2_async_handler!(
     v2_read_source,
     v2::ReadSourceRequest,
     v2::ReadSourceResponse,

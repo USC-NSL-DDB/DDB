@@ -275,6 +275,35 @@ impl SourceResolver {
         self.catalog.session_listing(sid)
     }
 
+    pub(crate) fn cached_membership(&self, sid: u64, path: &str) -> Option<bool> {
+        self.catalog.membership(path, sid)
+    }
+
+    pub(crate) async fn source_membership(
+        &self,
+        sid: u64,
+        path: &str,
+        refresh: bool,
+    ) -> Result<bool> {
+        self.ensure_accepting()?;
+        if refresh {
+            self.resolve_session(sid, true).await?;
+        } else {
+            let group = self
+                .groups
+                .group_id_by_session(sid)
+                .ok_or_else(|| anyhow!("session {sid} has no source group"))?;
+            let dirname = Path::new(path)
+                .parent()
+                .and_then(Path::to_str)
+                .ok_or_else(|| anyhow!("source path has no UTF-8 parent"))?;
+            self.resolve_session_path(path, dirname, group, sid).await?;
+        }
+        self.catalog
+            .membership(path, sid)
+            .ok_or_else(|| anyhow!("source discovery was invalidated"))
+    }
+
     pub(crate) async fn resolve_session(&self, sid: u64, refresh: bool) -> Result<Vec<String>> {
         self.ensure_accepting()?;
         let group_id = self

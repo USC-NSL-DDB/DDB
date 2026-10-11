@@ -1217,6 +1217,20 @@ export interface ResolveSourceResponse {
   "source"?: SourceFile;
 }
 
+export interface ResolveSourceTargetsRequest {
+  "context"?: RequestContext;
+  "source"?: string;
+  "target"?: Target;
+  "refresh"?: boolean;
+}
+
+export interface ResolveSourceTargetsResponse {
+  "context"?: ResponseContext;
+  "targets"?: SourceTarget[];
+  "warnings"?: SourceDiscoveryWarning[];
+  "complete"?: boolean;
+}
+
 export interface ResourceDeleted {
   "resourceKind"?: ResourceKind;
   "resourceId"?: string;
@@ -1409,6 +1423,12 @@ export interface SourceRoot {
   "name"?: string;
   "debuggerPath"?: string;
   "owners"?: SourceOwner[];
+}
+
+export interface SourceTarget {
+  "target"?: Target;
+  "displayName"?: string;
+  "matchingSessionCount"?: number;
 }
 
 export interface StateEvent {

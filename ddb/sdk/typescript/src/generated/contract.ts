@@ -27,6 +27,7 @@ export interface MethodMap {
   "DebuggerService.ListSourceRoots": { request: t.ListSourceRootsRequest; response: t.ListSourceRootsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListSourceEntries": { request: t.ListSourceEntriesRequest; response: t.ListSourceEntriesResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ResolveSource": { request: t.ResolveSourceRequest; response: t.ResolveSourceResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.ResolveSourceTargets": { request: t.ResolveSourceTargetsRequest; response: t.ResolveSourceTargetsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ReadSource": { request: t.ReadSourceRequest; response: t.ReadSourceResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListBreakpoints": { request: t.ListBreakpointsRequest; response: t.ListBreakpointsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.GetBreakpoint": { request: t.GetBreakpointRequest; response: t.GetBreakpointResponse; serverStreaming: false; scope: "read" };
@@ -86,6 +87,7 @@ export const METHODS = {
   "DebuggerService.ListSourceRoots": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceRoots", serverStreaming: false, scope: "read" },
   "DebuggerService.ListSourceEntries": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries", serverStreaming: false, scope: "read" },
   "DebuggerService.ResolveSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource", serverStreaming: false, scope: "read" },
+  "DebuggerService.ResolveSourceTargets": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets", serverStreaming: false, scope: "read" },
   "DebuggerService.ReadSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource", serverStreaming: false, scope: "read" },
   "DebuggerService.ListBreakpoints": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints", serverStreaming: false, scope: "read" },
   "DebuggerService.GetBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/GetBreakpoint", serverStreaming: false, scope: "read" },

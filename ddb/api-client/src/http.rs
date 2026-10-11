@@ -904,6 +904,14 @@ impl DdbClient {
         true
     );
     unary_method!(
+        resolve_source_targets,
+        v2::ResolveSourceTargetsRequest,
+        v2::ResolveSourceTargetsResponse,
+        DEBUGGER_SERVICE,
+        "ResolveSourceTargets",
+        true
+    );
+    unary_method!(
         read_source,
         v2::ReadSourceRequest,
         v2::ReadSourceResponse,

@@ -37,6 +37,7 @@ METHODS: dict[str, MethodSpec] = {
     "DebuggerService.ListSourceRoots": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceRoots", False, "read"),
     "DebuggerService.ListSourceEntries": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries", False, "read"),
     "DebuggerService.ResolveSource": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource", False, "read"),
+    "DebuggerService.ResolveSourceTargets": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets", False, "read"),
     "DebuggerService.ReadSource": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource", False, "read"),
     "DebuggerService.ListBreakpoints": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints", False, "read"),
     "DebuggerService.GetBreakpoint": MethodSpec("/api/v2/rpc/ddb.api.v2.DebuggerService/GetBreakpoint", False, "read"),

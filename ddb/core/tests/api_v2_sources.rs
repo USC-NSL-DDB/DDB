@@ -1,7 +1,7 @@
 mod support;
 
 use ddb_api_client::{v2, ClientConfig, ClientError, DdbClient};
-use support::{DdbProcess, SessionSpec, V2_TEST_READ_TOKEN};
+use support::{DdbProcess, SessionSpec, V2_TEST_CONTROL_TOKEN, V2_TEST_READ_TOKEN};
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Runtime::new().unwrap()
@@ -39,6 +39,155 @@ fn session<'a>(tag: &'a str, pid: u32) -> SessionSpec<'a> {
         function: "main",
         exit_on_continue: false,
     }
+}
+
+#[test]
+fn source_targets_include_only_exact_catalog_owners_without_requiring_content() {
+    let mut other = session("other", 8593);
+    other.hash = "unrelated-binary";
+    other.source_file = "/other/main.rs";
+    let mut ddb = DdbProcess::spawn_with_v2_auth(&[session("a", 8591), session("b", 8592), other]);
+    ddb.wait_for_sessions_len(3);
+    ddb.wait_for_stdout_count("*stopped", 3);
+    let client = client(&ddb);
+    runtime().block_on(async {
+        let sessions = client
+            .collect_sessions(Default::default(), 10)
+            .await
+            .unwrap();
+        let matching = sessions
+            .iter()
+            .filter(|session| session.tag != "other")
+            .map(|session| session.session_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let group_id = sessions
+            .iter()
+            .find(|session| session.tag == "a")
+            .unwrap()
+            .group_id
+            .clone()
+            .unwrap();
+        let result = client
+            .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                source: "/build/main.rs".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(result.complete, "{:?}", result.warnings);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.targets.len(), 3, "two sessions and their group only");
+        assert!(
+            matches!(result.targets[0].target.as_ref().unwrap().selector.as_ref(),
+            Some(v2::target::Selector::Group(group)) if group.group_id == group_id)
+        );
+        assert_eq!(result.targets[0].matching_session_count, 2);
+        let returned = result
+            .targets
+            .iter()
+            .filter_map(
+                |entry| match entry.target.as_ref().unwrap().selector.as_ref().unwrap() {
+                    v2::target::Selector::Session(session) => Some(session.session_id.clone()),
+                    v2::target::Selector::Group(_) => None,
+                    other => panic!("unexpected unfiltered scope: {other:?}"),
+                },
+            )
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(returned, matching);
+        let one = matching.first().unwrap();
+        let scoped = client
+            .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                source: "/build/main.rs".into(),
+                target: Some(v2::Target {
+                    selector: Some(v2::target::Selector::Session(v2::SessionTarget {
+                        session_id: one.clone(),
+                    })),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(scoped.targets.len(), 2);
+        assert!(scoped
+            .targets
+            .iter()
+            .all(|entry| entry.matching_session_count == 1));
+        for source in ["main.rs", "/build/absent.rs"] {
+            let absent = client
+                .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                    source: source.into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert!(absent.complete, "{:?}", absent.warnings);
+            assert!(
+                absent.targets.is_empty(),
+                "basenames/suffixes must not infer ownership"
+            );
+        }
+        for source in ["", "\n", &"x".repeat(4097)] {
+            assert_eq!(
+                code(
+                    client
+                        .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                            source: source.into(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_err()
+                ),
+                v2::DdbErrorCode::InvalidArgument
+            );
+        }
+        let anonymous = DdbClient::new(ClientConfig::new(ddb.api_endpoint())).unwrap();
+        assert_eq!(
+            code(
+                anonymous
+                    .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                        source: "/build/main.rs".into(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err()
+            ),
+            v2::DdbErrorCode::Unauthenticated
+        );
+        let other = sessions
+            .iter()
+            .find(|session| session.tag == "other")
+            .unwrap();
+        let control = DdbClient::new(
+            ClientConfig::new(ddb.api_endpoint()).with_bearer_token(V2_TEST_CONTROL_TOKEN),
+        )
+        .unwrap();
+        control
+            .execute(v2::ExecuteRequest {
+                target: Some(v2::Target {
+                    selector: Some(v2::target::Selector::Session(v2::SessionTarget {
+                        session_id: other.session_id.clone(),
+                    })),
+                }),
+                action: v2::ExecutionAction::Continue as i32,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        ddb.wait_for_stdout_count("*running", 1);
+        let cached = client
+            .resolve_source_targets(v2::ResolveSourceTargetsRequest {
+                source: "/build/main.rs".into(),
+                refresh: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            cached.complete,
+            "known running negatives should remain usable"
+        );
+        assert_eq!(cached.targets.len(), 3);
+    });
 }
 
 #[test]
@@ -209,7 +358,9 @@ fn distributed_catalog_keeps_session_ownership_and_applies_session_mappings() {
             .collect::<Vec<_>>();
         tags.sort_unstable();
         assert_eq!(tags, ["a", "b"]);
-        assert!(sessions.iter().all(|session| session.session_id != session.tag));
+        assert!(sessions
+            .iter()
+            .all(|session| session.session_id != session.tag));
         let catalog = client
             .collect_sources(
                 v2::ListSourcesRequest {

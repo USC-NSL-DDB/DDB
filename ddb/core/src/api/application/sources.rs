@@ -9,6 +9,7 @@ use std::{
 use anyhow::Context;
 use ddb_api_types::v2;
 use ddb_source_workspace::{EntryKind, Limits, SourceCache, SourceRoot};
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
@@ -594,6 +595,146 @@ impl DdbApplicationService {
             context: Some(scope.response_context(&self.server_instance_id)),
             sources,
             page: Some(page.info),
+            warnings,
+        })
+    }
+
+    pub(crate) async fn resolve_source_targets(
+        &self,
+        request: v2::ResolveSourceTargetsRequest,
+    ) -> Result<v2::ResolveSourceTargetsResponse, ApplicationError> {
+        let scope = RequestScope::begin(request.context.as_ref())?;
+        if request.source.trim().is_empty()
+            || request.source.len() > 4096
+            || request.source.chars().any(char::is_control)
+        {
+            return Err(ApplicationError::invalid(
+                "source",
+                "requires a nonempty debugger path of at most 4096 bytes without controls",
+            ));
+        }
+        let sessions = self.queries.sessions().await;
+        let selected = if request.target.is_some() {
+            Some(
+                TargetResolver::new(self.queries.as_ref(), &self.ids)
+                    .resolve(request.target.as_ref(), TargetPurpose::Command)
+                    .await?
+                    .session_ids,
+            )
+        } else {
+            None
+        };
+        let selected_sessions: Vec<_> = sessions
+            .into_iter()
+            .filter(|session| {
+                selected
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(&session.sid))
+            })
+            .collect();
+        if selected_sessions.len() > 10_000 {
+            return Err(ApplicationError::resource_exhausted(
+                "too many sessions for source target discovery; narrow the target",
+            ));
+        }
+        let discovery = stream::iter(selected_sessions.into_iter().map(|session| {
+            let source = request.source.as_str();
+            let refresh = request.refresh;
+            async move {
+                let cached = self.queries.cached_source_membership(session.sid, source);
+                if !session.all_threads_stopped {
+                    return (session, cached, cached.is_none().then_some(
+                        "target is running or starting; source membership is unknown without interrupting it"));
+                }
+                match self.queries.source_membership(session.sid, source, refresh).await {
+                    Ok(found) => (session, Some(found), None),
+                    Err(_) => (session, cached, Some("debugger source discovery failed; only cached matches are available")),
+                }
+            }
+        })).buffer_unordered(4);
+        futures::pin_mut!(discovery);
+        let mut matched = Vec::new();
+        let mut warnings = Vec::new();
+        while let Some((session, found, warning)) = scope.wait(discovery.next()).await? {
+            if let Some(message) = warning {
+                warnings.push(v2::SourceDiscoveryWarning {
+                    session_id: self.ids.encode(ResourceIdKind::Session, session.sid)?,
+                    message: message.into(),
+                });
+            }
+            if found == Some(true) {
+                matched.push(session);
+            }
+        }
+        // A retired session or changed group must not be published from an old
+        // discovery job. Results remain an observation, never a mutation lease.
+        let current = self
+            .queries
+            .sessions()
+            .await
+            .into_iter()
+            .map(|session| (session.sid, session))
+            .collect::<BTreeMap<_, _>>();
+        let mut targets = Vec::new();
+        let mut groups = BTreeMap::<u64, u32>::new();
+        for session in matched {
+            let Some(now) = current.get(&session.sid).filter(|now| {
+                now.group.id == session.group.id && now.group.valid == session.group.valid
+            }) else {
+                warnings.push(v2::SourceDiscoveryWarning {
+                    session_id: self.ids.encode(ResourceIdKind::Session, session.sid)?,
+                    message: "session topology changed during discovery; retry".into(),
+                });
+                continue;
+            };
+            targets.push(v2::SourceTarget {
+                target: Some(v2::Target {
+                    selector: Some(v2::target::Selector::Session(v2::SessionTarget {
+                        session_id: self.ids.encode(ResourceIdKind::Session, now.sid)?,
+                    })),
+                }),
+                display_name: format!("{} ({})", now.alias, now.tag),
+                matching_session_count: 1,
+            });
+            if now.group.valid {
+                *groups.entry(now.group.id).or_default() += 1;
+            }
+        }
+        for (id, matching_session_count) in groups {
+            if let Some(group) = self.queries.group_by_id(id) {
+                targets.push(v2::SourceTarget {
+                    target: Some(v2::Target {
+                        selector: Some(v2::target::Selector::Group(v2::GroupTarget {
+                            group_id: self.ids.encode(ResourceIdKind::Group, id)?,
+                        })),
+                    }),
+                    display_name: group.alias,
+                    matching_session_count,
+                });
+            }
+        }
+        if targets.len() > 10_000 {
+            return Err(ApplicationError::resource_exhausted(
+                "source target result exceeds 10000 entries; narrow the target",
+            ));
+        }
+        targets.sort_by_key(|entry| {
+            match entry
+                .target
+                .as_ref()
+                .and_then(|target| target.selector.as_ref())
+            {
+                Some(v2::target::Selector::Group(group)) => (0, group.group_id.clone()),
+                Some(v2::target::Selector::Session(session)) => (1, session.session_id.clone()),
+                _ => unreachable!("only group and session targets are constructed"),
+            }
+        });
+        warnings.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        scope.ensure_active()?;
+        Ok(v2::ResolveSourceTargetsResponse {
+            context: Some(scope.response_context(&self.server_instance_id)),
+            targets,
+            complete: warnings.is_empty(),
             warnings,
         })
     }

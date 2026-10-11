@@ -3054,6 +3054,48 @@
         },
         "type": "object"
       },
+      "ResolveSourceTargetsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "refresh": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ResolveSourceTargetsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SourceTarget"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SourceDiscoveryWarning"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "ResourceDeleted": {
         "additionalProperties": true,
         "properties": {
@@ -3753,6 +3795,24 @@
           },
           "rootReference": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "matchingSessionCount": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
           }
         },
         "type": "object"
@@ -8231,6 +8291,89 @@
         ],
         "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ResolveSource",
         "x-ddb-registry-key": "DebuggerService.ResolveSource",
+        "x-ddb-required-scope": "read"
+      }
+    },
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets": {
+      "post": {
+        "description": "Resolves relevant session/group breakpoint targets without reading source content.",
+        "operationId": "DebuggerService_ResolveSourceTargets",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/ResolveSourceTargetsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveSourceTargetsResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "$ref": "#/components/responses/DdbError400"
+          },
+          "401": {
+            "$ref": "#/components/responses/DdbError401"
+          },
+          "403": {
+            "$ref": "#/components/responses/DdbError403"
+          },
+          "404": {
+            "$ref": "#/components/responses/DdbError404"
+          },
+          "409": {
+            "$ref": "#/components/responses/DdbError409"
+          },
+          "410": {
+            "$ref": "#/components/responses/DdbError410"
+          },
+          "412": {
+            "$ref": "#/components/responses/DdbError412"
+          },
+          "429": {
+            "$ref": "#/components/responses/DdbError429"
+          },
+          "499": {
+            "$ref": "#/components/responses/DdbError499"
+          },
+          "500": {
+            "$ref": "#/components/responses/DdbError500"
+          },
+          "501": {
+            "$ref": "#/components/responses/DdbError501"
+          },
+          "502": {
+            "$ref": "#/components/responses/DdbError502"
+          },
+          "503": {
+            "$ref": "#/components/responses/DdbError503"
+          },
+          "504": {
+            "$ref": "#/components/responses/DdbError504"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Resolves relevant session/group breakpoint targets without reading source content.",
+        "tags": [
+          "DebuggerService"
+        ],
+        "x-ddb-protobuf-method": "/ddb.api.v2.DebuggerService/ResolveSourceTargets",
+        "x-ddb-registry-key": "DebuggerService.ResolveSourceTargets",
         "x-ddb-required-scope": "read"
       }
     }

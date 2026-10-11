@@ -2942,6 +2942,48 @@
         },
         "type": "object"
       },
+      "ResolveSourceTargetsRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/RequestContext"
+          },
+          "refresh": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "type": "object"
+      },
+      "ResolveSourceTargetsResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ResponseContext"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SourceTarget"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SourceDiscoveryWarning"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "ResourceDeleted": {
         "additionalProperties": true,
         "properties": {
@@ -3641,6 +3683,24 @@
           },
           "rootReference": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourceTarget": {
+        "additionalProperties": true,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "matchingSessionCount": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
           }
         },
         "type": "object"

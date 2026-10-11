@@ -480,6 +480,45 @@ message ResolveSourceResponse {
   SourceFile source = 2;
 }
 
+// ResolveSourceTargetsRequest discovers breakpoint installation scopes for a file.
+message ResolveSourceTargetsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Exact debugger path, after applying frontend source-workspace mappings.
+  // This is file membership, not verification that a line is executable.
+  string source = 2;
+  // Optional scope restriction; absence considers every current session.
+  optional Target target = 3;
+  // Refresh stopped sessions' catalogs. Running sessions are never interrupted.
+  bool refresh = 4;
+}
+
+// SourceTarget is a server-resolved, source-relevant breakpoint installation scope.
+message SourceTarget {
+  // Exactly one session or group selector; never an unfiltered broadcast.
+  Target target = 1;
+  // Server-provided session/group name for display.
+  string display_name = 2;
+  // Number of current sessions in this scope known to contain the exact source.
+  // A group may have other members. Installing a group breakpoint retains DDB's
+  // normal inheritance semantics; this count does not redefine group membership.
+  uint32 matching_session_count = 3;
+}
+
+// ResolveSourceTargetsResponse contains only proven source matches.
+message ResolveSourceTargetsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Group targets first, then session targets, in stable ID order. Bounded to
+  // 10,000 entries; overflow returns RESOURCE_EXHAUSTED rather than truncation.
+  repeated SourceTarget targets = 2;
+  // Discovery failures or unknown membership, without hiding successful matches.
+  repeated SourceDiscoveryWarning warnings = 3;
+  // True only when every considered session's membership could be determined.
+  // Empty targets with complete=false does not prove there are no owners.
+  bool complete = 4;
+}
+
 // ReadSourceRequest reads one bounded source window.
 message ReadSourceRequest {
   // Request controls; READ permission is required.
@@ -899,6 +938,8 @@ service DebuggerService {
   rpc ListSourceEntries(ListSourceEntriesRequest) returns (ListSourceEntriesResponse);
   // Resolves a backend location to a stable source reference.
   rpc ResolveSource(ResolveSourceRequest) returns (ResolveSourceResponse);
+  // Resolves relevant session/group breakpoint targets without reading source content.
+  rpc ResolveSourceTargets(ResolveSourceTargetsRequest) returns (ResolveSourceTargetsResponse);
   // Reads a bounded source window. Requires READ permission.
   rpc ReadSource(ReadSourceRequest) returns (ReadSourceResponse);
   // Lists logical breakpoints. Requires READ permission.

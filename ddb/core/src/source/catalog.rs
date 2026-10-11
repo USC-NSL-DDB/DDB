@@ -55,6 +55,13 @@ impl SourceCatalog {
             .collect()
     }
 
+    pub(crate) fn membership(&self, path: &str, sid: u64) -> Option<bool> {
+        let sessions = self.sessions.read().unwrap();
+        let sources = sessions.get(&sid)?;
+        let found = sources.paths.contains(path);
+        (found || sources.complete || sources.checked_paths.contains(path)).then_some(found)
+    }
+
     pub(crate) fn session_listing(&self, sid: u64) -> Vec<String> {
         self.sessions
             .read()
@@ -161,6 +168,27 @@ fn ensure_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn membership_distinguishes_unknown_negative_and_positive_and_retires_cache() {
+        let catalog = SourceCatalog::new();
+        let group = GroupId::new(7);
+        assert_eq!(catalog.membership("/main.rs", 1), None);
+        catalog
+            .record_path_listing("/missing.rs", 1, group, ["/main.rs".into()])
+            .unwrap();
+        assert_eq!(catalog.membership("/main.rs", 1), Some(true));
+        assert_eq!(catalog.membership("/missing.rs", 1), Some(false));
+        assert_eq!(catalog.membership("/unknown.rs", 1), None);
+        assert_eq!(catalog.membership("main.rs", 1), None);
+        catalog
+            .record_full_listing(1, group, ["/new.rs".into()])
+            .unwrap();
+        assert_eq!(catalog.membership("/main.rs", 1), Some(false));
+        assert_eq!(catalog.membership("/unknown.rs", 1), Some(false));
+        catalog.remove_session(1);
+        assert_eq!(catalog.membership("/new.rs", 1), None);
+    }
 
     #[test]
     fn catalog_budget_is_global_and_failed_updates_preserve_existing_entries() {

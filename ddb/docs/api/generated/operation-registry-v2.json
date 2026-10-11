@@ -774,6 +774,35 @@
       "successStatus": 200
     },
     {
+      "description": "Resolves relevant session/group breakpoint targets without reading source content.",
+      "errorStatuses": [
+        400,
+        401,
+        403,
+        404,
+        409,
+        410,
+        412,
+        429,
+        499,
+        500,
+        501,
+        502,
+        503,
+        504
+      ],
+      "httpMethod": "post",
+      "key": "DebuggerService.ResolveSourceTargets",
+      "operationId": "DebuggerService_ResolveSourceTargets",
+      "path": "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets",
+      "permission": "read",
+      "protobufMethod": "/ddb.api.v2.DebuggerService/ResolveSourceTargets",
+      "requestType": ".ddb.api.v2.ResolveSourceTargetsRequest",
+      "responseType": ".ddb.api.v2.ResolveSourceTargetsResponse",
+      "serverStreaming": false,
+      "successStatus": 200
+    },
+    {
       "description": "Reads a bounded source window. Requires READ permission.",
       "errorStatuses": [
         400,

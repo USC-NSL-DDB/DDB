@@ -241,6 +241,21 @@ impl ApiQueries {
         self.source_resolver.cached_sources(sid)
     }
 
+    pub(crate) fn cached_source_membership(&self, sid: u64, path: &str) -> Option<bool> {
+        self.source_resolver.cached_membership(sid, path)
+    }
+
+    pub(crate) async fn source_membership(
+        &self,
+        sid: u64,
+        path: &str,
+        refresh: bool,
+    ) -> Result<bool> {
+        self.source_resolver
+            .source_membership(sid, path, refresh)
+            .await
+    }
+
     pub(crate) async fn group_ids_for_source(&self, source: &str) -> Result<Vec<u64>> {
         let mut group_ids = self
             .source_resolver

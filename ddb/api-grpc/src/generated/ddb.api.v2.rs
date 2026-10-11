@@ -678,6 +678,35 @@ pub mod debugger_service_client {
                 .insert(GrpcMethod::new("ddb.api.v2.DebuggerService", "ResolveSource"));
             self.inner.unary(req, path, codec).await
         }
+        /// Resolves relevant session/group breakpoint targets without reading source content.
+        pub async fn resolve_source_targets(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                ::ddb_api_types::v2::ResolveSourceTargetsRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ResolveSourceTargetsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ddb.api.v2.DebuggerService/ResolveSourceTargets",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("ddb.api.v2.DebuggerService", "ResolveSourceTargets"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Reads a bounded source window. Requires READ permission.
         pub async fn read_source(
             &mut self,
@@ -1089,6 +1118,14 @@ pub mod debugger_service_server {
             request: tonic::Request<::ddb_api_types::v2::ResolveSourceRequest>,
         ) -> std::result::Result<
             tonic::Response<::ddb_api_types::v2::ResolveSourceResponse>,
+            tonic::Status,
+        >;
+        /// Resolves relevant session/group breakpoint targets without reading source content.
+        async fn resolve_source_targets(
+            &self,
+            request: tonic::Request<::ddb_api_types::v2::ResolveSourceTargetsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::ddb_api_types::v2::ResolveSourceTargetsResponse>,
             tonic::Status,
         >;
         /// Reads a bounded source window. Requires READ permission.
@@ -2322,6 +2359,58 @@ pub mod debugger_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ResolveSourceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/ddb.api.v2.DebuggerService/ResolveSourceTargets" => {
+                    #[allow(non_camel_case_types)]
+                    struct ResolveSourceTargetsSvc<T: DebuggerService>(pub Arc<T>);
+                    impl<
+                        T: DebuggerService,
+                    > tonic::server::UnaryService<
+                        ::ddb_api_types::v2::ResolveSourceTargetsRequest,
+                    > for ResolveSourceTargetsSvc<T> {
+                        type Response = ::ddb_api_types::v2::ResolveSourceTargetsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::ddb_api_types::v2::ResolveSourceTargetsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DebuggerService>::resolve_source_targets(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ResolveSourceTargetsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

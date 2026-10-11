@@ -1,5 +1,24 @@
 # Source discovery and workspace exports
 
+## Source-relevant breakpoint targets
+
+`DebuggerService.ResolveSourceTargets` accepts an exact debugger source path and
+returns only sessions with proven catalog membership, plus their groups. Both
+IDE adapters and terminal frontends should use this operation instead of looping
+over groups with `ResolveSource` or inferring membership from path suffixes.
+Frontend-local path mappings must be applied before the request.
+
+Discovery does not require source content to be readable or a line to be
+executable. An optional target restricts discovery. Group results retain normal
+breakpoint inheritance; `matchingSessionCount` counts proven matches only.
+
+Stopped sessions use bounded, cached debugger source discovery. Running sessions
+use cached membership and are never interrupted. Unknown membership or discovery
+failures produce warnings with `complete: false`. An incomplete empty result is
+not evidence that the file has no owners. `refresh: true` refreshes stopped
+catalogs only. Results contain no broadcast scope and have a 10,000-entry limit.
+Authentication, read permission, and request deadlines apply to HTTP and gRPC.
+
 DDB distinguishes debugger-known sources from configured workspace files.
 Neither requires selecting a stack frame. Source reads do not select a thread,
 change an evaluation context, or move execution.

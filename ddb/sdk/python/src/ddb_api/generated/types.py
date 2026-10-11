@@ -1594,6 +1594,26 @@ ResolveSourceResponse = TypedDict(
     },
 )
 
+ResolveSourceTargetsRequest = TypedDict(
+    "ResolveSourceTargetsRequest",
+    {
+        "context": NotRequired["RequestContext"],
+        "source": NotRequired["str"],
+        "target": NotRequired["Target"],
+        "refresh": NotRequired["bool"],
+    },
+)
+
+ResolveSourceTargetsResponse = TypedDict(
+    "ResolveSourceTargetsResponse",
+    {
+        "context": NotRequired["ResponseContext"],
+        "targets": NotRequired["list[SourceTarget]"],
+        "warnings": NotRequired["list[SourceDiscoveryWarning]"],
+        "complete": NotRequired["bool"],
+    },
+)
+
 ResourceDeleted = TypedDict(
     "ResourceDeleted",
     {
@@ -1857,6 +1877,15 @@ SourceRoot = TypedDict(
         "name": NotRequired["str"],
         "debuggerPath": NotRequired["str"],
         "owners": NotRequired["list[SourceOwner]"],
+    },
+)
+
+SourceTarget = TypedDict(
+    "SourceTarget",
+    {
+        "target": NotRequired["Target"],
+        "displayName": NotRequired["str"],
+        "matchingSessionCount": NotRequired["int"],
     },
 )
 

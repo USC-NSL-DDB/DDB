@@ -3308,6 +3308,56 @@ pub struct ResolveSourceResponse {
     #[prost(message, optional, tag = "2")]
     pub source: ::core::option::Option<SourceFile>,
 }
+/// ResolveSourceTargetsRequest discovers breakpoint installation scopes for a file.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveSourceTargetsRequest {
+    /// Request controls; READ permission is required.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<RequestContext>,
+    /// Exact debugger path, after applying frontend source-workspace mappings.
+    /// This is file membership, not verification that a line is executable.
+    #[prost(string, tag = "2")]
+    pub source: ::prost::alloc::string::String,
+    /// Optional scope restriction; absence considers every current session.
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<Target>,
+    /// Refresh stopped sessions' catalogs. Running sessions are never interrupted.
+    #[prost(bool, tag = "4")]
+    pub refresh: bool,
+}
+/// SourceTarget is a server-resolved, source-relevant breakpoint installation scope.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SourceTarget {
+    /// Exactly one session or group selector; never an unfiltered broadcast.
+    #[prost(message, optional, tag = "1")]
+    pub target: ::core::option::Option<Target>,
+    /// Server-provided session/group name for display.
+    #[prost(string, tag = "2")]
+    pub display_name: ::prost::alloc::string::String,
+    /// Number of current sessions in this scope known to contain the exact source.
+    /// A group may have other members. Installing a group breakpoint retains DDB's
+    /// normal inheritance semantics; this count does not redefine group membership.
+    #[prost(uint32, tag = "3")]
+    pub matching_session_count: u32,
+}
+/// ResolveSourceTargetsResponse contains only proven source matches.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveSourceTargetsResponse {
+    /// Common success metadata.
+    #[prost(message, optional, tag = "1")]
+    pub context: ::core::option::Option<ResponseContext>,
+    /// Group targets first, then session targets, in stable ID order. Bounded to
+    /// 10,000 entries; overflow returns RESOURCE_EXHAUSTED rather than truncation.
+    #[prost(message, repeated, tag = "2")]
+    pub targets: ::prost::alloc::vec::Vec<SourceTarget>,
+    /// Discovery failures or unknown membership, without hiding successful matches.
+    #[prost(message, repeated, tag = "3")]
+    pub warnings: ::prost::alloc::vec::Vec<SourceDiscoveryWarning>,
+    /// True only when every considered session's membership could be determined.
+    /// Empty targets with complete=false does not prove there are no owners.
+    #[prost(bool, tag = "4")]
+    pub complete: bool,
+}
 /// ReadSourceRequest reads one bounded source window.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadSourceRequest {

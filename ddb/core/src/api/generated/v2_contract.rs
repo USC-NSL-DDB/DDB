@@ -51,6 +51,8 @@ const V2_DEBUGGER_SERVICE_LIST_SOURCE_ENTRIES_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries";
 const V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource";
+const V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_TARGETS_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets";
 const V2_DEBUGGER_SERVICE_READ_SOURCE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource";
 const V2_DEBUGGER_SERVICE_LIST_BREAKPOINTS_PATH: &str =
@@ -212,6 +214,10 @@ fn v2_contract_router(authorization: &Arc<ApiAuthorization>) -> Router<ApiState>
         .route(
             V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH,
             post(v2_resolve_source),
+        )
+        .route(
+            V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_TARGETS_PATH,
+            post(v2_resolve_source_targets),
         )
         .route(V2_DEBUGGER_SERVICE_READ_SOURCE_PATH, post(v2_read_source))
         .route(
