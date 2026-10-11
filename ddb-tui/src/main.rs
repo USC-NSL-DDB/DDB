@@ -22,6 +22,8 @@ mod source_types;
 mod source_workspace;
 mod supervisor;
 mod timeline;
+#[cfg(test)]
+mod topology_interaction_tests;
 mod ui;
 mod watch_store;
 mod worker;
@@ -724,6 +726,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
                 isize::MAX
             });
         }
+        KeyCode::Left | KeyCode::Right
+            if app.focus == Focus::Threads && key.modifiers.is_empty() =>
+        {
+            if app.navigate_topology_tree(key.code == KeyCode::Right) {
+                inspect_selection(app, requests);
+            }
+        }
         KeyCode::Left | KeyCode::Right | KeyCode::Home
             if matches!(
                 app.focus,
@@ -884,6 +893,15 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::PageDown => {
             move_selection(app, requests, page_size(app));
             inspect_selection(app, requests);
+        }
+        KeyCode::Enter | KeyCode::Char(' ')
+            if app.focus == Focus::Threads
+                && app
+                    .topology_rows()
+                    .get(app.selected_topology_row())
+                    .is_some_and(|row| app.topology_can_fold(&row.kind)) =>
+        {
+            app.toggle_selected_topology_fold();
         }
         KeyCode::Enter if app.focus == Focus::Extensions => {
             if let Err(error) = app.start_extension_action_input() {
@@ -1356,9 +1374,15 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
         && app.breakpoint_target_picker.is_none()
         && app.breakpoint_hit_picker.is_none()
     {
-        if let Some((Focus::Threads, row)) = app.areas.item_at(mouse.column, mouse.row) {
-            if let Err(error) = app.open_topology_details(row) {
-                app.error(error);
+        if let Some((kind, _)) = app.areas.topology_rows.iter().find(|(_, area)| {
+            area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+        }) {
+            let result = app
+                .topology_index(kind)
+                .ok_or_else(|| "Topology changed; select a current row".to_string());
+            match result.and_then(|row| app.open_topology_details(row)) {
+                Ok(()) => {}
+                Err(error) => app.error(error),
             }
             return;
         }
@@ -1596,6 +1620,31 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     }
                 }
                 return;
+            }
+            if button == MouseButton::Left {
+                if let Some((kind, _)) = app.areas.topology_folds.iter().find(|(_, area)| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                }) {
+                    let kind = kind.clone();
+                    app.focus = Focus::Threads;
+                    if !app.toggle_topology_fold(&kind) {
+                        app.status =
+                            "Topology changed; this row no longer has visible children".into();
+                    }
+                    return;
+                }
+                if let Some((kind, _)) = app.areas.topology_rows.iter().find(|(_, area)| {
+                    area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                }) {
+                    let kind = kind.clone();
+                    app.focus = Focus::Threads;
+                    match app.select_visible_topology(&kind) {
+                        Ok(true) => inspect_selection(app, requests),
+                        Ok(false) => {}
+                        Err(error) => app.error(error),
+                    }
+                    return;
+                }
             }
             if let Some((hit, _)) = app.areas.current_hit_rows.iter().find(|(_, area)| {
                 area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -4747,7 +4796,14 @@ mod tests {
             app.focus = focus;
             handle_key(
                 &mut app,
-                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                KeyEvent::new(
+                    KeyCode::Right,
+                    if focus == Focus::Threads {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    },
+                ),
                 &tx,
             );
         }

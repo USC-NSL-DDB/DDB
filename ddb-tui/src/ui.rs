@@ -507,8 +507,26 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
         .iter()
         .map(|row| {
             let (icon, label_color) = match row.kind {
-                TopologyRowKind::Group(_) => ("▾", ACCENT),
-                TopologyRowKind::Session(_) => ("◇", Color::White),
+                TopologyRowKind::Group(_) => (
+                    if app.topology_collapsed(&row.kind) {
+                        "▸"
+                    } else {
+                        "▾"
+                    },
+                    ACCENT,
+                ),
+                TopologyRowKind::Session(_) => (
+                    if app.topology_can_fold(&row.kind) {
+                        if app.topology_collapsed(&row.kind) {
+                            "▸ ◇"
+                        } else {
+                            "▾ ◇"
+                        }
+                    } else {
+                        "◇"
+                    },
+                    Color::White,
+                ),
                 TopologyRowKind::Thread(_) => ("•", Color::Gray),
             };
             let state_color = match row.state.as_deref() {
@@ -555,6 +573,38 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
         selected,
         app.focus == Focus::Threads,
     );
+    let first = list_first(selected, rows.len(), area, 1);
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    for (offset, row) in rows
+        .iter()
+        .skip(first)
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        let y = inner.y + offset as u16;
+        areas
+            .topology_rows
+            .push((row.kind.clone(), Rect::new(inner.x, y, inner.width, 1)));
+        let icon_column = row.depth * 2;
+        let left = app.topology_viewport.column();
+        if app.topology_can_fold(&row.kind) && icon_column >= left {
+            let offset = icon_column - left + 2; // List's selection marker occupies two columns.
+            if offset < inner.width as usize {
+                areas.topology_folds.push((
+                    row.kind.clone(),
+                    Rect::new(
+                        inner.x + offset as u16,
+                        y,
+                        (inner.width - offset as u16).min(2),
+                        1,
+                    ),
+                ));
+            }
+        }
+    }
     if area.width >= 26 && area.height > 0 {
         let control = Rect::new(area.right() - 12, area.y, 11, 1);
         frame.render_widget(

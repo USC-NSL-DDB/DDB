@@ -141,6 +141,21 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Topology",
+        keys: "Space / Enter / disclosure click",
+        description: "Expand/collapse a group or session; folding preserves the execution target",
+    },
+    Entry {
+        section: "Topology",
+        keys: "Left / Right; Shift+Left / Shift+Right",
+        description: "Collapse or visit parent / expand or visit child; Shift scrolls columns",
+    },
+    Entry {
+        section: "Topology",
+        keys: "Session label, then s",
+        description: "Select one session and choose a signal; clicking a disclosure arrow only folds",
+    },
+    Entry {
+        section: "Topology",
         keys: "v",
         description: "Toggle grouped / flat sessions without changing execution scope",
     },

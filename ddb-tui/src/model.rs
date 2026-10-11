@@ -117,6 +117,8 @@ pub struct UiAreas {
     pub breakpoint_hit_rows: Vec<(usize, Rect)>,
     pub current_hit_rows: Vec<(breakpoint_hits::BreakpointHit, Rect)>,
     pub breakpoint_hit_view_toggle: Option<Rect>,
+    pub topology_rows: Vec<(TopologyRowKind, Rect)>,
+    pub topology_folds: Vec<(TopologyRowKind, Rect)>,
     pub breakpoint_hit_cancel: Option<Rect>,
     pub controls: Vec<(Control, Rect)>,
     pub details_export: Option<Rect>,
@@ -284,7 +286,7 @@ pub struct ThreadItem {
     pub line: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TopologyRowKind {
     Group(String),
     Session(String),
@@ -554,6 +556,7 @@ pub struct App {
     pub selected_frame: usize,
     selected_topology: Option<TopologyRowKind>,
     pub topology_grouped: bool,
+    collapsed_topology: std::collections::BTreeSet<TopologyRowKind>,
     pub selected_variable: usize,
     pub selected_breakpoint: usize,
     pub breakpoints_grouped: bool,
@@ -660,6 +663,7 @@ impl App {
             selected_thread: 0,
             selected_topology: None,
             topology_grouped: true,
+            collapsed_topology: Default::default(),
             selected_frame: 0,
             selected_variable: 0,
             selected_breakpoint: 0,
@@ -841,6 +845,7 @@ impl App {
                 self.breakpoint_target_picker = None;
                 self.breakpoint_hit_picker = None;
                 self.clear_hit_selection();
+                self.collapsed_topology.clear();
                 self.signal_picker = None;
                 self.session_termination = None;
                 self.invalidate_inspection();
@@ -936,6 +941,7 @@ impl App {
         } else {
             self.reconcile_topology_selection();
         }
+        self.prune_topology_folds();
     }
 
     pub fn apply_threads(&mut self, items: Vec<v2::Thread>) {
@@ -1012,6 +1018,7 @@ impl App {
             .current_thread()
             .is_some_and(|thread| thread.state.to_ascii_lowercase().contains("stop"));
         self.reconcile_topology_selection();
+        self.prune_topology_folds();
         if current_id != selected_id || !current_is_stopped {
             self.invalidate_inspection();
         }
@@ -1257,10 +1264,11 @@ impl App {
     }
 
     fn reconcile_topology_selection(&mut self) {
-        let selected_is_present = self
-            .selected_topology
-            .as_ref()
-            .is_some_and(|selected| self.topology_rows().iter().any(|row| &row.kind == selected));
+        let selected_is_present = self.selected_topology.as_ref().is_some_and(|selected| {
+            self.full_topology_rows()
+                .iter()
+                .any(|row| &row.kind == selected)
+        });
         if !selected_is_present {
             self.selected_topology = self
                 .current_thread()
@@ -1359,7 +1367,7 @@ impl App {
         self.status = format!("execution scope: {}", self.execution_scope_label());
     }
 
-    pub fn topology_rows(&self) -> Vec<TopologyRow> {
+    fn full_topology_rows(&self) -> Vec<TopologyRow> {
         if !self.topology_grouped {
             let mut sessions = self.sessions.iter().collect::<Vec<_>>();
             sessions.sort_by(|left, right| {
@@ -1537,9 +1545,7 @@ impl App {
             self.current_thread()
                 .map(|thread| TopologyRowKind::Thread(thread.id.clone()))
         });
-        self.topology_rows()
-            .iter()
-            .position(|row| selected.as_ref() == Some(&row.kind))
+        self.visible_topology_ancestor(selected.as_ref())
             .unwrap_or(0)
     }
 
@@ -4164,3 +4170,5 @@ pub use topology_details::{DetailsExport, TopologyDetails};
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;
+#[path = "topology_navigation.rs"]
+mod topology_navigation;

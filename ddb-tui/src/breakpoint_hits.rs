@@ -257,7 +257,7 @@ impl App {
                     .into(),
             );
         }
-        self.selected_topology = Some(TopologyRowKind::Thread(hit.thread_id.clone()));
+        self.reveal_topology_thread(&hit.thread_id);
         self.source_browser.set_following(true);
         Ok(hit.thread_id.clone())
     }
