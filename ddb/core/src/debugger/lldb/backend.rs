@@ -48,6 +48,7 @@ impl LldbBackend {
         commands: &mut Vec<String>,
     ) -> Result<()> {
         self.validate_config(config)?;
+        config.conf.debugger.validate()?;
 
         commands.push(Self::console_command("settings set auto-confirm true")?);
         commands.push(format!(
@@ -91,6 +92,26 @@ impl LldbBackend {
         }
         for command in &session.prerun_debugger_cmds {
             commands.push(Self::console_command(command.command.trim())?);
+        }
+        for mapping in &config.conf.debugger.source_mappings {
+            commands.push(Self::console_command(&format!(
+                "settings append target.source-map {} {}",
+                serde_json::to_string(&mapping.from)?,
+                serde_json::to_string(&mapping.to)?
+            ))?);
+        }
+        Ok(())
+    }
+
+    fn append_session_setup(config: &Config, commands: &mut Vec<String>) -> Result<()> {
+        if let Some(function) = &config.conf.debugger.entry_function {
+            commands.push(format!(
+                "-break-insert -t {}",
+                serde_json::to_string(function)?
+            ));
+        }
+        for command in &config.conf.debugger.lldb.commands {
+            commands.push(Self::console_command(command)?);
         }
         Ok(())
     }
@@ -136,6 +157,7 @@ impl DebuggerBackend for LldbBackend {
             _ => return Err(anyhow!("invalid mode for LLDB attach")),
         };
         commands.push(format!("-target-attach {pid}"));
+        Self::append_session_setup(config, &mut commands)?;
         Self::append_postrun(session, &mut commands)?;
         Ok(DebuggerBootstrapPlan {
             protocol_prelude: Self::protocol_prelude(context)?,
@@ -169,6 +191,7 @@ impl DebuggerBackend for LldbBackend {
                 .join(" ");
             commands.push(format!("-exec-arguments {args}"));
         }
+        Self::append_session_setup(config, &mut commands)?;
         Self::append_postrun(session, &mut commands)?;
         commands.push(
             if session.stop_at_entry {
@@ -324,5 +347,46 @@ mod tests {
             configured.contains("-interpreter-exec console"),
             "configured command did not use LLDB's console interpreter: {configured}"
         );
+    }
+
+    #[test]
+    fn backend_setup_selects_lldb_and_runs_once_after_symbols_before_execution() {
+        let config = Config::from_str("Conf:\n  Debugger:\n    backend: lldb\n    entry_function: main\n    source_mappings: [{from: '/build with spaces', to: '/source with spaces'}]\n    gdb: {commands: ['python print(1)']}\n    lldb: {commands: ['settings set target.max-children-count 33']}\n").unwrap();
+        let plugin = resolve_framework_plugin(&config);
+        let request = binary_request(&config);
+        let context = DebuggerSessionContext::for_test("0123456789abcdef0123456789abcdef");
+        let plan = LldbBackend
+            .build_local_binary_commands(
+                &config,
+                &request,
+                plugin.as_ref(),
+                &plugin.debugger_bootstrap(&config),
+                &context,
+            )
+            .unwrap();
+        let index = |needle: &str| {
+            plan.commands
+                .iter()
+                .position(|command| command.contains(needle))
+                .unwrap()
+        };
+        assert!(index("-file-exec-and-symbols") < index("-break-insert -t"));
+        assert!(index("-break-insert -t") < index("target.max-children-count"));
+        assert!(index("target.max-children-count") < index("-exec-run"));
+        assert_eq!(
+            plan.commands
+                .iter()
+                .filter(|command| command.contains("target.max-children-count"))
+                .count(),
+            1
+        );
+        assert!(plan
+            .commands
+            .iter()
+            .any(|command| command.contains("source-map")));
+        assert!(!plan
+            .commands
+            .iter()
+            .any(|command| command.contains("python print")));
     }
 }

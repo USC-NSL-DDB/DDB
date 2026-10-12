@@ -18,6 +18,7 @@ name = "ddb"
 path = "src/main.rs"
 
 [dependencies]
+ddb-config = { path = "../config" }
 ddb-api-types = { path = "../api-types" }
 ddb-source-workspace = { path = "../source-workspace" }
 ddb-api-extension = { path = "../api-extension" }

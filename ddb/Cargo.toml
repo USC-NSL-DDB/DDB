@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "config",
     "core",
     "gdbmi",
     "benchmarks",

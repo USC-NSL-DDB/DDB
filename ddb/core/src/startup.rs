@@ -56,12 +56,26 @@ impl BackendStartup {
         }
 
         let mut config = match (&args.config, &args.session) {
-            (Some(path), None) => Config::from_file(path)
-                .with_context(|| format!("failed to load configuration {}", path.display()))?,
+            (Some(path), None) => {
+                Config::from_file_with_overrides(path, &args.overrides, args.managed)
+                    .with_context(|| format!("failed to load configuration {}", path.display()))?
+            }
             (None, Some(ServeSession::Launch(launch))) => launch_config(launch, args)?,
             (None, Some(ServeSession::Attach(attach))) => attach_config(attach, args),
             _ => unreachable!("validated serve arguments have one startup source"),
         };
+
+        if args.config.is_none() && !args.overrides.is_empty() {
+            let mut document = serde_yml::to_value(&config)?;
+            anyhow::ensure!(
+                args.overrides.len() <= 32,
+                "at most 32 configuration overrides are allowed"
+            );
+            for assignment in &args.overrides {
+                ddb_config::apply_override(&mut document, assignment, args.managed)?;
+            }
+            config = Config::from_str(&serde_yml::to_string(&document)?)?;
+        }
 
         if args.managed {
             config.conf.api_server_bind = IpAddr::V4(Ipv4Addr::LOCALHOST);

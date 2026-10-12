@@ -60,6 +60,11 @@ pub struct ServeArgs {
     #[arg(value_name = "conf_file", value_parser = parse_path)]
     pub config: Option<PathBuf>,
 
+    /// Override a DDB configuration field with a YAML value, e.g. Conf.Debugger.backend=lldb.
+    /// Managed mode reserves API transport and authentication fields.
+    #[arg(long = "set", global = true, value_name = "KEY=VALUE")]
+    pub overrides: Vec<String>,
+
     #[command(subcommand)]
     pub session: Option<ServeSession>,
 
