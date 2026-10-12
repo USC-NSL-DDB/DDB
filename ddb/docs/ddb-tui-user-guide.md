@@ -138,11 +138,11 @@ events. A delayed remote target does not block the entire frontend.
 
 ### DDB-native interaction model
 
-The toolbar groups bounded, labeled buttons into execution and navigation rows.
-Each button includes its shortcut; whole buttons wrap on narrower terminals.
-`Show frame source F8` opens or retries the selected stack frame's source at its
-line. F8 is a shortcut, not a frame number, and the action does not resume or
-step execution. `f` instead follows the selected thread's execution location.
+The toolbar groups bounded, labeled execution and navigation buttons, sharing
+a row when they fit. Whole buttons wrap on narrower terminals. Press `?` for
+their shortcuts. `Frame source` or F8 opens or retries the selected stack frame's
+source at its line. F8 is a shortcut, not a frame number, and the action does not
+resume or step execution. `f` instead follows the selected thread's execution location.
 
 The left topology is DDB group → session → thread. Controls start in `Auto`.
 Continue and Pause broadcast to all sessions. Stepping uses the selected paused
@@ -159,13 +159,27 @@ topology ancestors, and loads its frame and source. Other concurrent stops do no
 steal focus while that owner remains paused. Breakpoint rows and the panel title
 count current paused hits separately from historical hit counts. Use `H` for the
 live hit view through `Paused [H]`, or `P` to choose a hit. Enabled/disabled
-breakpoint dots remain at the start of each row. Right-aligned `[N paused]`
-badges show current pauses; muted `total hits:N` values show historical counts.
-Session sites have their own badges. Horizontal scrolling preserves the badge,
-and the grouping control stays in the footer rather than covering the title.
-Automatically paused peers are not counted
-as breakpoint hits. Existing stops received together at bootstrap or recovery
+breakpoint dots remain at the start of each row. Right-aligned `[1 hit]` or
+`[N hits]` badges show current matching hits. Member rows otherwise show their
+session's backend-derived state, including running, stepped, paused, signal,
+exception, or mixed. A completed step is stopped, not "stepping". Unknown or
+unavailable causes remain explicit. Muted `total hits:N` values show DDB-observed
+stop counts for the logical breakpoint and each installed member. Ignored native
+encounters, steps, refreshes, and all-stop peers do not increment them. Retiring
+a member preserves the logical lifetime total. Horizontal scrolling preserves
+the badge, and the grouping control stays in the footer rather than covering
+the title. Automatically paused peers are not counted as breakpoint hits.
+Existing stops received together at bootstrap or recovery
 use snapshot order; DDB does not compare remote wall clocks to order them.
+
+Breakpoint and member rows retain their first-seen order across frame inspection
+and snapshot refreshes. New rows append without moving existing rows. File
+grouping remains explicitly sorted by full path and line. Selection stays tied
+to breakpoint/member identity.
+
+Use Ctrl+P to move up and Ctrl+N to move down in every non-Source panel and
+navigation overlay. Source uses hjkl and arrows; Ctrl+P there still opens the
+debugger file catalog. These navigation aliases do not alter prompt editing.
 
 The center stack is DDB distributed backtrace by default. Selecting a stopped
 thread or receiving a stop refreshes its cross-session call chain automatically.

@@ -181,6 +181,26 @@ fn reject_selected_memory(tui: &mut Tui) {
     tui.wait_for_current_frame(|screen| !screen.contains("[Restore]"));
 }
 
+fn breakpoint_rows(tui: &mut Tui) -> Vec<String> {
+    tui.send(b"\x1b2z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("[Restore]") && screen.matches("total hits:0").count() == 6
+    });
+    let rows = tui
+        .frames
+        .lock()
+        .unwrap()
+        .back()
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("total hits:0"))
+        .map(str::to_string)
+        .collect();
+    tui.send(b"z");
+    tui.wait_for_current_frame(|screen| !screen.contains("[Restore]"));
+    rows
+}
+
 fn workflow(backend: &str) {
     let mut ddb = spawn(backend);
     let snapshot = ddb.wait_for_snapshot(|snapshot| {
@@ -250,6 +270,38 @@ fn workflow(backend: &str) {
         saved[0].1,
         "caller must move beyond the saved context"
     );
+    // Two logical breakpoints, each with both sessions installed, expose any
+    // reordering between direct refreshes and SDK-projected snapshots.
+    for function in ["DDB::root_stop", "DDB::Backtrace::extraction"] {
+        ddb.runtime.block_on(async {
+            let operation = ddb
+                .client
+                .create_breakpoint(v2::CreateBreakpointRequest {
+                    target: Some(v2::Target {
+                        selector: Some(v2::target::Selector::Broadcast(v2::BroadcastTarget {})),
+                    }),
+                    breakpoint: Some(v2::BreakpointSpec {
+                        location: Some(v2::breakpoint_spec::Location::Function(
+                            v2::FunctionBreakpointLocation {
+                                function_name: function.into(),
+                            },
+                        )),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .operation
+                .unwrap();
+            let completed = ddb
+                .client
+                .wait_operation(operation.operation_id, TIMEOUT, POLL)
+                .await
+                .unwrap();
+            assert_eq!(completed.state, v2::OperationState::Completed as i32);
+        });
+    }
 
     let mut tui = Tui::spawn(&ddb.base_url());
     tui.wait_for("DDB Debugger");
@@ -296,6 +348,7 @@ fn workflow(backend: &str) {
         .iter()
         .filter(|thread| thread.session_id == root || thread.session_id == leaf)
         .all(|thread| thread.state == v2::ThreadState::Stopped as i32));
+    let initial_breakpoints = breakpoint_rows(&mut tui);
     click_text(&mut tui, "DDB Distributed Call Stack");
     tui.send(b"z");
     tui.wait_for_current_frame(|screen| {
@@ -309,6 +362,7 @@ fn workflow(backend: &str) {
     tui.wait_for_current_frame(|screen| {
         !screen.contains("[Restore]") && screen.contains("memory_marker :")
     });
+    assert_eq!(breakpoint_rows(&mut tui), initial_breakpoints);
     tui.expand_visible_variable("memory_marker");
     // GDB may expose a C++ access-group node even for this Rust repr(C) struct.
     tui.wait_for_current_frame(|screen| {

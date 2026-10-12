@@ -230,7 +230,7 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     tui.click_topology_thread("tui-client");
     // Continue the attached client. The server's native RPC breakpoint must hit.
     tui.send(b"\x1b[15~");
-    tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
+    tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
     tui.wait_for_source_marker('▶', server_line);
     tui.wait_for_current_frame(|screen| {
         // A large server thread list can scroll its session header off-screen.
@@ -531,7 +531,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
                 && reason.breakpoint_id.as_ref().is_some_and(|id| stopped.breakpoints.iter().any(|bp| bp.breakpoint_id == *id || bp.sub_breakpoints.iter().any(|member| member.sub_breakpoint_id == *id && member.session_id == server.session_id)))
         })
     }), "server breakpoint location must retain a navigable canonical breakpoint stop: {server_stops:#?}");
-    tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
+    tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
     let hit_row = tui
         .frames
         .lock()
@@ -543,7 +543,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
             line.chars()
                 .take(33)
                 .collect::<String>()
-                .contains("[1 paused]")
+                .contains("[1 hit]")
         })
         .expect("server breakpoint should have a current hit")
         + 1;
@@ -1418,7 +1418,7 @@ fn mock_backend_full_terminal_workflow() {
     // selection. Click it after browsing away from the selected frame.
     tui.send(b"g12\r");
     tui.wait_for_source_marker('▸', 12);
-    tui.click_control("Show frame source F8");
+    tui.click_control("Frame source");
     tui.wait_for_source_marker('▸', 9);
     assert_eq!(ddb.top_frame_line(&ddb.global_thread_id()), 9);
 
@@ -1576,7 +1576,7 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for_source_marker('▶', 9);
 
     // Click the rendered action, not a coordinate tied to a previous layout.
-    tui.click_control("Refresh r");
+    tui.click_control("Refresh");
     tui.wait_for("1 sessions · 1 groups · 1 breakpoints");
 
     tui.send(b"b");
@@ -2165,12 +2165,13 @@ fn real_function_breakpoint_terminal_workflow() {
         tui.send(b"\x1b[15~");
         tui.wait_for("exec · stopped");
         tui.wait_for("counter");
-        ddb.wait_for_snapshot(|snapshot| {
+        let first_hit = ddb.wait_for_snapshot(|snapshot| {
             snapshot
                 .breakpoints
                 .first()
                 .is_some_and(|bp| bp.hit_count == 1)
         });
+        assert_eq!(first_hit.breakpoints[0].sub_breakpoints[0].hit_count, 1);
         let stopped_line = ddb.top_frame_line(&ddb.global_thread_id());
         assert!(stopped_line > 0);
         tui.wait_for_source_marker('▶', stopped_line);
@@ -2178,7 +2179,7 @@ fn real_function_breakpoint_terminal_workflow() {
         // hits must stop on counter=3, not merely store the option in the API.
         tui.send(b"wcounter\r");
         tui.wait_for_variable_value("Watch: counter", "3");
-        tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
+        tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
         let hit_row = tui
             .frames
             .lock()
@@ -2190,7 +2191,7 @@ fn real_function_breakpoint_terminal_workflow() {
                 line.chars()
                     .take(33)
                     .collect::<String>()
-                    .contains("[1 paused]")
+                    .contains("[1 hit]")
             })
             .expect("current hit should be visible in the breakpoint pane")
             + 1;
@@ -2226,6 +2227,46 @@ fn real_function_breakpoint_terminal_workflow() {
         tui.wait_for_source_marker('▶', stopped_line);
         tui.send(b"\x1b2H");
         tui.wait_for_current_frame(|screen| screen.contains("DDB Breakpoints"));
+        // The public stop reason, not frame inspection, determines status.
+        // Stepping does not add a hit; subsequent actual hits add one each.
+        tui.send(b"\x1b[21~");
+        tui.wait_for_current_frame(|screen| screen.contains("[stepped]"));
+        let execution = ddb
+            .runtime
+            .block_on(
+                ddb.client
+                    .get_execution_state(v2::GetExecutionStateRequest {
+                        target: Some(v2::Target {
+                            selector: Some(v2::target::Selector::Thread(v2::ThreadTarget {
+                                thread_id: ddb.global_thread_id(),
+                            })),
+                        }),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap()
+            .execution_state
+            .unwrap();
+        assert!(!execution.running);
+        assert_eq!(
+            execution.stop_reason.unwrap().kind,
+            v2::StopReasonKind::Step as i32
+        );
+        let stepped = ddb.wait_for_snapshot(|snapshot| !snapshot.breakpoints.is_empty());
+        assert_eq!(stepped.breakpoints[0].hit_count, 1);
+        assert_eq!(stepped.breakpoints[0].sub_breakpoints[0].hit_count, 1);
+        for expected in [2, 3] {
+            tui.send(b"\x1b[15~");
+            let hit =
+                ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints[0].hit_count == expected);
+            assert_eq!(
+                hit.breakpoints[0].sub_breakpoints[0].hit_count, expected,
+                "{backend}"
+            );
+            tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
+        }
+        tui.send(b"\x1b2z");
+        tui.wait_for_current_frame(|screen| screen.matches("total hits:3").count() == 2);
         tui.quit();
         ddb.shutdown();
     }
