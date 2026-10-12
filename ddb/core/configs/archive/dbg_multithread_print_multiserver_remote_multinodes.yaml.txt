@@ -1,4 +1,5 @@
 ---
+# Historical Components configuration. Not accepted by the current DDB loader.
 # PreTasks:
 # - name: "Restart runtime"
 #   command: "./nu_scripts/start_rt.sh"

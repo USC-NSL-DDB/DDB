@@ -685,6 +685,33 @@ mod tests {
     }
 
     #[test]
+    fn every_active_project_example_uses_the_current_configuration_schema() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("configs");
+        let mut errors = Vec::new();
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml")
+            {
+                if let Err(error) = Config::from_file(&path) {
+                    errors.push(format!("{}: {error:#}", path.display()));
+                }
+            }
+        }
+        let example =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ddb-tui/examples/helloworld.yaml");
+        Config::from_file(example)
+            .expect("unified helloworld project example must use the canonical schema");
+        errors.sort();
+        assert!(
+            errors.is_empty(),
+            "invalid active examples:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    #[test]
     fn lower_case_framework_values_in_repo_configs_parse_correctly() {
         let quicksand = Config::from_str("Framework: quicksand\n")
             .expect("lower-case quicksand framework should parse");

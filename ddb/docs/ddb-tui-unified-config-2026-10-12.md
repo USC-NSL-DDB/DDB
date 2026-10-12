@@ -62,6 +62,15 @@ Strict parsing also exposed the unsupported `Pids` key in `pidconfig.yaml`.
 The example now uses `StaticSessions`; no ignored-key compatibility path was
 added.
 
+The final example audit found nine historical `Components` configs and a typo
+in the custom Mosquitto config example. The historical files are preserved in
+`ddb/core/configs/archive` as `.yaml.txt`, with their unsupported behavior
+documented. The current Mosquitto example uses `config_path` and explains its
+required listener settings. A regression parses every active project YAML in
+`ddb/core/configs` and the unified helloworld example through the canonical
+backend loader. The installed-broker smoke test no longer references the
+removed asset or checks unrelated processes by name.
+
 ## Reproducing verification
 
 Final results on this checkout:
@@ -69,7 +78,8 @@ Final results on this checkout:
 | Check | Result |
 | --- | --- |
 | Shared configuration unit tests | 4 passed |
-| Backend unit suite | 349 passed, 2 pre-existing ignored tests |
+| Backend unit suite | 350 passed, 2 pre-existing ignored tests |
+| Installed Mosquitto smoke test | 1 additional ignored-by-default test passed |
 | Frontend unit suite | 338 passed |
 | Full native terminal suite | 36 passed, including 5 real greeter workflows |
 | Exact application-local helloworld config | 1 additional real workflow passed |
@@ -85,6 +95,8 @@ passed. No timeout was increased to hide that change.
 ```bash
 cargo test --manifest-path ddb/Cargo.toml --offline -p ddb-config
 cargo test --manifest-path ddb/Cargo.toml --offline -p ddb --bin ddb
+cargo test --manifest-path ddb/Cargo.toml --offline -p ddb --bin ddb \
+  discovery::tests::test_broker_starter -- --ignored --exact
 cargo test --manifest-path ddb-tui/Cargo.toml --locked --offline --bin ddb-tui
 cargo clippy --manifest-path ddb-tui/Cargo.toml --locked --offline --all-targets -- -D warnings
 cargo clippy --manifest-path ddb/Cargo.toml --offline -p ddb-config --all-targets -- -D warnings
@@ -135,7 +147,10 @@ distributed all-stop can still take several seconds on this checkout.
 4. `c6c71c30` adds the managed single-config greeter case,
    discovery-file restoration, and assertions that default connections do not
    mutate debugger configuration.
-5. The documentation commit contains this audit, the updated guides, and the
+5. `bd7d5fa1` contains this audit, the updated guides, and the
    portable project and frontend-preferences examples.
+6. The final configuration-example cleanup commit preserves unsupported legacy
+   examples in an archive, validates every active project example, corrects the
+   custom broker example, and updates the installed-broker smoke test.
 
 All commits use explicit file allowlists. No commits are pushed automatically.
