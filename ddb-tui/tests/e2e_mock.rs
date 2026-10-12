@@ -49,6 +49,213 @@ impl Drop for OwnedBrokerProcess {
     }
 }
 
+/// Greeters use a fixed connector discovery path. Preserve its exact prior
+/// bytes and refuse a live broker, including when the prior file is absent.
+struct GreeterDiscoveryFile {
+    previous: Option<Vec<u8>>,
+    content: Vec<u8>,
+    port: u16,
+}
+
+impl GreeterDiscoveryFile {
+    fn claim() -> Self {
+        let path = Path::new("/tmp/ddb/service_discovery/config");
+        let previous = match fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("cannot inspect greeter discovery: {error}"),
+        };
+        let port = if let Some(bytes) = &previous {
+            let text = std::str::from_utf8(bytes).unwrap();
+            let mut lines = text.lines();
+            let port = lines
+                .next()
+                .unwrap()
+                .strip_prefix("tcp://127.0.0.1:")
+                .expect("greeter verification requires loopback discovery")
+                .parse::<u16>()
+                .unwrap();
+            assert_eq!(lines.next(), Some("service_discovery/report"));
+            port
+        } else {
+            reserve_port()
+        };
+        let reservation = TcpListener::bind(("127.0.0.1", port))
+            .expect("discovery broker is occupied; do not disturb an existing debugging session");
+        let content = format!("tcp://127.0.0.1:{port}\nservice_discovery/report\n\n").into_bytes();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &content).unwrap();
+        drop(reservation);
+        Self {
+            previous,
+            content,
+            port,
+        }
+    }
+}
+
+impl Drop for GreeterDiscoveryFile {
+    fn drop(&mut self) {
+        let path = Path::new("/tmp/ddb/service_discovery/config");
+        if fs::read(path).ok().as_ref() != Some(&self.content) {
+            return;
+        }
+        if let Some(previous) = &self.previous {
+            let _ = fs::write(path, previous);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, GDB, libstdc++ printers, ddb_runapp and Mosquitto"]
+fn greeter_auto_attach_single_config_managed_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK.lock().unwrap();
+    let discovery = GreeterDiscoveryFile::claim();
+    let workspace = PathBuf::from(
+        std::env::var_os("DDB_GREETER_WORKSPACE").expect("set DDB_GREETER_WORKSPACE"),
+    )
+    .canonicalize()
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let generated_config = directory.path().join("ddb.yaml");
+    let settings = serde_json::json!({
+        "Framework": "grpc",
+        "FrameFilter": {"filter_preset": ["cpp-stdlib", "protobuf-gen", "ddb-runtime"]},
+        "ServiceDiscovery": {"Broker": {"hostname": "127.0.0.1", "port": discovery.port, "managed": {"type": "mosquitto"}}},
+        "Conf": {"auto_shutdown": false, "on_exit": "kill", "base_dir": directory.path().join("state"), "log_dir": directory.path().join("logs"),
+            "Debugger": {"backend": "gdb", "gdb": {"commands": [
+                "python import sys; sys.path.insert(0, '/usr/share/gcc/python'); from libstdcxx.v6 import register_libstdcxx_printers; register_libstdcxx_printers(None)"
+            ]}}},
+        "Tui": {"source_roots": [{"name": "helloworld", "path": workspace, "debugger_path": workspace}], "stack_mode": "distributed", "refresh_ms": 10000,
+            "ddb_path": ddb_e2e_binary(), "backend_log": directory.path().join("backend.log")}
+    });
+    fs::write(&generated_config, serde_yml::to_string(&settings).unwrap()).unwrap();
+    let provided = std::env::var_os("DDB_GREETER_PROJECT_CONFIG").map(PathBuf::from);
+    let config = provided.as_deref().unwrap_or(&generated_config);
+    if provided.is_some() {
+        let project = ddb_config::read_yaml(config).unwrap();
+        let broker = &project["ServiceDiscovery"]["Broker"];
+        assert_eq!(broker["hostname"].as_str(), Some("127.0.0.1"));
+        assert_eq!(broker["managed"]["type"].as_str(), Some("mosquitto"));
+        assert_eq!(
+            broker["port"].as_u64().unwrap_or(10101),
+            u64::from(discovery.port)
+        );
+    }
+    let tui_binary = Path::new(env!("CARGO_BIN_EXE_ddb-tui"));
+    // The generated case exercises `ddb tui`; an existing project exercises
+    // direct ddb-tui and its inline ddb_path. Neither passes any setup flags.
+    let launch = if provided.is_some() {
+        format!(
+            "stty rows 40 cols 140; exec {} {}",
+            shell_quote(tui_binary),
+            shell_quote(config)
+        )
+    } else {
+        format!(
+            "stty rows 40 cols 140; exec env DDB_TUI_PATH={} {} tui {}",
+            shell_quote(tui_binary),
+            shell_quote(&ddb_e2e_binary()),
+            shell_quote(config)
+        )
+    };
+    let mut tui = Tui::spawn_shell(&launch).with_timeline();
+    // Browse a frontend-local file before even creating a debuggee.
+    tui.wait_for_current_frame(|screen| screen.contains("0 sessions"));
+    tui.send(b"o");
+    tui.wait_for("[Local] helloworld");
+    tui.send(b"\r");
+    tui.wait_for("greeter_server.cc");
+    tui.send(b"greeter_server.cc\r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Copyright 2015 gRPC") && !screen.contains("Source explorer")
+    });
+    let app_port = reserve_port();
+    let spawn_app = |role: &str, argument: String| {
+        OwnedTestProcess(Some(
+            Command::new("ddb_runapp")
+                .arg(workspace.join("build").join(format!("greeter_{role}")))
+                .arg("--ddb")
+                .arg(format!("--ddb_proc_alias=tui-{role}"))
+                .arg(argument)
+                .current_dir(workspace.join("build"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        ))
+    };
+    let _server = spawn_app("server", format!("--port={app_port}"));
+    tui.wait_for_current_frame(|screen| screen.contains("1 sessions"));
+    tui.click_topology_thread("tui-server");
+    let server_source = workspace.join("greeter_server.cc");
+    let server_line = fs::read_to_string(&server_source)
+        .unwrap()
+        .lines()
+        .position(|line| line.contains("reply->set_message"))
+        .unwrap()
+        + 1;
+    tui.send(format!("g{}:{server_line}\r", server_source.display()).as_bytes());
+    tui.wait_for_source_marker('▸', server_line);
+    tui.send(b"b");
+    tui.wait_for("DDB breakpoint targets");
+    tui.send(b"\r");
+    tui.wait_for_current_frame(|screen| {
+        !screen.contains("DDB breakpoint targets") && screen.contains("greeter_server.cc")
+    });
+    tui.send(b"\x1b[15~");
+    let deadline = Instant::now() + TIMEOUT;
+    while std::net::TcpStream::connect(("127.0.0.1", app_port)).is_err() {
+        tui.assert_running();
+        assert!(Instant::now() < deadline, "greeter server did not listen");
+        thread::sleep(POLL);
+    }
+    let _client = spawn_app("client", format!("--target=127.0.0.1:{app_port}"));
+    tui.wait_for_current_frame(|screen| screen.contains("2 sessions · 2 groups"));
+    tui.click_topology_thread("tui-client");
+    // Continue the attached client. The server's native RPC breakpoint must hit.
+    tui.send(b"ccc\x1b[15~");
+    tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+    tui.send(b"\x1b2P");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Paused breakpoint hits") && screen.contains("tui-server (")
+    });
+    tui.send(b"\r");
+    tui.wait_for_source_marker('▶', server_line);
+    tui.send(b"wprefix\r");
+    let exact_prefix = |screen: &str| {
+        screen.lines().collect::<Vec<_>>().windows(2).any(|rows| {
+            rows[0]
+                .chars()
+                .skip(105)
+                .collect::<String>()
+                .contains("Watch: prefix :")
+                && rows[1]
+                    .chars()
+                    .skip(105)
+                    .collect::<String>()
+                    .trim_matches(|ch: char| ch == '│' || ch.is_whitespace())
+                    == "\"Hello \""
+        })
+    };
+    tui.wait_for_current_frame(exact_prefix);
+    // Hit inspection retains all-session controls. Cycle back to its thread.
+    tui.send(b"c\x1b[21~");
+    tui.wait_for_source_marker('▶', server_line + 1);
+    tui.wait_for_current_frame(exact_prefix);
+    tui.send(b"r");
+    tui.wait_for_source_marker('▶', server_line + 1);
+    tui.wait_for_current_frame(exact_prefix);
+    let output = tui.quit();
+    assert!(output.contains("\u{1b}[?1049l"));
+    assert!(
+        TcpListener::bind(("127.0.0.1", discovery.port)).is_ok(),
+        "owned broker must stop with managed DDB"
+    );
+}
+
 #[test]
 #[ignore = "requires DDB_GREETER_WORKSPACE, instrumented greeters, ddb_runapp and a free configured loopback discovery port"]
 fn greeter_auto_attach_all_stop_terminal_workflow() {
@@ -86,15 +293,8 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     let workspace = PathBuf::from(
         std::env::var_os("DDB_GREETER_WORKSPACE").expect("set DDB_GREETER_WORKSPACE"),
     );
-    let discovery = fs::read_to_string("/tmp/ddb/service_discovery/config").unwrap();
-    let mut lines = discovery.lines();
-    let endpoint = lines
-        .next()
-        .unwrap()
-        .strip_prefix("tcp://127.0.0.1:")
-        .expect("test requires loopback discovery");
-    let broker_port: u16 = endpoint.parse().unwrap();
-    assert_eq!(lines.next(), Some("service_discovery/report"));
+    let discovery = GreeterDiscoveryFile::claim();
+    let broker_port = discovery.port;
     let reserved = TcpListener::bind(("127.0.0.1", broker_port))
         .expect("discovery port is occupied; do not disturb an existing broker");
     let directory = tempfile::tempdir().unwrap();
@@ -152,7 +352,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
                     .join("examples/debugger-settings/gdb-libstdcxx.yaml")
             });
         Tui::spawn_shell(&format!(
-            "stty rows 40 cols 140; exec {} --debugger-settings {} connect --api {} --refresh-ms 10000",
+            "stty rows 40 cols 140; exec {} --session-profile {} connect --api {} --refresh-ms 10000",
             shell_quote(Path::new(env!("CARGO_BIN_EXE_ddb-tui"))),
             shell_quote(&settings),
             shell_quote(Path::new(&ddb.base_url())),
@@ -359,8 +559,8 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     tui.quit();
     ddb.shutdown();
     assert_eq!(
-        fs::read_to_string("/tmp/ddb/service_discovery/config").unwrap(),
-        discovery
+        fs::read("/tmp/ddb/service_discovery/config").unwrap(),
+        discovery.content
     );
 }
 
@@ -1698,7 +1898,7 @@ fn real_debugger_settings_terminal_workflow() {
         )).unwrap();
         let tui_binary = PathBuf::from(env!("CARGO_BIN_EXE_ddb-tui"));
         let mut tui = Tui::spawn_shell(&format!(
-            "stty rows 40 cols 140; exec {} --debugger-settings {} connect --api {} --refresh-ms 10000",
+            "stty rows 40 cols 140; exec {} --session-profile {} connect --api {} --refresh-ms 10000",
             shell_quote(&tui_binary), shell_quote(&settings), shell_quote(Path::new(&ddb.base_url()))
         ));
         let snapshot = ddb.wait_for_snapshot(|snapshot| {
@@ -2191,22 +2391,18 @@ fn real_debugger_workflow(backend: &str) {
     // The breakpoint and execution checks below need a projected thread.
     tui.wait_for("◎ thread");
 
-    if backend == "gdb" {
-        let snapshot = ddb.wait_for_snapshot(|snapshot| {
-            snapshot.operations.iter().any(|operation| {
-                operation.kind == v2::OperationKind::ConfigureDebugger as i32
-                    && operation.state == v2::OperationState::Completed as i32
-            })
-        });
-        assert_eq!(
-            snapshot
-                .operations
-                .iter()
-                .filter(|operation| operation.kind == v2::OperationKind::ConfigureDebugger as i32)
-                .count(),
-            1
-        );
-    }
+    // Persistent setup is DDB-owned. Connecting a default frontend must not
+    // reconfigure either debugger; only explicit API profiles may do that.
+    let snapshot = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.operations.iter().any(|operation| {
+            operation.kind == v2::OperationKind::DistributedBacktrace as i32
+                && operation.state == v2::OperationState::Completed as i32
+        })
+    });
+    assert!(!snapshot
+        .operations
+        .iter()
+        .any(|operation| operation.kind == v2::OperationKind::ConfigureDebugger as i32));
 
     // Edit a scratch register through the TUI, observe the real backend and
     // refreshed pane, then restore it before allowing the fixture to execute.
