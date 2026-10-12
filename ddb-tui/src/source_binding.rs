@@ -10,6 +10,9 @@ use std::borrow::Cow;
 pub struct DebuggerBinding<'a> {
     pub path: Cow<'a, str>,
     pub owners: Cow<'a, [v2::SourceOwner]>,
+    /// An unscoped local workspace is a view of this exact debugger path
+    /// across sessions, not a claim that the document belongs to one session.
+    unscoped_local: bool,
 }
 
 impl<'a> DebuggerBinding<'a> {
@@ -17,6 +20,8 @@ impl<'a> DebuggerBinding<'a> {
         Some(Self {
             path: source.debugger_path()?,
             owners: source.owners(sessions),
+            unscoped_local: matches!(source, Source::Local(local)
+                if local.root.session_tags.is_empty() && local.owner_hint.is_empty()),
         })
     }
 
@@ -29,10 +34,11 @@ impl<'a> DebuggerBinding<'a> {
 
     pub fn matches_location(&self, session_id: &str, path: &str) -> bool {
         self.path == path
-            && self
-                .owners
-                .iter()
-                .any(|owner| owner.session_id == session_id)
+            && (self.unscoped_local
+                || self
+                    .owners
+                    .iter()
+                    .any(|owner| owner.session_id == session_id))
     }
 
     pub fn marks_breakpoint(
@@ -54,9 +60,11 @@ impl<'a> DebuggerBinding<'a> {
             || (breakpoint.location.line as usize == line
                 && breakpoint.location.src == self.path
                 && breakpoint.target.as_ref().is_some_and(|target| {
-                    self.owners
-                        .iter()
-                        .any(|owner| target_includes(target, &owner.session_id, sessions))
+                    self.unscoped_local
+                        || self
+                            .owners
+                            .iter()
+                            .any(|owner| target_includes(target, &owner.session_id, sessions))
                 }))
     }
 }

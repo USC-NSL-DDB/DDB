@@ -183,6 +183,50 @@ fn bindings_require_exact_debugger_path_and_owner_not_a_display_path_or_suffix()
 }
 
 #[test]
+fn unscoped_local_paths_project_breakpoints_but_never_infer_an_owner() {
+    let mut local = crate::source_types::LocalSource {
+        root: crate::source_types::LocalRoot {
+            name: "application".into(),
+            debugger_path: Some("/build".into()),
+            session_tags: vec![],
+        },
+        path: "main.rs".into(),
+        owner_hint: vec![],
+        owner_instance: None,
+    };
+    let source = crate::source_types::Source::Local(local.clone());
+    let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
+    assert!(binding.single_owner().is_none());
+    assert!(binding.marks_breakpoint(
+        &breakpoint(
+            "future",
+            v2::Target {
+                selector: Some(v2::target::Selector::Broadcast(Default::default()))
+            }
+        ),
+        2,
+        &[]
+    ));
+    assert!(!binding.matches_location("a", "/other/build/main.rs"));
+    local.owner_hint.push(v2::SourceOwner {
+        session_id: "a".into(),
+        ..Default::default()
+    });
+    let source = crate::source_types::Source::Local(local.clone());
+    let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
+    assert!(binding.matches_location("a", "/build/main.rs"));
+    assert!(!binding.matches_location("b", "/build/main.rs"));
+    local.owner_hint.clear();
+    local.root.session_tags = vec!["worker-a".into()];
+    let source = crate::source_types::Source::Local(local);
+    let binding = DebuggerBinding::from_source(&source, &[]).unwrap();
+    assert!(
+        !binding.matches_location("b", "/build/main.rs"),
+        "an unmatched explicit tag must not become unscoped"
+    );
+}
+
+#[test]
 fn breakpoint_creation_defaults_to_the_document_owner_without_changing_selection() {
     let mut app = app(&["a"], true);
     let (sender, mut receiver) = mpsc::channel(2);
