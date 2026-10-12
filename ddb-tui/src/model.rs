@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use ddb_api_client::v2::{self, breakpoint_spec, extension_payload, operation_result, target};
 use ratatui::layout::Rect;
@@ -889,11 +889,13 @@ impl App {
         });
         self.groups = snapshot.groups;
         self.execution_states = snapshot.execution_states;
-        self.breakpoints = snapshot
+        let mut breakpoints = snapshot
             .breakpoints
             .into_iter()
             .filter_map(breakpoint_view)
-            .collect();
+            .collect::<Vec<_>>();
+        stabilize_breakpoints(&mut breakpoints, &self.breakpoints);
+        self.breakpoints = breakpoints;
         self.pending_commands = snapshot.pending_commands.len();
         let panels =
             extension_panel_views(&self.capabilities.extensions, &snapshot.extension_states);
@@ -2894,6 +2896,42 @@ fn operation_result_summary(result: &v2::OperationResult) -> Option<String> {
     })
 }
 
+/// Snapshot vectors are sets, not presentation order. Retain existing rows
+/// and append new identities deterministically without another state cache.
+fn stabilize_breakpoints(incoming: &mut [Breakpoint], previous: &[Breakpoint]) {
+    let positions = previous
+        .iter()
+        .enumerate()
+        .map(|(index, bp)| (bp.id.as_str(), (index, bp)))
+        .collect::<HashMap<_, _>>();
+    let rank = |bp: &Breakpoint| {
+        positions
+            .get(bp.id.as_str())
+            .map_or(usize::MAX, |(index, _)| *index)
+    };
+    incoming.sort_by(|a, b| (rank(a), &a.id).cmp(&(rank(b), &b.id)));
+    for bp in incoming {
+        let members = positions
+            .get(bp.id.as_str())
+            .map(|(_, old)| {
+                old.sub_breakpoints
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| (member.sub_breakpoint_id.as_str(), index))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let rank = |member: &v2::SubBreakpoint| {
+            members
+                .get(member.sub_breakpoint_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        };
+        bp.sub_breakpoints
+            .sort_by(|a, b| (rank(a), &a.sub_breakpoint_id).cmp(&(rank(b), &b.sub_breakpoint_id)));
+    }
+}
+
 fn breakpoint_view(breakpoint: v2::Breakpoint) -> Option<Breakpoint> {
     let spec = breakpoint.spec?;
     let location = match spec.location.as_ref() {
@@ -4351,6 +4389,7 @@ pub use topology_details::{DetailsExport, TopologyDetails};
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;
+pub use breakpoint_hits::MemberState;
 #[path = "frame_sources.rs"]
 pub mod frame_sources;
 #[path = "topology_navigation.rs"]

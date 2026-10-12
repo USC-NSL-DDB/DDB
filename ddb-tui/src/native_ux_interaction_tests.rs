@@ -206,7 +206,7 @@ fn first_breakpoint_stop_selects_its_topology_and_later_concurrent_stops_do_not_
     apply_message(&mut app, UiMessage::Snapshot(snapshot(&["a", "b"], 3)), &tx);
     assert_eq!(app.current_thread().unwrap().id, "thread/b");
     assert_eq!(app.breakpoint_hits().len(), 2);
-    assert!(render(&mut app).contains("[2 paused]"));
+    assert!(render(&mut app).contains("[2 hits]"));
 }
 
 #[test]
@@ -409,6 +409,107 @@ fn a_running_snapshot_releases_pause_focus_before_a_later_process_wide_stop() {
 }
 
 #[test]
+fn breakpoint_rows_stay_in_place_when_frame_inspection_refreshes_snapshot_order() {
+    let mut app = app(&["a", "b"]);
+    let mut first = snapshot(&["a", "b"], 1);
+    let mut second_breakpoint = first.breakpoints[0].clone();
+    second_breakpoint.breakpoint_id = "breakpoint/other".into();
+    first.breakpoints.push(second_breakpoint);
+    first.breakpoints[0].sub_breakpoints = ["a", "b"]
+        .map(|id| v2::SubBreakpoint {
+            sub_breakpoint_id: format!("member/{id}"),
+            session_id: id.into(),
+            ..Default::default()
+        })
+        .into();
+    app.apply_snapshot(first.clone());
+    app.selected_breakpoint = 0;
+    app.selected_breakpoint_site = Some(1);
+    let rows = |app: &App| {
+        app.breakpoint_order()
+            .into_iter()
+            .flat_map(|index| {
+                let bp = &app.breakpoints[index];
+                std::iter::once(bp.id.clone()).chain(
+                    bp.sub_breakpoints
+                        .iter()
+                        .map(|site| site.sub_breakpoint_id.clone()),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let initial_rows = rows(&app);
+    app.apply_frames(
+        ["a", "b"]
+            .map(|owner| v2::Frame {
+                frame_id: format!("frame/{owner}"),
+                thread_id: format!("thread/{owner}"),
+                ..Default::default()
+            })
+            .into(),
+    );
+    app.focus = Focus::Stack;
+    let (tx, mut rx) = mpsc::channel(64);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        &tx,
+    );
+    assert_eq!(app.current_frame().unwrap().thread_id, "thread/b");
+    assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|request| {
+        matches!(request.untracked(), BackendRequest::InspectFrame { frame_id, .. } if frame_id == "frame/b")
+    }));
+    // State-store snapshots are sets of resources; their vectors may be
+    // enumerated differently after inspecting another distributed frame.
+    first.breakpoints[0].sub_breakpoints.reverse();
+    first.breakpoints.reverse();
+    apply_message(&mut app, UiMessage::RefreshSnapshot(first.clone()), &tx);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        &tx,
+    );
+    assert_eq!(app.current_frame().unwrap().thread_id, "thread/a");
+    first.breakpoints.reverse();
+    apply_message(&mut app, UiMessage::Snapshot(first), &tx);
+    assert_eq!(rows(&app), initial_rows);
+    assert_eq!(app.current_breakpoint().unwrap().id, "breakpoint/shared");
+    assert_eq!(
+        app.current_breakpoint().unwrap().sub_breakpoints[app.selected_breakpoint_site.unwrap()]
+            .sub_breakpoint_id,
+        "member/b"
+    );
+
+    let mut added = snapshot(&["a", "b"], 1);
+    added.breakpoints[0].sub_breakpoints = ["0-new", "b", "a"]
+        .map(|id| v2::SubBreakpoint {
+            sub_breakpoint_id: format!("member/{id}"),
+            session_id: "a".into(),
+            ..Default::default()
+        })
+        .into();
+    let mut newcomer = added.breakpoints[0].clone();
+    newcomer.breakpoint_id = "breakpoint/0-new".into();
+    newcomer.sub_breakpoints.clear();
+    let mut other = newcomer.clone();
+    other.breakpoint_id = "breakpoint/other".into();
+    added.breakpoints.extend([newcomer, other]);
+    app.apply_snapshot(added);
+    assert_eq!(
+        rows(&app),
+        [
+            "breakpoint/shared",
+            "member/a",
+            "member/b",
+            "member/0-new",
+            "breakpoint/other",
+            "breakpoint/0-new",
+        ]
+    );
+    assert_eq!(app.selected_breakpoint_site, Some(1));
+}
+
+#[test]
 fn ordinary_action_feedback_does_not_expose_internal_ids() {
     let mut app = app(&["a"]);
     let (tx, mut rx) = mpsc::channel(8);
@@ -431,4 +532,219 @@ fn ordinary_action_feedback_does_not_expose_internal_ids() {
     let screen = render(&mut app);
     assert!(!screen.contains("operation/private-internal-id"));
     assert!(!screen.contains("#1 pending"));
+}
+
+#[test]
+fn breakpoint_member_badges_distinguish_hits_steps_signals_and_running() {
+    let mut app = app(&["a"]);
+    let mut state = snapshot(&["a"], 1);
+    state.breakpoints[0]
+        .sub_breakpoints
+        .push(v2::SubBreakpoint {
+            sub_breakpoint_id: "member/a".into(),
+            session_id: "a".into(),
+            ..Default::default()
+        });
+    app.apply_snapshot(state.clone());
+    assert!(render(&mut app).contains("[1 hit]"));
+    for (kind, label) in [
+        (v2::StopReasonKind::Step, "[stepped]"),
+        (v2::StopReasonKind::Pause, "[paused]"),
+        (v2::StopReasonKind::Signal, "[signal]"),
+        (v2::StopReasonKind::Exception, "[exception]"),
+        (v2::StopReasonKind::Entry, "[entry]"),
+    ] {
+        let mut next = state.clone();
+        next.execution_states[0].stop_reason.as_mut().unwrap().kind = kind as i32;
+        app.apply_snapshot(next);
+        let screen = render(&mut app);
+        assert!(screen.contains(label), "{label}: {screen}");
+        assert!(!screen.contains("[1 hit]"));
+    }
+    app.mark_running(Some("thread/a"));
+    assert!(render(&mut app).contains("[running]"));
+    app.backend_unavailable("offline");
+    assert!(render(&mut app).contains("[offline]"));
+}
+
+#[test]
+fn ctrl_p_and_ctrl_n_follow_arrow_navigation_in_every_non_source_panel() {
+    let fixture = |focus| {
+        let mut app = app(&["a", "b"]);
+        app.focus = focus;
+        app.expanded_pane = true;
+        app.breakpoints.push(app.breakpoints[0].clone());
+        app.breakpoints[1].id = "breakpoint/second".into();
+        app.apply_frames(
+            (0..2)
+                .map(|level| v2::Frame {
+                    frame_id: format!("frame/{level}"),
+                    thread_id: "thread/a".into(),
+                    level,
+                    function_name: Some(format!("function_{level}")),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        app.apply_variables(
+            (0..2)
+                .map(|index| v2::Variable {
+                    variable_id: format!("variable/{index}"),
+                    name: format!("value_{index}"),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        app.apply_registers(
+            (0..2)
+                .map(|index| v2::Register {
+                    name: format!("r{index}"),
+                    value: index.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        app.apply_memory(v2::MemoryBlock {
+            data: vec![0; 64],
+            ..Default::default()
+        });
+        app.extension_panels.push(model::ExtensionPanelView {
+            extension_title: "Test".into(),
+            description: String::new(),
+            panel_title: "Rows".into(),
+            columns: vec!["Value".into()],
+            rows: (0..100).map(|i| vec![i.to_string()]).collect(),
+        });
+        for i in 0..100 {
+            app.push_timeline(format!("event {i}"));
+            app.output.push(&format!("output {i}"));
+        }
+        render(&mut app);
+        app.output.scroll(-4);
+        app.timeline_scroll = 4;
+        app.extension_scroll = 4;
+        app
+    };
+    for focus in [
+        Focus::Threads,
+        Focus::Breakpoints,
+        Focus::Stack,
+        Focus::Variables,
+        Focus::Registers,
+        Focus::Memory,
+        Focus::Extensions,
+        Focus::Timeline,
+        Focus::Output,
+    ] {
+        let mut arrows = fixture(focus);
+        let mut aliases = fixture(focus);
+        let (arrow_tx, _arrow_rx) = mpsc::channel(64);
+        let (alias_tx, _alias_rx) = mpsc::channel(64);
+        let before = render(&mut arrows);
+        for (arrow, alias) in [(KeyCode::Down, 'n'), (KeyCode::Up, 'p')] {
+            handle_key(
+                &mut arrows,
+                KeyEvent::new(arrow, KeyModifiers::NONE),
+                &arrow_tx,
+            );
+            handle_key(
+                &mut aliases,
+                KeyEvent::new(KeyCode::Char(alias), KeyModifiers::CONTROL),
+                &alias_tx,
+            );
+            assert_eq!(
+                render(&mut aliases),
+                render(&mut arrows),
+                "{focus:?} Ctrl+{alias}"
+            );
+            assert!(!aliases.source_explorer.visible);
+            if alias == 'n' {
+                assert_ne!(
+                    render(&mut arrows),
+                    before,
+                    "fixture must move in {focus:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn source_hjkl_moves_the_document_and_ctrl_p_keeps_the_file_picker() {
+    let mut app = app(&["a"]);
+    app.focus = Focus::Source;
+    let source = source_types::Source::Local(source_types::LocalSource {
+        root: source_types::LocalRoot {
+            name: "test".into(),
+            debugger_path: None,
+            session_tags: vec![],
+        },
+        path: "main.rs".into(),
+        owner_hint: vec![],
+        owner_instance: None,
+    });
+    let request = app.source_browser.open_source(source.clone());
+    app.source_browser.apply(
+        request.generation,
+        source_types::Content {
+            source,
+            start_line: 1,
+            line_count: 4,
+            total_lines: 4,
+            content: (0..4)
+                .map(|_| "long source ".repeat(30))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        },
+    );
+    app.source_browser.set_cursor(2);
+    app.source_browser.fit_horizontal(40);
+    let (tx, _rx) = mpsc::channel(64);
+    for (key, line, column) in [('j', 3, 0), ('k', 2, 0), ('l', 2, 8), ('h', 2, 0)] {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+            &tx,
+        );
+        let document = app.source_browser.document().unwrap();
+        assert_eq!((document.cursor, document.column), (line, column), "{key}");
+    }
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &tx,
+    );
+    assert!(app.source_explorer.visible);
+    assert_eq!(app.source_browser.document().unwrap().cursor, 2);
+}
+
+#[test]
+fn ctrl_navigation_uses_modal_rows_from_source_and_leaves_prompt_input_unchanged() {
+    let mut app = app(&["a", "b"]);
+    app.focus = Focus::Source;
+    app.open_breakpoint_hits().unwrap();
+    let (tx, _rx) = mpsc::channel(16);
+    for (key, cursor) in [('n', 1), ('p', 0)] {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
+            &tx,
+        );
+        assert_eq!(app.breakpoint_hit_picker.as_ref().unwrap().cursor, cursor);
+        assert!(!app.source_explorer.visible);
+    }
+    app.breakpoint_hit_picker = None;
+    app.focus = Focus::Breakpoints;
+    app.start_input(InputMode::Evaluate);
+    app.input = "value".into();
+    for key in ['n', 'p'] {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
+            &tx,
+        );
+        assert_eq!(app.input, "value");
+        assert_eq!(app.input_mode, InputMode::Evaluate);
+        assert!(!app.source_explorer.visible);
+    }
 }

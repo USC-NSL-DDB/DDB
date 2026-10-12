@@ -18,7 +18,7 @@ use ratatui::{
 use crate::{
     api::CapabilitiesExt,
     display_text::{horizontal_line, horizontal_text, terminal_text},
-    model::{App, Control, Focus, InputMode, TopologyRowKind, UiAreas},
+    model::{App, Control, Focus, InputMode, MemberState, TopologyRowKind, UiAreas},
 };
 
 const ACCENT: Color = Color::Rgb(86, 156, 214);
@@ -550,6 +550,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     }
     let mut rows = Vec::new();
     let hits = app.breakpoint_hits();
+    let mut member_states = std::collections::HashMap::new();
     let mut previous_file = None;
     for index in app.breakpoint_order() {
         let breakpoint = &app.breakpoints[index];
@@ -564,7 +565,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                         .unwrap_or_else(|| "Non-source / unresolved breakpoints".into()),
                     Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
                 ),
-                0,
+                None,
             ));
             previous_file = Some(breakpoint.file_group());
         }
@@ -641,7 +642,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                     Style::default().fg(MUTED),
                 ),
             ]),
-            current_hits.len(),
+            hit_badge(current_hits.len()),
         ));
         for (site, member) in breakpoint.sub_breakpoints.iter().enumerate() {
             let site_hits = current_hits
@@ -689,7 +690,13 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                         Style::default().fg(MUTED),
                     ),
                 ]),
-                site_hits,
+                Some(hit_badge(site_hits).unwrap_or_else(|| {
+                    member_badge(
+                        *member_states
+                            .entry(member.session_id.as_str())
+                            .or_insert_with(|| app.breakpoint_member_state(&member.session_id)),
+                    )
+                })),
             ));
         }
     }
@@ -702,13 +709,8 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     let first = list_first(selected, rows.len(), area, 1);
     app.breakpoint_viewport.fit(
         rows.iter()
-            .map(|(_, _, line, paused)| {
-                line.width()
-                    + if *paused == 0 {
-                        0
-                    } else {
-                        pause_badge(*paused).len() + 1
-                    }
+            .map(|(_, _, line, badge)| {
+                line.width() + badge.as_ref().map_or(0, |badge| badge.width() + 1)
             })
             .max()
             .unwrap_or(0),
@@ -720,10 +722,10 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
         .collect::<Vec<_>>();
     let items = rows
         .into_iter()
-        .map(|(_, _, line, paused)| {
+        .map(|(_, _, line, badge)| {
             ListItem::new(breakpoint_line(
                 line,
-                paused,
+                badge,
                 app.breakpoint_viewport.column(),
                 area.width.saturating_sub(4) as usize,
             ))
@@ -738,7 +740,11 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
             &if hits.is_empty() {
                 "DDB Breakpoints".into()
             } else {
-                format!("DDB Breakpoints · {} paused", hits.len())
+                format!(
+                    "DDB Breakpoints · {} {}",
+                    hits.len(),
+                    if hits.len() == 1 { "hit" } else { "hits" }
+                )
             },
         ),
         items,
@@ -783,26 +789,46 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     draw_hit_view_toggle(frame, app, area, areas);
 }
 
-fn pause_badge(paused: usize) -> String {
-    if paused == 0 {
-        String::new()
-    } else {
-        format!("[{paused} paused]")
-    }
+fn hit_badge(hits: usize) -> Option<Span<'static>> {
+    (hits > 0).then(|| {
+        Span::styled(
+            format!("[{hits} {}]", if hits == 1 { "hit" } else { "hits" }),
+            Style::default().fg(YELLOW).bg(Color::Rgb(58, 51, 29)),
+        )
+    })
+}
+
+fn member_badge(state: MemberState) -> Span<'static> {
+    use v2::StopReasonKind as Reason;
+    let (label, color) = match state {
+        MemberState::Offline => ("offline", MUTED),
+        MemberState::Unavailable => ("unavailable", MUTED),
+        MemberState::Unknown => ("unknown", MUTED),
+        MemberState::Running => ("running", GREEN),
+        MemberState::Mixed => ("mixed", YELLOW),
+        MemberState::Stopped(Reason::Step) => ("stepped", ACCENT),
+        MemberState::Stopped(Reason::Breakpoint) => ("bp stop", YELLOW),
+        MemberState::Stopped(Reason::Watchpoint) => ("watchpoint", YELLOW),
+        MemberState::Stopped(Reason::Signal) => ("signal", RED),
+        MemberState::Stopped(Reason::Exception) => ("exception", RED),
+        MemberState::Stopped(Reason::Entry) => ("entry", ACCENT),
+        MemberState::Stopped(Reason::Exit) => ("exited", MUTED),
+        MemberState::Stopped(Reason::Pause) => ("paused", MUTED),
+        MemberState::Stopped(Reason::Other) => ("stopped", MUTED),
+        MemberState::Stopped(Reason::Unspecified) => ("unknown", MUTED),
+    };
+    Span::styled(format!("[{label}]"), Style::default().fg(color))
 }
 
 fn breakpoint_line(
     line: Line<'static>,
-    paused: usize,
+    badge: Option<Span<'static>>,
     column: usize,
     width: usize,
 ) -> Line<'static> {
     let line = horizontal_line(line, column);
-    if paused == 0 {
-        return line;
-    }
-    let badge = pause_badge(paused);
-    let badge_width = badge.len();
+    let Some(badge) = badge else { return line };
+    let badge_width = badge.width();
     if width < badge_width + 4 {
         return crate::display_text::truncate_line(line, width);
     }
@@ -810,10 +836,7 @@ fn breakpoint_line(
     let mut line = crate::display_text::truncate_line(line, label_width);
     line.spans
         .push(Span::raw(" ".repeat(width - badge_width - line.width())));
-    line.spans.push(Span::styled(
-        badge,
-        Style::default().fg(YELLOW).bg(Color::Rgb(58, 51, 29)),
-    ));
+    line.spans.push(badge);
     line
 }
 
@@ -2577,7 +2600,7 @@ mod v2_tests {
     fn frame_toolbar_control_is_mouse_addressable() {
         let mut app = App::new("http://localhost".into());
         let screen = render(&mut app, 140, 40);
-        assert!(screen.contains("Show frame source"), "{screen}");
+        assert!(screen.contains("Frame source"), "{screen}");
         assert!(!screen.contains("Frame F8"));
         let (_, area) = app
             .areas
@@ -2648,7 +2671,7 @@ mod v2_tests {
                 "Step over",
                 "Step in",
                 "Step out",
-                "Show frame source",
+                "Frame source",
                 "Scope: Auto",
                 "Refresh",
             ] {
@@ -2671,12 +2694,18 @@ mod v2_tests {
                 .find(|(c, _)| *c == Control::RevealFrame)
                 .unwrap()
                 .1;
-            assert!(navigation.y > run.y);
+            if width >= 140 {
+                assert_eq!(navigation.y, run.y);
+                assert!(!screen.contains("Shift+F11"));
+                assert!(!screen.contains("Auto: Continue/Pause"));
+            } else {
+                assert!(navigation.y > run.y);
+            }
         }
     }
 
     #[test]
-    fn pause_badges_are_pinned_after_the_label_and_keep_history_scrollable() {
+    fn hit_badges_are_pinned_after_the_label_and_keep_history_scrollable() {
         let label = Line::from(vec![
             Span::styled("● ", Style::default().fg(RED)),
             Span::raw(format!(
@@ -2685,25 +2714,25 @@ mod v2_tests {
             )),
         ]);
         for width in [18, 29, 80] {
-            let row = breakpoint_line(label.clone(), 2, 0, width);
+            let row = breakpoint_line(label.clone(), hit_badge(2), 0, width);
             assert!(row.to_string().starts_with("● "));
-            assert!(row.to_string().ends_with("[2 paused]"));
+            assert!(row.to_string().ends_with("[2 hits]"));
             assert_eq!(row.width(), width);
             assert_eq!(row.spans[0].style.fg, Some(RED));
             assert_eq!(row.spans.last().unwrap().style.fg, Some(YELLOW));
-            let end = label.width() + "[2 paused]".len() + 1 - width;
-            let scrolled = breakpoint_line(label.clone(), 2, end, width).to_string();
+            let end = label.width() + "[2 hits]".len() + 1 - width;
+            let scrolled = breakpoint_line(label.clone(), hit_badge(2), end, width).to_string();
             assert!(scrolled.contains("END"), "{scrolled}");
-            assert!(scrolled.ends_with("[2 paused]"));
+            assert!(scrolled.ends_with("[2 hits]"));
         }
-        assert_eq!(breakpoint_line(label.clone(), 0, 0, 80), label);
+        assert_eq!(breakpoint_line(label.clone(), None, 0, 80), label);
         for width in 0..18 {
-            assert!(breakpoint_line(label.clone(), 99, 0, width).width() <= width);
+            assert!(breakpoint_line(label.clone(), hit_badge(99), 0, width).width() <= width);
         }
     }
 
     #[test]
-    fn long_unicode_scope_keeps_its_shortcut_and_tiny_layouts_keep_hits_in_bounds() {
+    fn long_unicode_scope_is_ellipsized_and_tiny_layouts_keep_hits_in_bounds() {
         let mut app = App::new("http://localhost".into());
         app.execution_scope_override = true;
         app.execution_target = Some(crate::api::group_target("group"));
@@ -2720,11 +2749,7 @@ mod v2_tests {
             .iter()
             .find(|(c, _)| *c == Control::CycleScope)
             .unwrap();
-        assert!(screen
-            .lines()
-            .nth(area.y as usize)
-            .unwrap()
-            .contains(" c ]"));
+        assert!(screen.lines().nth(area.y as usize).unwrap().contains(" ]"));
         for width in 1..60 {
             for height in [1, 5, 18, 19, 24] {
                 render(&mut app, width, height);
@@ -3390,16 +3415,14 @@ mod v2_tests {
             ..Default::default()
         }]);
         let screen = render_lines(&mut app, 100, 24);
-        assert!(screen.contains("[1 paused]"), "{screen}");
+        assert!(screen.contains("[1 hit]"), "{screen}");
         assert!(screen.contains("total hits:15"));
         let breakpoint_row = screen
             .lines()
             .find(|line| line.contains("hit_here"))
             .unwrap();
         assert!(breakpoint_row.find('●').unwrap() < breakpoint_row.find("hit_here").unwrap());
-        assert!(
-            breakpoint_row.find("hit_here").unwrap() < breakpoint_row.find("[1 paused]").unwrap()
-        );
+        assert!(breakpoint_row.find("hit_here").unwrap() < breakpoint_row.find("[1 hit]").unwrap());
         assert!(!breakpoint_row.contains("▶ 1 paused"));
         assert!(!breakpoint_row.contains("hit_here:0"));
         app.open_breakpoint_hits().unwrap();
@@ -3415,8 +3438,8 @@ mod v2_tests {
         app.breakpoint_hit_picker = None;
         app.mark_running(Some("thread/hit"));
         let screen = render(&mut app, 100, 24);
-        assert!(!screen.contains("[1 paused]"), "{screen}");
-        assert!(!screen.contains("DDB Breakpoints · 1 paused"), "{screen}");
+        assert!(!screen.contains("[1 hit]"), "{screen}");
+        assert!(!screen.contains("DDB Breakpoints · 1 hit"), "{screen}");
         assert!(screen.contains("total hits:15"));
     }
 

@@ -7,44 +7,42 @@ struct Button {
 }
 
 /// Measurement and hit testing use the same complete, terminal-cell-sized
-/// buttons. Groups wrap independently so navigation never resembles stepping.
+/// buttons. Execution and navigation share a row when both groups fit.
 fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
     let mut buttons = Vec::new();
     let mut row = 0;
+    let mut x: u16 = 0;
     let groups = [
         vec![
-            (Control::Continue, "▶", "Continue".into(), "F5"),
-            (Control::Interrupt, "⏸", "Pause".into(), "F6"),
-            (Control::Next, "↷", "Step over".into(), "F10"),
-            (Control::StepIn, "↓", "Step in".into(), "F11"),
-            (Control::StepOut, "↑", "Step out".into(), "Shift+F11"),
+            (Control::Continue, "▶", "Continue".into()),
+            (Control::Interrupt, "⏸", "Pause".into()),
+            (Control::Next, "↷", "Step over".into()),
+            (Control::StepIn, "↓", "Step in".into()),
+            (Control::StepOut, "↑", "Step out".into()),
         ],
         vec![
-            (Control::RevealFrame, "", "Show frame source".into(), "F8"),
+            (Control::RevealFrame, "", "Frame source".into()),
             (
                 Control::RefreshStack,
                 "↻",
                 if app.stack_mode == crate::cli::StackMode::Local {
-                    "Reload local stack"
+                    "Local stack"
                 } else {
-                    "Reload DDB stack"
+                    "DDB stack"
                 }
                 .into(),
-                "d",
             ),
-            (Control::Refresh, "", "Refresh".into(), "r"),
+            (Control::Refresh, "", "Refresh".into()),
             (
                 Control::CycleScope,
                 "",
                 format!("Scope: {}", app.control_scope_label()),
-                "c",
             ),
         ],
     ];
     for group in groups {
-        let mut x: u16 = 0;
-        let first = buttons.len();
-        for (control, icon, name, key) in group {
+        let mut group_buttons = Vec::new();
+        for (control, icon, name) in group {
             if !available(app, control) {
                 continue;
             }
@@ -64,7 +62,7 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
             };
             let name = terminal_text(&name);
             let name = if control == Control::CycleScope {
-                let space = usize::from(width).saturating_sub(crate::display_text::width(key) + 5);
+                let space = usize::from(width).saturating_sub(4);
                 crate::display_text::truncate_line(Line::raw(name), space).to_string()
             } else {
                 name
@@ -72,7 +70,6 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
             let label = Line::from(vec![
                 Span::raw("[ "),
                 Span::styled(format!("{icon}{name}"), Style::default().fg(color)),
-                Span::styled(format!(" {key}"), Style::default().fg(MUTED)),
                 Span::raw(" ]"),
             ]);
             let button_width = u16::try_from(label.width()).unwrap_or(u16::MAX);
@@ -80,22 +77,41 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
             if button_width > width || button_width == 0 {
                 continue;
             }
-            if x > 0 && x.saturating_add(button_width) > width {
+            group_buttons.push(Button {
+                control,
+                label,
+                area: Rect::new(0, 0, button_width, 1),
+            });
+        }
+        if group_buttons.is_empty() {
+            continue;
+        }
+        let group_width = group_buttons
+            .iter()
+            .map(|button| u32::from(button.area.width))
+            .sum::<u32>()
+            + group_buttons.len().saturating_sub(1) as u32;
+        if x > 0 {
+            if u32::from(x) + 2 + group_width > u32::from(width) {
+                row += 1;
+                x = 0;
+            } else {
+                x += 2; // Larger gap between execution and navigation.
+            }
+        }
+        for mut button in group_buttons {
+            if x > 0 && x.saturating_add(button.area.width) > width {
                 row += 1;
                 x = 0;
             }
-            buttons.push(Button {
-                control,
-                label,
-                area: Rect::new(x, row, button_width, 1),
-            });
-            x = x.saturating_add(button_width).saturating_add(1);
-        }
-        if buttons.len() > first {
-            row += 1;
+            button.area.x = x;
+            button.area.y = row;
+            x = x.saturating_add(button.area.width).saturating_add(1);
+            buttons.push(button);
         }
     }
-    (buttons, row + 1) // The last row is status, never a click target.
+    let height = buttons.last().map_or(1, |button| button.area.y + 2);
+    (buttons, height) // The last row is status, never a click target.
 }
 
 fn available(app: &App, control: Control) -> bool {
@@ -121,7 +137,7 @@ pub(super) fn height(app: &App, width: u16) -> u16 {
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        " DDB Debugger ",
+        " DDB Debugger · ? help ",
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     ));
     let inner = block.inner(area);
@@ -165,7 +181,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiA
         )
     } else {
         format!(
-            " · {} running · {} paused{}",
+            " · {} running · {} stopped",
             app.threads
                 .iter()
                 .filter(|thread| thread.state == "running")
@@ -173,12 +189,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiA
             app.threads
                 .iter()
                 .filter(|thread| thread.state == "stopped")
-                .count(),
-            if !app.execution_scope_override && inner.width >= 100 {
-                " · Auto: Continue/Pause all; Step selected frame"
-            } else {
-                ""
-            }
+                .count()
         )
     };
     frame.render_widget(

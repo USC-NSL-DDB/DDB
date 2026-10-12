@@ -475,6 +475,25 @@ fn handle_event(app: &mut App, event: Event, requests: &mpsc::Sender<BackendRequ
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendRequest>) {
+    let overlay = app.topology_details.is_some()
+        || app.session_termination.is_some()
+        || app.source_explorer.visible
+        || app.show_help
+        || app.breakpoint_target_picker.is_some()
+        || app.signal_picker.is_some()
+        || app.breakpoint_hit_picker.is_some();
+    let key = if app.input_mode == InputMode::Normal
+        && (app.focus != Focus::Source || overlay)
+        && key.modifiers == KeyModifiers::CONTROL
+    {
+        match key.code {
+            KeyCode::Char('p') => KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            KeyCode::Char('n') => KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            _ => key,
+        }
+    } else {
+        key
+    };
     if let Some(details) = app.topology_details.as_mut() {
         match key.code {
             KeyCode::Char('y') if key.modifiers.is_empty() => {
@@ -660,7 +679,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Char('/') if app.focus == Focus::Source => {
             start_source_search_prompt(app, requests)
         }
-        KeyCode::Char('n' | 'N') if app.focus == Focus::Source => {
+        KeyCode::Char('n' | 'N') if app.focus == Focus::Source && key.modifiers.is_empty() => {
             find_source(app, requests, None, key.code == KeyCode::Char('N'));
         }
         KeyCode::Esc if app.source_search.pending() => {
@@ -711,6 +730,14 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Left | KeyCode::Right if app.focus == Focus::Source => {
             app.source_browser
                 .scroll_horizontal(if key.code == KeyCode::Left { -8 } else { 8 });
+        }
+        KeyCode::Char('h' | 'l') if app.focus == Focus::Source && key.modifiers.is_empty() => {
+            app.source_browser
+                .scroll_horizontal(if key.code == KeyCode::Char('h') {
+                    -8
+                } else {
+                    8
+                });
         }
         KeyCode::Left | KeyCode::Right | KeyCode::Home
             if app.focus == Focus::Extensions && key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -4167,7 +4194,13 @@ mod tests {
         ]));
         app.focus = Focus::Breakpoints;
         app.expanded_pane = true;
-        app.selected_breakpoint_site = Some(1);
+        app.selected_breakpoint = app.breakpoints.iter().position(|bp| bp.id == "b").unwrap();
+        app.selected_breakpoint_site = app
+            .current_breakpoint()
+            .unwrap()
+            .sub_breakpoints
+            .iter()
+            .position(|member| member.sub_breakpoint_id == "keep");
         let target = app.current_breakpoint().unwrap().target.clone();
         let (tx, mut rx) = mpsc::channel(8);
         handle_key(
@@ -4176,9 +4209,15 @@ mod tests {
             &tx,
         );
         assert!(app.breakpoints_grouped);
-        assert_eq!(app.breakpoint_order(), vec![1, 0]);
+        assert_eq!(
+            app.breakpoint_order()
+                .into_iter()
+                .map(|index| app.breakpoints[index].id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
         assert_eq!(app.current_breakpoint().unwrap().id, "b");
-        assert_eq!(app.selected_breakpoint_site, Some(1));
+        assert_eq!(app.selected_breakpoint_site, Some(0));
         assert_eq!(app.current_breakpoint().unwrap().target, target);
         assert!(rx.try_recv().is_err());
 

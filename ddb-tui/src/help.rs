@@ -39,6 +39,11 @@ const ENTRIES: &[Entry] = &[
         description: "Browse rows; Left/Right scroll columns; Home resets columns",
     },
     Entry {
+        section: "Panes",
+        keys: "Ctrl+p / Ctrl+n",
+        description: "Previous / next row in non-Source panes and navigation overlays",
+    },
+    Entry {
         section: "Execution",
         keys: "F5 / F6",
         description: "Continue / pause all sessions by default",
@@ -85,12 +90,17 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Source",
+        keys: "h / j / k / l",
+        description: "Scroll left / move down / move up / scroll right, like the arrow keys",
+    },
+    Entry {
+        section: "Source",
         keys: "f",
         description: "Follow the selected thread's execution location",
     },
     Entry {
         section: "Source",
-        keys: "F8 / Show frame source",
+        keys: "F8 / Frame source",
         description: "Open or retry the selected stack frame's source; navigation only, never resumes execution",
     },
     Entry {
