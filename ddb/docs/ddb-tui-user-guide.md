@@ -41,6 +41,51 @@ only for source-tree development or deliberate binary selection. Use
 `--startup-timeout SECONDS` for unusually slow hosts and `--backend-log PATH`
 to retain backend output at a specific new path.
 
+### One file for the project
+
+Put persistent GDB/LLDB setup under `Conf.Debugger` and frontend preferences
+under `Tui` in that same YAML. The frontend reads its `Tui` section using the
+shared `ddb-config` schema. DDB owns native session startup and does not open
+frontend-local source paths. For example:
+
+```yaml
+Conf:
+  Debugger:
+    backend: gdb
+    gdb:
+      commands: [set print elements 33]
+Tui:
+  source_roots:
+    - name: application
+      path: ../src
+      debugger_path: /build/application
+  stack_mode: distributed
+  source_search: exact
+```
+
+`o` browses this local tree before any target attaches. `Tui.source_roots` does
+not export files through the backend; DDB `SourceRoots` remains an explicit
+backend-host export. Relative paths in these sections resolve against the
+containing YAML. Source mappings in `Conf.Debugger` refer to absolute
+debugger-host paths instead.
+
+Only the selected backend's commands run, once per session bootstrap, including
+automatic attachment. Refreshing or reconnecting the TUI does not repeat them.
+Only use trusted configurations; native commands can control the debuggee.
+Unknown fields and invalid values are rejected.
+
+Optional `--tui-config preferences.yaml` reads frontend-only fields without a
+`Tui` wrapper. Defaults are overridden by project `Tui`, then the preferences
+file, then explicit CLI options. `--ddb-set Conf.Debugger.backend=lldb` forwards
+a backend override to DDB's canonical parser. Managed transport/authentication
+and frontend settings cannot be changed with that option. Separate
+`--source-workspace` files and API-based `--session-profile` are optional, not
+required for the normal project workflow.
+
+The [complete configuration reference](../../ddb-tui/README.md#one-project-configuration)
+and [instrumented helloworld example](../../ddb-tui/examples/helloworld.yaml)
+include C++ printer setup and automatic discovery.
+
 ### Launch a local program
 
 ```bash
@@ -124,7 +169,7 @@ not whichever thread is selected. Unmapped files cannot create source
 breakpoints. Multiple matching logical breakpoints require a choice in the
 breakpoint manager before deletion.
 
-Pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
+Prefer inline `Tui.source_roots`. Optionally pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
 directories on the frontend host. This separate file contains a `roots` list of
 `name`, `path`, optional `debugger_path`, and optional `session_tags`. Paths are
 relative to that file. DDB exports and local directories are labelled separately;

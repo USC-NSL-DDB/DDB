@@ -70,7 +70,51 @@ Conf:
 ```
 
 Static attach and binary-launch sessions use the same configuration shape for
-GDB and LLDB. New configuration uses `PrerunDebuggerCommands` and
+GDB and LLDB. Persistent backend-specific setup belongs in the project YAML:
+
+```yaml
+Conf:
+  Debugger:
+    backend: gdb
+    pretty_printing: true
+    source_mappings:
+      - from: /build/application
+        to: /srv/source/application
+    # Optional temporary function breakpoint, installed after symbols load.
+    entry_function: main
+    gdb:
+      commands:
+        - set print elements 33
+    lldb:
+      commands:
+        - settings set target.max-children-count 33
+Tui:
+  source_roots:
+    - name: frontend-checkout
+      path: ../checkout
+      debugger_path: /build/application
+  stack_mode: distributed
+```
+
+DDB runs only the selected backend's commands, once per session bootstrap.
+Setup runs after attach or symbol loading, before execution and framework
+post-start actions. Failure prevents activation; prior side effects are not
+rolled back. Source mappings use absolute debugger-host paths and preserve
+list order. Native commands require a trusted configuration file. GDB's
+`pretty_printing` enables MI visualizers but does not load external packages
+or change auto-load trust. Frontend refresh/reconnect does not repeat setup.
+
+`Tui` fields are frontend-owned. DDB validates their shared schema without
+opening frontend files or exporting them through the API. `SourceRoots`
+remains the explicit backend source-export setting. Launch the combined file
+with `ddb tui project.yaml`; see the [TUI configuration guide](../../ddb-tui/README.md#one-project-configuration).
+
+`ddb serve --set Conf.Debugger.backend=lldb project.yaml` applies a typed
+configuration override. `ddb tui --ddb-set Conf.Debugger.backend=lldb project.yaml`
+forwards it to that same loader. Managed startup reserves API transport and
+authentication settings. Overrides never run through a shell.
+
+Backend-neutral hooks remain available as `PrerunDebuggerCommands` and
 `PostrunDebuggerCommands`. The legacy `PrerunGdbCommands` and
 `PostrunGdbCommands` keys remain accepted when reading existing files.
 

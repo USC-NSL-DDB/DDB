@@ -25,6 +25,13 @@ change an evaluation context, or move execution.
 
 ## Configure exported directories
 
+Frontend-local browsing can instead use `Tui.source_roots` in the same project
+YAML. Those paths belong to the TUI host and are not API exports. The backend
+validates their shared schema but never opens them. See the
+[single-file TUI configuration](../../../ddb-tui/README.md#one-project-configuration).
+The operations below expose only explicit DDB `SourceRoots` and debugger-known
+sources, never frontend-local grants.
+
 Add `SourceRoots` to the DDB startup YAML:
 
 ```yaml

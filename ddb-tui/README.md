@@ -26,6 +26,101 @@ negotiate API v2, and shut down only that owned backend when the TUI exits. A
 distributed configuration uses the same command; remote targets do not require
 manual frontend/backend orchestration.
 
+### One project configuration
+
+The project YAML contains DDB settings, persistent debugger setup under
+`Conf.Debugger`, and frontend-only preferences under `Tui`:
+
+```yaml
+Framework: grpc
+ServiceDiscovery:
+  Broker:
+    hostname: 127.0.0.1
+    managed:
+      type: mosquitto
+Conf:
+  on_exit: kill
+  Debugger:
+    backend: gdb
+    gdb:
+      commands:
+        - set print elements 33
+    lldb:
+      commands:
+        - settings set target.max-children-count 33
+Tui:
+  source_roots:
+    - name: application
+      path: ..
+      debugger_path: /absolute/build/path/application
+  stack_mode: distributed
+  source_search: exact
+  values_formatting: pretty-printers
+```
+
+Run `ddb tui .ddb/ddb.yaml`, then press `o` to browse the local source tree
+before any application attaches. `Tui.source_roots` grants read access only to
+the frontend. It does not export that directory through DDB's API. Use DDB's
+separate `SourceRoots` setting when backend-host files should be exported.
+
+Native setup belongs to DDB and runs once for each debugger session, including
+automatic attachments. A frontend refresh or reconnect does not repeat it.
+Only the matching backend's command list runs. Commands execute after attach
+or symbol loading and before launch execution or framework post-start actions.
+Failures abort session bootstrap rather than resuming with partial setup.
+Only open trusted project configurations; native commands have debugger-console
+authority. DDB does not search the current directory for configuration files.
+
+Optional `Conf.Debugger.source_mappings` is a list of `{from: /build, to: /source}`
+entries with absolute paths on the debugger host. `entry_function` installs a
+temporary function breakpoint before native commands. It does not rewind a
+process that has passed the function. `pretty_printing` enables GDB's MI
+visualizers by default; it does not install printer packages or relax GDB trust.
+
+Supported `Tui` fields are `source_roots`, `stack_mode`, `source_search`,
+`values_formatting`, `trace_api`, `refresh_ms`, `startup_timeout_secs`,
+`watch_file`, `backend_log`, and `ddb_path`. Paths in `Tui` and `SourceRoots`
+resolve against their containing configuration file, not the current directory.
+`debugger_path` remains an explicit absolute path from the debug information.
+Unknown configuration fields are rejected. Backend-only DDB validates `Tui`
+but never opens its frontend-local paths.
+
+An optional frontend preferences file, such as [examples/tui.yaml](examples/tui.yaml),
+has the same fields without a `Tui` wrapper:
+
+```bash
+ddb tui --tui-config ./tui.yaml ./.ddb/ddb.yaml
+ddb-tui --tui-config ./tui.yaml connect --api http://127.0.0.1:5000
+```
+
+Precedence is built-in defaults, project `Tui`, explicit `--tui-config`, then
+explicit command-line options. Root lists replace rather than concatenate.
+`--source-workspace` explicitly replaces the resolved local root list.
+Use `--trace-api=false` to override a configured `true`. Connect mode rejects
+backend-launch settings in frontend preferences; it never changes the external
+backend's startup configuration.
+
+Override backend configuration through DDB's canonical parser:
+
+```bash
+ddb tui --ddb-set Conf.Debugger.backend=lldb ./.ddb/ddb.yaml
+ddb serve --set Conf.Debugger.backend=lldb ./.ddb/ddb.yaml
+```
+
+`--ddb-set` accepts a dotted DDB key and a YAML value, not shell code. Repeated
+assignments apply in order, with the last value winning. Types and unknown keys
+are checked by DDB. Managed mode rejects replacing `Conf`, its `api_*` fields,
+and frontend `Tui` settings. Private authentication, transport, readiness, and
+lifecycle remain supervisor-owned. `--ddb-arg` remains available for supported
+logging, telemetry, and command-worker CLI options.
+
+For instrumented gRPC greeters, copy [examples/helloworld.yaml](examples/helloworld.yaml)
+to the application's `.ddb/ddb.yaml`, set its one `debugger_path`, and launch
+with `ddb tui .ddb/ddb.yaml`. Start `ddb_runapp ./greeter_server --ddb` and
+`ddb_runapp ./greeter_client --ddb` in separate terminals. The example includes
+explicit trusted GCC printer loading, so no workspace or printer-profile flags
+are needed. Quitting kills debugged applications as configured by `on_exit`.
+
 Launch or attach without writing YAML:
 
 ```bash
@@ -136,7 +231,7 @@ If `/usr/share/gcc/python` is a trusted formatter installation on the **DDB host
 opt in with:
 
 ```bash
---debugger-settings /absolute/path/to/ddb-tui/examples/debugger-settings/gdb-libstdcxx.yaml
+--session-profile /absolute/path/to/ddb-tui/examples/debugger-settings/gdb-libstdcxx.yaml
 ```
 
 This example explicitly imports the installed GCC printers through the existing
@@ -173,9 +268,15 @@ The TUI requires the current API v2 and uses the typed Rust SDK for every
 backend request. There is no v1 fallback or alternate protocol mode. Upgrade
 the backend and frontend together when the API contract changes.
 
-### Debugger session settings
+### Optional interactive session profiles
 
-Pass `--debugger-settings /absolute/path/settings.yaml` to apply backend settings
+Prefer the project `Conf.Debugger` section for persistent debugger setup.
+Use `--session-profile /absolute/path/profile.yaml` only to explicitly apply
+interactive settings through the API to ready sessions, including on an
+externally owned backend. This replaces the old `--debugger-settings` option;
+the old option is not accepted.
+
+The profile applies backend settings
 to each ready GDB/LLDB session, including sessions discovered by automatic attach.
 The file is explicit opt-in and is read before starting the managed backend.
 
@@ -200,7 +301,7 @@ backend's commands through `ExecuteRawCommand` in native CLI syntax. Mapping
 paths refer to the debugger host; they are not local TUI source-workspace paths
 and are not resolved relative to this YAML file. Prefer absolute paths.
 
-`entry_function` applies once to each ready/stopped GDB or LLDB session, including
+In this optional API profile, `entry_function` applies once to each ready/stopped GDB or LLDB session, including
 later automatic attachments. It does not resume execution or rewind a process
 that has already passed the function. Omit it to leave entry breakpoints alone.
 Use a function present in each target program, or use the interactive function
@@ -793,12 +894,11 @@ also checks a second TUI in explicit local mode: the same callee
 retains source and variable inspection while the cross-session caller is absent.
 Run only these cases with `cargo test --test e2e_mock distributed_caller_memory -- --ignored --test-threads=1`.
 
-The opt-in auto-attach greeter regression additionally requires an instrumented
-gRPC helloworld checkout, `ddb_runapp`, Mosquitto, and an existing
-`/tmp/ddb/service_discovery/config` pointing at a free loopback broker port with
-topic `service_discovery/report`. It refuses an occupied port and does not rewrite
-the discovery file. It owns its broker and applications; do not run another
-discovery session while this test runs.
+The opt-in auto-attach greeter regressions additionally require an instrumented
+gRPC helloworld checkout, `ddb_runapp`, and Mosquitto. They reserve a free loopback
+broker port, preserve and restore the prior `/tmp/ddb/service_discovery/config`
+bytes, and refuse an occupied configured broker port. They own their brokers
+and applications; do not run another discovery session while these tests run.
 
 ```bash
 DDB_GREETER_WORKSPACE=/absolute/path/to/grpc/examples/cpp/helloworld \
@@ -813,6 +913,17 @@ measures continue through a canonical snapshot showing the server breakpoint
 and every thread stopped. The subsequent hit-owner timing includes snapshot
 verification and explicit owner navigation, not just terminal painting. These
 tests retain the ordinary 15-second readiness deadlines.
+
+`greeter_auto_attach_single_config_managed_terminal_workflow` launches through
+`ddb tui` with one project file and no source-workspace or session-profile flags.
+It browses local sources before attach, automatically attaches both greeters,
+hits the server RPC breakpoint, inspects an exact `"Hello "` string, steps over
+the assignment, refreshes without losing formatting, and checks owned-broker
+shutdown. It requires trusted GCC printers at `/usr/share/gcc/python`.
+Set `DDB_GREETER_PROJECT_CONFIG=/absolute/path/to/helloworld/.ddb/ddb.yaml`
+to exercise an existing project unchanged through direct `ddb-tui`, including
+its inline `ddb_path` and config-relative source roots. The project must use
+the free configured loopback Mosquitto port and the `helloworld` local root.
 
 The `greeter_auto_attach_pretty_string_terminal_workflow` case uses the explicit
 libstdc++ profile above and requires its formatter package on the DDB host. Set
