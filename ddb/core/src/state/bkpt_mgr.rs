@@ -1,9 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicBool, AtomicU64},
-        Arc, RwLock,
-    },
+    sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
 use super::GroupId;
@@ -216,8 +213,16 @@ pub struct BkptMeta {
     loc: BkptLoc,
     properties: BreakpointProperties,
     enabled: Arc<AtomicBool>,
-    times: Arc<AtomicU64>,
+    hits: Arc<RwLock<BreakpointHitCounts>>,
     sub_bkpt_counter: Arc<SimpleCounter>,
+}
+
+/// One consistency unit for logical and installed-member observed hits.
+/// The logical total includes members that have since been removed.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BreakpointHitCounts {
+    pub total: u64,
+    pub members: HashMap<(u64, SessionId), u64>,
 }
 
 impl BkptMeta {
@@ -230,7 +235,7 @@ impl BkptMeta {
             loc,
             properties,
             enabled: Arc::new(AtomicBool::new(enabled)),
-            times: Arc::new(AtomicU64::new(0)),
+            hits: Arc::default(),
             sub_bkpt_counter: Arc::new(SimpleCounter::new()),
         }
     }
@@ -268,20 +273,19 @@ impl BkptMeta {
         self.enabled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn set_times(&self, times: u64) {
-        self.times.store(times, std::sync::atomic::Ordering::SeqCst);
+    fn record_hit(&self, subbkpt_id: u64, sid: SessionId) {
+        let mut hits = self.hits.write().unwrap();
+        hits.total = hits.total.saturating_add(1);
+        let member = hits.members.entry((subbkpt_id, sid)).or_default();
+        *member = member.saturating_add(1);
     }
 
-    fn record_hit(&self) {
-        let _ = self.times.fetch_update(
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-            |times| Some(times.saturating_add(1)),
-        );
+    pub(crate) fn hit_counts(&self) -> BreakpointHitCounts {
+        self.hits.read().unwrap().clone()
     }
 
     pub fn times(&self) -> u64 {
-        self.times.load(std::sync::atomic::Ordering::SeqCst)
+        self.hits.read().unwrap().total
     }
 
     pub fn location(&self) -> &BkptLoc {
@@ -725,7 +729,7 @@ impl BreakpointMgr {
             .get(&(sid, local_bkpt_id))
             .copied()?;
         let breakpoint = state.bkpts.get(&bkpt_id)?.clone();
-        breakpoint.record_hit();
+        breakpoint.record_hit(subbkpt_id, sid);
         Some((bkpt_id, subbkpt_id, breakpoint))
     }
 
@@ -859,7 +863,45 @@ mod tests {
         assert_eq!((first.0, second.0), (breakpoint.id(), breakpoint.id()));
         assert_eq!(second.2.times(), 2);
         assert_eq!(mgr.breakpoint(breakpoint.id()).unwrap().times(), 2);
+        let counts = breakpoint.hit_counts();
+        let member = breakpoint.sub_breakpoints()[0].id();
+        assert_eq!(counts.members[&(member, 4)], 1);
+        assert_eq!(counts.members[&(member, 5)], 1);
         assert!(mgr.record_breakpoint_hit(6, 61).is_none());
+    }
+
+    #[test]
+    fn hit_snapshots_are_consistent_during_concurrent_distributed_hits() {
+        let mgr = BreakpointMgr::new();
+        let breakpoint = mgr
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
+                vec![SubBkptSpec::Group {
+                    group_id: GroupId::new(7),
+                    locals: vec![(4, 41), (5, 51)],
+                }],
+            )
+            .unwrap();
+        std::thread::scope(|scope| {
+            for (sid, local) in [(4, 41), (5, 51)] {
+                let mgr = &mgr;
+                scope.spawn(move || {
+                    for _ in 0..1000 {
+                        mgr.record_breakpoint_hit(sid, local).unwrap();
+                    }
+                });
+            }
+            for _ in 0..1000 {
+                let snapshot = crate::state::BreakpointSnapshot::from(&breakpoint);
+                assert_eq!(snapshot.times, snapshot.member_hits.values().sum::<u64>());
+            }
+        });
+        assert_eq!(breakpoint.times(), 2000);
+        mgr.record_local_bkpt_deletion(4, 41);
+        assert_eq!(mgr.breakpoint(breakpoint.id()).unwrap().times(), 2000);
+        mgr.record_breakpoint_hit(5, 51).unwrap();
+        assert_eq!(mgr.breakpoint(breakpoint.id()).unwrap().times(), 2001);
     }
 
     #[test]

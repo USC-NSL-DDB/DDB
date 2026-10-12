@@ -419,13 +419,20 @@ impl<'a> ProjectionContext<'a> {
                             )),
                         });
                     }
-                    sub_breakpoints.push(self.sub_breakpoint(
-                        snapshot,
-                        format!("{}:{id}", snapshot.id),
-                        session_id,
-                        None,
-                        line,
-                    )?);
+                    sub_breakpoints.push(
+                        self.sub_breakpoint(
+                            snapshot,
+                            format!("{}:{id}", snapshot.id),
+                            session_id,
+                            None,
+                            line,
+                            snapshot
+                                .member_hits
+                                .get(&(*id, *target_session))
+                                .copied()
+                                .unwrap_or(0),
+                        )?,
+                    );
                 }
                 SubBreakpointSnapshot::Group {
                     id,
@@ -451,6 +458,7 @@ impl<'a> ProjectionContext<'a> {
                             self.ids.encode(ResourceIdKind::Session, sid)?,
                             Some(group_id.clone()),
                             line,
+                            snapshot.member_hits.get(&(*id, *sid)).copied().unwrap_or(0),
                         )?);
                     }
                 }
@@ -517,6 +525,7 @@ impl<'a> ProjectionContext<'a> {
         session_id: String,
         inherited_from_group_id: Option<String>,
         line: u32,
+        hit_count: u64,
     ) -> Result<SubBreakpoint, ApplicationError> {
         let mut resource = SubBreakpoint {
             sub_breakpoint_id: self
@@ -538,7 +547,7 @@ impl<'a> ProjectionContext<'a> {
             }),
             verified: true,
             message: None,
-            hit_count: 0,
+            hit_count,
             revision: 0,
         };
         resource.revision = self

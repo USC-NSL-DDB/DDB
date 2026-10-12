@@ -3744,6 +3744,16 @@ mod tests {
         )
         .await;
         assert!(breakpoint_hit.resource_revision > breakpoint_created.resource_revision);
+        let Some(state_event::Payload::Upsert(upsert)) = &breakpoint_hit.payload else {
+            panic!("breakpoint hits must publish a resource upsert");
+        };
+        let Some(ddb_api_types::v2::resource_upsert::Resource::Breakpoint(hit)) = &upsert.resource
+        else {
+            panic!("breakpoint hit event must contain the updated breakpoint");
+        };
+        assert_eq!(hit.hit_count, 1);
+        assert_eq!(hit.sub_breakpoints[0].hit_count, 1);
+        assert!(hit.sub_breakpoints[0].revision > breakpoint.sub_breakpoints[0].revision);
 
         let internal_breakpoint = service
             .ids
@@ -4021,9 +4031,22 @@ mod tests {
         );
         assert!(second.revision > first.revision);
 
+        model.record_breakpoint_hit(42, 7).unwrap();
+        model.record_breakpoint_hit(43, 8).unwrap();
+        model.record_breakpoint_hit(42, 7).unwrap();
+        let hits = read();
+        assert_eq!(hits.hit_count, 3);
+        assert_eq!(hits.sub_breakpoints[0].hit_count, 2);
+        assert_eq!(hits.sub_breakpoints[1].hit_count, 1);
+        assert_eq!(read(), hits, "reads do not increment hit counters");
+
         model.record_local_breakpoint_deletion(42, 7);
         let remaining = read();
-        assert_eq!(remaining.sub_breakpoints, second.sub_breakpoints[1..]);
+        assert_eq!(remaining.sub_breakpoints, hits.sub_breakpoints[1..]);
+        assert_eq!(
+            remaining.hit_count, 3,
+            "retiring a member preserves history"
+        );
         assert!(remaining.verified);
         model.record_local_breakpoint_deletion(43, 8);
         assert_eq!(
@@ -4080,7 +4103,14 @@ mod tests {
             .remove(0);
         assert_eq!(hit.hit_count, initial.hit_count + 1);
         assert_eq!(hit.revision, initial.revision + 1);
-        assert_eq!(hit.sub_breakpoints, initial.sub_breakpoints);
+        assert_eq!(
+            hit.sub_breakpoints[0].hit_count,
+            initial.sub_breakpoints[0].hit_count + 1
+        );
+        assert_eq!(
+            hit.sub_breakpoints[0].revision,
+            initial.sub_breakpoints[0].revision + 1
+        );
         assert_eq!(
             service
                 .list_breakpoints(ListBreakpointsRequest::default())
