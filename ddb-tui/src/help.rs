@@ -85,8 +85,13 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Source",
-        keys: "f / F8",
-        description: "Follow execution / reveal or retry the selected frame's source",
+        keys: "f",
+        description: "Follow the selected thread's execution location",
+    },
+    Entry {
+        section: "Source",
+        keys: "F8 / Show frame source",
+        description: "Open or retry the selected stack frame's source; navigation only, never resumes execution",
     },
     Entry {
         section: "Source",
@@ -126,7 +131,7 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         section: "Breakpoints",
-        keys: "H / Hits button",
+        keys: "H / Paused button",
         description: "Switch all breakpoints / live hits grouped by DDB group and session; Enter/click opens the owning frame",
     },
     Entry {

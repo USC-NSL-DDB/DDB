@@ -206,7 +206,7 @@ fn first_breakpoint_stop_selects_its_topology_and_later_concurrent_stops_do_not_
     apply_message(&mut app, UiMessage::Snapshot(snapshot(&["a", "b"], 3)), &tx);
     assert_eq!(app.current_thread().unwrap().id, "thread/b");
     assert_eq!(app.breakpoint_hits().len(), 2);
-    assert!(render(&mut app).contains("▶ 2 paused"));
+    assert!(render(&mut app).contains("[2 paused]"));
 }
 
 #[test]

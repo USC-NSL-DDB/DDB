@@ -58,6 +58,35 @@ pub fn width(input: &str) -> usize {
     Span::raw(terminal_text(input)).width()
 }
 
+/// Keep styles and grapheme clusters intact when reserving cells for a badge
+/// or shortcut. An ellipsis makes clipped information explicit.
+pub fn truncate_line(line: Line<'static>, maximum: usize) -> Line<'static> {
+    if line.width() <= maximum {
+        return line;
+    }
+    if maximum == 0 {
+        return Line::default();
+    }
+    let mut spans = Vec::new();
+    let style = line.style;
+    let mut used = 0;
+    'outer: for span in line.spans {
+        let mut text = String::new();
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let width = Span::raw(grapheme.symbol).width();
+            if used + width > maximum - 1 {
+                spans.push(Span::styled(text, span.style));
+                break 'outer;
+            }
+            used += width;
+            text.push_str(grapheme.symbol);
+        }
+        spans.push(Span::styled(text, span.style));
+    }
+    spans.push(Span::raw("…"));
+    Line::from(spans).style(style)
+}
+
 /// Clip by terminal cells, preserving grapheme clusters. A wide glyph bisected
 /// by the viewport edge becomes padding instead of shifting the following text.
 pub fn horizontal_text(input: &str, column: usize) -> String {
@@ -114,5 +143,17 @@ mod tests {
         assert_eq!(horizontal_text("A界e\u{301}Z", 3), "e\u{301}Z");
         assert_eq!(horizontal_text("abc", 100), "");
         assert_eq!(horizontal_text("\t\x1btest", 0), " �test");
+    }
+
+    #[test]
+    fn truncation_preserves_styles_graphemes_and_cell_bounds() {
+        let style = Style::default().fg(ratatui::style::Color::Red);
+        let line = Line::from(vec![Span::styled("界e\u{301}AB", style)]);
+        assert_eq!(truncate_line(line.clone(), 4).to_string(), "界e\u{301}…");
+        assert_eq!(truncate_line(line.clone(), 2).to_string(), "…");
+        assert_eq!(truncate_line(line.clone(), 1).to_string(), "…");
+        assert_eq!(truncate_line(line.clone(), 0).width(), 0);
+        assert_eq!(truncate_line(line.clone(), 20), line);
+        assert_eq!(truncate_line(line, 4).spans[0].style, style);
     }
 }

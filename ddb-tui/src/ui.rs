@@ -1,5 +1,7 @@
 #[path = "source_explorer_ui.rs"]
 mod explorer;
+#[path = "toolbar_ui.rs"]
+mod toolbar;
 
 use ddb_api_client::v2::{self, target};
 use ratatui::{
@@ -53,15 +55,15 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(12),
+            Constraint::Length(toolbar::height(app, root.width)),
+            Constraint::Min(1),
             Constraint::Length(3),
             Constraint::Length(1),
         ])
         .split(root);
 
     let mut areas = UiAreas::default();
-    draw_toolbar(frame, app, rows[0], &mut areas);
+    toolbar::draw(frame, app, rows[0], &mut areas);
 
     if app.expanded_pane || root.width < 100 || root.height < 28 {
         draw_compact_panel(frame, app, rows[1], &mut areas);
@@ -345,111 +347,6 @@ fn draw_mini_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
-    let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        " DDB Debugger ",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let controls = [
-        (Control::Continue, "▶ Continue".to_string(), 11),
-        (Control::Interrupt, "⏸ Pause".to_string(), 9),
-        (Control::Next, "↷ Next".to_string(), 8),
-        (Control::StepIn, "↓ Into".to_string(), 8),
-        (Control::StepOut, "↑ Out".to_string(), 7),
-        (Control::RevealFrame, "Frame F8".to_string(), 10),
-        (Control::RefreshStack, "↻ DDB stack".to_string(), 12),
-        (
-            Control::CycleScope,
-            format!("◎ {} [c]", app.control_scope_label()),
-            22,
-        ),
-        (Control::Refresh, "⟳".to_string(), 3),
-    ]
-    .into_iter()
-    .filter(|(control, _, _)| match control {
-        Control::RefreshStack => {
-            app.stack_mode == crate::cli::StackMode::Local
-                || app
-                    .capabilities
-                    .supports_ddb_feature("distributed_backtrace")
-        }
-        Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
-        control => control.action_name().is_some_and(|action| {
-            app.control_target(action)
-                .as_ref()
-                .is_some_and(|target| app.capabilities.supports_execution_target(action, target))
-        }),
-    });
-    let status_width = 38.min(inner.width);
-    let status_start = inner
-        .x
-        .saturating_add(inner.width.saturating_sub(status_width));
-    let mut x = inner.x;
-    for (control, label, width) in controls {
-        if x.saturating_add(width) >= status_start {
-            break;
-        }
-        let rect = Rect::new(x, inner.y, width, 1);
-        let color = match control {
-            Control::Continue => GREEN,
-            Control::Interrupt => YELLOW,
-            Control::RefreshStack | Control::CycleScope => ACCENT,
-            _ => Color::White,
-        };
-        frame.render_widget(
-            Paragraph::new(label).style(Style::default().fg(color)),
-            rect,
-        );
-        areas.controls.push((control, rect));
-        x = x.saturating_add(width);
-    }
-
-    let connection = if app.api_connected {
-        Span::styled("● connected", Style::default().fg(GREEN))
-    } else {
-        Span::styled("● reconnecting", Style::default().fg(RED))
-    };
-    let status_area = Rect::new(status_start, inner.y, status_width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            connection,
-            Span::styled(
-                if app.trace_api {
-                    format!(
-                        "  {}  {}  events:{}  jobs:{}",
-                        endpoint_label(&app.api_endpoint),
-                        app.api_protocol,
-                        if app.event_stream_connected {
-                            "up"
-                        } else {
-                            "retry"
-                        },
-                        app.pending_commands
-                    )
-                } else {
-                    format!(
-                        " · {} running · {} paused",
-                        app.threads
-                            .iter()
-                            .filter(|thread| thread.state == "running")
-                            .count(),
-                        app.threads
-                            .iter()
-                            .filter(|thread| thread.state == "stopped")
-                            .count()
-                    )
-                },
-                Style::default().fg(MUTED),
-            ),
-        ]))
-        .alignment(Alignment::Right),
-        status_area,
-    );
-}
-
 fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
     let focus = if app.focus == Focus::Extensions
         && app.extension_panels.is_empty()
@@ -667,6 +564,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                         .unwrap_or_else(|| "Non-source / unresolved breakpoints".into()),
                     Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
                 ),
+                0,
             ));
             previous_file = Some(breakpoint.file_group());
         }
@@ -703,14 +601,6 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
             None,
             Line::from(vec![
                 Span::styled(
-                    if current_hits.is_empty() {
-                        String::new()
-                    } else {
-                        format!("▶ {} paused · ", current_hits.len())
-                    },
-                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
                     if breakpoint.enabled { "● " } else { "○ " },
                     Style::default().fg(if breakpoint.enabled { RED } else { MUTED }),
                 ),
@@ -723,17 +613,24 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                     Style::default().fg(GREEN),
                 ),
                 Span::styled(
-                    format!(
-                        "{}:{} ",
-                        terminal_text(short_path(&breakpoint.location.src)),
-                        breakpoint.location.line,
-                    ),
+                    if breakpoint.location.line > 0 {
+                        format!(
+                            "{}:{} ",
+                            terminal_text(short_path(&breakpoint.location.src)),
+                            breakpoint.location.line
+                        )
+                    } else {
+                        format!("{} ", terminal_text(&breakpoint.location.src))
+                    },
                     Style::default().fg(ACCENT),
                 ),
-                Span::raw(format!("hits:{}{}", breakpoint.times, attributes)),
+                Span::styled(
+                    format!("total hits:{}{}", breakpoint.times, attributes),
+                    Style::default().fg(MUTED),
+                ),
                 Span::styled(
                     format!(" · {scope} · {} sites", breakpoint.sub_breakpoints.len()),
-                    Style::default().fg(YELLOW),
+                    Style::default().fg(MUTED),
                 ),
                 Span::styled(
                     breakpoint
@@ -744,6 +641,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                     Style::default().fg(MUTED),
                 ),
             ]),
+            current_hits.len(),
         ));
         for (site, member) in breakpoint.sub_breakpoints.iter().enumerate() {
             let site_hits = current_hits
@@ -775,54 +673,61 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                 Some(index),
                 Some(site),
                 Line::from(vec![
-                    Span::styled(
-                        if site_hits == 0 {
-                            String::new()
-                        } else {
-                            format!("● {site_hits} hit · ")
-                        },
-                        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-                    ),
                     Span::styled("  ↳ ", Style::default().fg(MUTED)),
                     Span::styled(session, Style::default().fg(Color::White)),
+                    Span::styled(format!(" · {location} · "), Style::default().fg(MUTED)),
                     Span::styled(
-                        format!(
-                            " · {location} · {} · hits:{}{}",
-                            if member.verified {
-                                "verified"
-                            } else {
-                                "unverified"
-                            },
-                            member.hit_count,
-                            message,
-                        ),
+                        if member.verified {
+                            "verified"
+                        } else {
+                            "unverified"
+                        },
                         Style::default().fg(if member.verified { GREEN } else { YELLOW }),
                     ),
+                    Span::styled(
+                        format!(" · total hits:{}{message}", member.hit_count),
+                        Style::default().fg(MUTED),
+                    ),
                 ]),
+                site_hits,
             ));
         }
     }
     let selected = rows
         .iter()
-        .position(|(index, site, _)| {
+        .position(|(index, site, _, _)| {
             *index == Some(app.selected_breakpoint) && *site == app.selected_breakpoint_site
         })
         .unwrap_or(0);
     let first = list_first(selected, rows.len(), area, 1);
     app.breakpoint_viewport.fit(
         rows.iter()
-            .map(|(_, _, line)| line.width())
+            .map(|(_, _, line, paused)| {
+                line.width()
+                    + if *paused == 0 {
+                        0
+                    } else {
+                        pause_badge(*paused).len() + 1
+                    }
+            })
             .max()
             .unwrap_or(0),
         area.width.saturating_sub(4) as usize,
     );
     let parents = rows
         .iter()
-        .map(|(index, site, _)| (*index, *site))
+        .map(|(index, site, _, _)| (*index, *site))
         .collect::<Vec<_>>();
     let items = rows
         .into_iter()
-        .map(|(_, _, line)| ListItem::new(horizontal_line(line, app.breakpoint_viewport.column())))
+        .map(|(_, _, line, paused)| {
+            ListItem::new(breakpoint_line(
+                line,
+                paused,
+                app.breakpoint_viewport.column(),
+                area.width.saturating_sub(4) as usize,
+            ))
+        })
         .collect::<Vec<_>>();
     draw_selectable_list(
         frame,
@@ -841,13 +746,15 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
         app.focus == Focus::Breakpoints,
     );
     areas.add_focus_panel(Focus::Breakpoints, area);
-    if area.width >= 34 && area.height > 0 {
-        let control = Rect::new(area.right() - 12, area.y, 11, 1);
+    // Keep grouping mouse-accessible without overwriting the title/count.
+    // The footer reserves separate cells for Paused, grouping, and Expand.
+    if area.width >= 32 && area.height >= 3 {
+        let control = Rect::new(area.x + 12, area.bottom() - 1, 9, 1);
         frame.render_widget(
             Paragraph::new(if app.breakpoints_grouped {
-                " Flat [v] "
+                "Flat [v]"
             } else {
-                " Files [v] "
+                "Files [v]"
             })
             .style(Style::default().fg(ACCENT)),
             control,
@@ -876,14 +783,48 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     draw_hit_view_toggle(frame, app, area, areas);
 }
 
+fn pause_badge(paused: usize) -> String {
+    if paused == 0 {
+        String::new()
+    } else {
+        format!("[{paused} paused]")
+    }
+}
+
+fn breakpoint_line(
+    line: Line<'static>,
+    paused: usize,
+    column: usize,
+    width: usize,
+) -> Line<'static> {
+    let line = horizontal_line(line, column);
+    if paused == 0 {
+        return line;
+    }
+    let badge = pause_badge(paused);
+    let badge_width = badge.len();
+    if width < badge_width + 4 {
+        return crate::display_text::truncate_line(line, width);
+    }
+    let label_width = width - badge_width - 1;
+    let mut line = crate::display_text::truncate_line(line, label_width);
+    line.spans
+        .push(Span::raw(" ".repeat(width - badge_width - line.width())));
+    line.spans.push(Span::styled(
+        badge,
+        Style::default().fg(YELLOW).bg(Color::Rgb(58, 51, 29)),
+    ));
+    line
+}
+
 fn draw_hit_view_toggle(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
     if area.width >= 24 && area.height >= 3 {
-        let button = Rect::new(area.x + 1, area.bottom() - 1, 9, 1);
+        let button = Rect::new(area.x + 1, area.bottom() - 1, 10, 1);
         frame.render_widget(
             Paragraph::new(if app.breakpoint_hit_view.visible {
                 "All [H]"
             } else {
-                "Hits [H]"
+                "Paused [H]"
             })
             .style(Style::default().fg(ACCENT)),
             button,
@@ -2390,6 +2331,10 @@ mod v2_tests {
     }
 
     fn render(app: &mut App, width: u16, height: u16) -> String {
+        render_lines(app, width, height).replace('\n', "")
+    }
+
+    fn render_lines(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| app.areas = draw(frame, app)).unwrap();
@@ -2397,9 +2342,10 @@ mod v2_tests {
             .backend()
             .buffer()
             .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect()
+            .chunks(usize::from(width).max(1))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -2630,7 +2576,9 @@ mod v2_tests {
     #[test]
     fn frame_toolbar_control_is_mouse_addressable() {
         let mut app = App::new("http://localhost".into());
-        assert!(render(&mut app, 140, 40).contains("Frame F8"));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("Show frame source"), "{screen}");
+        assert!(!screen.contains("Frame F8"));
         let (_, area) = app
             .areas
             .controls
@@ -2641,6 +2589,151 @@ mod v2_tests {
             app.areas.control_at(area.x, area.y),
             Some(Control::RevealFrame)
         );
+    }
+
+    #[test]
+    fn toolbar_buttons_have_complete_labels_separate_click_targets_and_wrap() {
+        let mut app = App::new("http://localhost".into());
+        app.sessions.push(v2::Session {
+            session_id: "session".into(),
+            ..Default::default()
+        });
+        app.apply_threads(vec![v2::Thread {
+            thread_id: "thread".into(),
+            session_id: "session".into(),
+            state: v2::ThreadState::Stopped as i32,
+            ..Default::default()
+        }]);
+        app.capabilities.execution_actions = vec![
+            v2::ExecutionAction::Continue as i32,
+            v2::ExecutionAction::Interrupt as i32,
+            v2::ExecutionAction::Next as i32,
+            v2::ExecutionAction::StepIn as i32,
+            v2::ExecutionAction::StepOut as i32,
+        ];
+        app.capabilities.execution_action_capabilities = app
+            .capabilities
+            .execution_actions
+            .iter()
+            .map(|action| v2::ExecutionActionCapability {
+                action: *action,
+                scopes: vec![
+                    v2::ExecutionScopeKind::Thread as i32,
+                    v2::ExecutionScopeKind::Fanout as i32,
+                ],
+            })
+            .collect();
+        for width in [140, 100, 80, 45] {
+            let screen = render_lines(&mut app, width, 40);
+            assert_eq!(app.areas.controls.len(), 8, "{screen}");
+            for (control, rect) in &app.areas.controls {
+                let line = screen.lines().nth(rect.y as usize).unwrap();
+                let button = line
+                    .chars()
+                    .skip(rect.x as usize)
+                    .take(rect.width as usize)
+                    .collect::<String>();
+                assert!(
+                    button.starts_with('[') && button.ends_with(']'),
+                    "{control:?}: {button}"
+                );
+                for x in rect.x..rect.right() {
+                    assert_eq!(app.areas.control_at(x, rect.y), Some(*control));
+                }
+                assert!(app.areas.control_at(rect.right(), rect.y).is_none());
+            }
+            for label in [
+                "Continue",
+                "Pause",
+                "Step over",
+                "Step in",
+                "Step out",
+                "Show frame source",
+                "Scope: Auto",
+                "Refresh",
+            ] {
+                assert!(
+                    screen.contains(label),
+                    "missing {label} at {width}: {screen}"
+                );
+            }
+            let run = app
+                .areas
+                .controls
+                .iter()
+                .find(|(c, _)| *c == Control::Continue)
+                .unwrap()
+                .1;
+            let navigation = app
+                .areas
+                .controls
+                .iter()
+                .find(|(c, _)| *c == Control::RevealFrame)
+                .unwrap()
+                .1;
+            assert!(navigation.y > run.y);
+        }
+    }
+
+    #[test]
+    fn pause_badges_are_pinned_after_the_label_and_keep_history_scrollable() {
+        let label = Line::from(vec![
+            Span::styled("● ", Style::default().fg(RED)),
+            Span::raw(format!(
+                "main.rs:12 {} total hits:17 END",
+                "metadata ".repeat(20)
+            )),
+        ]);
+        for width in [18, 29, 80] {
+            let row = breakpoint_line(label.clone(), 2, 0, width);
+            assert!(row.to_string().starts_with("● "));
+            assert!(row.to_string().ends_with("[2 paused]"));
+            assert_eq!(row.width(), width);
+            assert_eq!(row.spans[0].style.fg, Some(RED));
+            assert_eq!(row.spans.last().unwrap().style.fg, Some(YELLOW));
+            let end = label.width() + "[2 paused]".len() + 1 - width;
+            let scrolled = breakpoint_line(label.clone(), 2, end, width).to_string();
+            assert!(scrolled.contains("END"), "{scrolled}");
+            assert!(scrolled.ends_with("[2 paused]"));
+        }
+        assert_eq!(breakpoint_line(label.clone(), 0, 0, 80), label);
+        for width in 0..18 {
+            assert!(breakpoint_line(label.clone(), 99, 0, width).width() <= width);
+        }
+    }
+
+    #[test]
+    fn long_unicode_scope_keeps_its_shortcut_and_tiny_layouts_keep_hits_in_bounds() {
+        let mut app = App::new("http://localhost".into());
+        app.execution_scope_override = true;
+        app.execution_target = Some(crate::api::group_target("group"));
+        app.groups.push(v2::Group {
+            group_id: "group".into(),
+            display_name: "界e\u{301}".repeat(80),
+            ..Default::default()
+        });
+        let screen = render_lines(&mut app, 45, 24);
+        assert!(screen.contains('…'));
+        let (_, area) = app
+            .areas
+            .controls
+            .iter()
+            .find(|(c, _)| *c == Control::CycleScope)
+            .unwrap();
+        assert!(screen
+            .lines()
+            .nth(area.y as usize)
+            .unwrap()
+            .contains(" c ]"));
+        for width in 1..60 {
+            for height in [1, 5, 18, 19, 24] {
+                render(&mut app, width, height);
+                for (_, area) in &app.areas.controls {
+                    assert!(area.right() <= width && area.bottom() <= height);
+                    assert!(app.areas.panel_at(area.x, area.y).is_none());
+                }
+            }
+        }
     }
 
     #[test]
@@ -3296,9 +3389,19 @@ mod v2_tests {
             state: v2::ThreadState::Stopped as i32,
             ..Default::default()
         }]);
-        let screen = render(&mut app, 100, 24);
-        assert!(screen.contains("▶ 1 paused"), "{screen}");
-        assert!(screen.contains("hits:15"));
+        let screen = render_lines(&mut app, 100, 24);
+        assert!(screen.contains("[1 paused]"), "{screen}");
+        assert!(screen.contains("total hits:15"));
+        let breakpoint_row = screen
+            .lines()
+            .find(|line| line.contains("hit_here"))
+            .unwrap();
+        assert!(breakpoint_row.find('●').unwrap() < breakpoint_row.find("hit_here").unwrap());
+        assert!(
+            breakpoint_row.find("hit_here").unwrap() < breakpoint_row.find("[1 paused]").unwrap()
+        );
+        assert!(!breakpoint_row.contains("▶ 1 paused"));
+        assert!(!breakpoint_row.contains("hit_here:0"));
         app.open_breakpoint_hits().unwrap();
         assert!(render(&mut app, 100, 24).contains("Paused breakpoint hits"));
         assert_eq!(app.areas.breakpoint_hit_rows.len(), 1);
@@ -3312,9 +3415,36 @@ mod v2_tests {
         app.breakpoint_hit_picker = None;
         app.mark_running(Some("thread/hit"));
         let screen = render(&mut app, 100, 24);
-        assert!(!screen.contains("▶ 1 paused"), "{screen}");
+        assert!(!screen.contains("[1 paused]"), "{screen}");
         assert!(!screen.contains("DDB Breakpoints · 1 paused"), "{screen}");
-        assert!(screen.contains("hits:15"));
+        assert!(screen.contains("total hits:15"));
+    }
+
+    #[test]
+    fn breakpoint_footer_actions_do_not_cover_the_title_or_each_other() {
+        let mut app = App::new("http://localhost".into());
+        app.focus = Focus::Breakpoints;
+        for width in [140, 160, 45] {
+            render(&mut app, width, 40);
+            let group = app.areas.breakpoint_grouping.unwrap();
+            let paused = app.areas.breakpoint_hit_view_toggle.unwrap();
+            let expand = app
+                .areas
+                .pane_expanders
+                .iter()
+                .find(|(focus, _)| *focus == Focus::Breakpoints)
+                .unwrap()
+                .1;
+            assert!(group.intersection(paused).is_empty());
+            assert!(group.intersection(expand).is_empty());
+            let panel = app
+                .areas
+                .panels
+                .iter()
+                .find(|panel| panel.focus == Focus::Breakpoints)
+                .unwrap();
+            assert_eq!(group.y, panel.area.bottom() - 1);
+        }
     }
 
     #[test]
