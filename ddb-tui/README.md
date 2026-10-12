@@ -365,8 +365,8 @@ normal DDB-native view.
 | `e` in topology details / `Export` button | Export the captured JSON snapshot to a new local file; enter a path and press Enter, or Esc/empty Enter to cancel |
 | `y` in topology details / `Copy` button | Send the captured JSON to the terminal clipboard using OSC 52 |
 | `K` in Topology / `Kill [K]` | Confirm SIGKILL for one selected session or a thread's owning session; `y`/Terminate accepts, Enter/Esc cancels |
-| `v` in Breakpoints / header `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
-| `H` in Breakpoints / `Hits [H]` or `All [H]` | Switch all breakpoints / persistent current hits grouped by DDB group and session |
+| `v` in Breakpoints / footer `Files [v]` or `Flat [v]` | Toggle full-path file grouping; preserve the selected breakpoint/member and its target |
+| `H` in Breakpoints / `Paused [H]` or `All [H]` | Switch all breakpoints / currently paused hits grouped by DDB group and session |
 | `M` in Variables | Read 256 bytes at the selected variable/watch's DDB-provided address |
 | `g` | Go to a source line (loads another source window when needed) |
 | `Left` / `Right` in Source | Scroll long source lines horizontally, keeping the gutter fixed |
@@ -499,8 +499,15 @@ do not switch panes while editing a prompt or interacting with a modal dialog.
 No prefix sequence is required. In tmux or a terminal emulator, reserve these
 Alt-number combinations for DDB rather than binding them to another action.
 
-The toolbar starts in `Auto`. Continue and Pause broadcast to all sessions;
-Next, Into, Out, and other stepping actions use the selected paused frame's
+Toolbar buttons have explicit boundaries, action names, and keyboard shortcuts.
+The first group contains execution actions: Continue, Pause, Step over, Step in,
+and Step out. Source navigation, stack reload, Refresh, and control scope occupy
+separate rows. Buttons wrap as complete units on narrower terminals; gaps and
+the connection/status row are not clickable. Unsupported controls remain hidden.
+Below 19 terminal rows, the existing compact header and keyboard controls apply.
+
+The toolbar starts in `Scope: Auto`. Continue and Pause broadcast to all sessions;
+Step over, Step in, Step out, and other stepping actions use the selected paused frame's
 owning thread, including a frame in another session's distributed stack. Without
 a frame, stepping uses the selected paused thread. A distributed boundary is not
 an executable frame. Browsing a group or session does not change these defaults.
@@ -639,8 +646,10 @@ characters are displayed safely rather than executed.
 Byte-backed output is decoded as UTF-8, replacing invalid byte sequences with
 replacement characters, as in the VS Code adapter. This is a text view, not a
 lossless binary export.
-Press `F8` from any pane, or click `Frame F8` in the toolbar, to reveal the
-selected stack frame's source without changing the execution target. Unlike
+Press `F8` from any pane, or click `Show frame source F8` in the toolbar, to open
+or retry the selected stack frame's source file at that frame's line. `F8` is a
+keyboard shortcut, not a frame number. It navigates only: it does not continue,
+step, or select a different stack frame. Unlike
 `f` in Source, this reveals the selected frame rather than enabling execution
 following. Missing source locations and non-source boundary rows report why
 they cannot be opened.
@@ -781,8 +790,14 @@ spaces, including C++ operator names and signatures.
 The prompt and all breakpoint mutations are capability-gated; unsupported
 options are rejected before any request is sent to DDB.
 
-Breakpoint rows show `▶ N paused` for threads currently stopped at that
-breakpoint. This is separate from the cumulative `hits:N` counter. Automatically
+Breakpoint rows start with `●` for enabled or `○` for disabled, followed by their
+source location or symbol. A separate right-aligned `[N paused]` badge counts
+threads currently stopped there. Session sites use the same badge after their
+indented owner label; no play/pause icon or second breakpoint dot precedes it.
+Badges stay visible while row text scrolls horizontally when the pane is wide
+enough. Clipped labels have an ellipsis. Expand with `z` or scroll horizontally
+to read long labels and diagnostics. The muted `total hits:N` counter is
+historical, not a current pause indicator. Automatically
 paused all-stop peers are not counted. Member rows show current hits only when
 DDB identifies that member or there is a single member in the hitting session.
 Markers disappear when the thread resumes or the backend disconnects.
@@ -803,7 +818,7 @@ This navigation does not change an explicit control override. In `Auto`,
 stepping uses the newly inspected frame; Continue/Pause still broadcast.
 
 For a persistent view of all current breakpoint stops, focus Breakpoints with
-Alt+2 and press `H`, or click `Hits [H]`. It shows hitting threads grouped by DDB
+Alt+2 and press `H`, or click `Paused [H]`. It shows hitting threads grouped by DDB
 group and session, excluding historical hits and automatically paused all-stop
 peers. Up/Down, PageUp/PageDown, and Home/End choose hits; Enter or a click opens
 the owning frame through ordinary DDB inspection. The mode stays active when

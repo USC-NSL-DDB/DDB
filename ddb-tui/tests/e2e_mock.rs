@@ -230,7 +230,7 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     tui.click_topology_thread("tui-client");
     // Continue the attached client. The server's native RPC breakpoint must hit.
     tui.send(b"\x1b[15~");
-    tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+    tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
     tui.wait_for_source_marker('▶', server_line);
     tui.wait_for_current_frame(|screen| {
         // A large server thread list can scroll its session header off-screen.
@@ -531,7 +531,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
                 && reason.breakpoint_id.as_ref().is_some_and(|id| stopped.breakpoints.iter().any(|bp| bp.breakpoint_id == *id || bp.sub_breakpoints.iter().any(|member| member.sub_breakpoint_id == *id && member.session_id == server.session_id)))
         })
     }), "server breakpoint location must retain a navigable canonical breakpoint stop: {server_stops:#?}");
-    tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+    tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
     let hit_row = tui
         .frames
         .lock()
@@ -543,7 +543,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
             line.chars()
                 .take(33)
                 .collect::<String>()
-                .contains("▶ 1 paused")
+                .contains("[1 paused]")
         })
         .expect("server breakpoint should have a current hit")
         + 1;
@@ -608,6 +608,52 @@ fn topology_reached_top(current: Option<&Vec<String>>) -> bool {
     current
         .and_then(|rows| rows.first())
         .is_some_and(|row| row.chars().nth(1) == Some('▸'))
+}
+
+fn topology_visible_rows(frame: &str) -> Vec<String> {
+    frame
+        .lines()
+        .skip_while(|line| !line.contains("DDB Topology"))
+        .skip(1)
+        .take_while(|line| !line.starts_with('└'))
+        .map(|line| line.chars().take(33).collect())
+        .collect()
+}
+
+fn source_visible_rows(frame: &str) -> Vec<(usize, usize)> {
+    frame
+        .lines()
+        .enumerate()
+        .filter_map(|(row, line)| {
+            let center = line.chars().skip(33).take(72).collect::<String>();
+            let number = center.split('│').find_map(|field| {
+                field
+                    .trim()
+                    .trim_start_matches(['▶', '●', '▸', '◆', ' '])
+                    .parse()
+                    .ok()
+            })?;
+            Some((row, number))
+        })
+        .collect()
+}
+
+#[test]
+fn topology_rows_follow_the_rendered_header_not_a_fixed_toolbar_height() {
+    let frame = "[ Continue F5 ]\n[ Show frame source F8 ]\nconnected\nextra wrapped row\n┌ DDB Topology ────┐\n│▸▾ server\n│  ◇ server session\n└─────────────────┘";
+    let rows = topology_visible_rows(frame);
+    assert_eq!(rows.len(), 2);
+    assert!(topology_reached_top(Some(&rows)));
+}
+
+#[test]
+fn source_rows_handle_adjacent_pane_borders_and_cursor_markers() {
+    let frame = format!(
+        "{}││      1 │ first line│\n{}││  ▸   2 │ second line│",
+        " ".repeat(32),
+        " ".repeat(32)
+    );
+    assert_eq!(source_visible_rows(&frame), vec![(0, 1), (1, 2)]);
 }
 
 #[test]
@@ -1021,18 +1067,20 @@ Conf:
     tui.wait_for_source_marker('▸', 2);
     tui.send(b"k");
     tui.wait_for_source_marker('▸', 1);
-    // At 140x40 the source pane contains twenty text rows, not a fixed
-    // ten-line paging step. Repeated keys also cross source-window loads.
-    let page_destination = 1 + 24 * 20;
+    // Page movement uses the rendered source height, including a wrapped
+    // toolbar. Repeated keys also cross source-window loads.
+    let page_height = source_visible_rows(tui.frames.lock().unwrap().back().unwrap()).len();
+    assert!(page_height > 10);
+    let page_destination = 1 + 24 * page_height;
     tui.send(&b"\x1b[6~".repeat(24));
     tui.wait_for_source_marker('▸', page_destination);
-    // Crossing a source read boundary must not reset the cursor to row eight.
-    // Source content occupies terminal rows 5..24 in this fixed-size fixture.
+    // Crossing a read boundary keeps the cursor on the last visible row.
     tui.wait_for_current_frame(|frame| {
-        frame
-            .lines()
-            .nth(23)
-            .is_some_and(|row| row.contains(&format!("▸ {page_destination:>5} │")))
+        source_visible_rows(frame)
+            .last()
+            .is_some_and(|(row, number)| {
+                *number == page_destination && frame.lines().nth(*row).unwrap().contains('▸')
+            })
     });
     tui.clear_capture();
     tui.send(b"\x1b[1;3D");
@@ -1147,12 +1195,7 @@ fn topology_folding_and_single_session_signal_terminal_workflow() {
     // folds it; hidden inspection and current controls must not trigger work.
     tui.send(b"\x1b1\x1b[5~ ");
     tui.wait_for_current_frame(|screen| {
-        let topology = screen
-            .lines()
-            .skip(4)
-            .take(4)
-            .map(|line| line.chars().take(33).collect::<String>())
-            .collect::<String>();
+        let topology = topology_visible_rows(screen).join("");
         !topology.contains('◇') && !topology.contains('•')
     });
     tui.send(b"\x1b[C");
@@ -1371,6 +1414,14 @@ fn mock_backend_full_terminal_workflow() {
     tui.wait_for("counter");
     tui.wait_for_source_marker('▶', 9);
 
+    // The renamed F8 button is source navigation, not execution or frame
+    // selection. Click it after browsing away from the selected frame.
+    tui.send(b"g12\r");
+    tui.wait_for_source_marker('▸', 12);
+    tui.click_control("Show frame source F8");
+    tui.wait_for_source_marker('▸', 9);
+    assert_eq!(ddb.top_frame_line(&ddb.global_thread_id()), 9);
+
     // Switch presentation with the rendered header control, then restore it
     // with the keyboard. Neither operation should move the stopped frame.
     tui.wait_for_current_frame(|screen| screen.contains("Flat [v]"));
@@ -1524,8 +1575,8 @@ fn mock_backend_full_terminal_workflow() {
     // Synchronize on the rendered execution location before acting on source.
     tui.wait_for_source_marker('▶', 9);
 
-    // SGR mouse click on the toolbar's Refresh control (terminal coordinates are 1-based).
-    tui.send(b"\x1b[<0;90;2M\x1b[<0;90;2m");
+    // Click the rendered action, not a coordinate tied to a previous layout.
+    tui.click_control("Refresh r");
     tui.wait_for("1 sessions · 1 groups · 1 breakpoints");
 
     tui.send(b"b");
@@ -1963,7 +2014,7 @@ fn real_debugger_settings_terminal_workflow() {
                 .count(),
             if backend == "gdb" { 2 } else { 1 }
         );
-        tui.wait_for("◎ Auto");
+        tui.wait_for("Scope: Auto");
         tui.wait_for("#0");
         tui.send(if backend == "gdb" {
             b":show substitute-path\r"
@@ -2007,7 +2058,7 @@ fn real_logpoint_terminal_workflow() {
                 .any(|thread| thread.state == v2::ThreadState::Stopped as i32)
         });
         let mut tui = Tui::spawn(&ddb.base_url());
-        tui.wait_for("◎ Auto");
+        tui.wait_for("Scope: Auto");
         tui.wait_for("#0");
         tui.send(b"Fddb_real_loop::function_breakpoint_target\r");
         tui.wait_for("DDB breakpoint targets");
@@ -2083,7 +2134,7 @@ fn real_function_breakpoint_terminal_workflow() {
         });
         let mut tui = Tui::spawn(&ddb.base_url());
         tui.wait_for("connected");
-        tui.wait_for("◎ Auto");
+        tui.wait_for("Scope: Auto");
         tui.wait_for("#0");
         tui.send(b"Fddb_real_loop::function_breakpoint_target -- --ignore-count 3\r");
         tui.wait_for("DDB breakpoint targets");
@@ -2127,7 +2178,7 @@ fn real_function_breakpoint_terminal_workflow() {
         // hits must stop on counter=3, not merely store the option in the API.
         tui.send(b"wcounter\r");
         tui.wait_for_variable_value("Watch: counter", "3");
-        tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+        tui.wait_for_current_frame(|screen| screen.contains("[1 paused]"));
         let hit_row = tui
             .frames
             .lock()
@@ -2139,7 +2190,7 @@ fn real_function_breakpoint_terminal_workflow() {
                 line.chars()
                     .take(33)
                     .collect::<String>()
-                    .contains("▶ 1 paused")
+                    .contains("[1 paused]")
             })
             .expect("current hit should be visible in the breakpoint pane")
             + 1;
@@ -2259,7 +2310,7 @@ fn managed_real_launch_workflow(backend: &str) {
     tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
     // The breakpoint and execution checks below need a projected thread.
-    tui.wait_for("◎ Auto");
+    tui.wait_for("Scope: Auto");
 
     let goto_breakpoint = format!(
         "g{}:{}\r",
@@ -2421,7 +2472,7 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("#0");
     // Session stop output may precede the API thread projection on LLDB.
     // The breakpoint and execution checks below need a projected thread.
-    tui.wait_for("◎ Auto");
+    tui.wait_for("Scope: Auto");
 
     // Persistent setup is DDB-owned. Connecting a default frontend must not
     // reconfigure either debugger; only explicit API profiles may do that.
@@ -3203,20 +3254,38 @@ impl Tui {
         self.stdin.flush().expect("TUI input should flush");
     }
 
-    // Diagnostic workflows explicitly opt in; workspace-only workflows keep
-    // the default hidden timeline. Click the Source border, not a source line,
-    // to restore focus without disabling execution following.
+    fn click_control(&mut self, label: &str) {
+        let label = format!("[ {label} ]");
+        self.wait_for_current_frame(|screen| screen.contains(&label));
+        let (column, row) = self
+            .frames
+            .lock()
+            .unwrap()
+            .back()
+            .unwrap()
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.find(&label)
+                    .map(|byte| (ratatui::text::Span::raw(&line[..byte]).width() + 2, row + 1))
+            })
+            .expect("the complete button must be visible");
+        self.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    }
+
+    // Diagnostic workflows explicitly opt in. Direct pane focus preserves
+    // following and does not depend on the responsive toolbar's height.
     fn with_timeline(mut self) -> Self {
         self.wait_for("DDB Debugger");
         self.send(b"t");
         self.wait_for("DDB Timeline");
-        self.send(b"\x1b[<0;40;4M\x1b[<0;40;4m");
+        self.send(b"\x1b3");
         self
     }
 
     fn click_topology_thread(&mut self, session_label: &str) {
         let deadline = Instant::now() + TIMEOUT;
-        self.send(b"\x1b[<0;2;4M\x1b[<0;2;4m");
+        self.send(b"\x1b1");
         // Topology sorts groups and sessions by name, not launch order. A new
         // session may sort above the current selection, so search from the top.
         self.clear_capture();
@@ -3224,14 +3293,12 @@ impl Tui {
             self.assert_running();
             self.send(b"\x1b[5~");
             thread::sleep(Duration::from_millis(100));
-            let topology = self.frames.lock().unwrap().back().map(|frame| {
-                frame
-                    .lines()
-                    .skip(4)
-                    .take(4)
-                    .map(|line| line.chars().take(33).collect::<String>())
-                    .collect::<Vec<_>>()
-            });
+            let topology = self
+                .frames
+                .lock()
+                .unwrap()
+                .back()
+                .map(|frame| topology_visible_rows(frame));
             if topology_reached_top(topology.as_ref()) {
                 break;
             }
@@ -3319,17 +3386,36 @@ impl Tui {
 
     fn select_visible_variable(&mut self, name: &str) {
         let deadline = Instant::now() + TIMEOUT;
+        let mut expanded = false;
         loop {
             let row = self.frames.lock().unwrap().back().and_then(|frame| {
                 frame.lines().position(|line| {
-                    let right = line.chars().skip(105).collect::<String>();
+                    let right = if expanded {
+                        line.to_string()
+                    } else {
+                        line.chars().skip(105).collect::<String>()
+                    };
                     right.contains(&format!("{name} :"))
                         && (name.starts_with("Watch: ") || !right.contains("Watch: "))
                 })
             });
             if let Some(row) = row {
                 self.send(format!("\x1b[<0;112;{}M\x1b[<0;112;{}m", row + 1, row + 1).as_bytes());
+                if expanded {
+                    self.send(b"z");
+                    self.wait_for_current_frame(|screen| !screen.contains("[Restore]"));
+                }
                 return;
+            }
+            // The responsive toolbar can leave fewer inline variable rows.
+            // Expand the pane as a user would instead of assuming the desired
+            // local and every retained watch fit at once.
+            if !expanded {
+                self.send(b"\x1b5z");
+                self.wait_for_current_frame(|screen| {
+                    screen.contains("[Restore]") && screen.contains("Variables / Watches")
+                });
+                expanded = true;
             }
             assert!(
                 Instant::now() < deadline,

@@ -138,6 +138,12 @@ events. A delayed remote target does not block the entire frontend.
 
 ### DDB-native interaction model
 
+The toolbar groups bounded, labeled buttons into execution and navigation rows.
+Each button includes its shortcut; whole buttons wrap on narrower terminals.
+`Show frame source F8` opens or retries the selected stack frame's source at its
+line. F8 is a shortcut, not a frame number, and the action does not resume or
+step execution. `f` instead follows the selected thread's execution location.
+
 The left topology is DDB group → session → thread. Controls start in `Auto`.
 Continue and Pause broadcast to all sessions. Stepping uses the selected paused
 frame's owning thread, or the selected paused thread if no frame is loaded.
@@ -152,7 +158,12 @@ The first observed ordinary stop selects its actual owning thread, expands its
 topology ancestors, and loads its frame and source. Other concurrent stops do not
 steal focus while that owner remains paused. Breakpoint rows and the panel title
 count current paused hits separately from historical hit counts. Use `H` for the
-live hit view or `P` to choose a hit. Automatically paused peers are not counted
+live hit view through `Paused [H]`, or `P` to choose a hit. Enabled/disabled
+breakpoint dots remain at the start of each row. Right-aligned `[N paused]`
+badges show current pauses; muted `total hits:N` values show historical counts.
+Session sites have their own badges. Horizontal scrolling preserves the badge,
+and the grouping control stays in the footer rather than covering the title.
+Automatically paused peers are not counted
 as breakpoint hits. Existing stops received together at bootstrap or recovery
 use snapshot order; DDB does not compare remote wall clocks to order them.
 
