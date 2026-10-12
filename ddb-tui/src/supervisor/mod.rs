@@ -73,7 +73,12 @@ impl ManagedBackend {
         let executable = resolve::resolve(args.ddb_path.as_deref())?;
         let mut files = RuntimeFiles::new(args.backend_log.as_deref())?;
         let (stdout, stderr) = files.child_stdio()?;
-        let mut command = build_command(&executable, &files, &session, &args.ddb_args);
+        let mut extra = args.ddb_args.clone();
+        for assignment in &args.ddb_overrides {
+            extra.push("--set".into());
+            extra.push(assignment.clone());
+        }
+        let mut command = build_command(&executable, &files, &session, &extra);
         command
             .stdin(Stdio::null())
             .stdout(stdout)
@@ -404,6 +409,8 @@ mod tests {
                 "--command-workers=4".into(),
                 "--session-id=value with spaces".into(),
                 "--console-log".into(),
+                "--set".into(),
+                "Conf.Debugger.gdb.commands=['set print elements 33']".into(),
             ],
         );
         let arguments = command
@@ -417,6 +424,12 @@ mod tests {
         let separator = arguments.iter().position(|arg| arg == "--").unwrap();
         assert!(arguments[..separator].contains(&OsString::from("--session-id=value with spaces")));
         assert!(arguments[..separator].contains(&OsString::from("--command-workers=4")));
+        assert!(arguments[..separator].windows(2).any(|window| window
+            == [
+                "--set",
+                "Conf.Debugger.gdb.commands=['set print elements 33']"
+            ]
+            .map(OsString::from)));
         assert_eq!(
             arguments
                 .iter()

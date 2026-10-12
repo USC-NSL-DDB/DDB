@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, RwLock},
 };
 use tokio::sync::Semaphore;
@@ -19,16 +19,7 @@ struct Config {
     roots: Vec<RootConfig>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RootConfig {
-    name: String,
-    path: PathBuf,
-    #[serde(default)]
-    debugger_path: Option<String>,
-    #[serde(default)]
-    session_tags: Vec<String>,
-}
+type RootConfig = ddb_config::SourceRoot;
 
 struct Grant {
     metadata: LocalRoot,
@@ -74,13 +65,17 @@ impl Workspace {
         );
         let config: Config =
             serde_yml::from_slice(&bytes).context("invalid source workspace configuration")?;
+        Self::from_roots(config.roots, path.parent().unwrap_or(Path::new(".")))
+    }
+
+    pub fn from_roots(roots: Vec<RootConfig>, base: &Path) -> Result<Self> {
         anyhow::ensure!(
-            config.roots.len() <= 32,
+            roots.len() <= 32,
             "at most 32 local source roots may be configured"
         );
         let mut workspace = Self::default();
         let cache = Arc::new(SourceCache::default());
-        for config in config.roots {
+        for config in roots {
             anyhow::ensure!(
                 !config.name.trim().is_empty()
                     && config.name.len() <= 128
@@ -122,7 +117,7 @@ impl Workspace {
             let path = if config.path.is_absolute() {
                 config.path
             } else {
-                path.parent().unwrap_or(Path::new(".")).join(config.path)
+                base.join(config.path)
             };
             let directory = Arc::new(
                 SourceRoot::open_with_cache(&path, Limits::default(), cache.clone()).with_context(

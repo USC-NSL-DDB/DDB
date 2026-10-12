@@ -40,7 +40,6 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use api::BreakpointTarget;
 use api::{thread_target, ApiClient, CapabilitiesExt, ClientConfig, TUI_API_COMPATIBILITY};
-use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::{
     cursor::Show,
@@ -67,8 +66,7 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-    let mode = args.parse_mode()?;
+    let (args, mode, frontend_config) = Args::configured()?;
     let (watch_store, saved_watches) = match &args.watch_file {
         Some(path) => {
             let (store, expressions) = watch_store::Store::open(path)?;
@@ -82,7 +80,10 @@ async fn main() -> Result<()> {
     };
     let workspace = std::sync::Arc::new(match &args.source_workspace {
         Some(path) => source_workspace::Workspace::load(path)?,
-        None => source_workspace::Workspace::default(),
+        None => source_workspace::Workspace::from_roots(
+            frontend_config.source_roots.unwrap_or_default(),
+            std::path::Path::new("."),
+        )?,
     });
 
     let mut managed = match &mode {
@@ -4479,6 +4480,7 @@ mod tests {
     #[test]
     fn pretty_printer_setup_is_capability_gated_and_once_per_ready_gdb_session() {
         let mut app = App::new("http://localhost".into());
+        app.debugger_settings = debugger_setup::Settings::parse("{}").unwrap();
         let session = |id: &str, kind: v2::BackendKind, status: v2::SessionStatus| v2::Session {
             session_id: id.into(),
             backend: Some(v2::BackendDescriptor {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -40,19 +40,27 @@ pub(crate) struct Args {
     #[arg(long = "ddb-arg", global = true, require_equals = true, value_parser = parse_ddb_argument)]
     pub ddb_args: Vec<String>,
 
+    /// Override a DDB config field using DDB's schema, e.g. Conf.Debugger.backend=lldb.
+    #[arg(long = "ddb-set", global = true, value_name = "KEY=VALUE")]
+    pub ddb_overrides: Vec<String>,
+
+    /// Optional frontend-only preferences. Overrides the project's Tui section.
+    #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
+    pub tui_config: Option<PathBuf>,
+
     /// Explicit local source roots and debugger-path mappings (YAML).
     #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub source_workspace: Option<PathBuf>,
 
-    /// Explicit backend source mappings and GDB/LLDB startup commands (YAML).
-    #[arg(long, global = true, value_name = "PATH", value_parser = parse_existing_path)]
+    /// Explicit interactive API session profile. Persistent setup belongs in Conf.Debugger.
+    #[arg(long = "session-profile", global = true, value_name = "PATH", value_parser = parse_existing_path)]
     pub debugger_settings: Option<PathBuf>,
 
     /// Load and automatically save watches in an explicitly trusted JSON file.
     #[arg(long, global = true, value_name = "PATH")]
     pub watch_file: Option<PathBuf>,
 
-    /// Value presentation: enable GDB visualizers, use raw expandable values,
+    /// Value presentation: prefer visualizers, use raw expandable values,
     /// or disable child expansion. Does not disable already-installed formatters.
     #[arg(long, global = true, value_enum, default_value_t = ValuesFormatting::PrettyPrinters)]
     pub values_formatting: ValuesFormatting,
@@ -66,7 +74,7 @@ pub(crate) struct Args {
     pub source_search: crate::source_search::Mode,
 
     /// Show sanitized API request metadata in Output (no payloads or credentials).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, action = ArgAction::Set, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false")]
     pub trace_api: bool,
 
     /// Maximum seconds to wait for a managed DDB service to become ready.
@@ -182,11 +190,119 @@ pub(crate) enum Mode {
 }
 
 impl Args {
+    pub(crate) fn configured() -> Result<(Self, Mode, ddb_config::TuiConfig)> {
+        let matches = Self::command().get_matches();
+        let mut args = Self::from_arg_matches(&matches)?;
+        let mode = args.parse_mode()?;
+        let config = args.apply_configuration(&matches, &mode)?;
+        Ok((args, mode, config))
+    }
+
+    fn apply_configuration(
+        &mut self,
+        matches: &clap::ArgMatches,
+        mode: &Mode,
+    ) -> Result<ddb_config::TuiConfig> {
+        let mut config = match mode {
+            Mode::ManagedConfig(path) => ddb_config::load_tui(path, true)?,
+            _ => ddb_config::TuiConfig::default(),
+        };
+        if let Some(path) = &self.tui_config {
+            config.overlay(ddb_config::load_tui(path, false)?);
+        }
+        let explicit =
+            |id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
+        if !explicit("values_formatting") {
+            if let Some(value) = config.values_formatting {
+                self.values_formatting = match value {
+                    ddb_config::ValuesFormatting::PrettyPrinters => {
+                        ValuesFormatting::PrettyPrinters
+                    }
+                    ddb_config::ValuesFormatting::Raw => ValuesFormatting::Raw,
+                    ddb_config::ValuesFormatting::Disabled => ValuesFormatting::Disabled,
+                };
+            }
+        }
+        if !explicit("stack_mode") {
+            if let Some(value) = config.stack_mode {
+                self.stack_mode = match value {
+                    ddb_config::StackMode::Distributed => StackMode::Distributed,
+                    ddb_config::StackMode::Local => StackMode::Local,
+                };
+            }
+        }
+        if !explicit("source_search") {
+            if let Some(value) = config.source_search {
+                self.source_search = match value {
+                    ddb_config::SourceSearch::Exact => crate::source_search::Mode::Exact,
+                    ddb_config::SourceSearch::Fuzzy => crate::source_search::Mode::Fuzzy,
+                };
+            }
+        }
+        macro_rules! option {
+            ($field:ident) => {
+                if !explicit(stringify!($field)) {
+                    if let Some(value) = config.$field.clone() {
+                        self.$field = Some(value);
+                    }
+                }
+            };
+        }
+        option!(watch_file);
+        option!(backend_log);
+        option!(ddb_path);
+        if !explicit("trace_api") {
+            if let Some(value) = config.trace_api {
+                self.trace_api = value;
+            }
+        }
+        if !explicit("refresh_ms") {
+            if let Some(value) = config.refresh_ms {
+                self.refresh_ms = value;
+            }
+        }
+        if !explicit("startup_timeout_secs") {
+            if let Some(value) = config.startup_timeout_secs {
+                self.startup_timeout_secs = value;
+            }
+        }
+        if !matches!(
+            mode,
+            Mode::ManagedConfig(_) | Mode::ManagedLaunch { .. } | Mode::ManagedAttach { .. }
+        ) {
+            anyhow::ensure!(
+                self.backend_log.is_none()
+                    && self.ddb_path.is_none()
+                    && config.startup_timeout_secs.is_none(),
+                "frontend preferences cannot start or configure an externally owned DDB backend"
+            );
+        }
+        Ok(config)
+    }
+
     pub(crate) fn parse_mode(&self) -> Result<Mode> {
         if self.config.is_some() && self.config_flag.is_some() {
             anyhow::bail!("the positional config and --config cannot be used together");
         }
         let config = self.config.clone().or_else(|| self.config_flag.clone());
+        if !self.ddb_overrides.is_empty() {
+            anyhow::ensure!(
+                !(matches!(&self.command, Some(Command::Connect { .. }))
+                    || (self.command.is_none() && config.is_none())),
+                "--ddb-set requires a managed backend"
+            );
+            anyhow::ensure!(
+                self.ddb_overrides.len() <= 32,
+                "at most 32 configuration overrides are allowed"
+            );
+            for assignment in &self.ddb_overrides {
+                ddb_config::apply_override(
+                    &mut serde_yml::Value::Mapping(Default::default()),
+                    assignment,
+                    true,
+                )?;
+            }
+        }
         if !self.ddb_args.is_empty() {
             if matches!(&self.command, Some(Command::Connect { .. }))
                 || (self.command.is_none() && config.is_none())
@@ -281,6 +397,139 @@ fn parse_ddb_argument(argument: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inline_preferences_are_overridden_only_by_explicit_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ddb.yaml");
+        std::fs::write(&project, "Tui:\n  source_roots: [{name: app, path: src}]\n  stack_mode: local\n  source_search: fuzzy\n  values_formatting: raw\n  trace_api: true\n  refresh_ms: 1234\n  watch_file: watches.json\n").unwrap();
+        let (args, config) =
+            configured_from(vec!["ddb-tui".into(), project.display().to_string()]).unwrap();
+        assert_eq!(args.stack_mode, StackMode::Local);
+        assert_eq!(args.source_search, crate::source_search::Mode::Fuzzy);
+        assert_eq!(args.values_formatting, ValuesFormatting::Raw);
+        assert_eq!(args.refresh_ms, 1234);
+        assert!(args.trace_api);
+        assert_eq!(args.watch_file.unwrap(), dir.path().join("watches.json"));
+        assert_eq!(config.source_roots.unwrap()[0].path, dir.path().join("src"));
+        let (args, _) = configured_from(vec![
+            "ddb-tui".into(),
+            project.display().to_string(),
+            "--stack-mode".into(),
+            "distributed".into(),
+            "--source-search".into(),
+            "exact".into(),
+            "--values-formatting".into(),
+            "pretty-printers".into(),
+            "--trace-api=false".into(),
+            "--refresh-ms".into(),
+            "2000".into(),
+        ])
+        .unwrap();
+        assert_eq!(args.stack_mode, StackMode::Distributed);
+        assert_eq!(args.source_search, crate::source_search::Mode::Exact);
+        assert_eq!(args.values_formatting, ValuesFormatting::PrettyPrinters);
+        assert_eq!(args.refresh_ms, 2000);
+        assert!(!args.trace_api);
+    }
+
+    fn configured_from(arguments: Vec<String>) -> anyhow::Result<(Args, ddb_config::TuiConfig)> {
+        use clap::{CommandFactory, FromArgMatches};
+        let matches = Args::command().try_get_matches_from(arguments)?;
+        let mut args = Args::from_arg_matches(&matches)?;
+        let mode = args.parse_mode()?;
+        let config = args.apply_configuration(&matches, &mode)?;
+        Ok((args, config))
+    }
+
+    #[test]
+    fn frontend_preferences_overlay_project_and_resolve_their_own_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("ddb.yaml");
+        let preferences_dir = dir.path().join("preferences");
+        std::fs::create_dir(&preferences_dir).unwrap();
+        let preferences = preferences_dir.join("tui.yaml");
+        std::fs::write(
+            &project,
+            "Tui: {stack_mode: local, trace_api: true, watch_file: old.json}",
+        )
+        .unwrap();
+        std::fs::write(
+            &preferences,
+            "source_roots: []\ntrace_api: false\nwatch_file: saved.json",
+        )
+        .unwrap();
+        let (args, config) = configured_from(vec![
+            "ddb-tui".into(),
+            "--tui-config".into(),
+            preferences.display().to_string(),
+            project.display().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(args.stack_mode, StackMode::Local);
+        assert!(!args.trace_api);
+        assert_eq!(args.watch_file.unwrap(), preferences_dir.join("saved.json"));
+        assert!(config.source_roots.unwrap().is_empty());
+    }
+
+    #[test]
+    fn ddb_config_overrides_reject_external_mode_and_managed_transport() {
+        for arguments in [
+            vec!["ddb-tui", "--ddb-set", "Conf.Debugger.backend=lldb"],
+            vec![
+                "ddb-tui",
+                "launch",
+                "--ddb-set",
+                "Conf.api_server_port=80",
+                "--",
+                "/bin/true",
+            ],
+            vec![
+                "ddb-tui",
+                "launch",
+                "--ddb-set",
+                "Tui.trace_api=true",
+                "--",
+                "/bin/true",
+            ],
+        ] {
+            assert!(Args::try_parse_from(arguments)
+                .unwrap()
+                .parse_mode()
+                .is_err());
+        }
+        let args = Args::try_parse_from([
+            "ddb-tui",
+            "launch",
+            "--ddb-set",
+            "Conf.Debugger.gdb.commands=['set print elements 33']",
+            "--",
+            "/bin/true",
+        ])
+        .unwrap();
+        assert!(args.parse_mode().is_ok());
+    }
+
+    #[test]
+    fn frontend_preferences_work_in_connect_mode_without_backend_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let preferences = dir.path().join("tui.yaml");
+        std::fs::write(
+            &preferences,
+            "source_roots: [{name: app, path: .}]\nstack_mode: local",
+        )
+        .unwrap();
+        let (args, config) = configured_from(vec![
+            "ddb-tui".into(),
+            "connect".into(),
+            "--api".into(),
+            "http://localhost".into(),
+            "--tui-config".into(),
+            preferences.display().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(args.stack_mode, StackMode::Local);
+        assert_eq!(config.source_roots.unwrap().len(), 1);
+    }
     #[test]
     fn source_search_default_is_exact_and_fuzzy_is_an_explicit_global_option() {
         use clap::Parser;
@@ -507,7 +756,7 @@ mod tests {
         ] {
             let mut arguments = vec!["ddb-tui"];
             arguments.extend(tail);
-            arguments.extend(["--debugger-settings", settings.to_str().unwrap()]);
+            arguments.extend(["--session-profile", settings.to_str().unwrap()]);
             let args = Args::try_parse_from(arguments).unwrap();
             assert_eq!(
                 args.debugger_settings,

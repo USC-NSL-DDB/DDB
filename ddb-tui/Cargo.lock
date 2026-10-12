@@ -543,6 +543,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddb-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_yml",
+]
+
+[[package]]
 name = "ddb-sample-extension"
 version = "0.1.0"
 dependencies = [
@@ -575,6 +585,7 @@ dependencies = [
  "crossterm",
  "ddb-api-client",
  "ddb-api-extension",
+ "ddb-config",
  "ddb-sample-extension",
  "ddb-source-workspace",
  "futures-util",

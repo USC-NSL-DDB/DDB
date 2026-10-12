@@ -1900,7 +1900,8 @@ mod tests {
                 &tx,
                 BackendRequest::ConfigureSession {
                     session_id: "session/gdb".into(),
-                    setup: crate::debugger_setup::Settings::default()
+                    setup: crate::debugger_setup::Settings::parse("{}")
+                        .unwrap()
                         .plan(
                             v2::BackendKind::Gdb as i32,
                             crate::cli::ValuesFormatting::PrettyPrinters,

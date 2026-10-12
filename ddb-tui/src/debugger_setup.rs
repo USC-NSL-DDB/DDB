@@ -15,6 +15,9 @@ use crate::{
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    /// Only an explicitly loaded API profile may mutate an existing session.
+    #[serde(skip)]
+    explicit: bool,
     /// Install a typed temporary function breakpoint before native commands.
     entry_function: Option<String>,
     #[serde(default)]
@@ -25,19 +28,8 @@ pub struct Settings {
     lldb: Backend,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Mapping {
-    from: String,
-    to: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Backend {
-    #[serde(default)]
-    commands: Vec<String>,
-}
+type Mapping = ddb_config::SourceMapping;
+type Backend = ddb_config::NativeSetup;
 
 #[derive(Debug)]
 pub struct Setup {
@@ -56,9 +48,10 @@ impl Settings {
         Self::parse(&text).with_context(|| format!("debugger settings {}", path.display()))
     }
 
-    fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         ensure!(text.len() <= 65_536, "settings exceed 64 KiB");
-        let settings: Self = serde_yml::from_str(text)?;
+        let mut settings: Self = serde_yml::from_str(text)?;
+        settings.explicit = true;
         if let Some(function) = &settings.entry_function {
             ensure!(
                 !function.trim().is_empty() && function.len() <= 4096 && !function.chars().any(char::is_control),
@@ -90,6 +83,9 @@ impl Settings {
     }
 
     pub fn plan(&self, kind: i32, formatting: ValuesFormatting) -> Option<Setup> {
+        if !self.explicit {
+            return None;
+        }
         let backend = match v2::BackendKind::try_from(kind).ok()? {
             v2::BackendKind::Gdb => &self.gdb,
             v2::BackendKind::Lldb => &self.lldb,
@@ -202,6 +198,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_frontend_never_reconfigures_backend_owned_debugger_setup() {
+        for kind in [v2::BackendKind::Gdb, v2::BackendKind::Lldb] {
+            assert!(Settings::default()
+                .plan(kind as i32, ValuesFormatting::PrettyPrinters)
+                .is_none());
+        }
+    }
+
+    #[test]
     fn libstdcxx_example_is_explicit_and_only_runs_on_gdb() {
         let settings = Settings::parse(include_str!(
             "../examples/debugger-settings/gdb-libstdcxx.yaml"
@@ -222,7 +227,8 @@ mod tests {
                 ValuesFormatting::PrettyPrinters
             )
             .is_none());
-        assert!(Settings::default()
+        assert!(Settings::parse("{}")
+            .unwrap()
             .plan(
                 v2::BackendKind::Gdb as i32,
                 ValuesFormatting::PrettyPrinters
