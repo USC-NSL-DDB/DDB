@@ -995,6 +995,16 @@ impl App {
             .collect::<Vec<_>>();
         threads.sort_by(|left, right| left.id.cmp(&right.id));
         self.threads = threads;
+        // A snapshot can overtake the owner's running event. Release its
+        // focus lock now, before a later process-wide stop pauses it again.
+        if self.pause_focus.as_ref().is_some_and(|owner| {
+            !self
+                .threads
+                .iter()
+                .any(|thread| thread.id == *owner && thread.state == "stopped")
+        }) {
+            self.pause_focus = None;
+        }
         // `Thread.selected` is backend-session local: more than one session can
         // legitimately report a selected thread. Preserve the TUI's global
         // navigation choice while that thread still exists, and only consult

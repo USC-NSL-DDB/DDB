@@ -380,6 +380,35 @@ fn a_rejected_execution_request_preserves_the_first_pause_owner() {
 }
 
 #[test]
+fn a_running_snapshot_releases_pause_focus_before_a_later_process_wide_stop() {
+    let mut app = app(&["a"]);
+    app.select_pause_thread("thread/a");
+    let (tx, _rx) = mpsc::channel(64);
+
+    // A snapshot can overtake the owner's running event after Continue.
+    apply_message(&mut app, UiMessage::Snapshot(snapshot(&[], 2)), &tx);
+    assert!(app.pause_focus.is_none());
+
+    // The next RPC breakpoint stops the whole server process. Its main
+    // thread is stopped again, but only the RPC thread owns the new cause.
+    let mut stopped = snapshot(&["a"], 3);
+    let mut rpc = stopped.threads[0].clone();
+    rpc.thread_id = "thread/rpc".into();
+    rpc.name = Some("rpc".into());
+    stopped.threads.push(rpc);
+    let mut execution = stopped.execution_states[0].clone();
+    execution.execution_state_id = "execution/rpc".into();
+    execution.target = Some(api::thread_target("thread/rpc"));
+    execution.stop_reason.as_mut().unwrap().thread_id = Some("thread/rpc".into());
+    stopped.execution_states[0].stop_reason = execution.stop_reason.clone();
+    stopped.execution_states.push(execution);
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+
+    assert_eq!(app.current_thread().unwrap().id, "thread/rpc");
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/rpc"));
+}
+
+#[test]
 fn ordinary_action_feedback_does_not_expose_internal_ids() {
     let mut app = app(&["a"]);
     let (tx, mut rx) = mpsc::channel(8);
