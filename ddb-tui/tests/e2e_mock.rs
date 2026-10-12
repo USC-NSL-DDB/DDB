@@ -197,14 +197,27 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
         .position(|line| line.contains("reply->set_message"))
         .unwrap()
         + 1;
-    tui.send(format!("g{}:{server_line}\r", server_source.display()).as_bytes());
+    // Reopen the explicit local tree, not a frame-resolved document carrying
+    // an owner hint. This is the formerly broken config-source workflow.
+    tui.send(b"o");
+    tui.wait_for_current_frame(|screen| screen.contains("[Local] helloworld"));
+    tui.send(b"\r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("greeter_server.cc") && screen.contains("Source explorer")
+    });
+    tui.send(b"greeter_server.cc\r");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Copyright 2015 gRPC") && !screen.contains("Source explorer")
+    });
+    tui.send(format!("g{server_line}\r").as_bytes());
     tui.wait_for_source_marker('▸', server_line);
     tui.send(b"b");
     tui.wait_for("DDB breakpoint targets");
-    tui.send(b"\r");
+    tui.send(b" \r");
     tui.wait_for_current_frame(|screen| {
         !screen.contains("DDB breakpoint targets") && screen.contains("greeter_server.cc")
     });
+    tui.wait_for_source_marker('●', server_line);
     tui.send(b"\x1b[15~");
     let deadline = Instant::now() + TIMEOUT;
     while std::net::TcpStream::connect(("127.0.0.1", app_port)).is_err() {
@@ -216,8 +229,21 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     tui.wait_for_current_frame(|screen| screen.contains("2 sessions · 2 groups"));
     tui.click_topology_thread("tui-client");
     // Continue the attached client. The server's native RPC breakpoint must hit.
-    tui.send(b"ccc\x1b[15~");
+    tui.send(b"\x1b[15~");
     tui.wait_for_current_frame(|screen| screen.contains("▶ 1 paused"));
+    tui.wait_for_source_marker('▶', server_line);
+    tui.wait_for_current_frame(|screen| {
+        // A large server thread list can scroll its session header off-screen.
+        // Assert the selected stopped row with the RPC source, not the first
+        // visible row under a potentially absent session header.
+        screen.lines().any(|line| {
+            let topology = line.chars().take(33).collect::<String>();
+            topology.contains('▸')
+                && topology.contains('•')
+                && topology.contains("stopped")
+                && topology.contains("greeter_ser")
+        })
+    });
     tui.send(b"\x1b2P");
     tui.wait_for_current_frame(|screen| {
         screen.contains("Paused breakpoint hits") && screen.contains("tui-server (")
@@ -241,8 +267,8 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
         })
     };
     tui.wait_for_current_frame(exact_prefix);
-    // Hit inspection retains all-session controls. Cycle back to its thread.
-    tui.send(b"c\x1b[21~");
+    // Stepping resolves the paused frame's thread without a scope workaround.
+    tui.send(b"\x1b[21~");
     tui.wait_for_source_marker('▶', server_line + 1);
     tui.wait_for_current_frame(exact_prefix);
     tui.send(b"r");
@@ -436,7 +462,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
     ddb.wait_for_snapshot(|s| s.breakpoints.len() == 2 && s.breakpoints.iter().all(|b| b.verified));
-    tui.send(b"ccc\x1b[15~");
+    tui.send(b"\x1b[15~");
     ddb.wait_for_snapshot(|s| {
         s.threads.iter().any(|t| {
             t.location.as_ref().is_some_and(|l| {
@@ -550,9 +576,8 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
             })
         };
         tui.wait_for_current_frame(pretty_prefix);
-        // Global continue was selected earlier. Explicitly restore controls to
-        // the inspected breakpoint-hit thread before stepping the C++ method.
-        tui.send(b"c\x1b[21~");
+        // Continue broadcasts, while Step uses the inspected hit's thread.
+        tui.send(b"\x1b[21~");
         tui.wait_for_source_marker('▶', server_line + 1);
         tui.wait_for_current_frame(pretty_prefix);
     }
@@ -1938,7 +1963,8 @@ fn real_debugger_settings_terminal_workflow() {
                 .count(),
             if backend == "gdb" { 2 } else { 1 }
         );
-        tui.wait_for("◎ thread");
+        tui.wait_for("◎ Auto");
+        tui.wait_for("#0");
         tui.send(if backend == "gdb" {
             b":show substitute-path\r"
         } else {
@@ -1981,7 +2007,8 @@ fn real_logpoint_terminal_workflow() {
                 .any(|thread| thread.state == v2::ThreadState::Stopped as i32)
         });
         let mut tui = Tui::spawn(&ddb.base_url());
-        tui.wait_for("◎ thread");
+        tui.wait_for("◎ Auto");
+        tui.wait_for("#0");
         tui.send(b"Fddb_real_loop::function_breakpoint_target\r");
         tui.wait_for("DDB breakpoint targets");
         tui.send(b" \r");
@@ -2056,7 +2083,8 @@ fn real_function_breakpoint_terminal_workflow() {
         });
         let mut tui = Tui::spawn(&ddb.base_url());
         tui.wait_for("connected");
-        tui.wait_for("◎ thread");
+        tui.wait_for("◎ Auto");
+        tui.wait_for("#0");
         tui.send(b"Fddb_real_loop::function_breakpoint_target -- --ignore-count 3\r");
         tui.wait_for("DDB breakpoint targets");
         // Function breakpoints have no source owner; choose broadcast explicitly.
@@ -2134,10 +2162,14 @@ fn real_function_breakpoint_terminal_workflow() {
         let owner = ddb
             .wait_for_snapshot(|snapshot| !snapshot.sessions.is_empty())
             .sessions[0]
-            .session_id
             .clone();
         tui.send(b"z");
-        tui.wait_for_current_frame(|screen| screen.contains("stop ") && screen.contains(&owner));
+        tui.wait_for_current_frame(|screen| {
+            screen.contains(&owner.display_name)
+                && screen.contains('●')
+                && !screen.contains(&owner.session_id)
+                && !screen.contains("· stop ")
+        });
         tui.send(b"z\r");
         tui.wait_for_variable_value("Watch: counter", "3");
         tui.wait_for_source_marker('▶', stopped_line);
@@ -2227,7 +2259,7 @@ fn managed_real_launch_workflow(backend: &str) {
     tui.wait_for("ddb_real_loop");
     // Session stop output may precede the API thread projection on LLDB.
     // The breakpoint and execution checks below need a projected thread.
-    tui.wait_for("◎ thread");
+    tui.wait_for("◎ Auto");
 
     let goto_breakpoint = format!(
         "g{}:{}\r",
@@ -2389,7 +2421,7 @@ fn real_debugger_workflow(backend: &str) {
     tui.wait_for("#0");
     // Session stop output may precede the API thread projection on LLDB.
     // The breakpoint and execution checks below need a projected thread.
-    tui.wait_for("◎ thread");
+    tui.wait_for("◎ Auto");
 
     // Persistent setup is DDB-owned. Connecting a default frontend must not
     // reconfigure either debugger; only explicit API profiles may do that.

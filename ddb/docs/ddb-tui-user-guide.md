@@ -138,12 +138,23 @@ events. A delayed remote target does not block the entire frontend.
 
 ### DDB-native interaction model
 
-The left topology is DDB group → session → thread, not a flat local-thread list.
-Selecting a group or session changes the execution target while retaining the
-thread under inspection; selecting a thread changes both. `c` cycles the target
-through thread, session, group, and all eligible sessions. Unsupported actions
-are hidden; an action on an unsupported scope is rejected before it can be
-queued, according to `GetCapabilities`.
+The left topology is DDB group → session → thread. Controls start in `Auto`.
+Continue and Pause broadcast to all sessions. Stepping uses the selected paused
+frame's owning thread, or the selected paused thread if no frame is loaded.
+This also applies to a caller frame in another session's distributed stack.
+Boundary rows cannot be stepped. Browsing a group or session does not change
+these defaults. `c` explicitly overrides controls through thread, session, group,
+and all eligible sessions, then returns to `Auto`. While an override is active,
+topology selection changes that target. Unsupported action/scope combinations
+are hidden and rejected before queueing, according to `GetCapabilities`.
+
+The first observed ordinary stop selects its actual owning thread, expands its
+topology ancestors, and loads its frame and source. Other concurrent stops do not
+steal focus while that owner remains paused. Breakpoint rows and the panel title
+count current paused hits separately from historical hit counts. Use `H` for the
+live hit view or `P` to choose a hit. Automatically paused peers are not counted
+as breakpoint hits. Existing stops received together at bootstrap or recovery
+use snapshot order; DDB does not compare remote wall clocks to order them.
 
 The center stack is DDB distributed backtrace by default. Selecting a stopped
 thread or receiving a stop refreshes its cross-session call chain automatically.
@@ -168,6 +179,16 @@ debugger path, and its target picker defaults to the document's single owner,
 not whichever thread is selected. Unmapped files cannot create source
 breakpoints. Multiple matching logical breakpoints require a choice in the
 breakpoint manager before deletion.
+
+An untagged local root opened without a frame-owner hint shows exact-path source
+markers across sessions. It does not imply a single owner; choose breakpoint
+targets from DDB's discovered candidates. Tagged local roots and remote source
+documents retain owner-specific matching.
+
+Pending controls, mutations, and source/frame/variable reads show an animated
+spinner. Its 100 ms animation is local and adds no API polling. Normal feedback
+uses action names and developer-facing target labels. Use `--trace-api` for
+operation IDs, stop revisions, and connection diagnostics.
 
 Prefer inline `Tui.source_roots`. Optionally pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
 directories on the frontend host. This separate file contains a `roots` list of

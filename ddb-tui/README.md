@@ -338,11 +338,11 @@ normal DDB-native view.
 | `j` / `k`, Up/Down, mouse wheel | Navigate the focused panel |
 | Page Up / Page Down | Move by the focused pane's visible page size |
 | `Enter` / click | Select a DDB group/session/thread target, inspect a thread/frame, expand a variable, or activate a row |
-| `F5` | Continue |
-| `F6` | Interrupt/pause |
-| `F10` | Step over |
+| `F5` | Continue all sessions by default |
+| `F6` | Interrupt/pause all sessions by default |
+| `F10` | Step over in the selected paused frame's thread |
 | `F11` / `Shift+F11` | Step in / step out |
-| `c` | Cycle execution scope: thread → session → group → all eligible sessions |
+| `c` | Override controls: Auto → thread → session → group → all eligible sessions → Auto |
 | `b` | Toggle a breakpoint at the source cursor |
 | `B` | Create a conditional, temporary, or hardware breakpoint |
 | `Space` in the target picker | Select one or more session/group targets, or server-resolved broadcast |
@@ -499,8 +499,16 @@ do not switch panes while editing a prompt or interacting with a modal dialog.
 No prefix sequence is required. In tmux or a terminal emulator, reserve these
 Alt-number combinations for DDB rather than binding them to another action.
 
-The toolbar shows execution actions supported by DDB for the selected target
-scope. A thread-only Next action is not offered for a session or group. Stack
+The toolbar starts in `Auto`. Continue and Pause broadcast to all sessions;
+Next, Into, Out, and other stepping actions use the selected paused frame's
+owning thread, including a frame in another session's distributed stack. Without
+a frame, stepping uses the selected paused thread. A distributed boundary is not
+an executable frame. Browsing a group or session does not change these defaults.
+Press `c` to request an explicit control scope, then cycle back to `Auto` to
+restore the defaults. Signals keep their explicit single-session selection.
+
+The toolbar shows actions supported by DDB for each resolved target. A thread-only
+Next action is not offered while a session or group override is active. Stack
 frames without a usable source file/line are dimmed and labeled `no source
 location`. A reported location starts as `source unchecked`; the active read is
 `loading source`. Failed loads dim the function name and show `source load
@@ -516,23 +524,30 @@ the corresponding evidence. The cache is bounded to 128 owner/path entries.
 Other frames are not eagerly fetched, so this indication adds no source probes
 to pause or distributed-backtrace refreshes.
 
-If a selected execution target disappears, controls stay disabled and the scope
-is labeled unavailable until you explicitly select a target or cycle scope.
+If an explicitly overridden execution target disappears, controls stay disabled
+and the scope is labeled unavailable until you select a target or cycle scope.
 Inspection may move to a surviving thread, but it cannot silently redirect
-Continue or signals. A retired target does not reactivate merely because the
+overridden controls or signals. Automatic Continue/Pause still resolve all
+current sessions. A retired target does not reactivate merely because the
 same ID reappears or a replacement backend uses an identical ID. Scope cycling
 from a thread follows the control thread's owner, not a different inspected
 distributed frame.
 
 The bottom line shows the latest user mutation as `queued`, `pending admission`,
 `pending`, `completed`, `error`, or `cancelled`. It captures the requested target
-when submitted and includes the DDB operation ID after admission. Continue,
+when submitted using its developer-facing name. Continue,
 stepping, jumps, signals, breakpoint changes, evaluations, assignments, native
 commands, extension actions, and logpoint configuration use this feedback.
-Snapshots and frame navigation do not replace it. It stays visible until another
-tracked action is submitted, including while editing a prompt. Timeline records
-each transition with its local intent number and target identity; concurrent
-pending actions are counted even when the latest action has completed.
+An animated spinner advances every 100 ms while a tracked action or source,
+frame, or variable read is pending. Animation is local and sends no API requests.
+Pending mutations take priority over read activity. Empty results, read errors,
+queue rejection, and disconnection end the corresponding read activity.
+Snapshots do not replace mutation outcomes. The latest outcome stays visible
+until another action is submitted, except while a background read needs feedback.
+Timeline records each transition; concurrent pending actions remain counted even
+when the latest action has completed. Normal controls, feedback, and hit lists
+omit operation IDs and stop revisions. `--trace-api` exposes those diagnostics,
+plus endpoint/protocol details, when troubleshooting.
 
 An admitted operation whose wait times out is `outcome unconfirmed`, not an
 execution failure. Connection loss also leaves pending outcomes unconfirmed.
@@ -698,11 +713,14 @@ Opening a file does not change debugger selection, evaluation context, or the
 execution target. It disables following until `f` is pressed in Source.
 Alt-Left/Right restores document history and cursor positions.
 
-The source title identifies the document's owners. Execution and breakpoint
-markers require both a matching owner and the exact declared debugger path;
-equal filenames or path suffixes do not establish a relationship. A mapped
-workspace file uses `debugger_path` for breakpoints, never its display path.
-Without that mapping, source breakpoint placement is rejected.
+The source title identifies the document's owners. Markers require the exact
+declared debugger path; equal filenames or path suffixes do not establish a
+relationship. Remote documents and local files with session tags or frame-owner
+hints also require a matching owner. An untagged local root opened independently
+of a frame shows breakpoints and execution locations for that exact path across
+sessions. This aggregate view does not infer ownership or select a breakpoint
+target. A mapped workspace file uses `debugger_path` for breakpoints, never its
+display path. Without that mapping, source breakpoint placement is rejected.
 
 A backend-instance change invalidates DDB source references and remote history.
 Local documents, cursor positions, and local history remain available, including
@@ -727,9 +745,10 @@ cannot be inspected. A truncated result keeps `TRUNCATED` in the panel title and
 reports the server's reason in status and timeline.
 
 The topology panel is grouped as DDB group → session → thread. Selecting a group
-or session changes the execution target without stealing the thread being
-inspected; selecting a thread changes both. Controls are sent to the displayed
-scope only when `GetCapabilities` advertises that action/scope combination.
+or session preserves the inspected thread. Selecting a thread inspects it.
+Topology selection changes control targets only while an explicit override is
+active; `Auto` keeps Continue/Pause global and stepping frame-owned. Controls
+require the action/scope combination advertised by `GetCapabilities`.
 
 Breakpoint creation always opens a DDB target picker. It supports a
 server-resolved broadcast, inheritable group targets, individual sessions, and
@@ -767,11 +786,21 @@ breakpoint. This is separate from the cumulative `hits:N` counter. Automatically
 paused all-stop peers are not counted. Member rows show current hits only when
 DDB identifies that member or there is a single member in the hitting session.
 Markers disappear when the thread resumes or the backend disconnects.
+The first observed ordinary stop selects its owning thread in Topology, expands
+collapsed ancestors, and follows its frame and source automatically. Further
+concurrent stops do not steal that selection while the first owner remains
+paused. The Breakpoints title and rows count current hits; `H` and `P` let you
+choose another. This is first-observed ordering, not a comparison of wall clocks
+across machines. A bootstrap or recovery snapshot containing several existing
+stops uses their snapshot order. Resuming or a successfully queued user execution
+command starts a new focus decision. A rejected command does not discard the
+current owner.
 Press `P` in Breakpoints, or right-click a breakpoint row, to choose a currently
 paused hitting thread. Enter or a click loads that thread's stack, source and
 variables. Esc or Cancel closes the picker. The picker validates the stop revision
 before navigating and rejects hits that resumed or changed while it was open.
-This navigation does not change the execution-control target.
+This navigation does not change an explicit control override. In `Auto`,
+stepping uses the newly inspected frame; Continue/Pause still broadcast.
 
 For a persistent view of all current breakpoint stops, focus Breakpoints with
 Alt+2 and press `H`, or click `Hits [H]`. It shows hitting threads grouped by DDB
@@ -785,7 +814,7 @@ removes all unverified hits; a new backend discards the old selection.
 The live hits view is navigation-only. Breakpoint mutation keys do not act on the
 hidden all-breakpoints selection. Press `H` or `All [H]` to manage breakpoints;
 the previous logical breakpoint/member selection and grouping remain intact.
-Browsing hits does not change the execution-control scope.
+Browsing hits does not change an explicit execution-control override.
 
 The variables panel preserves the scopes returned by DDB. Non-expensive scopes
 load automatically; expensive scopes (such as globals and file statics) load
@@ -812,7 +841,7 @@ backend availability changes.
 - Left: DDB group/session/thread topology and aggregate distributed breakpoints
 - Center: source view and the DDB distributed call stack
 - Right: named variable scopes and lazy children, registers, memory, extensions, and DDB timeline
-- Top: capability-gated controls, current execution scope, and connection state
+- Top: capability-gated controls, Auto or an explicit override, and connection state
 - Bottom: status, command palette, and contextual key hints
 
 DDB-host sources are read through the typed API. Explicit local checkouts are
@@ -917,9 +946,12 @@ tests retain the ordinary 15-second readiness deadlines.
 `greeter_auto_attach_single_config_managed_terminal_workflow` launches through
 `ddb tui` with one project file and no source-workspace or session-profile flags.
 It browses local sources before attach, automatically attaches both greeters,
-hits the server RPC breakpoint, inspects an exact `"Hello "` string, steps over
-the assignment, refreshes without losing formatting, and checks owned-broker
-shutdown. It requires trusted GCC printers at `/usr/share/gcc/python`.
+sets and renders a breakpoint from the untagged local source tree, and continues
+all sessions without a scope workaround. The RPC hit must select its server
+thread and source automatically before any manual hit navigation. The test then
+inspects an exact `"Hello "` string, steps over the assignment using the frame's
+thread, refreshes without losing formatting, and checks owned-broker shutdown.
+It requires trusted GCC printers at `/usr/share/gcc/python`.
 Set `DDB_GREETER_PROJECT_CONFIG=/absolute/path/to/helloworld/.ddb/ddb.yaml`
 to exercise an existing project unchanged through direct `ddb-tui`, including
 its inline `ddb_path` and config-relative source roots. The project must use
