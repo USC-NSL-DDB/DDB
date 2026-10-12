@@ -554,6 +554,9 @@ pub struct App {
     pub breakpoint_target_picker: Option<BreakpointTargetPicker>,
     pub execution_target: Option<v2::Target>,
     execution_target_retired: bool,
+    pub execution_scope_override: bool,
+    pub pause_focus: Option<String>,
+    inspection_loading: bool,
     pub selected_thread: usize,
     pub selected_frame: usize,
     selected_topology: Option<TopologyRowKind>,
@@ -664,6 +667,9 @@ impl App {
             breakpoint_target_picker: None,
             execution_target: None,
             execution_target_retired: false,
+            execution_scope_override: false,
+            pause_focus: None,
+            inspection_loading: false,
             breakpoints: Vec::new(),
             selected_thread: 0,
             selected_topology: None,
@@ -852,6 +858,7 @@ impl App {
                 self.logpoint_edit = None;
                 self.session_setup_attempted.clear();
                 self.supersede_automatic_control();
+                self.pause_focus = None;
                 self.source_explorer.invalidate_server();
                 self.breakpoint_target_picker = None;
                 self.breakpoint_hit_picker = None;
@@ -936,6 +943,8 @@ impl App {
             self.invalidate_inspection();
         }
         if self.sessions.is_empty() {
+            self.inspection_loading = false;
+            self.pause_focus = None;
             self.threads.clear();
             self.frames.clear();
             self.variables.clear();
@@ -1089,6 +1098,7 @@ impl App {
     }
 
     fn apply_stack_frames(&mut self, frames: Vec<StackFrame>) {
+        self.inspection_loading = false;
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         self.frames = frames;
         // The worker loads details for the first inspectable distributed frame.
@@ -1130,6 +1140,7 @@ impl App {
     }
 
     pub fn apply_scopes(&mut self, scopes: Vec<v2::Scope>) {
+        self.inspection_loading = false;
         let scopes = scopes
             .into_iter()
             .map(|scope| Variable {
@@ -1279,6 +1290,76 @@ impl App {
         }
     }
 
+    /// Normal controls resolve their target when invoked. Browsing a group or
+    /// another frame does not silently turn a step into a distributed fanout.
+    pub fn control_target(&self, action: &str) -> Option<v2::Target> {
+        if self.execution_scope_override {
+            return self.execution_target();
+        }
+        if matches!(action, "continue" | "interrupt") {
+            return (!self.sessions.is_empty()).then_some(v2::Target {
+                selector: Some(target::Selector::Broadcast(v2::BroadcastTarget {})),
+            });
+        }
+        let thread_id = match self.current_frame() {
+            Some(frame) if frame.boundary => return None,
+            Some(frame) => frame.thread_id.as_str(),
+            None => self.current_thread()?.id.as_str(),
+        };
+        self.threads
+            .iter()
+            .find(|thread| thread.id == thread_id && thread.state == "stopped")
+            .map(|thread| thread_target(&thread.id))
+    }
+
+    pub fn control_scope_label(&self) -> String {
+        if self.execution_scope_override {
+            self.execution_scope_label()
+        } else {
+            "Auto".into()
+        }
+    }
+
+    pub fn background_activity(&self) -> Option<&'static str> {
+        if self.source_browser.pending_generation().is_some() {
+            Some("Loading source…")
+        } else if self.source_explorer.loading() {
+            Some("Loading source files…")
+        } else if self.inspection_loading {
+            Some("Loading frame and variables…")
+        } else if self.variables.iter().any(|variable| variable.loading) {
+            Some("Loading variable children…")
+        } else {
+            None
+        }
+    }
+
+    pub fn has_activity(&self) -> bool {
+        self.operations.active() || self.background_activity().is_some()
+    }
+
+    pub fn select_pause_thread(&mut self, thread_id: &str) -> bool {
+        if self.pause_focus.as_ref().is_some_and(|owner| {
+            self.threads
+                .iter()
+                .any(|thread| thread.id == *owner && thread.state == "stopped")
+        }) {
+            return false;
+        }
+        let Some(index) = self
+            .threads
+            .iter()
+            .position(|thread| thread.id == thread_id && thread.state == "stopped")
+        else {
+            return false;
+        };
+        self.pause_focus = Some(thread_id.into());
+        self.selected_thread = index;
+        self.reveal_topology_thread(thread_id);
+        self.source_browser.set_following(true);
+        true
+    }
+
     fn target_is_present(&self, target: &v2::Target) -> bool {
         match target.selector.as_ref() {
             Some(target::Selector::Thread(value)) => self
@@ -1382,6 +1463,29 @@ impl App {
     }
 
     pub fn cycle_execution_scope(&mut self) {
+        if !self.execution_scope_override {
+            self.execution_scope_override = true;
+            self.execution_target = self
+                .current_thread()
+                .map(|thread| thread_target(&thread.id));
+            self.execution_target_retired = false;
+            self.status = format!(
+                "Control override: {} · c changes target or returns to Auto",
+                self.execution_scope_label()
+            );
+            return;
+        }
+        if matches!(
+            self.execution_target
+                .as_ref()
+                .and_then(|target| target.selector.as_ref()),
+            Some(target::Selector::Broadcast(_))
+        ) {
+            self.execution_scope_override = false;
+            self.status =
+                "Automatic controls: Continue/Pause all sessions; Step selected frame".into();
+            return;
+        }
         let next = match self.execution_target().and_then(|target| target.selector) {
             Some(target::Selector::Thread(value)) => self
                 .threads
@@ -1413,7 +1517,10 @@ impl App {
         };
         self.execution_target = next;
         self.execution_target_retired = false;
-        self.status = format!("execution scope: {}", self.execution_scope_label());
+        self.status = format!(
+            "Control override: {} · c changes target or returns to Auto",
+            self.execution_scope_label()
+        );
     }
 
     fn full_topology_rows(&self) -> Vec<TopologyRow> {
@@ -2106,6 +2213,7 @@ impl App {
         Ok((draft, target))
     }
     pub fn begin_inspection(&mut self) -> u64 {
+        self.inspection_loading = true;
         self.inspection_generation = self.inspection_generation.wrapping_add(1).max(1);
         self.inspected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         self.frames.clear();
@@ -2116,12 +2224,16 @@ impl App {
     }
 
     pub fn begin_frame_inspection(&mut self) -> u64 {
+        self.inspection_loading = true;
         self.inspection_generation = self.inspection_generation.wrapping_add(1).max(1);
         self.clear_inspection_details();
         self.inspection_generation
     }
 
     pub fn mark_running(&mut self, thread_id: Option<&str>) {
+        if thread_id.is_none() || self.pause_focus.as_deref() == thread_id {
+            self.pause_focus = None;
+        }
         // Do not reuse an old breakpoint reason if a stop event or thread list
         // arrives before the next execution-state snapshot.
         for execution in &mut self.execution_states {
@@ -2283,6 +2395,7 @@ impl App {
     }
 
     fn invalidate_inspection(&mut self) {
+        self.inspection_loading = false;
         self.frames.clear();
         self.distributed_stack_truncation = None;
         self.execution_location = None;
@@ -2315,6 +2428,7 @@ impl App {
             return false;
         }
         self.inspected_thread_id = None;
+        self.inspection_loading = false;
         for variable in &mut self.variables {
             variable.loading = false;
         }
@@ -2583,6 +2697,8 @@ impl App {
     }
 
     pub fn backend_unavailable(&mut self, error: impl ToString) {
+        self.pause_focus = None;
+        self.inspection_loading = false;
         for message in self.operations.disconnected(false) {
             self.push_timeline(message);
         }
@@ -2740,19 +2856,14 @@ fn operation_result_summary(result: &v2::OperationResult) -> Option<String> {
                 "target stopped".to_string()
             }
         }
-        operation_result::Value::Selection(selection) => format!(
-            "selected thread {}",
-            selection.thread_id.as_deref().unwrap_or("<unknown>")
-        ),
+        operation_result::Value::Selection(_) => "selection updated".into(),
         operation_result::Value::Evaluation(evaluation) => {
             format!("{} = {}", evaluation.expression, evaluation.value)
         }
         operation_result::Value::VariableAssignment(assignment) => {
             format!("assigned value: {}", assignment.value)
         }
-        operation_result::Value::Breakpoint(breakpoint) => {
-            format!("breakpoint {}", breakpoint.breakpoint_id)
-        }
+        operation_result::Value::Breakpoint(_) => "breakpoint saved".into(),
         operation_result::Value::RawCommand(result) => result
             .text
             .clone()
@@ -3916,16 +4027,15 @@ mod v2_tests {
             app.execution_target().and_then(|target| target.selector),
             Some(target::Selector::Group(value)) if value.group_id == "group/b"
         ));
+        app.execution_scope_override = true;
         app.cycle_execution_scope();
         assert!(matches!(
             app.execution_target().and_then(|target| target.selector),
             Some(target::Selector::Broadcast(_))
         ));
         app.cycle_execution_scope();
-        assert!(matches!(
-            app.execution_target().and_then(|target| target.selector),
-            Some(target::Selector::Thread(value)) if value.thread_id == "thread/alpha"
-        ));
+        assert!(!app.execution_scope_override);
+        assert_eq!(app.control_scope_label(), "Auto");
 
         app.focus = Focus::Threads;
         app.move_selection(-1);

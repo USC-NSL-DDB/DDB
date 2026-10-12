@@ -263,11 +263,14 @@ fn draw_breakpoint_hits(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mu
                 .map(|thread| thread.name.as_str())
                 .unwrap_or(&hit.thread_id);
             let label = format!(
-                "{} · {} · {} · stop {}",
+                "{} · {}{}",
                 session_display_name(app, &hit.session_id),
                 name,
-                hit.thread_id,
-                hit.revision
+                if app.trace_api {
+                    format!(" · {} · stop {}", hit.thread_id, hit.revision)
+                } else {
+                    String::new()
+                }
             );
             areas.breakpoint_hit_rows.push((
                 index,
@@ -305,7 +308,7 @@ fn draw_breakpoint_hits(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mu
 }
 
 fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    if app.operations.display().is_some() {
+    if app.has_activity() || app.operations.display().is_some() {
         draw_operation_feedback(frame, app, area);
         return;
     }
@@ -314,13 +317,18 @@ fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         "reconnecting"
     };
-    frame.render_widget(
-        Paragraph::new(terminal_text(&format!(
-            " DDB Debugger · {state} · {} · {} ",
+    let detail = if app.trace_api {
+        format!(
+            " · {} · {}",
             app.api_protocol,
             endpoint_label(&app.api_endpoint)
-        )))
-        .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        )
+    } else {
+        String::new()
+    };
+    frame.render_widget(
+        Paragraph::new(terminal_text(&format!(" DDB Debugger · {state}{detail} ")))
+            .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         area,
     );
 }
@@ -355,7 +363,7 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
         (Control::RefreshStack, "↻ DDB stack".to_string(), 12),
         (
             Control::CycleScope,
-            format!("◎ {}", app.execution_scope_label()),
+            format!("◎ {} [c]", app.control_scope_label()),
             22,
         ),
         (Control::Refresh, "⟳".to_string(), 3),
@@ -370,7 +378,7 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
         }
         Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
         control => control.action_name().is_some_and(|action| {
-            app.execution_target()
+            app.control_target(action)
                 .as_ref()
                 .is_some_and(|target| app.capabilities.supports_execution_target(action, target))
         }),
@@ -409,17 +417,31 @@ fn draw_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiArea
         Paragraph::new(Line::from(vec![
             connection,
             Span::styled(
-                format!(
-                    "  {}  {}  events:{}  jobs:{}",
-                    endpoint_label(&app.api_endpoint),
-                    app.api_protocol,
-                    if app.event_stream_connected {
-                        "up"
-                    } else {
-                        "retry"
-                    },
-                    app.pending_commands
-                ),
+                if app.trace_api {
+                    format!(
+                        "  {}  {}  events:{}  jobs:{}",
+                        endpoint_label(&app.api_endpoint),
+                        app.api_protocol,
+                        if app.event_stream_connected {
+                            "up"
+                        } else {
+                            "retry"
+                        },
+                        app.pending_commands
+                    )
+                } else {
+                    format!(
+                        " · {} running · {} paused",
+                        app.threads
+                            .iter()
+                            .filter(|thread| thread.state == "running")
+                            .count(),
+                        app.threads
+                            .iter()
+                            .filter(|thread| thread.state == "stopped")
+                            .count()
+                    )
+                },
                 Style::default().fg(MUTED),
             ),
         ]))
@@ -805,7 +827,15 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     draw_selectable_list(
         frame,
         area,
-        title(app, Focus::Breakpoints, "DDB Breakpoints"),
+        title(
+            app,
+            Focus::Breakpoints,
+            &if hits.is_empty() {
+                "DDB Breakpoints".into()
+            } else {
+                format!("DDB Breakpoints · {} paused", hits.len())
+            },
+        ),
         items,
         selected,
         app.focus == Focus::Breakpoints,
@@ -1296,7 +1326,13 @@ fn draw_stack(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                         format!(
                             " → {} · {} ──",
                             terminal_text(session),
-                            terminal_text(&stack_frame.thread_id)
+                            terminal_text(&if app.trace_api {
+                                stack_frame.thread_id.clone()
+                            } else {
+                                app.target_label(Some(&crate::api::thread_target(
+                                    &stack_frame.thread_id,
+                                )))
+                            })
                         ),
                         Style::default().fg(MUTED),
                     ),
@@ -1823,15 +1859,30 @@ fn draw_operation_feedback(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         YELLOW
     };
+    let text = if !app.operations.active() && app.background_activity().is_some() {
+        app.background_activity().unwrap().to_string()
+    } else if app.trace_api {
+        app.operations.diagnostics().unwrap_or_default()
+    } else {
+        app.operations.display().unwrap_or_default()
+    };
     frame.render_widget(
-        Paragraph::new(terminal_text(&app.operations.display().unwrap_or_default()))
-            .style(Style::default().fg(color)),
+        Paragraph::new(terminal_text(&format!(
+            "{} {}",
+            if app.has_activity() {
+                app.operations.spinner()
+            } else {
+                app.operations.indicator()
+            },
+            text
+        )))
+        .style(Style::default().fg(color)),
         area,
     );
 }
 
 fn draw_hints(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    if app.operations.display().is_some() {
+    if app.has_activity() || app.operations.display().is_some() {
         draw_operation_feedback(frame, app, area);
         return;
     }
@@ -2595,6 +2646,7 @@ mod v2_tests {
     #[test]
     fn toolbar_only_exposes_execution_actions_supported_for_the_selected_scope() {
         let mut app = App::new("http://localhost".into());
+        app.execution_scope_override = true;
         app.sessions.push(v2::Session {
             session_id: "session".into(),
             ..Default::default()
@@ -3260,7 +3312,8 @@ mod v2_tests {
         app.breakpoint_hit_picker = None;
         app.mark_running(Some("thread/hit"));
         let screen = render(&mut app, 100, 24);
-        assert!(!screen.contains("paused"), "{screen}");
+        assert!(!screen.contains("▶ 1 paused"), "{screen}");
+        assert!(!screen.contains("DDB Breakpoints · 1 paused"), "{screen}");
         assert!(screen.contains("hits:15"));
     }
 

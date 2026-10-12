@@ -679,10 +679,7 @@ async fn handle_with_feedback(
                             .await?;
                     }
                     messages
-                        .send(UiMessage::Receipt(
-                            format!("all-stop pause {session_id}"),
-                            receipt,
-                        ))
+                        .send(UiMessage::Receipt("all-stop pause".into(), receipt))
                         .await?;
                 }
                 Err(error) => {
@@ -852,10 +849,7 @@ async fn handle_with_feedback(
             )
             .await?;
             messages
-                .send(UiMessage::Receipt(
-                    format!("delete breakpoint {id}"),
-                    receipt,
-                ))
+                .send(UiMessage::Receipt("delete breakpoint".into(), receipt))
                 .await?;
         }
         BackendRequest::SetBreakpointEnabled {
@@ -886,10 +880,7 @@ async fn handle_with_feedback(
             .await?;
             let action = if enabled { "enable" } else { "disable" };
             messages
-                .send(UiMessage::Receipt(
-                    format!("{action} breakpoint {id}"),
-                    receipt,
-                ))
+                .send(UiMessage::Receipt(format!("{action} breakpoint"), receipt))
                 .await?;
         }
         BackendRequest::Evaluate {
@@ -1556,7 +1547,14 @@ fn state_event_summary(event: &v2::StateEvent) -> String {
                     Ok(v2::ThreadState::Unavailable) => "unavailable",
                     _ => "unknown",
                 };
-                return format!("exec · {state} · {}", thread.thread_id);
+                return format!(
+                    "exec · {state} · {}",
+                    thread
+                        .name
+                        .as_deref()
+                        .or(thread.backend_thread_id.as_deref())
+                        .unwrap_or("thread")
+                );
             }
             Some(resource_upsert::Resource::ExecutionState(state)) => {
                 return format!(
@@ -1564,8 +1562,8 @@ fn state_event_summary(event: &v2::StateEvent) -> String {
                     if state.running { "running" } else { "stopped" }
                 );
             }
-            Some(resource_upsert::Resource::Breakpoint(breakpoint)) => {
-                return format!("breakpoint · updated · {}", breakpoint.breakpoint_id);
+            Some(resource_upsert::Resource::Breakpoint(_)) => {
+                return "breakpoint · updated".into();
             }
             _ => {}
         }
@@ -1576,12 +1574,7 @@ fn state_event_summary(event: &v2::StateEvent) -> String {
     let resource = v2::ResourceKind::try_from(event.resource_kind)
         .map(|kind| kind.as_str_name())
         .unwrap_or("RESOURCE_KIND_UNSPECIFIED");
-    format!(
-        "{} {} {}",
-        short_enum(kind),
-        short_enum(resource),
-        event.resource_id
-    )
+    format!("{} {}", short_enum(kind), short_enum(resource),)
 }
 
 fn state_event_activity(event: &v2::StateEvent) -> DebuggerActivity {

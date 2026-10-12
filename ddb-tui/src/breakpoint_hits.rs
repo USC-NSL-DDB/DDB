@@ -154,7 +154,13 @@ impl App {
                     } else {
                         name.map_or_else(
                             || format!("Group {group}"),
-                            |name| format!("{name} · {group}"),
+                            |name| {
+                                if self.trace_api {
+                                    format!("{name} · {group}")
+                                } else {
+                                    name.into()
+                                }
+                            },
                         )
                     },
                     depth: 0,
@@ -173,7 +179,13 @@ impl App {
                     hit: None,
                     label: name.map_or_else(
                         || format!("Session {}", hit.session_id),
-                        |name| format!("{name} · {}", hit.session_id),
+                        |name| {
+                            if self.trace_api {
+                                format!("{name} · {}", hit.session_id)
+                            } else {
+                                name.into()
+                            }
+                        },
                     ),
                     depth: 1,
                 });
@@ -191,14 +203,19 @@ impl App {
                 .unwrap_or_else(|| "no source location".into());
             rows.push(HitRow {
                 label: format!(
-                    "● {location} · {} · stop {} · {} · {}",
+                    "● {location} · {}{}",
                     thread
                         .map(|thread| thread.name.as_str())
                         .filter(|name| !name.is_empty())
                         .unwrap_or(&hit.thread_id),
-                    hit.revision,
-                    hit.breakpoint_id,
-                    hit.thread_id
+                    if self.trace_api {
+                        format!(
+                            " · stop {} · {} · {}",
+                            hit.revision, hit.breakpoint_id, hit.thread_id
+                        )
+                    } else {
+                        String::new()
+                    }
                 ),
                 hit: Some(hit),
                 depth: 2,

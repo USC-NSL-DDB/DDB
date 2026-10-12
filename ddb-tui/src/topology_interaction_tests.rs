@@ -191,6 +191,7 @@ fn execution_scope_cycles_from_the_control_thread_not_a_different_inspected_thre
         .iter()
         .position(|thread| thread.id == "thread/b")
         .unwrap();
+    app.execution_scope_override = true;
     app.cycle_execution_scope();
     assert_eq!(
         app.execution_target(),

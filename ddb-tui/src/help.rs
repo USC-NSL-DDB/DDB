@@ -41,17 +41,17 @@ const ENTRIES: &[Entry] = &[
     Entry {
         section: "Execution",
         keys: "F5 / F6",
-        description: "Continue / pause the selected target",
+        description: "Continue / pause all sessions by default",
     },
     Entry {
         section: "Execution",
         keys: "F10 / F11 / Shift+F11",
-        description: "Next / step in / step out; available scopes come from DDB",
+        description: "Next / step in / step out on the selected paused frame's thread",
     },
     Entry {
         section: "Execution",
         keys: "c",
-        description: "Cycle execution scope: thread, session, group, all",
+        description: "Override controls: Auto, thread, session, group, all, Auto",
     },
     Entry {
         section: "Execution",

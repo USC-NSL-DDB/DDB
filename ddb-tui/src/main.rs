@@ -9,6 +9,8 @@ mod help;
 mod live_hits_interaction_tests;
 mod logpoints;
 mod model;
+#[cfg(test)]
+mod native_ux_interaction_tests;
 mod operation_feedback;
 #[cfg(test)]
 mod operation_feedback_interaction_tests;
@@ -155,12 +157,16 @@ async fn run_frontend(
         return Err(error);
     }
     if let Some(backend) = managed {
-        app.push_timeline(format!(
-            "managed DDB {} ready (instance {}, log {})",
-            backend.backend_version(),
-            backend.server_instance_id(),
-            backend.log_path().display()
-        ));
+        app.push_timeline(if app.trace_api {
+            format!(
+                "managed DDB {} ready (instance {}, log {})",
+                backend.backend_version(),
+                backend.server_instance_id(),
+                backend.log_path().display()
+            )
+        } else {
+            format!("managed DDB {} ready", backend.backend_version())
+        });
     } else {
         app.push_timeline("connected to externally owned DDB");
     }
@@ -305,6 +311,8 @@ async fn run(
     let mut events = EventStream::new();
     let mut refresh = tokio::time::interval(Duration::from_millis(refresh_ms.max(250)));
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut animation = tokio::time::interval(Duration::from_millis(100));
+    animation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut termination = Box::pin(termination_signal());
 
     let mut worker_finished = false;
@@ -320,6 +328,9 @@ async fn run(
         }
 
         tokio::select! {
+            _ = animation.tick(), if app.has_activity() => {
+                app.operations.tick();
+            }
             record = async { traces.as_mut().expect("guarded receiver").recv().await }, if traces.is_some() => {
                 if !apply_api_trace(app, record) { traces = None; }
             }
@@ -2042,7 +2053,10 @@ fn inspect_thread(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread
         return;
     }
     let generation = app.begin_inspection();
-    app.status = format!("loading thread #{thread_id}…");
+    app.status = format!(
+        "Loading {}…",
+        app.target_label(Some(&thread_target(&thread_id)))
+    );
     queue_request(
         app,
         requests,
@@ -2067,18 +2081,18 @@ fn dispatch_control(app: &mut App, requests: &mpsc::Sender<BackendRequest>, cont
         app.status = format!("the connected DDB backend does not support {action}");
         return;
     }
-    let Some(target) = app.execution_target() else {
-        app.status = "select a DDB thread, session, or group before using controls".to_string();
+    let Some(target) = app.control_target(action) else {
+        app.status = "Select a paused frame or thread before stepping".to_string();
         return;
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
             "{action} is not available for {}",
-            app.execution_scope_label()
+            app.target_label(Some(&target))
         );
         return;
     }
-    let scope = app.execution_scope_label();
+    let scope = app.target_label(Some(&target));
     app.status = format!("sending {action} to {scope}…");
     queue_request(app, requests, BackendRequest::Control(control, target));
 }
@@ -2088,14 +2102,14 @@ fn start_execution_prompt(app: &mut App, action: &str, mode: InputMode) {
         app.status = format!("the connected DDB backend does not support {action}");
         return;
     }
-    let Some(target) = app.execution_target() else {
+    let Some(target) = app.control_target(action) else {
         app.status = "select a DDB thread or session before using this operation".to_string();
         return;
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
             "{action} is not available for {}",
-            app.execution_scope_label()
+            app.target_label(Some(&target))
         );
         return;
     }
@@ -2222,14 +2236,14 @@ fn queue_execution_operation(
     action: &str,
     build: impl FnOnce(v2::Target) -> BackendRequest,
 ) {
-    let Some(target) = app.execution_target() else {
+    let Some(target) = app.control_target(action) else {
         app.status = "select a DDB thread or session before using this operation".to_string();
         return;
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
             "{action} is not available for {}",
-            app.execution_scope_label()
+            app.target_label(Some(&target))
         );
         return;
     }
@@ -2905,6 +2919,7 @@ fn handle_stopped_thread(
 }
 
 fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
+    app.select_pause_thread(&thread_id);
     app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
     pause_running_peers(app, requests, &thread_id);
     let should_inspect = match app.current_thread().map(|thread| thread.id.as_str()) {
@@ -3017,6 +3032,12 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
     if let BackendRequest::LoadSource(request) = &request {
         app.begin_frame_source_read(request);
     }
+    let resets_pause_focus = matches!(
+        &request,
+        BackendRequest::Control(..)
+            | BackendRequest::Jump { .. }
+            | BackendRequest::SendSignal { .. }
+    );
     // Explicit execution intent supersedes automatic work even if the queue is
     // full. The user must never be resumed/paused by an older automatic task
     // while retrying their command. Inspection and automatic peer pauses do not
@@ -3056,11 +3077,28 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
         None => request,
     };
     match requests.try_send(request) {
-        Ok(()) => {}
+        Ok(()) => {
+            if resets_pause_focus {
+                app.pause_focus = None;
+            }
+        }
         Err(mpsc::error::TrySendError::Full(
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
         Err(mpsc::error::TrySendError::Full(request)) => {
+            if let BackendRequest::InspectThread {
+                thread_id,
+                generation,
+                ..
+            }
+            | BackendRequest::InspectFrame {
+                thread_id,
+                generation,
+                ..
+            } = &request
+            {
+                app.release_failed_inspection(*generation, thread_id);
+            }
             if let Some(ticket) = ticket {
                 if let Some(message) = app.operations.update(
                     ticket,
@@ -3097,6 +3135,19 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
         Err(mpsc::error::TrySendError::Closed(request)) => {
+            if let BackendRequest::InspectThread {
+                thread_id,
+                generation,
+                ..
+            }
+            | BackendRequest::InspectFrame {
+                thread_id,
+                generation,
+                ..
+            } = &request
+            {
+                app.release_failed_inspection(*generation, thread_id);
+            }
             if let Some(ticket) = ticket {
                 if let Some(message) = app.operations.update(
                     ticket,
@@ -4730,6 +4781,7 @@ mod tests {
     #[test]
     fn execution_jump_uses_uppercase_key_and_prompt_text_keeps_navigation_letters() {
         let mut app = distributed_caller_app();
+        app.execution_scope_override = true;
         app.capabilities = v2::Capabilities {
             execution_actions: vec![v2::ExecutionAction::Jump as i32],
             execution_action_capabilities: vec![v2::ExecutionActionCapability {
@@ -6166,8 +6218,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_stop_does_not_steal_or_restart_the_active_thread() {
+    async fn additional_background_stop_does_not_steal_or_restart_the_first_pause() {
         let mut app = App::new("http://127.0.0.1:5000".to_string());
+        app.pause_focus = Some("thread/child".into());
         app.threads = vec![
             ThreadItem {
                 id: "thread/child".to_string(),
@@ -6538,6 +6591,7 @@ mod tests {
             ..Default::default()
         });
         app.execution_target = Some(api::group_target("group/a"));
+        app.execution_scope_override = true;
         app.groups.push(v2::Group {
             group_id: "group/a".into(),
             ..Default::default()

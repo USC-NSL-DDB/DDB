@@ -33,7 +33,10 @@ fn fixture() -> App {
         .iter()
         .map(|action| v2::ExecutionActionCapability {
             action: *action,
-            scopes: vec![v2::ExecutionScopeKind::Thread as i32],
+            scopes: vec![
+                v2::ExecutionScopeKind::Thread as i32,
+                v2::ExecutionScopeKind::Fanout as i32,
+            ],
         })
         .collect();
     app
@@ -72,7 +75,7 @@ fn control_feedback_survives_snapshots_inspection_and_prompt_input_in_every_layo
     assert!(
         matches!(*request, BackendRequest::Control(Control::Next, target) if target == api::thread_target("thread/a"))
     );
-    assert!(render(&mut app, 140, 42).contains("#1 queued · next"));
+    assert!(render(&mut app, 140, 42).contains("queued · next"));
     for update in [
         Update::Started,
         Update::Admitted(operation(v2::OperationState::Accepted)),
@@ -86,9 +89,9 @@ fn control_feedback_survives_snapshots_inspection_and_prompt_input_in_every_layo
     app.apply_snapshot(snapshot());
     app.status = "loading another frame".into();
     for (width, height) in [(140, 42), (75, 24), (60, 15)] {
-        assert!(render(&mut app, width, height).contains("#1 pending · next"));
+        assert!(render(&mut app, width, height).contains("pending · next"));
         app.input_mode = InputMode::Evaluate;
-        assert!(render(&mut app, width, height).contains("#1 pending · next"));
+        assert!(render(&mut app, width, height).contains("pending · next"));
         app.input_mode = InputMode::Normal;
     }
     for (width, height) in [(1, 1), (8, 5)] {
@@ -103,12 +106,17 @@ fn control_feedback_survives_snapshots_inspection_and_prompt_input_in_every_layo
         &tx,
     );
     app.apply_snapshot(snapshot());
-    assert!(render(&mut app, 140, 42).contains("#1 completed · next"));
+    assert!(render(&mut app, 140, 42).contains("completed · next"));
     app.error("Source unavailable for selected frame");
     let small = render(&mut app, 75, 15);
-    assert!(small.contains("#1 completed · next"));
+    assert!(small.contains("completed · next"));
     assert!(small.contains("Source unavailable for selected frame"));
-    assert!(app.timeline.iter().any(|line| line.contains("operation/a")));
+    assert!(app
+        .timeline
+        .iter()
+        .all(|line| !line.contains("operation/a")));
+    app.trace_api = true;
+    assert!(render(&mut app, 140, 42).contains("operation/a"));
 }
 
 #[test]
@@ -140,10 +148,10 @@ fn older_completions_and_automatic_receipts_do_not_replace_newer_intent() {
         ),
         &tx,
     );
-    assert!(render(&mut app, 140, 42).contains("#2 queued · continue"));
-    assert!(app.operations.display().unwrap().contains("thread/a"));
+    assert!(render(&mut app, 140, 42).contains("queued · continue"));
+    assert!(app.operations.display().unwrap().contains("all sessions"));
     app.backend_unavailable("offline");
-    assert!(render(&mut app, 140, 42).contains("#2 outcome unconfirmed"));
+    assert!(render(&mut app, 140, 42).contains("outcome unconfirmed"));
     let mut replacement = snapshot();
     replacement.server_instance_id = "backend/b".into();
     app.apply_snapshot(replacement);
@@ -174,7 +182,7 @@ fn failed_queue_admission_and_closed_worker_are_not_reported_as_pending() {
         }
         dispatch_control(&mut app, &tx, Control::Next);
         let text = app.operations.display().unwrap();
-        assert!(text.contains("#1 error · next"));
+        assert!(text.contains("error · next"));
         assert!(text.contains("not sent to DDB"));
         assert!(!text.contains("1 pending"));
     }

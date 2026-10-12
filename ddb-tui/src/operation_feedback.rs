@@ -20,18 +20,11 @@ impl BackendRequest {
             Self::CreateBreakpoint { target, .. } => {
                 ("create breakpoint".into(), target.clone().into_api_target())
             }
-            Self::DeleteBreakpoint { id, target } => {
-                (format!("delete breakpoint {id}"), target.clone())
-            }
+            Self::DeleteBreakpoint { target, .. } => ("delete breakpoint".into(), target.clone()),
             Self::SetBreakpointEnabled {
-                id,
-                target,
-                enabled,
+                target, enabled, ..
             } => (
-                format!(
-                    "{} breakpoint {id}",
-                    if *enabled { "enable" } else { "disable" }
-                ),
+                format!("{} breakpoint", if *enabled { "enable" } else { "disable" }),
                 target.clone(),
             ),
             Self::Evaluate { thread_id, .. } => (
@@ -52,16 +45,12 @@ impl BackendRequest {
                 target.clone(),
             ),
             Self::RawCommand { target, .. } => ("debugger command".into(), target.clone()),
-            Self::ConfigureLogpoint { id, .. } => return Some(format!("configure logpoint {id}")),
+            Self::ConfigureLogpoint { .. } => return Some("configure logpoint".into()),
             _ => return None,
         };
         // Capture labels at intent time. Selecting another frame or losing the
         // resource cannot relabel a pending command as targeting something else.
-        Some(format!(
-            "{label} · {} · [{}]",
-            app.target_label(Some(&target)),
-            target_identity(&target)
-        ))
+        Some(format!("{label} · {}", app.target_label(Some(&target)),))
     }
 
     #[cfg(test)]
@@ -70,24 +59,6 @@ impl BackendRequest {
             Self::Tracked { request, .. } => *request,
             request => request,
         }
-    }
-}
-
-fn target_identity(target: &v2::Target) -> String {
-    use v2::target::Selector;
-    match target.selector.as_ref() {
-        Some(Selector::Thread(target)) => target.thread_id.clone(),
-        Some(Selector::Session(target)) => target.session_id.clone(),
-        Some(Selector::Group(target)) => target.group_id.clone(),
-        Some(Selector::SessionSet(target)) => target.session_ids.join(", "),
-        Some(Selector::Multiple(target)) => target
-            .targets
-            .iter()
-            .map(target_identity)
-            .collect::<Vec<_>>()
-            .join(", "),
-        Some(Selector::Broadcast(_)) => "broadcast".into(),
-        _ => "unresolved target".into(),
     }
 }
 
@@ -145,10 +116,7 @@ struct Entry {
 
 impl Entry {
     fn text(&self) -> String {
-        let mut text = format!("#{} {} · {}", self.ticket, self.state.label(), self.label);
-        if let Some(id) = &self.operation_id {
-            text.push_str(&format!(" · {id}"));
-        }
+        let mut text = format!("{} · {}", self.state.label(), self.label);
         if let Some(detail) = &self.detail {
             text.push_str(&format!(" · {detail}"));
         }
@@ -160,6 +128,7 @@ impl Entry {
 pub struct Feedback {
     next_ticket: u64,
     entries: VecDeque<Entry>,
+    animation_frame: usize,
 }
 
 impl Feedback {
@@ -302,6 +271,42 @@ impl Feedback {
         })
     }
 
+    pub fn active(&self) -> bool {
+        self.entries.iter().any(|entry| entry.state.active())
+    }
+
+    pub fn tick(&mut self) {
+        self.animation_frame = (self.animation_frame + 1) % 10;
+    }
+
+    pub fn indicator(&self) -> &'static str {
+        if self.active() {
+            self.spinner()
+        } else if self.has_error() {
+            "!"
+        } else {
+            "✓"
+        }
+    }
+
+    pub fn spinner(&self) -> &'static str {
+        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][self.animation_frame]
+    }
+
+    pub fn diagnostics(&self) -> Option<String> {
+        let entry = self.entries.back()?;
+        Some(format!(
+            "#{} {}{}",
+            entry.ticket,
+            entry.text(),
+            entry
+                .operation_id
+                .as_ref()
+                .map(|id| format!(" · {id}"))
+                .unwrap_or_default()
+        ))
+    }
+
     pub fn has_error(&self) -> bool {
         self.entries.back().is_some_and(|entry| {
             matches!(
@@ -341,7 +346,7 @@ mod tests {
         assert!(feedback
             .display()
             .unwrap()
-            .contains("#2 queued · continue to session/b"));
+            .contains("queued · continue to session/b"));
         assert!(feedback.update(first, Update::Started).is_none());
         assert!(feedback
             .update(
@@ -364,7 +369,7 @@ mod tests {
         assert!(feedback
             .display()
             .unwrap()
-            .starts_with("1 pending · #2 completed"));
+            .starts_with("1 pending · completed"));
     }
 
     #[test]
