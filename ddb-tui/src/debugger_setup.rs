@@ -1,6 +1,6 @@
 //! Explicit, ordered session setup. Local source browsing is configured separately.
 
-use std::{io::Read, path::Path};
+use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
 use ddb_api_client::v2;
@@ -40,29 +40,32 @@ pub struct Setup {
 
 impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .with_context(|| format!("open debugger settings {}", path.display()))?
-            .take(65_537)
-            .read_to_string(&mut text)?;
-        Self::parse(&text).with_context(|| format!("debugger settings {}", path.display()))
+        let settings: Self = ddb_config::read_yaml(path, 65_536)?;
+        settings
+            .validate()
+            .with_context(|| format!("session profile {}", path.display()))
     }
 
+    #[cfg(test)]
     pub(crate) fn parse(text: &str) -> Result<Self> {
         ensure!(text.len() <= 65_536, "settings exceed 64 KiB");
-        let mut settings: Self = serde_yml::from_str(text)?;
-        settings.explicit = true;
-        if let Some(function) = &settings.entry_function {
+        let settings: Self = serde_yml::from_str(text)?;
+        settings.validate()
+    }
+
+    fn validate(mut self) -> Result<Self> {
+        self.explicit = true;
+        if let Some(function) = &self.entry_function {
             ensure!(
                 !function.trim().is_empty() && function.len() <= 4096 && !function.chars().any(char::is_control),
                 "entry_function must be nonempty, at most 4096 bytes, and contain no control characters"
             );
         }
         ensure!(
-            settings.source_mappings.len() <= 128,
+            self.source_mappings.len() <= 128,
             "too many source mappings"
         );
-        for mapping in &settings.source_mappings {
+        for mapping in &self.source_mappings {
             for path in [&mapping.from, &mapping.to] {
                 ensure!(
                     !path.trim().is_empty() && path.len() <= 4_096 && !path.chars().any(char::is_control),
@@ -70,7 +73,7 @@ impl Settings {
                 );
             }
         }
-        for backend in [&settings.gdb, &settings.lldb] {
+        for backend in [&self.gdb, &self.lldb] {
             ensure!(backend.commands.len() <= 128, "too many startup commands");
             for command in &backend.commands {
                 ensure!(
@@ -79,7 +82,7 @@ impl Settings {
                 );
             }
         }
-        Ok(settings)
+        Ok(self)
     }
 
     pub fn plan(&self, kind: i32, formatting: ValuesFormatting) -> Option<Setup> {
@@ -196,6 +199,21 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loaded_profiles_keep_their_size_bound_and_validate_native_commands() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile.yaml");
+        std::fs::write(&path, "entry_function: main").unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().entry_function.as_deref(),
+            Some("main")
+        );
+        std::fs::write(&path, "gdb: {commands: [' ']}").unwrap();
+        assert!(Settings::load(&path).is_err());
+        std::fs::write(&path, format!("{{}}\n#{}", "x".repeat(65_536))).unwrap();
+        assert!(Settings::load(&path).is_err());
+    }
 
     #[test]
     fn default_frontend_never_reconfigures_backend_owned_debugger_setup() {

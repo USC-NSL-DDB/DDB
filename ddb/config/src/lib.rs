@@ -2,7 +2,7 @@
 //! or opens source roots. Those effects belong to the owning host.
 
 use anyhow::{ensure, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs::File,
     io::Read,
@@ -237,8 +237,11 @@ fn resolve(path: &mut PathBuf, base: &Path) {
     }
 }
 
-/// Bounded, nonblocking regular-file read. No implicit project discovery.
-pub fn read_yaml(path: &Path) -> Result<serde_yml::Value> {
+pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+
+/// Read typed YAML from a bounded regular file without waiting for FIFO writers.
+/// The caller supplies its format's size limit. No implicit project discovery.
+pub fn read_yaml<T: DeserializeOwned>(path: &Path, max_bytes: usize) -> Result<T> {
     let mut options = File::options();
     options.read(true);
     #[cfg(unix)]
@@ -254,13 +257,17 @@ pub fn read_yaml(path: &Path) -> Result<serde_yml::Value> {
         "configuration must be a regular file"
     );
     let mut bytes = Vec::new();
-    file.take(1_048_577).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1_048_576, "configuration exceeds 1 MiB");
+    file.take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= max_bytes,
+        "configuration exceeds {max_bytes} bytes"
+    );
     serde_yml::from_slice(&bytes).with_context(|| format!("parse configuration {}", path.display()))
 }
 
 pub fn load_tui(path: &Path, project: bool) -> Result<TuiConfig> {
-    let document = read_yaml(path)?;
+    let document: serde_yml::Value = read_yaml(path, MAX_CONFIG_BYTES)?;
     ensure!(
         document.is_mapping(),
         "configuration must be a YAML mapping"
@@ -338,6 +345,20 @@ pub fn apply_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_yaml_reader_preserves_limits_and_rejects_nonregular_files() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(read_yaml::<serde_yml::Value>(directory.path(), MAX_CONFIG_BYTES).is_err());
+        let path = directory.path().join("setup.yaml");
+        let yaml = "commands: []";
+        std::fs::write(&path, yaml).unwrap();
+        let setup: NativeSetup = read_yaml(&path, yaml.len()).unwrap();
+        assert!(setup.commands.is_empty());
+        assert!(read_yaml::<NativeSetup>(&path, yaml.len() - 1).is_err());
+        std::fs::write(&path, "command: []").unwrap();
+        assert!(read_yaml::<NativeSetup>(&path, MAX_CONFIG_BYTES).is_err());
+    }
     #[test]
     fn strict_tui_and_debugger_configuration() {
         assert!(serde_yml::from_str::<TuiConfig>("source_root: []").is_err());

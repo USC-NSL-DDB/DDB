@@ -7,7 +7,6 @@ use ddb_source_workspace::{Limits, SourceCache, SourceRoot};
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
-    io::Read,
     path::Path,
     sync::{Arc, RwLock},
 };
@@ -45,26 +44,8 @@ impl Default for Workspace {
 impl Workspace {
     /// Called before terminal entry. No implicit cwd or backend-config roots.
     pub fn load(path: &Path) -> Result<Self> {
-        let mut bytes = Vec::new();
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK);
-        }
-        let file = options.open(path)?;
-        anyhow::ensure!(
-            file.metadata()?.is_file(),
-            "source workspace configuration must be a regular file"
-        );
-        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        anyhow::ensure!(
-            bytes.len() <= 1024 * 1024,
-            "source workspace configuration exceeds 1 MiB"
-        );
-        let config: Config =
-            serde_yml::from_slice(&bytes).context("invalid source workspace configuration")?;
+        let config: Config = ddb_config::read_yaml(path, ddb_config::MAX_CONFIG_BYTES)
+            .context("invalid source workspace configuration")?;
         Self::from_roots(config.roots, path.parent().unwrap_or(Path::new(".")))
     }
 

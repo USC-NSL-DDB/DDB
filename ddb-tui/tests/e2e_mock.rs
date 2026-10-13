@@ -22,6 +22,55 @@ const POLL: Duration = Duration::from_millis(50);
 static REAL_DEBUGGER_LOCK: Mutex<()> = Mutex::new(());
 static DDB_START_LOCK: Mutex<()> = Mutex::new(());
 
+#[test]
+fn session_profile_rejects_fifo_without_waiting_for_a_writer() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let profile = directory.path().join("profile.yaml");
+    let path = std::ffi::CString::new(profile.as_os_str().as_bytes()).unwrap();
+    // No writer is started. A blocking configuration reader would never return.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let mut process = OwnedTestProcess(Some(
+        Command::new(env!("CARGO_BIN_EXE_ddb-tui"))
+            .env("TOKIO_WORKER_THREADS", "2")
+            .args([
+                "connect",
+                "--api",
+                "http://127.0.0.1:1",
+                "--session-profile",
+            ])
+            .arg(&profile)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = process.0.as_mut().unwrap().try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session profile reader blocked on a FIFO"
+        );
+        thread::sleep(POLL);
+    };
+    assert!(!status.success());
+    let mut error = String::new();
+    process
+        .0
+        .as_mut()
+        .unwrap()
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut error)
+        .unwrap();
+    assert!(error.contains("regular file"), "{error}");
+}
+
 #[path = "support/real_distributed_memory.rs"]
 mod real_distributed_memory;
 
@@ -135,7 +184,8 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     let provided = std::env::var_os("DDB_GREETER_PROJECT_CONFIG").map(PathBuf::from);
     let config = provided.as_deref().unwrap_or(&generated_config);
     if provided.is_some() {
-        let project = ddb_config::read_yaml(config).unwrap();
+        let project: serde_yml::Value =
+            ddb_config::read_yaml(config, ddb_config::MAX_CONFIG_BYTES).unwrap();
         let broker = &project["ServiceDiscovery"]["Broker"];
         assert_eq!(broker["hostname"].as_str(), Some("127.0.0.1"));
         assert_eq!(broker["managed"]["type"].as_str(), Some("mosquitto"));

@@ -580,7 +580,7 @@ impl Config {
         managed: bool,
     ) -> Result<Self> {
         let path = fs::canonicalize(path)?;
-        let mut document = ddb_config::read_yaml(&path)?;
+        let mut document = ddb_config::read_yaml(&path, ddb_config::MAX_CONFIG_BYTES)?;
         anyhow::ensure!(
             overrides.len() <= 32,
             "at most 32 configuration overrides are allowed"
