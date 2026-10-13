@@ -171,6 +171,8 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     let generated_config = directory.path().join("ddb.yaml");
     let settings = serde_json::json!({
         "Framework": "grpc",
+        // Loopback auto-attach must work without any SSH account or server.
+        "SSH": {"port": 1, "user": "ddb-ci-no-ssh"},
         "FrameFilter": {"filter_preset": ["cpp-stdlib", "protobuf-gen", "ddb-runtime"]},
         "ServiceDiscovery": {"Broker": {"hostname": "127.0.0.1", "port": discovery.port, "managed": {"type": "mosquitto"}}},
         "Conf": {"auto_shutdown": false, "on_exit": "kill", "base_dir": directory.path().join("state"), "log_dir": directory.path().join("logs"),
@@ -394,7 +396,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
         thread::sleep(POLL);
     }
     let port = reserve_port();
-    let config = format!("Framework: grpc\nFrameFilter:\n  filter_preset: [cpp-stdlib, protobuf-gen, ddb-runtime]\nServiceDiscovery:\n  Broker:\n    hostname: 127.0.0.1\n    port: {broker_port}\nConf:\n  auto_shutdown: false\n  on_exit: kill\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: gdb\n", directory.path().display(), directory.path().display());
+    let config = format!("Framework: grpc\nSSH:\n  port: 1\n  user: ddb-ci-no-ssh\nFrameFilter:\n  filter_preset: [cpp-stdlib, protobuf-gen, ddb-runtime]\nServiceDiscovery:\n  Broker:\n    hostname: 127.0.0.1\n    port: {broker_port}\nConf:\n  auto_shutdown: false\n  on_exit: kill\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: gdb\n", directory.path().display(), directory.path().display());
     let app_port = reserve_port();
     let spawn_app = |role: &str, argument: String| {
         OwnedTestProcess(Some(

@@ -53,7 +53,7 @@ impl DbgManager {
                 start_result
                     .map_err(|error| error.context("failed to start MQTT discovery producer"))?;
                 info!("MQTT discovery producer started successfully");
-                Ok(Some(DiscoveredTransportPolicy::DirectSsh {
+                Ok(Some(DiscoveredTransportPolicy::Direct {
                     port: config.ssh.port,
                     user: config.ssh.user.clone(),
                 }))

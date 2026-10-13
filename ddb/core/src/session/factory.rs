@@ -51,7 +51,7 @@ pub(crate) fn validate_static_session_config(
 /// configuration when discovery starts, decides the transport per service.
 #[derive(Clone)]
 pub(crate) enum DiscoveredTransportPolicy {
-    DirectSsh {
+    Direct {
         port: u16,
         user: String,
     },
@@ -66,7 +66,10 @@ pub(crate) enum DiscoveredTransportPolicy {
 impl DiscoveredTransportPolicy {
     pub(crate) fn resolve(&self, ip: Ipv4Addr) -> (TransportSpec, Option<ProxyTunnel>) {
         match self {
-            Self::DirectSsh { port, user } => (
+            // Loopback in direct discovery names this host. A proxy's
+            // loopback instead names the remote namespace, so do not bypass it.
+            Self::Direct { .. } if ip.is_loopback() => (TransportSpec::Local, None),
+            Self::Direct { port, user } => (
                 TransportSpec::DirectSsh(SSHCred::new(&ip.to_string(), *port, user, None)),
                 None,
             ),
@@ -214,6 +217,30 @@ mod tests {
         cmd_flow::breakpoint::BreakpointEventPublisher, notification::NotificationManager,
         state::RuntimeModel,
     };
+
+    #[test]
+    fn discovered_loopback_processes_use_local_transport_without_ssh_credentials() {
+        let policy = DiscoveredTransportPolicy::Direct {
+            port: 2222,
+            user: "remote-debugger".into(),
+        };
+        for ip in [Ipv4Addr::LOCALHOST, Ipv4Addr::new(127, 0, 0, 42)] {
+            let (transport, tunnel) = policy.resolve(ip);
+            assert!(
+                matches!(transport, TransportSpec::Local),
+                "loopback {ip} must not require an SSH server or private key"
+            );
+            assert!(tunnel.is_none());
+        }
+        let (transport, tunnel) = policy.resolve(Ipv4Addr::new(192, 0, 2, 7));
+        let TransportSpec::DirectSsh(credentials) = transport else {
+            panic!("a remote discovered service still requires SSH");
+        };
+        assert_eq!(credentials.hostname, "192.0.2.7");
+        assert_eq!(credentials.port, 2222);
+        assert_eq!(credentials.username, "remote-debugger");
+        assert!(tunnel.is_none());
+    }
 
     fn test_factory(config: Config) -> SessionFactory {
         let config = Arc::new(config);

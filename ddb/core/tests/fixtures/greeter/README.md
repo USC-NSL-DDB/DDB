@@ -22,3 +22,7 @@ Set `DDB_GREETER_WORKSPACE` to this directory when running the TUI terminal
 suite. Runtime prerequisites are GDB, Mosquitto, `ddb_runapp`, libfaketime, and
 GCC's libstdc++ Python printers at `/usr/share/gcc/python`. Tests own their
 brokers and processes and preserve the prior discovery configuration.
+
+Direct discovery of loopback processes uses local debugger transport. Generated
+test configurations deliberately specify an unusable SSH account and port, so
+the local auto-attach workflows cannot depend on a developer's SSH server or key.
