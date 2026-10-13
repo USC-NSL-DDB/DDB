@@ -3105,7 +3105,16 @@ fn handle_stopped_thread(
 }
 
 fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
-    app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
+    if app.is_automatic_pause(&thread_id) {
+        return;
+    }
+    if app
+        .all_stop_cause
+        .as_deref()
+        .is_none_or(|cause| app.is_automatic_pause(cause) || app.is_secondary_stop(cause))
+    {
+        app.all_stop_cause = Some(thread_id.clone());
+    }
     // The event can precede its snapshot. Reconcile its stopped state before
     // selecting the pause owner, or a later interrupted peer can steal focus.
     pause_running_peers(app, requests, &thread_id);

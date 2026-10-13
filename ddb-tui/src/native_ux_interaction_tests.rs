@@ -255,6 +255,92 @@ fn stop_event_before_snapshot_selects_its_owner_before_an_automatic_peer() {
 }
 
 #[test]
+fn snapshot_first_stop_batch_selects_the_principal_before_its_automatic_peer() {
+    let mut app = app(&[]);
+    let mut stopped = snapshot(&["a", "b"], 2);
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGINT".into()),
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/b"));
+    assert_eq!(app.all_stop_cause.as_deref(), Some("thread/b"));
+}
+
+#[test]
+fn authoritative_snapshot_replaces_provisional_automatic_peer_focus() {
+    let mut app = app(&[]);
+    app.note_automatic_pause("a");
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(
+        &mut app,
+        UiMessage::DebuggerEvent(model::DebuggerEvent {
+            server_instance_id: "backend/native-ux".into(),
+            state_revision: 2,
+            state_event_sequence: 2,
+            summary: "automatic peer interrupt".into(),
+            refresh: false,
+            activity: DebuggerActivity::Stopped(Some("thread/a".into())),
+        }),
+        &tx,
+    );
+    let mut stopped = snapshot(&["a", "b"], 3);
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGINT".into()),
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/b"));
+    assert_eq!(app.all_stop_cause.as_deref(), Some("thread/b"));
+}
+
+#[test]
+fn independent_interrupt_remains_the_pause_owner_when_a_later_breakpoint_arrives() {
+    let mut app = app(&[]);
+    let mut interrupted = snapshot(&["a"], 2);
+    interrupted.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(interrupted.clone()), &tx);
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/a"));
+    let mut later = snapshot(&["a", "b"], 3);
+    later.execution_states[0] = interrupted.execution_states[0].clone();
+    apply_message(&mut app, UiMessage::Snapshot(later), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/a");
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/a"));
+}
+
+#[test]
+fn process_wide_stop_replaces_an_old_owner_without_a_running_projection() {
+    let mut app = app(&["a"]);
+    app.select_pause_thread("thread/a");
+    let mut stopped = snapshot(&["a"], 2);
+    let mut rpc = stopped.threads[0].clone();
+    rpc.thread_id = "thread/rpc".into();
+    stopped.threads.push(rpc);
+    let mut execution = stopped.execution_states[0].clone();
+    execution.execution_state_id = "execution/rpc".into();
+    execution.target = Some(api::thread_target("thread/rpc"));
+    execution.stop_reason.as_mut().unwrap().thread_id = Some("thread/rpc".into());
+    stopped.execution_states[0].stop_reason = execution.stop_reason.clone();
+    stopped.execution_states.push(execution);
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/rpc");
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/rpc"));
+}
+
+#[test]
 fn pending_actions_have_a_visible_activity_indicator() {
     let mut app = app(&["a"]);
     let (tx, _rx) = mpsc::channel(8);

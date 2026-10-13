@@ -8,13 +8,33 @@ pub(super) enum AutomaticPause {
     Observed(u64),
 }
 
-fn is_interrupt(reason: &v2::StopReason) -> bool {
+pub(super) fn is_interrupt(reason: &v2::StopReason) -> bool {
     reason.kind == v2::StopReasonKind::Pause as i32
         || (reason.kind == v2::StopReasonKind::Signal as i32
             && matches!(reason.signal_name.as_deref(), Some("SIGINT" | "SIGSTOP")))
 }
 
 impl App {
+    /// A process-wide stop also stops peers, but only its reported thread owns
+    /// the cause. This evidence supersedes an older focus even without Running.
+    pub fn is_secondary_stop(&self, thread: &str) -> bool {
+        self.thread_execution(thread).is_some_and(|state| {
+            !state.running
+                && state
+                    .stop_reason
+                    .as_ref()
+                    .and_then(|reason| reason.thread_id.as_deref())
+                    .is_some_and(|owner| owner != thread)
+        })
+    }
+
+    pub fn is_automatic_pause(&self, thread: &str) -> bool {
+        self.thread_execution(thread).is_some_and(|state| {
+            !state.running
+                && matches!(self.automatic_pauses.get(thread), Some(AutomaticPause::Observed(revision)) if *revision == state.revision)
+        })
+    }
+
     fn thread_execution(&self, id: &str) -> Option<&v2::ExecutionState> {
         self.execution_states.iter().find(|state| {
             matches!(state.target.as_ref().and_then(|target| target.selector.as_ref()), Some(target::Selector::Thread(thread)) if thread.thread_id == id)
@@ -71,9 +91,7 @@ impl App {
             return None;
         }
         let state = self.thread_execution(&thread.id)?;
-        if state.running
-            || matches!(self.automatic_pauses.get(&thread.id), Some(AutomaticPause::Observed(revision)) if *revision == state.revision)
-        {
+        if state.running || self.is_automatic_pause(&thread.id) {
             return None;
         }
         let reason = state.stop_reason.as_ref()?;

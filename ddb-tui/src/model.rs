@@ -808,7 +808,7 @@ impl App {
             .source_server_instance
             .as_ref()
             .is_some_and(|instance| instance != &snapshot.server_instance_id);
-        snapshot
+        let mut stops = snapshot
             .execution_states
             .iter()
             .filter_map(|state| {
@@ -840,9 +840,21 @@ impl App {
                 {
                     return None;
                 }
-                Some(target.thread_id.clone())
+                // A recovery snapshot can contain the principal stop and its
+                // interrupted peers before either event is projected. Preserve
+                // order among independent causes, but inspect them before pauses.
+                let priority = state.stop_reason.as_ref().map_or(1, |reason| {
+                    if topology_status::is_interrupt(reason) {
+                        2
+                    } else {
+                        0
+                    }
+                });
+                Some((priority, target.thread_id.clone()))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        stops.sort_by_key(|(priority, _)| *priority);
+        stops.into_iter().map(|(_, thread)| thread).collect()
     }
 
     pub fn snapshot_instance_matches(&self, snapshot: &v2::Snapshot) -> bool {
@@ -1400,10 +1412,16 @@ impl App {
     }
 
     pub fn select_pause_thread(&mut self, thread_id: &str) -> bool {
+        if self.is_automatic_pause(thread_id) || self.is_secondary_stop(thread_id) {
+            return false;
+        }
         if self.pause_focus.as_ref().is_some_and(|owner| {
-            self.threads
-                .iter()
-                .any(|thread| thread.id == *owner && thread.state == "stopped")
+            !self.is_automatic_pause(owner)
+                && !self.is_secondary_stop(owner)
+                && self
+                    .threads
+                    .iter()
+                    .any(|thread| thread.id == *owner && thread.state == "stopped")
         }) {
             return false;
         }
