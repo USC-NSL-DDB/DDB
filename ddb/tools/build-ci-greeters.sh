@@ -13,5 +13,7 @@ cmake -S "${fixture}" -B "${fixture}/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+cmake --build "${fixture}/build" --target ddb_attach_signal_order
+"${fixture}/build/ddb_attach_signal_order"
 cmake --build "${fixture}/build" --target greeter_client greeter_server \
   --parallel "${DDB_CI_BUILD_JOBS:-2}"

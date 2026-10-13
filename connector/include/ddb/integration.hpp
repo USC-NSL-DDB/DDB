@@ -194,7 +194,6 @@ private:
     // Upon attaching, ddb shall signal SIGDDBWAIT and back to the regular flow
     // but signal SIGDDBWAIT will resume execution, which is not what we want.
     // this is the hack to re-trap the debuggee again.
-    block_signal(SIGDDBWAIT);
     wait_for_signal(SIGDDBWAIT);
     raise(SIGTRAP); // force gdb to stop the debuggee again
   }
@@ -212,6 +211,14 @@ private:
   }
 
   inline void init_discovery() {
+    // Prepare before MQTT can publish our PID. The backend may attach and
+    // signal while publish/waitForCompletion is still executing. Blocking
+    // before MQTT creates worker threads also makes them inherit the mask.
+    if (this->config.wait_for_attach) {
+      block_signal(SIGDDBWAIT);
+    } else {
+      setup_ddb_signal_handler();
+    }
     if (this->config.hash.empty()) {
       this->config.hash = compute_self_hash();
     }
@@ -236,14 +243,13 @@ private:
         this->config.auto_discovery = false;
         if (this->config.wait_for_attach) {
           DDB::DDBConnector::wait_for_debugger();
-        } else {
-          setup_ddb_signal_handler();
         }
       }
     }
 
     if (failure) {
       setup_ddb_signal_handler();
+      unblock_signal(SIGDDBWAIT);
     }
   }
 };

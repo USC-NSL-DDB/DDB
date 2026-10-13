@@ -18,6 +18,11 @@ development files. The output is `build/greeter_client` and
 `build/greeter_server`. Debug information and disabled optimization are required
 for source breakpoints, stepping, and variable inspection.
 
+Before building the applications, the script runs `ddb_attach_signal_order`.
+This deterministic connector test stubs only the MQTT C boundary and delivers
+the attach signal during publication. It checks synchronous wait, non-wait,
+and connection-failure signal handling without a broker or debugger.
+
 Set `DDB_GREETER_WORKSPACE` to this directory when running the TUI terminal
 suite. Runtime prerequisites are GDB, Mosquitto, `ddb_runapp`, libfaketime, and
 GCC's libstdc++ Python printers at `/usr/share/gcc/python`. Tests own their

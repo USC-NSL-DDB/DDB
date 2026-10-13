@@ -8,6 +8,10 @@ get_filename_component(DDB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABS
 # Compile the pinned instrumented framework with this checkout's connector.
 # No preinstalled, potentially uninstrumented gRPC is accepted.
 include_directories(BEFORE "${DDB_ROOT}/connector/include")
+find_package(Threads REQUIRED)
+add_executable(ddb_attach_signal_order attach_signal_order.cc)
+target_compile_options(ddb_attach_signal_order PRIVATE -UNDEBUG)
+target_link_libraries(ddb_attach_signal_order PRIVATE Threads::Threads)
 set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(gRPC_INSTALL OFF CACHE BOOL "" FORCE)
 set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
