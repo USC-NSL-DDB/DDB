@@ -236,13 +236,15 @@ fn automatic_step_uses_the_distributed_frame_owner_and_rejects_boundaries() {
         ..Default::default()
     }]);
     assert_eq!(
-        app.control_target("next"),
+        app.control_target(v2::ExecutionAction::Next),
         Some(api::thread_target("thread/b"))
     );
     app.frames[0].boundary = true;
-    assert!(app.control_target("next").is_none());
+    assert!(app.control_target(v2::ExecutionAction::Next).is_none());
     assert!(matches!(
-        app.control_target("continue").unwrap().selector,
+        app.control_target(v2::ExecutionAction::Continue)
+            .unwrap()
+            .selector,
         Some(v2::target::Selector::Broadcast(_))
     ));
 }
@@ -254,7 +256,7 @@ fn control_override_is_explicit_and_cycles_back_to_automatic_defaults() {
     app.cycle_execution_scope();
     assert!(app.execution_scope_override);
     assert_eq!(
-        app.control_target("continue"),
+        app.control_target(v2::ExecutionAction::Continue),
         Some(api::thread_target("thread/a"))
     );
     for _ in 0..4 {
@@ -263,7 +265,9 @@ fn control_override_is_explicit_and_cycles_back_to_automatic_defaults() {
     assert!(!app.execution_scope_override);
     assert_eq!(app.control_scope_label(), "Auto");
     assert!(matches!(
-        app.control_target("continue").unwrap().selector,
+        app.control_target(v2::ExecutionAction::Continue)
+            .unwrap()
+            .selector,
         Some(v2::target::Selector::Broadcast(_))
     ));
 }
@@ -645,14 +649,14 @@ fn session_only_topology_controls_selected_session_without_changing_toolbar_scop
     app.focus = Focus::Threads;
     app.select_visible_topology(&TopologyRowKind::Thread("thread/b".into()))
         .unwrap();
-    let toolbar = app.control_target("continue");
+    let toolbar = app.control_target(v2::ExecutionAction::Continue);
     app.toggle_topology_sessions();
     assert!(app
         .topology_rows()
         .iter()
         .all(|row| !matches!(row.kind, TopologyRowKind::Thread(_))));
     assert_eq!(app.selected_topology_session_id().as_deref(), Some("b"));
-    assert_eq!(app.control_target("continue"), toolbar);
+    assert_eq!(app.control_target(v2::ExecutionAction::Continue), toolbar);
     let (tx, mut rx) = mpsc::channel(8);
     handle_key(
         &mut app,
@@ -662,7 +666,7 @@ fn session_only_topology_controls_selected_session_without_changing_toolbar_scop
     assert!(
         matches!(rx.try_recv().unwrap().untracked(), BackendRequest::Control(Control::Continue, target) if target == api::session_target("b"))
     );
-    assert_eq!(app.control_target("continue"), toolbar);
+    assert_eq!(app.control_target(v2::ExecutionAction::Continue), toolbar);
     let screen = render(&mut app);
     assert!(screen.contains("Signal [s]"));
     assert!(app.areas.topology_sessions_toggle.is_some());

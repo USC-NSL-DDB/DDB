@@ -53,7 +53,7 @@ impl App {
         };
         if !self
             .capabilities
-            .supports_execution_target("send_signal", &session_target(id.clone()))
+            .supports_execution_target(v2::ExecutionAction::Signal, &session_target(id.clone()))
         {
             return Err("DDB does not support sending signals to a session".into());
         }

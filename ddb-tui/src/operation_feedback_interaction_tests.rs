@@ -69,7 +69,10 @@ fn control_feedback_survives_snapshots_inspection_and_prompt_input_in_every_layo
     let mut app = fixture();
     let (tx, mut rx) = mpsc::channel(8);
     dispatch_control(&mut app, &tx, Control::Next);
-    let BackendRequest::Tracked { ticket, request } = rx.try_recv().unwrap() else {
+    let BackendRequest::Tracked {
+        ticket, request, ..
+    } = rx.try_recv().unwrap()
+    else {
         panic!("control must carry its intent identity")
     };
     assert!(

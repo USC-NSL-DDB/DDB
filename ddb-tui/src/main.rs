@@ -902,7 +902,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Char('B') => start_breakpoint_prompt(app),
         KeyCode::Char('L') if app.focus == Focus::Breakpoints => {
             if !app.capabilities.supports_inspection("evaluate")
-                || !app.capabilities.supports_execution("continue")
+                || !app
+                    .capabilities
+                    .supports_execution(v2::ExecutionAction::Continue)
             {
                 app.error("Logpoints require evaluation and continue support");
             } else if let Some(id) = app.current_breakpoint().map(|bp| bp.id.clone()) {
@@ -918,7 +920,9 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
         }
         KeyCode::Char('F') => app.start_input(InputMode::FunctionBreakpoint),
-        KeyCode::Char('J') => start_execution_prompt(app, "jump", InputMode::Jump),
+        KeyCode::Char('J') => {
+            start_execution_prompt(app, v2::ExecutionAction::Jump, InputMode::Jump)
+        }
         KeyCode::Char('s') => request_signal_picker(app, requests),
         KeyCode::Char('g') => app.start_input(InputMode::GotoLine),
         KeyCode::Char('d') => refresh_stack(app, requests),
@@ -1255,12 +1259,15 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         }
                     }
                     InputMode::Jump => {
-                        queue_execution_operation(app, requests, "jump", |target| {
-                            BackendRequest::Jump {
+                        queue_execution_operation(
+                            app,
+                            requests,
+                            v2::ExecutionAction::Jump,
+                            |target| BackendRequest::Jump {
                                 location: input,
                                 target,
-                            }
-                        });
+                            },
+                        );
                     }
                     InputMode::Signal => {
                         if let Some((instance, target)) = signal_target {
@@ -1277,12 +1284,15 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                                 },
                             );
                         } else {
-                            queue_execution_operation(app, requests, "send_signal", |target| {
-                                BackendRequest::SendSignal {
+                            queue_execution_operation(
+                                app,
+                                requests,
+                                v2::ExecutionAction::Signal,
+                                |target| BackendRequest::SendSignal {
                                     signal: input,
                                     target,
-                                }
-                            });
+                                },
+                            );
                         }
                     }
                     InputMode::GotoLine => goto_source_line(app, requests, &input),
@@ -1359,7 +1369,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
 /// operation. Other raw commands retain the selected thread as their precise
 /// execution context.
 fn request_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
-    let action = "send_signal";
+    let action = v2::ExecutionAction::Signal;
     if !app.capabilities.supports_execution(action) {
         app.status = "the connected DDB backend does not support send_signal".to_string();
         return;
@@ -2232,22 +2242,26 @@ fn dispatch_session_control(
         return;
     };
     let target = api::session_target(id);
-    let Some(action) = control.action_name() else {
+    let Some(action) = control.execution_action() else {
         return;
     };
     if !app.capabilities.supports_execution_target(action, &target) {
-        app.error(format!("{action} is not supported for this session"));
+        app.error(format!(
+            "{} is not supported for this session",
+            api::execution_action_label(action)
+        ));
         return;
     }
     queue_request(app, requests, BackendRequest::Control(control, target));
 }
 
 fn dispatch_control(app: &mut App, requests: &mpsc::Sender<BackendRequest>, control: Control) {
-    let Some(action) = control.action_name() else {
+    let Some(action) = control.execution_action() else {
         return;
     };
+    let label = api::execution_action_label(action);
     if !app.capabilities.supports_execution(action) {
-        app.status = format!("the connected DDB backend does not support {action}");
+        app.status = format!("the connected DDB backend does not support {label}");
         return;
     }
     let Some(target) = app.control_target(action) else {
@@ -2256,19 +2270,20 @@ fn dispatch_control(app: &mut App, requests: &mpsc::Sender<BackendRequest>, cont
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
-            "{action} is not available for {}",
+            "{label} is not available for {}",
             app.target_label(Some(&target))
         );
         return;
     }
     let scope = app.target_label(Some(&target));
-    app.status = format!("sending {action} to {scope}…");
+    app.status = format!("sending {label} to {scope}…");
     queue_request(app, requests, BackendRequest::Control(control, target));
 }
 
-fn start_execution_prompt(app: &mut App, action: &str, mode: InputMode) {
+fn start_execution_prompt(app: &mut App, action: v2::ExecutionAction, mode: InputMode) {
+    let label = api::execution_action_label(action);
     if !app.capabilities.supports_execution(action) {
-        app.status = format!("the connected DDB backend does not support {action}");
+        app.status = format!("the connected DDB backend does not support {label}");
         return;
     }
     let Some(target) = app.control_target(action) else {
@@ -2277,7 +2292,7 @@ fn start_execution_prompt(app: &mut App, action: &str, mode: InputMode) {
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
-            "{action} is not available for {}",
+            "{label} is not available for {}",
             app.target_label(Some(&target))
         );
         return;
@@ -2402,7 +2417,7 @@ fn create_breakpoint(
 fn queue_execution_operation(
     app: &mut App,
     requests: &mpsc::Sender<BackendRequest>,
-    action: &str,
+    action: v2::ExecutionAction,
     build: impl FnOnce(v2::Target) -> BackendRequest,
 ) {
     let Some(target) = app.control_target(action) else {
@@ -2411,7 +2426,8 @@ fn queue_execution_operation(
     };
     if !app.capabilities.supports_execution_target(action, &target) {
         app.status = format!(
-            "{action} is not available for {}",
+            "{} is not available for {}",
+            api::execution_action_label(action),
             app.target_label(Some(&target))
         );
         return;
@@ -3136,7 +3152,7 @@ fn pause_running_peers(
         let target = crate::api::session_target(&session_id);
         if !app
             .capabilities
-            .supports_execution_target("interrupt", &target)
+            .supports_execution_target(v2::ExecutionAction::Interrupt, &target)
         {
             app.error(format!(
                 "Cannot enforce all-stop for {session_id}: session interrupt is unsupported"
@@ -3255,6 +3271,7 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
     let request = match ticket {
         Some(ticket) => BackendRequest::Tracked {
             ticket,
+            guard: app.operations.intent_guard(ticket),
             request: Box::new(request),
         },
         None => request,
@@ -3269,103 +3286,74 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
             BackendRequest::Refresh | BackendRequest::Bootstrap,
         )) => {}
         Err(mpsc::error::TrySendError::Full(request)) => {
-            if let BackendRequest::InspectThread {
-                thread_id,
-                generation,
-                ..
-            }
-            | BackendRequest::InspectFrame {
-                thread_id,
-                generation,
-                ..
-            } = &request
-            {
-                app.release_failed_inspection(*generation, thread_id);
-            }
-            if let Some(ticket) = ticket {
-                if let Some(message) = app.operations.update(
-                    ticket,
-                    operation_feedback::Update::Error(
-                        "request queue is full; not sent to DDB".into(),
-                    ),
-                ) {
-                    app.push_timeline(message);
-                }
-            }
-            if let BackendRequest::ClassifyStop(stop) = &request {
-                if let Some(v2::target::Selector::Thread(thread)) = stop
-                    .state
-                    .target
-                    .as_ref()
-                    .and_then(|target| target.selector.as_ref())
-                {
-                    ordinary_stop(app, requests, thread.thread_id.clone());
-                }
-            }
-            if let BackendRequest::ExploreSources(request) = &request {
-                app.source_explorer.fail(
-                    request.generation,
-                    "DDB request queue is full; retry the source request".into(),
-                );
-            } else if let BackendRequest::LoadSource(request) = request {
-                if app.source_browser.fail(request.generation) {
-                    app.finish_frame_source_read(
-                        request.generation,
-                        Some("request queue is full; retry source loading".into()),
-                    );
-                }
-            }
+            reject_queued_request(app, requests, request, "request queue is full");
             app.error("DDB request queue is full; wait for the current operation and retry");
         }
         Err(mpsc::error::TrySendError::Closed(request)) => {
-            if let BackendRequest::InspectThread {
-                thread_id,
-                generation,
-                ..
-            }
-            | BackendRequest::InspectFrame {
-                thread_id,
-                generation,
-                ..
-            } = &request
-            {
-                app.release_failed_inspection(*generation, thread_id);
-            }
-            if let Some(ticket) = ticket {
-                if let Some(message) = app.operations.update(
-                    ticket,
-                    operation_feedback::Update::Error(
-                        "request worker is unavailable; not sent to DDB".into(),
-                    ),
-                ) {
-                    app.push_timeline(message);
-                }
-            }
-            if let BackendRequest::ClassifyStop(stop) = &request {
-                if let Some(v2::target::Selector::Thread(thread)) = stop
-                    .state
-                    .target
-                    .as_ref()
-                    .and_then(|target| target.selector.as_ref())
-                {
-                    ordinary_stop(app, requests, thread.thread_id.clone());
-                }
-            }
-            if let BackendRequest::ExploreSources(request) = &request {
-                app.source_explorer.fail(
-                    request.generation,
-                    "DDB request worker is unavailable".into(),
-                );
-            } else if let BackendRequest::LoadSource(request) = request {
-                if app.source_browser.fail(request.generation) {
-                    app.finish_frame_source_read(
-                        request.generation,
-                        Some("request worker is unavailable; retry source loading".into()),
-                    );
-                }
-            }
+            reject_queued_request(app, requests, request, "request worker is unavailable");
             app.backend_unavailable("DDB request worker is unavailable");
         }
+    }
+}
+
+/// Release the same intent/read state for overload and a stopped worker. The
+/// caller decides whether the connection remains usable.
+fn reject_queued_request(
+    app: &mut App,
+    requests: &mpsc::Sender<BackendRequest>,
+    request: BackendRequest,
+    reason: &str,
+) {
+    let request = match request {
+        BackendRequest::Tracked {
+            ticket, request, ..
+        } => {
+            if let Some(message) = app.operations.update(
+                ticket,
+                operation_feedback::Update::Error(format!("{reason}; not sent to DDB")),
+            ) {
+                app.push_timeline(message);
+            }
+            *request
+        }
+        request => request,
+    };
+    match request {
+        BackendRequest::InspectThread {
+            thread_id,
+            generation,
+            ..
+        }
+        | BackendRequest::InspectFrame {
+            thread_id,
+            generation,
+            ..
+        } => {
+            app.release_failed_inspection(generation, &thread_id);
+        }
+        BackendRequest::ClassifyStop(stop) => {
+            if let Some(v2::target::Selector::Thread(thread)) = stop
+                .state
+                .target
+                .as_ref()
+                .and_then(|target| target.selector.as_ref())
+            {
+                ordinary_stop(app, requests, thread.thread_id.clone());
+            }
+        }
+        BackendRequest::ExploreSources(request) => {
+            app.source_explorer.fail(
+                request.generation,
+                format!("DDB {reason}; retry the source request"),
+            );
+        }
+        BackendRequest::LoadSource(request) if app.source_browser.fail(request.generation) => {
+            app.finish_frame_source_read(
+                request.generation,
+                Some(format!("{reason}; retry source loading")),
+            );
+        }
+        _ => {}
     }
 }
 

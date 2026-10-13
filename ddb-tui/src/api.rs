@@ -64,8 +64,8 @@ pub fn group_target(group_id: impl Into<String>) -> v2::Target {
 pub trait CapabilitiesExt {
     fn validate_for_tui(&self) -> Result<()>;
     fn supports_inspection(&self, capability: &str) -> bool;
-    fn supports_execution(&self, action: &str) -> bool;
-    fn supports_execution_target(&self, action: &str, target: &v2::Target) -> bool;
+    fn supports_execution(&self, action: v2::ExecutionAction) -> bool;
+    fn supports_execution_target(&self, action: v2::ExecutionAction, target: &v2::Target) -> bool;
     fn supports_breakpoint_action(&self, action: &str) -> bool;
     fn supports_ddb_feature(&self, capability: &str) -> bool;
 }
@@ -104,17 +104,11 @@ impl CapabilitiesExt for v2::Capabilities {
         }
     }
 
-    fn supports_execution(&self, action: &str) -> bool {
-        let Some(action) = execution_action(action) else {
-            return false;
-        };
+    fn supports_execution(&self, action: v2::ExecutionAction) -> bool {
         self.execution_actions.contains(&(action as i32))
     }
 
-    fn supports_execution_target(&self, action: &str, target: &v2::Target) -> bool {
-        let Some(action) = execution_action(action) else {
-            return false;
-        };
+    fn supports_execution_target(&self, action: v2::ExecutionAction, target: &v2::Target) -> bool {
         if !self.execution_actions.contains(&(action as i32)) {
             return false;
         }
@@ -174,17 +168,21 @@ impl CapabilitiesExt for v2::Capabilities {
     }
 }
 
-fn execution_action(action: &str) -> Option<v2::ExecutionAction> {
-    Some(match action {
-        "continue" => v2::ExecutionAction::Continue,
-        "interrupt" => v2::ExecutionAction::Interrupt,
-        "next" => v2::ExecutionAction::Next,
-        "step_in" => v2::ExecutionAction::StepIn,
-        "step_out" => v2::ExecutionAction::StepOut,
-        "jump" => v2::ExecutionAction::Jump,
-        "send_signal" => v2::ExecutionAction::Signal,
-        _ => return None,
-    })
+/// Developer-facing labels never participate in capability checks or routing.
+pub fn execution_action_label(action: v2::ExecutionAction) -> &'static str {
+    match action {
+        v2::ExecutionAction::Unspecified => "unspecified",
+        v2::ExecutionAction::Continue => "continue",
+        v2::ExecutionAction::Interrupt => "interrupt",
+        v2::ExecutionAction::Next => "next",
+        v2::ExecutionAction::StepIn => "step_in",
+        v2::ExecutionAction::StepOut => "step_out",
+        v2::ExecutionAction::Jump => "jump",
+        v2::ExecutionAction::Signal => "send_signal",
+        v2::ExecutionAction::ReverseContinue => "reverse_continue",
+        v2::ExecutionAction::ReverseNext => "reverse_next",
+        v2::ExecutionAction::ReverseStepIn => "reverse_step_in",
+    }
 }
 
 fn execution_scope(target: &v2::Target) -> Option<v2::ExecutionScopeKind> {
@@ -206,6 +204,34 @@ fn execution_scope(target: &v2::Target) -> Option<v2::ExecutionScopeKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_actions_have_one_typed_mapping_and_display_labels_are_separate() {
+        use crate::model::Control;
+        for (control, action, label) in [
+            (Control::Continue, v2::ExecutionAction::Continue, "continue"),
+            (
+                Control::Interrupt,
+                v2::ExecutionAction::Interrupt,
+                "interrupt",
+            ),
+            (Control::Next, v2::ExecutionAction::Next, "next"),
+            (Control::StepIn, v2::ExecutionAction::StepIn, "step_in"),
+            (Control::StepOut, v2::ExecutionAction::StepOut, "step_out"),
+        ] {
+            assert_eq!(control.execution_action(), Some(action));
+            assert_eq!(control.action_name(), Some(label));
+        }
+        for control in [
+            Control::CycleScope,
+            Control::Refresh,
+            Control::RefreshStack,
+            Control::RevealFrame,
+        ] {
+            assert!(control.execution_action().is_none());
+            assert!(control.action_name().is_none());
+        }
+    }
 
     #[test]
     fn breakpoint_target_keeps_opaque_identifiers() {
@@ -242,10 +268,13 @@ mod tests {
             ..Default::default()
         };
         capabilities.validate_for_tui().unwrap();
-        assert!(capabilities.supports_execution("next"));
-        assert!(capabilities.supports_execution_target("next", &thread_target("thread/a")));
-        assert!(!capabilities.supports_execution_target("next", &group_target("group/a")));
-        assert!(!capabilities.supports_execution_target("next", &session_target("session/a")));
+        assert!(capabilities.supports_execution(v2::ExecutionAction::Next));
+        assert!(capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &thread_target("thread/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &group_target("group/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &session_target("session/a")));
         assert!(capabilities.supports_breakpoint_action("disable"));
         assert!(capabilities.supports_breakpoint_action("create"));
         assert!(!capabilities.supports_breakpoint_action("delete"));
@@ -253,7 +282,7 @@ mod tests {
         assert!(capabilities.supports_breakpoint_action("group_inheritance"));
         assert!(!capabilities.supports_breakpoint_action("hardware"));
         assert!(capabilities.supports_inspection("evaluate"));
-        assert!(!capabilities.supports_execution("continue"));
+        assert!(!capabilities.supports_execution(v2::ExecutionAction::Continue));
     }
 
     #[test]
@@ -262,8 +291,10 @@ mod tests {
             execution_actions: vec![v2::ExecutionAction::Next as i32],
             ..Default::default()
         };
-        assert!(!capabilities.supports_execution_target("next", &thread_target("thread/a")));
-        assert!(!capabilities.supports_execution_target("next", &group_target("group/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &thread_target("thread/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &group_target("group/a")));
     }
 
     #[test]

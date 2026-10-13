@@ -2,6 +2,10 @@
 //! wait in the worker queue, or fail before DDB returns an admission receipt.
 use std::{
     collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -114,7 +118,7 @@ struct Entry {
     state: State,
     operation_id: Option<String>,
     detail: Option<String>,
-    retired: bool,
+    guard: IntentGuard,
     control: Option<(Control, v2::Target)>,
     settled_at: Option<Instant>,
     dismissed: bool,
@@ -130,11 +134,23 @@ impl Entry {
     }
 }
 
+/// The UI and worker share one retirement decision for a queued intent.
+/// A connection loss alone does not retire it; an observed replacement does.
+#[derive(Clone, Debug, Default)]
+pub struct IntentGuard(Arc<AtomicBool>);
+
+impl IntentGuard {
+    pub fn is_retired(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Feedback {
     next_ticket: u64,
     entries: VecDeque<Entry>,
     animation_frame: usize,
+    backend_guard: IntentGuard,
 }
 
 impl Feedback {
@@ -158,7 +174,7 @@ impl Feedback {
             state: State::Queued,
             operation_id: None,
             detail: None,
-            retired: false,
+            guard: self.backend_guard.clone(),
             control: None,
             settled_at: None,
             dismissed: false,
@@ -166,6 +182,15 @@ impl Feedback {
         let text = entry.text();
         self.entries.push_back(entry);
         Ok((self.next_ticket, text))
+    }
+
+    pub fn intent_guard(&self, ticket: u64) -> IntentGuard {
+        self.entries
+            .iter()
+            .find(|entry| entry.ticket == ticket)
+            .expect("guard requested for a queued intent")
+            .guard
+            .clone()
     }
 
     pub fn queue_control(
@@ -196,7 +221,7 @@ impl Feedback {
             .entries
             .iter_mut()
             .find(|entry| entry.ticket == ticket)?;
-        if entry.retired || entry.state.terminal() {
+        if entry.guard.is_retired() || entry.state.terminal() {
             return None;
         }
         let old = entry.text();
@@ -267,12 +292,15 @@ impl Feedback {
     /// A same-instance final receipt may still resolve it. A replaced instance
     /// must never update an intent belonging to the previous backend.
     pub fn disconnected(&mut self, replaced: bool) -> Vec<String> {
+        if replaced {
+            // Worker requests can outlive the bounded display history. Retire
+            // the generation, not just the entries still retained for display.
+            self.backend_guard.0.store(true, Ordering::SeqCst);
+            self.backend_guard = IntentGuard::default();
+        }
         self.entries
             .iter_mut()
             .filter_map(|entry| {
-                if replaced {
-                    entry.retired = true;
-                }
                 if !entry.state.active() {
                     return None;
                 }
@@ -378,6 +406,37 @@ impl Feedback {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intent_guard_survives_disconnect_but_retires_with_its_backend() {
+        let mut feedback = Feedback::default();
+        let (ticket, _) = feedback.queue("continue".into()).unwrap();
+        let guard = feedback.intent_guard(ticket);
+        feedback.disconnected(false);
+        assert!(!guard.is_retired());
+        feedback.disconnected(true);
+        assert!(guard.is_retired());
+        let (ticket, _) = feedback.queue("continue on replacement".into()).unwrap();
+        assert!(!feedback.intent_guard(ticket).is_retired());
+        assert!(guard.is_retired());
+    }
+
+    #[test]
+    fn evicting_feedback_history_does_not_release_a_queued_intent_from_retirement() {
+        let mut feedback = Feedback::default();
+        let (ticket, _) = feedback.queue("queued broadcast".into()).unwrap();
+        let guard = feedback.intent_guard(ticket);
+        feedback.disconnected(false);
+        for index in 0..HISTORY_LIMIT {
+            feedback.queue(format!("later intent {index}")).unwrap();
+        }
+        assert!(feedback.entries.iter().all(|entry| entry.ticket != ticket));
+        feedback.disconnected(true);
+        assert!(
+            guard.is_retired(),
+            "history eviction must not revive the worker's queued intent"
+        );
+    }
 
     #[test]
     fn confirmed_feedback_expires_but_pending_and_unconfirmed_outcomes_do_not() {

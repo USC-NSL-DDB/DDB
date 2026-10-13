@@ -99,12 +99,17 @@ pub enum Control {
 
 impl Control {
     pub fn action_name(self) -> Option<&'static str> {
+        self.execution_action()
+            .map(crate::api::execution_action_label)
+    }
+
+    pub fn execution_action(self) -> Option<v2::ExecutionAction> {
         match self {
-            Self::Continue => Some("continue"),
-            Self::Interrupt => Some("interrupt"),
-            Self::Next => Some("next"),
-            Self::StepIn => Some("step_in"),
-            Self::StepOut => Some("step_out"),
+            Self::Continue => Some(v2::ExecutionAction::Continue),
+            Self::Interrupt => Some(v2::ExecutionAction::Interrupt),
+            Self::Next => Some(v2::ExecutionAction::Next),
+            Self::StepIn => Some(v2::ExecutionAction::StepIn),
+            Self::StepOut => Some(v2::ExecutionAction::StepOut),
             Self::CycleScope | Self::Refresh | Self::RefreshStack | Self::RevealFrame => None,
         }
     }
@@ -1345,11 +1350,14 @@ impl App {
 
     /// Normal controls resolve their target when invoked. Browsing a group or
     /// another frame does not silently turn a step into a distributed fanout.
-    pub fn control_target(&self, action: &str) -> Option<v2::Target> {
+    pub fn control_target(&self, action: v2::ExecutionAction) -> Option<v2::Target> {
         if self.execution_scope_override {
             return self.execution_target();
         }
-        if matches!(action, "continue" | "interrupt") {
+        if matches!(
+            action,
+            v2::ExecutionAction::Continue | v2::ExecutionAction::Interrupt
+        ) {
             return (!self.sessions.is_empty()).then_some(v2::Target {
                 selector: Some(target::Selector::Broadcast(v2::BroadcastTarget {})),
             });
@@ -3287,6 +3295,7 @@ fn extension_cell(value: &Value) -> String {
 pub enum BackendRequest {
     Tracked {
         ticket: u64,
+        guard: crate::operation_feedback::IntentGuard,
         request: Box<BackendRequest>,
     },
     SearchSource(crate::source_search::Request),

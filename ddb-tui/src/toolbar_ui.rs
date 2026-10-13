@@ -51,7 +51,7 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
                 _ => Color::White,
             };
             let pending = control
-                .action_name()
+                .execution_action()
                 .and_then(|action| app.control_target(action))
                 .is_some_and(|target| app.operations.control_pending(control, &target));
             let icon = if pending {
@@ -124,7 +124,7 @@ fn available(app: &App, control: Control) -> bool {
                     .supports_ddb_feature("distributed_backtrace")
         }
         Control::CycleScope | Control::Refresh | Control::RevealFrame => true,
-        control => control.action_name().is_some_and(|action| {
+        control => control.execution_action().is_some_and(|action| {
             app.control_target(action)
                 .as_ref()
                 .is_some_and(|target| app.capabilities.supports_execution_target(action, target))

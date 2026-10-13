@@ -100,17 +100,34 @@ pub async fn run(
             },
         };
         let (request, ticket) = match request {
-            BackendRequest::Tracked { ticket, request } => (*request, Some(ticket)),
+            BackendRequest::Tracked {
+                ticket,
+                guard,
+                request,
+            } => {
+                let _ = messages
+                    .send(UiMessage::OperationFeedback {
+                        ticket,
+                        update: crate::operation_feedback::Update::Started,
+                    })
+                    .await;
+                // Check after message backpressure, just before dispatch. The UI
+                // may have observed a replacement while this task was waiting.
+                if guard.is_retired() {
+                    let _ = messages
+                        .send(UiMessage::OperationFeedback {
+                            ticket,
+                            update: crate::operation_feedback::Update::Error(
+                                "DDB instance changed; queued intent was not sent".into(),
+                            ),
+                        })
+                        .await;
+                    continue;
+                }
+                (*request, Some(ticket))
+            }
             request => (request, None),
         };
-        if let Some(ticket) = ticket {
-            let _ = messages
-                .send(UiMessage::OperationFeedback {
-                    ticket,
-                    update: crate::operation_feedback::Update::Started,
-                })
-                .await;
-        }
         let request = match request {
             BackendRequest::ExportDetails(export) => {
                 if exports.len() >= 2 {
@@ -694,7 +711,8 @@ async fn handle_with_feedback(
             }
         }
         BackendRequest::Control(control, target) => {
-            let action = execution_action(control)
+            let action = control
+                .execution_action()
                 .context("only execution controls reach the backend worker")?;
             let label = control
                 .action_name()
@@ -1345,20 +1363,6 @@ fn operation_is_terminal(state: i32) -> bool {
             | v2::OperationState::Failed
             | v2::OperationState::Cancelled)
     )
-}
-
-fn execution_action(control: crate::model::Control) -> Option<v2::ExecutionAction> {
-    match control {
-        crate::model::Control::Continue => Some(v2::ExecutionAction::Continue),
-        crate::model::Control::Interrupt => Some(v2::ExecutionAction::Interrupt),
-        crate::model::Control::Next => Some(v2::ExecutionAction::Next),
-        crate::model::Control::StepIn => Some(v2::ExecutionAction::StepIn),
-        crate::model::Control::StepOut => Some(v2::ExecutionAction::StepOut),
-        crate::model::Control::CycleScope
-        | crate::model::Control::Refresh
-        | crate::model::Control::RefreshStack
-        | crate::model::Control::RevealFrame => None,
-    }
 }
 
 fn parse_jump_location(value: &str) -> anyhow::Result<v2::SourceLocation> {

@@ -558,7 +558,7 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
             };
             let enabled = target.as_ref().is_some_and(|target| {
                 app.capabilities
-                    .supports_execution_target(control.action_name().unwrap(), target)
+                    .supports_execution_target(control.execution_action().unwrap(), target)
             });
             frame.render_widget(
                 Paragraph::new(text).style(Style::default().fg(if enabled {
