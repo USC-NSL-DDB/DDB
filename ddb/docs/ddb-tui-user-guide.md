@@ -140,7 +140,11 @@ events. A delayed remote target does not block the entire frontend.
 
 The toolbar groups bounded, labeled execution and navigation buttons, sharing
 a row when they fit. Whole buttons wrap on narrower terminals. Press `?` for
-their shortcuts. `Frame source` or F8 opens or retries the selected stack frame's
+their shortcuts. The title is `DDB TU`, with Scope on the top-right border.
+Connection state and running/stopped totals are on the bottom Status border.
+Pending execution buttons show an in-place spinner and ignore repeated input
+for that action and target until the receipt settles. `Frame source` or F8 opens
+or retries the selected stack frame's
 source at its line. F8 is a shortcut, not a frame number, and the action does not
 resume or step execution. `f` instead follows the selected thread's execution location.
 
@@ -154,16 +158,35 @@ and all eligible sessions, then returns to `Auto`. While an override is active,
 topology selection changes that target. Unsupported action/scope combinations
 are hidden and rejected before queueing, according to `GetCapabilities`.
 
+In Topology, `T` switches to sessions only and hides every thread. `C`/Run and
+`I`/Pause control only the visible selected session, independently of toolbar
+scope; in thread view they use that thread's owning session. A group selection
+does not pick a session implicitly. Signal is visible beside Kill. In session-only
+view, `s` targets the selected session, including custom signals. `K` keeps its
+explicit termination confirmation. Toggling views preserves inspection and scope.
+
+Breakpoint insertion has separate Session and Group tabs. Switch with Tab,
+Left/Right, or a tab click; the previous type's selections are cleared. Session
+rules are independent. Group rules include current and future members.
+Breakpoint rows identify the rule type; inherited members are labeled separately.
+Delete opens a scope confirmation for one session rule, one group rule, or a
+separately labeled all-rules choice. Selecting an inherited child preselects its
+group rule and warns that current and future members are affected. Empty pending
+group rules remain manageable. Changed scope or a replaced backend cancels the
+confirmation rather than redirecting it.
+
 The first observed ordinary stop selects its actual owning thread, expands its
 topology ancestors, and loads its frame and source. Other concurrent stops do not
 steal focus while that owner remains paused. Breakpoint rows and the panel title
 count current paused hits separately from historical hit counts. Use `H` for the
 live hit view through `Paused [H]`, or `P` to choose a hit. Enabled/disabled
 breakpoint dots remain at the start of each row. Right-aligned `[1 hit]` or
-`[N hits]` badges show current matching hits. Member rows otherwise show their
-session's backend-derived state, including running, stepped, paused, signal,
-exception, or mixed. A completed step is stopped, not "stepping". Unknown or
-unavailable causes remain explicit. Muted `total hits:N` values show DDB-observed
+`[N hits]` badges show current matching hits. General running/stopped state and
+pause reasons appear only in Topology. Principal triggering threads and sessions
+show `trigger` plus the reason, including the signal name. Process-wide stopped
+siblings and peers interrupted by this frontend's global pause policy show only
+`stopped`. Automatic provenance applies only to the observed stop revision, not
+to later independent stops. Muted `total hits:N` values show DDB-observed
 stop counts for the logical breakpoint and each installed member. Ignored native
 encounters, steps, refreshes, and all-stop peers do not increment them. Retiring
 a member preserves the logical lifetime total. Horizontal scrolling preserves
@@ -214,6 +237,10 @@ Pending controls, mutations, and source/frame/variable reads show an animated
 spinner. Its 100 ms animation is local and adds no API polling. Normal feedback
 uses action names and developer-facing target labels. Use `--trace-api` for
 operation IDs, stop revisions, and connection diagnostics.
+
+Confirmed completions clear after five seconds; confirmed errors/cancellations
+clear after eight seconds, restoring the original keyboard hints. Pending and
+unconfirmed outcomes remain visible. Timeline retains the operation transitions.
 
 Prefer inline `Tui.source_roots`. Optionally pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
 directories on the frontend host. This separate file contains a `roots` list of

@@ -304,7 +304,7 @@ fn workflow(backend: &str) {
     }
 
     let mut tui = Tui::spawn(&ddb.base_url());
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.click_topology_thread("dbt-leaf");
     let snapshot = ddb.wait_for_snapshot(|snapshot| {
         snapshot.operations.iter().any(|operation| {

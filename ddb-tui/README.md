@@ -346,9 +346,10 @@ normal DDB-native view.
 | `c` | Override controls: Auto → thread → session → group → all eligible sessions → Auto |
 | `b` | Toggle a breakpoint at the source cursor |
 | `B` | Create a conditional, temporary, or hardware breakpoint |
-| `Space` in the target picker | Select one or more session/group targets, or server-resolved broadcast |
+| `Tab` / Left/Right in the target picker | Switch Session / Group tabs; clear the prior type's selection |
+| `Space` in the target picker | Select one or more rules of the active type; Session also offers all current sessions |
 | `x` / `Space` | Enable or disable the selected breakpoint |
-| `Delete` | Remove the selected breakpoint |
+| `Delete` in Breakpoints | Choose a session/group rule and confirm deletion; a separate choice removes all rules |
 | `F` | Add a function/symbol breakpoint, then choose session/group targets |
 | `d` | Refresh the selected stack mode, distributed by default |
 | `Enter` in Variables | Load/collapse a scope or expand/collapse variable children |
@@ -359,6 +360,9 @@ normal DDB-native view.
 | `m` | Read memory (`ADDRESS` or `ADDRESS ; BYTE_COUNT`) |
 | `E` / source `Inspect [E]` | Inspect an expression once in the selected frame; expand its result in Variables |
 | `v` in Topology / header `Flat [v]` or `Group [v]` | Toggle grouped/flat session view without changing execution scope |
+| `T` in Topology / `Sessions` or `Threads` button | Hide all threads / restore them without changing inspection or toolbar scope |
+| `C` / `I` in Topology, or `Run` / `Pause` buttons | Continue / pause only the selected session, independent of toolbar scope |
+| `s` in session-only Topology / `Signal [s]` beside Kill | Choose a signal for the selected session, independent of toolbar scope |
 | `Space` / `Enter` in Topology, or click a disclosure arrow | Expand/collapse the selected group/session without changing execution scope |
 | `Left` / `Right` in Topology | Collapse or visit the parent / expand or visit the first child |
 | Click a session label, then `s` | Choose a signal for exactly that session; disclosure clicks only fold |
@@ -504,9 +508,13 @@ Toolbar buttons have explicit boundaries and action names. Press `?` for shortcu
 The first group contains execution actions: Continue, Pause, Step over, Step in,
 and Step out. Frame source, DDB stack, Refresh, and control scope form the next
 group. Both groups share a row when they fit; whole buttons wrap on narrower
-terminals. The status row shows connection state and running/stopped totals,
-without repeating the Auto scope explanation. Gaps and the status row are not
-clickable. Unsupported controls remain hidden.
+terminals. `Scope` is clickable on the toolbar's top-right border, beside the
+short `DDB TU` title and help hint. Connection state and running/stopped totals
+are on the bottom Status border. A pending execution button replaces its icon
+with the same animated spinner, without moving or resizing the button. Repeated
+keyboard or mouse input for that pending action and exact target is ignored
+until its receipt settles. Different actions or targets remain independent.
+Gaps and Status are not clickable. Unsupported controls remain hidden.
 Below 19 terminal rows, the existing compact header and keyboard controls apply.
 
 The toolbar starts in `Scope: Auto`. Continue and Pause broadcast to all sessions;
@@ -552,8 +560,11 @@ An animated spinner advances every 100 ms while a tracked action or source,
 frame, or variable read is pending. Animation is local and sends no API requests.
 Pending mutations take priority over read activity. Empty results, read errors,
 queue rejection, and disconnection end the corresponding read activity.
-Snapshots do not replace mutation outcomes. The latest outcome stays visible
-until another action is submitted, except while a background read needs feedback.
+Snapshots do not replace mutation outcomes. Confirmed completion clears after
+five seconds; confirmed errors and cancellations clear after eight seconds.
+The original keyboard hints then return. Pending and unconfirmed outcomes do not
+expire. Receipt text in Status also clears after five seconds unless a newer
+message has replaced it.
 Timeline records each transition; concurrent pending actions remain counted even
 when the latest action has completed. Normal controls, feedback, and hit lists
 omit operation IDs and stop revisions. `--trace-api` exposes those diagnostics,
@@ -762,11 +773,38 @@ Topology selection changes control targets only while an explicit override is
 active; `Auto` keeps Continue/Pause global and stepping frame-owned. Controls
 require the action/scope combination advertised by `GetCapabilities`.
 
-Breakpoint creation always opens a DDB target picker. It supports a
-server-resolved broadcast, inheritable group targets, individual sessions, and
-explicit multi-target selection as advertised. A selected group absorbs its
-redundant member-session selections. The manager preserves aggregate and
-per-session sub-breakpoint status, including pending/verification messages.
+`T` hides every thread row, retaining groups and sessions. `C`/Run and `I`/Pause
+act only on the visible selected session, even when the toolbar has another
+explicit scope. In thread view they act on that thread's owning session. Group
+rows do not select a session implicitly. Signal and Kill are adjacent in the
+footer. In session-only view, Signal also uses the visible selected session,
+including custom signals; Kill retains its explicit termination confirmation.
+The current inspection and toolbar scope do not change when toggling the view.
+
+Topology labels principal stops as `trigger` with their exact reason, including
+signal names. Other threads in the same process-wide stop, and peers interrupted
+by this frontend's global pause policy, show only `stopped`. Automatic provenance
+belongs to the exact stop revision. A later independent breakpoint or signal is
+not suppressed. After reconnecting without that history, an interrupt is shown
+as reported by DDB rather than guessed to be automatic.
+
+Breakpoint creation always opens a DDB target picker with separate Session and
+Group tabs. Tab, Left/Right, or a tab click switches types and clears the previous
+selection. Session rules are independent; all-current-sessions selection creates
+independent rules without future inheritance. Group rules apply to current and
+future members. Several rules of the same type can be selected when advertised
+by DDB. Empty tabs stay empty rather than selecting a different type implicitly.
+The manager preserves aggregate and per-session hit counts and installation
+status, including pending/verification messages.
+
+Parent rows identify `Session`, `Group`, or `Mixed` rules. Child rows distinguish
+independent session rules from inherited group members. Delete opens a scope
+confirmation, preselecting the child row's session rule or its inheritable group
+rule. Choose one rule, or the separately labeled all-rules choice, then press
+Enter or click Delete in the dialog. Group deletion explicitly warns that all
+current and future members are affected. A group rule with no installed members
+remains manageable. Changed rule scope or a replaced DDB instance invalidates
+the dialog.
 
 The picker preselects a document's single owner, independent of the selected
 thread. Unbound and multi-owner documents require an explicit target choice.
@@ -798,16 +836,12 @@ hit counts change. New breakpoints and installed members append; simultaneous
 new rows use identity order. File grouping still sorts full paths and lines.
 Selection follows breakpoint/member identity, not the incoming array position.
 
-Rows start with `●` for enabled or `○` for disabled, followed by their source
-location or symbol. A right-aligned `[1 hit]` or `[N hits]` badge counts threads
-currently stopped there. Installed member rows show that badge for a matching
-live hit; otherwise they show their session's current state, such as `[running]`,
-`[stepped]`, `[paused]`, `[signal]`, or `[exception]`. `[stepped]` means a step
-completed and execution is stopped. `[mixed]` means threads have different
-execution states or principal stop reasons. `[unknown]`, `[unavailable]`, and
-`[offline]` do not invent a known stop cause. A breakpoint cause that cannot be
-attributed to this particular member is `[bp stop]`. Inspecting another frame
-never changes these backend-derived states.
+Rows start with `●` for enabled or `○` for disabled, followed by their rule type
+and source location or symbol. A right-aligned `[1 hit]` or `[N hits]` badge counts
+threads currently stopped at this breakpoint. Installed members show that badge
+only for a matching live hit. Running, stepping, pause, signal, exception, and
+other general execution states belong in Topology, not Breakpoints. Inspecting
+another frame never changes backend-derived hit information.
 Badges stay visible while row text scrolls horizontally when the pane is wide
 enough. Clipped labels have an ellipsis. Expand with `z` or scroll horizontally
 to read long labels and diagnostics. The muted `total hits:N` values come from

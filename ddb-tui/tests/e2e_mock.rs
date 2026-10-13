@@ -234,15 +234,12 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
     tui.wait_for_source_marker('▶', server_line);
     tui.wait_for_current_frame(|screen| {
         // A large server thread list can scroll its session header off-screen.
-        // Assert the selected stopped row with the RPC source, not the first
-        // visible row under a potentially absent session header.
-        screen.lines().any(|line| {
-            let topology = line.chars().take(33).collect::<String>();
-            topology.contains('▸')
-                && topology.contains('•')
-                && topology.contains("stopped")
-                && topology.contains("greeter_ser")
-        })
+        // Check the selected principal stop and its inspected source owner.
+        screen.contains("[tui-server (")
+            && screen.lines().any(|line| {
+                let topology = line.chars().take(33).collect::<String>();
+                topology.contains('▸') && topology.contains('!') && topology.contains("stopped")
+            })
     });
     tui.send(b"\x1b2P");
     tui.wait_for_current_frame(|screen| {
@@ -461,6 +458,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
     tui.send(b"b");
     tui.wait_for("DDB breakpoint targets");
     tui.send(b"\r");
+    tui.wait_for_current_frame(|screen| !screen.contains("DDB breakpoint targets"));
     ddb.wait_for_snapshot(|s| s.breakpoints.len() == 2 && s.breakpoints.iter().all(|b| b.verified));
     tui.send(b"\x1b[15~");
     ddb.wait_for_snapshot(|s| {
@@ -477,6 +475,9 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
             .all(|t| t.state == v2::ThreadState::Stopped as i32)
     });
     let server_hit_started = Instant::now();
+    // A stop can precede the Continue operation's terminal receipt. The
+    // toolbar deliberately ignores repeated input while that intent is pending.
+    tui.wait_for_current_frame(|screen| screen.contains("[ ▶ Continue ]"));
     tui.send(b"\x1b[15~");
     ddb.wait_for_snapshot(|s| {
         s.threads.iter().any(|t| {
@@ -531,20 +532,19 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
                 && reason.breakpoint_id.as_ref().is_some_and(|id| stopped.breakpoints.iter().any(|bp| bp.breakpoint_id == *id || bp.sub_breakpoints.iter().any(|member| member.sub_breakpoint_id == *id && member.session_id == server.session_id)))
         })
     }), "server breakpoint location must retain a navigable canonical breakpoint stop: {server_stops:#?}");
-    tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
-    let hit_row = tui
-        .frames
-        .lock()
-        .unwrap()
-        .back()
-        .unwrap()
+    // A client badge may remain while the newer server stop is being projected.
+    // Expand to identify the actual server breakpoint rather than the first hit.
+    tui.send(b"\x1b2z");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("[Restore]")
+            && screen
+                .lines()
+                .any(|line| line.contains("greeter_server.cc") && line.contains("[1 hit]"))
+    });
+    let hit_screen = tui.frames.lock().unwrap().back().cloned().unwrap();
+    let hit_row = hit_screen
         .lines()
-        .position(|line| {
-            line.chars()
-                .take(33)
-                .collect::<String>()
-                .contains("[1 hit]")
-        })
+        .position(|line| line.contains("greeter_server.cc") && line.contains("[1 hit]"))
         .expect("server breakpoint should have a current hit")
         + 1;
     tui.send(format!("\x1b[<2;5;{hit_row}M\x1b[<2;5;{hit_row}m").as_bytes());
@@ -556,7 +556,7 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
         hit_render_started.elapsed().as_millis()
     );
     tui.clear_capture();
-    tui.send(b"\r");
+    tui.send(b"\rz");
     tui.wait_for_source_marker('▶', server_line);
     if workflow == GreeterWorkflow::PrettyValues {
         tui.send(b"wprefix\r");
@@ -597,7 +597,7 @@ fn topology_thread_row(frame: &str, session_label: &str) -> Option<usize> {
             under_session = topology.contains(session_label);
             return None;
         }
-        (under_session && topology.contains('•')).then_some(row + 1)
+        (under_session && (topology.contains('•') || topology.contains('!'))).then_some(row + 1)
     })
 }
 
@@ -616,6 +616,7 @@ fn topology_visible_rows(frame: &str) -> Vec<String> {
         .skip_while(|line| !line.contains("DDB Topology"))
         .skip(1)
         .take_while(|line| !line.starts_with('└'))
+        .filter(|line| !line.starts_with("│[")) // Session action strip is not a topology row.
         .map(|line| line.chars().take(33).collect())
         .collect()
 }
@@ -640,7 +641,7 @@ fn source_visible_rows(frame: &str) -> Vec<(usize, usize)> {
 
 #[test]
 fn topology_rows_follow_the_rendered_header_not_a_fixed_toolbar_height() {
-    let frame = "[ Continue F5 ]\n[ Show frame source F8 ]\nconnected\nextra wrapped row\n┌ DDB Topology ────┐\n│▸▾ server\n│  ◇ server session\n└─────────────────┘";
+    let frame = "[ Continue F5 ]\n[ Show frame source F8 ]\nconnected\nextra wrapped row\n┌ DDB Topology ────┐\n│[Run C] [Pause I] [Sessions T]│\n│▸▾ server\n│  ◇ server session\n└─────────────────┘";
     let rows = topology_visible_rows(frame);
     assert_eq!(rows.len(), 2);
     assert!(topology_reached_top(Some(&rows)));
@@ -671,7 +672,7 @@ fn unchanged_topology_capture_is_not_an_acknowledgement_of_page_up() {
 
 #[test]
 fn topology_mouse_target_does_not_confuse_a_group_label_with_a_session() {
-    let frame = "│  ▾ beta-worker  2 sessions\n│    ◇ alpha-worker (alpha)\n│      • 1 stopped\n│    ◇ beta-worker (beta)\n│      • 1 stopped";
+    let frame = "│  ▾ beta-worker  2 sessions\n│    ◇ alpha-worker (alpha)\n│      • 1 stopped\n│    ◇ beta-worker (beta)\n│      ! 1 stopped trigger · signal SIGUSR1";
     assert_eq!(topology_thread_row(frame, "beta-worker"), Some(5));
     assert_eq!(topology_thread_row(frame, "alpha-worker"), Some(3));
 }
@@ -1258,6 +1259,117 @@ fn topology_folding_and_single_session_signal_terminal_workflow() {
         "signal must target one selected session, not its group: {operation:?}"
     );
     assert_eq!(operation.target.as_ref().unwrap().resolved_target_count, 1);
+    tui.send(b"T");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("[Threads T]") && !topology_visible_rows(screen).join("").contains('•')
+    });
+    tui.send(b"C");
+    // Mock Continue stops itself after 25 ms. Assert its completed target,
+    // not a transient running state that API polling can legitimately miss.
+    let resumed = ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .operations
+            .iter()
+            .filter(|operation| {
+                operation.kind == v2::OperationKind::Execute as i32
+                    && operation.state == v2::OperationState::Completed as i32
+            })
+            .count()
+            == 2
+    });
+    for operation in resumed
+        .operations
+        .iter()
+        .filter(|operation| operation.kind == v2::OperationKind::Execute as i32)
+    {
+        assert!(
+            matches!(operation.target.as_ref().and_then(|summary| summary.target.as_ref()).and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Session(session)) if session.session_id == alpha)
+        );
+    }
+    assert!(resumed
+        .threads
+        .iter()
+        .filter(|thread| thread.session_id != alpha)
+        .all(|thread| thread.state == v2::ThreadState::Stopped as i32));
+    tui.quit();
+    ddb.shutdown();
+}
+
+#[test]
+#[ignore = "requires the sibling DDB binary and a PTY"]
+fn breakpoint_type_tabs_and_scoped_deletion_terminal_workflow() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ddb = {
+        let _guard = ddb_start_guard();
+        let port = reserve_port();
+        let mut config = format!("Framework: unspecified\nConf:\n  auto_shutdown: false\n  api_server_port: {port}\n  api_insecure_allow_unauthenticated_v2: true\n  base_dir: {}/state\n  log_dir: {}/logs\n  Debugger:\n    backend: mock\nStaticSessions:\n", directory.path().display(), directory.path().display());
+        for (index, tag) in ["scope-a", "scope-b"].into_iter().enumerate() {
+            config.push_str(&format!("  - tag: {tag}\n    alias: {tag}\n    hash: shared-scope\n    pid: {}\n    start_delay_ms: 0\n    mock:\n      source_file: tests/api_v1.rs\n      source_line: 9\n      function: main\n      exit_on_continue: false\n      exit_on_bootstrap: false\n", 2100 + index));
+        }
+        Ddb::spawn_config(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            directory,
+            port,
+            &config,
+            &[],
+        )
+    };
+    ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 2 && snapshot.threads.len() == 2);
+    let mut tui = Tui::spawn(&ddb.base_url());
+    tui.wait_for("counter");
+    tui.send(b"Fmain\r");
+    tui.wait_for_current_frame(|screen| screen.contains("[ Session rules ]"));
+    tui.send(b"\t \r");
+    let created = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.breakpoints.len() == 1 && snapshot.breakpoints[0].verified
+    });
+    assert!(matches!(
+        created.breakpoints[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.selector.as_ref()),
+        Some(v2::target::Selector::Group(_))
+    ));
+    tui.wait_for_current_frame(|screen| screen.contains("Group · function main"));
+    tui.send(b"\x1b2z\x1b[3~");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Delete breakpoint rule") && screen.contains("current and future members")
+    });
+    tui.send(b"\r");
+    ddb.wait_for_snapshot(|snapshot| snapshot.breakpoints.is_empty());
+    tui.send(b"Fmain\r");
+    tui.wait_for_current_frame(|screen| screen.contains("All current DDB sessions"));
+    tui.send(b" \r");
+    let created = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.breakpoints.len() == 1 && snapshot.breakpoints[0].sub_breakpoints.len() == 2
+    });
+    let id = created.breakpoints[0].breakpoint_id.clone();
+    tui.wait_for_current_frame(|screen| screen.contains("Session · function main"));
+    tui.send(b"\x1b[3~");
+    tui.wait_for_current_frame(|screen| {
+        screen.contains("Delete breakpoint rule") && screen.contains("independent session rule")
+    });
+    tui.send(b"\r");
+    let retained = ddb.wait_for_snapshot(|snapshot| {
+        snapshot.breakpoints.len() == 1 && snapshot.breakpoints[0].sub_breakpoints.len() == 1
+    });
+    assert_eq!(retained.breakpoints[0].breakpoint_id, id);
+    assert!(matches!(
+        retained.breakpoints[0]
+            .target
+            .as_ref()
+            .and_then(|target| target.selector.as_ref()),
+        Some(v2::target::Selector::Session(_))
+    ));
+    tui.wait_for_current_frame(|screen| {
+        !screen.contains("Delete breakpoint rule")
+            && screen.contains("Session · function main")
+            && screen
+                .lines()
+                .filter(|line| line.contains("↳ Session rule ·"))
+                .count()
+                == 1
+    });
     tui.quit();
     ddb.shutdown();
 }
@@ -1409,7 +1521,7 @@ fn mock_backend_full_terminal_workflow() {
     ddb.wait_for_snapshot(|snapshot| snapshot.sessions.len() == 1);
 
     let mut tui = Tui::spawn(&ddb.base_url());
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for("mock_session");
     tui.wait_for("counter");
     tui.wait_for_source_marker('▶', 9);
@@ -1720,7 +1832,7 @@ fn managed_mock_one_command_workflow() {
     let backend_log = directory.path().join("managed-backend.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("managed_mock_session");
     tui.wait_for_source_marker('▶', 9);
@@ -1798,7 +1910,7 @@ fn ddb_tui_dispatcher_runs_the_managed_frontend() {
     let backend_log = directory.path().join("dispatcher-backend.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, true);
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("managed_mock_session");
 
@@ -1815,7 +1927,7 @@ fn managed_distributed_sessions_surface_partial_readiness() {
     let backend_log = directory.path().join("distributed-backend.log");
 
     let mut tui = Tui::spawn_managed(&config, &backend_log, false);
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for("first-ready (");
     tui.wait_for("1 sessions · 1 groups");
     tui.wait_for("child_leaf");
@@ -1920,7 +2032,7 @@ fn reconnects_and_bootstraps_when_ddb_starts_late() {
     let port = reserve_port();
     let api = format!("http://127.0.0.1:{port}");
     let mut tui = Tui::spawn_with_refresh(&api, 250);
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for("reconnecting");
 
     let mut ddb = Ddb::spawn_mock_on_reserved(port);
@@ -1950,6 +2062,63 @@ fn real_lldb_terminal_workflow() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     real_debugger_workflow("lldb");
+}
+
+#[test]
+#[ignore = "requires real GDB and LLDB, the sibling DDB binary and a PTY"]
+fn real_session_run_pause_terminal_workflow() {
+    let _guard = REAL_DEBUGGER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for backend in ["gdb", "lldb"] {
+        let (mut ddb, _fixture) = Ddb::spawn_real(backend);
+        let initial = ddb.wait_for_snapshot(|snapshot| {
+            snapshot.sessions.len() == 1
+                && snapshot.sessions[0].status == v2::SessionStatus::Stopped as i32
+        });
+        let session = initial.sessions[0].clone();
+        let mut tui = Tui::spawn(&ddb.base_url());
+        tui.wait_for("#0");
+        tui.click_topology_thread(&format!("tui-real-{backend}"));
+        tui.send(b"T");
+        tui.wait_for_current_frame(|screen| screen.contains("[Threads T]"));
+        tui.send(b"C");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .threads
+                .iter()
+                .any(|thread| thread.state == v2::ThreadState::Running as i32)
+        });
+        tui.wait_for_current_frame(|screen| screen.contains("1 running"));
+        tui.send(b"I");
+        let stopped = ddb.wait_for_snapshot(|snapshot| {
+            snapshot
+                .threads
+                .iter()
+                .all(|thread| thread.state == v2::ThreadState::Stopped as i32)
+                && snapshot
+                    .operations
+                    .iter()
+                    .filter(|operation| {
+                        operation.kind == v2::OperationKind::Execute as i32
+                            && operation.state == v2::OperationState::Completed as i32
+                    })
+                    .count()
+                    == 2
+        });
+        for operation in stopped
+            .operations
+            .iter()
+            .filter(|operation| operation.kind == v2::OperationKind::Execute as i32)
+        {
+            assert!(
+                matches!(operation.target.as_ref().and_then(|summary| summary.target.as_ref()).and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Session(target)) if target.session_id == session.session_id)
+            );
+            assert_eq!(operation.target.as_ref().unwrap().resolved_target_count, 1);
+        }
+        tui.quit();
+        ddb.shutdown();
+    }
 }
 
 #[test]
@@ -2230,7 +2399,12 @@ fn real_function_breakpoint_terminal_workflow() {
         // The public stop reason, not frame inspection, determines status.
         // Stepping does not add a hit; subsequent actual hits add one each.
         tui.send(b"\x1b[21~");
-        tui.wait_for_current_frame(|screen| screen.contains("[stepped]"));
+        tui.wait_for_current_frame(|screen| {
+            topology_visible_rows(screen)
+                .iter()
+                .any(|row| row.contains("! 1") && row.contains("stopped"))
+                && !screen.contains("[1 hit]")
+        });
         let execution = ddb
             .runtime
             .block_on(
@@ -2318,7 +2492,7 @@ fn managed_real_gdb_attach_detaches_on_quit() {
     assert_eq!(pid, debuggee.id());
 
     let mut tui = Tui::spawn_managed_attach(pid, &backend_log);
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("stopped");
     let output = tui.quit();
@@ -2341,7 +2515,7 @@ fn managed_real_launch_workflow(backend: &str) {
         .join(format!("{backend}-managed-backend.log"));
     let mut tui = Tui::spawn_managed_launch(backend, &fixture.binary, &pid_file, &backend_log);
 
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for_current_frame(|screen| screen.contains("● connected"));
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
@@ -2503,7 +2677,7 @@ fn real_debugger_workflow(backend: &str) {
     });
 
     let mut tui = Tui::spawn(&ddb.base_url());
-    tui.wait_for("DDB Debugger");
+    tui.wait_for("DDB TU");
     tui.wait_for("connected");
     tui.wait_for("stopped");
     tui.wait_for("1 sessions · 1 groups");
@@ -3317,7 +3491,7 @@ impl Tui {
     // Diagnostic workflows explicitly opt in. Direct pane focus preserves
     // following and does not depend on the responsive toolbar's height.
     fn with_timeline(mut self) -> Self {
-        self.wait_for("DDB Debugger");
+        self.wait_for("DDB TU");
         self.send(b"t");
         self.wait_for("DDB Timeline");
         self.send(b"\x1b3");
@@ -3378,7 +3552,7 @@ impl Tui {
     fn wait_for(&mut self, needle: &str) {
         if needle == "DDB breakpoint targets" {
             self.wait_for_current_frame(|screen| {
-                screen.contains(needle) && screen.contains("Session ·")
+                screen.contains(needle) && screen.lines().any(|line| line.contains("] Session ·"))
             });
             return;
         }
