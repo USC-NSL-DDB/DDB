@@ -894,9 +894,13 @@ Conf:
     // Stepping still applies to alpha. Beta's document/cursor remain on screen.
     tui.clear_capture();
     tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
     assert_eq!(ddb.wait_for_top_frame_line_change(&alpha_thread, 9), 10);
     assert_eq!(ddb.top_frame_line(&beta_thread), 9);
+    tui.wait_for_current_frame(|frame| {
+        topology_thread_row(frame, "alpha-worker")
+            .and_then(|row| frame.lines().nth(row - 1))
+            .is_some_and(|row| row.chars().take(33).collect::<String>().contains("stopped"))
+    });
     tui.wait_for_frame(|frame| {
         frame.lines().any(|line| {
             line.contains("9 │ beta_CHECKOUT line 9")
@@ -1750,7 +1754,6 @@ fn mock_backend_full_terminal_workflow() {
 
     tui.clear_capture();
     tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
     ddb.wait_for_snapshot(|snapshot| {
         snapshot.threads.iter().any(|thread| {
             thread.state == v2::ThreadState::Stopped as i32
@@ -1889,8 +1892,6 @@ fn managed_mock_one_command_workflow() {
 
     tui.clear_capture();
     tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
-    tui.wait_for("exec · stopped");
     tui.wait_for_source_marker('▶', 10);
 
     let output = tui.quit();
@@ -2382,8 +2383,6 @@ fn real_function_breakpoint_terminal_workflow() {
         tui.wait_for("1 breakpoints");
         tui.clear_capture();
         tui.send(b"\x1b[15~");
-        tui.wait_for("exec · stopped");
-        tui.wait_for("counter");
         let first_hit = ddb.wait_for_snapshot(|snapshot| {
             snapshot
                 .breakpoints
@@ -2391,6 +2390,7 @@ fn real_function_breakpoint_terminal_workflow() {
                 .is_some_and(|bp| bp.hit_count == 1)
         });
         assert_eq!(first_hit.breakpoints[0].sub_breakpoints[0].hit_count, 1);
+        tui.wait_for("counter");
         let stopped_line = ddb.top_frame_line(&ddb.global_thread_id());
         assert!(stopped_line > 0);
         tui.wait_for_source_marker('▶', stopped_line);
@@ -2487,6 +2487,10 @@ fn real_function_breakpoint_terminal_workflow() {
                 hit.breakpoints[0].sub_breakpoints[0].hit_count, expected,
                 "{backend}"
             );
+            // A live-hit label is still "[1 hit]" at every stop. Wait for the
+            // newly inspected counter, not the previous stop's retained label,
+            // before sending another execution control.
+            tui.wait_for_variable_value("Watch: counter", &(expected + 2).to_string());
             tui.wait_for_current_frame(|screen| screen.contains("[1 hit]"));
         }
         tui.send(b"\x1b2z");
@@ -2591,8 +2595,6 @@ fn managed_real_launch_workflow(backend: &str) {
 
     tui.clear_capture();
     tui.send(b"\x1b[15~");
-    tui.wait_for("continue:");
-    tui.wait_for("exec · stopped");
     tui.wait_for("breakpoint_target");
     tui.wait_for_source_marker('▶', fixture.breakpoint_line);
     let before_step_line = tui
@@ -2601,8 +2603,6 @@ fn managed_real_launch_workflow(backend: &str) {
 
     tui.clear_capture();
     tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
-    tui.wait_for("exec · stopped");
     let after_step_line = tui.wait_for_execution_line_change(before_step_line);
     assert_ne!(after_step_line, before_step_line);
 
@@ -2869,8 +2869,16 @@ fn real_debugger_workflow(backend: &str) {
 
     tui.clear_capture();
     tui.send(b"\x1b[15~");
-    tui.wait_for("continue:");
-    tui.wait_for("exec · stopped");
+    ddb.wait_for_snapshot(|snapshot| {
+        snapshot
+            .breakpoints
+            .first()
+            .is_some_and(|breakpoint| breakpoint.hit_count == 1)
+            && snapshot
+                .threads
+                .iter()
+                .any(|thread| thread.state == v2::ThreadState::Stopped as i32)
+    });
     tui.wait_for("breakpoint_target");
     tui.wait_for("counter");
     tui.wait_for("std::hint::black_box");
@@ -3018,8 +3026,6 @@ fn real_debugger_workflow(backend: &str) {
         .filter(|operation| operation.kind == v2::OperationKind::Evaluate as i32)
         .count();
     tui.send(b"\x1b[21~");
-    tui.wait_for("next:");
-    tui.wait_for("exec · stopped");
     let after_step_line = ddb.wait_for_top_frame_line_change(&thread_id, before_step_line);
     tui.wait_for_source_marker('▶', after_step_line);
     assert_ne!(after_step_line, before_step_line);
@@ -3221,7 +3227,9 @@ StaticSessions:
         ddb.wait_until("DDB readiness", |ddb| {
             ddb.runtime
                 .block_on(ddb.client.get_readiness(v2::GetReadinessRequest::default()))
-                .is_ok()
+                .ok()
+                .and_then(|response| response.readiness)
+                .is_some_and(|readiness| readiness.status == v2::HealthStatus::Up as i32)
         });
         ddb
     }
@@ -3305,9 +3313,21 @@ StaticSessions:
     fn wait_for_top_frame_line_change(&mut self, thread_id: &str, previous: usize) -> usize {
         let mut changed = None;
         self.wait_until("top frame line to change", |ddb| {
-            let line = ddb.top_frame_line(thread_id);
-            if line != previous {
-                changed = Some(line);
+            let snapshot = ddb
+                .runtime
+                .block_on(ddb.client.get_snapshot(v2::GetSnapshotRequest::default()))
+                .expect("GetSnapshot should succeed while waiting for a new stop")
+                .snapshot
+                .expect("GetSnapshot should include the runtime snapshot");
+            let new_stop = snapshot.threads.iter().any(|thread| {
+                thread.thread_id == thread_id
+                    && thread.state == v2::ThreadState::Stopped as i32
+                    && thread.location.as_ref().is_some_and(|location| {
+                        location.line > 0 && location.line as usize != previous
+                    })
+            });
+            if new_stop {
+                changed = Some(ddb.top_frame_line(thread_id));
                 true
             } else {
                 false
@@ -3357,12 +3377,17 @@ StaticSessions:
             paths.sort();
             for path in paths {
                 if let Ok(bytes) = fs::read(&path) {
-                    let tail = &bytes[bytes.len().saturating_sub(32_768)..];
                     output.push_str(&format!(
-                        "\nBackend log {} (last 32 KiB):\n{}",
-                        path.file_name().unwrap().to_string_lossy(),
-                        String::from_utf8_lossy(tail)
+                        "\nBackend log {}:\n",
+                        path.file_name().unwrap().to_string_lossy()
                     ));
+                    if bytes.len() > 32_768 {
+                        output.push_str(&String::from_utf8_lossy(&bytes[..16_384]));
+                        output.push_str("\n... middle of log omitted ...\n");
+                        output.push_str(&String::from_utf8_lossy(&bytes[bytes.len() - 16_384..]));
+                    } else {
+                        output.push_str(&String::from_utf8_lossy(&bytes));
+                    }
                 }
             }
         }

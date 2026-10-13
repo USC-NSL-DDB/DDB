@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,10 @@ inline std::unique_ptr<DDB::DDBConnector> start_ddb() {
   auto config = DDB::Config::get_default(absl::GetFlag(FLAGS_ddb_host_ip))
                     .with_alias(absl::GetFlag(FLAGS_ddb_proc_alias));
   auto connector = std::make_unique<DDB::DDBConnector>(config);
+  std::cerr << "DDB automatic attach requested for "
+            << absl::GetFlag(FLAGS_ddb_proc_alias) << std::endl;
   connector->init();
+  std::cerr << "DDB automatic attach completed for "
+            << absl::GetFlag(FLAGS_ddb_proc_alias) << std::endl;
   return connector;
 }
