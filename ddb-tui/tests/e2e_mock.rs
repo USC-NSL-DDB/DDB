@@ -231,8 +231,8 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
                 .arg(format!("--ddb_proc_alias=tui-{role}"))
                 .arg(argument)
                 .current_dir(workspace.join("build"))
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
                 .spawn()
                 .unwrap(),
         ))
@@ -404,8 +404,8 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
                 .arg(format!("--ddb_proc_alias=tui-{role}"))
                 .arg(argument)
                 .current_dir(workspace.join("build"))
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
                 .spawn()
                 .unwrap(),
         ))
@@ -3346,7 +3346,27 @@ StaticSessions:
     }
 
     fn output_text(&self) -> String {
-        String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
+        let mut output = String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned();
+        let logs = self._tempdir.path().join("logs");
+        if let Ok(entries) = fs::read_dir(logs) {
+            let mut paths = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            paths.sort();
+            for path in paths {
+                if let Ok(bytes) = fs::read(&path) {
+                    let tail = &bytes[bytes.len().saturating_sub(32_768)..];
+                    output.push_str(&format!(
+                        "\nBackend log {} (last 32 KiB):\n{}",
+                        path.file_name().unwrap().to_string_lossy(),
+                        String::from_utf8_lossy(tail)
+                    ));
+                }
+            }
+        }
+        output
     }
 
     fn shutdown(&mut self) {
