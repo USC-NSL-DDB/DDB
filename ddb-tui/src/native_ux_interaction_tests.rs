@@ -210,6 +210,51 @@ fn first_breakpoint_stop_selects_its_topology_and_later_concurrent_stops_do_not_
 }
 
 #[test]
+fn stop_event_before_snapshot_selects_its_owner_before_an_automatic_peer() {
+    let mut app = app(&[]);
+    for capability in &mut app.capabilities.execution_action_capabilities {
+        capability
+            .scopes
+            .push(v2::ExecutionScopeKind::Session as i32);
+    }
+    let (tx, mut rx) = mpsc::channel(32);
+    apply_message(
+        &mut app,
+        UiMessage::DebuggerEvent(model::DebuggerEvent {
+            server_instance_id: "backend/native-ux".into(),
+            state_revision: 2,
+            state_event_sequence: 2,
+            summary: "server breakpoint".into(),
+            refresh: false,
+            activity: DebuggerActivity::Stopped(Some("thread/b".into())),
+        }),
+        &tx,
+    );
+    assert_eq!(
+        app.current_thread().unwrap().id,
+        "thread/b",
+        "the event's owner is still marked running in the previous snapshot"
+    );
+    let mut stopped = snapshot(&["a", "b"], 3);
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGINT".into()),
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    // Recovery can enumerate the automatic peer before the initiating server.
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+    assert_eq!(app.selected_topology_thread_id(), Some("thread/b"));
+    assert_eq!(app.pause_focus.as_deref(), Some("thread/b"));
+    let queued = std::iter::from_fn(|| rx.try_recv().ok())
+        .map(BackendRequest::untracked)
+        .collect::<Vec<_>>();
+    assert!(queued.iter().any(|request| matches!(request, BackendRequest::InspectThread { thread_id, .. } if thread_id == "thread/b")));
+    assert_eq!(queued.iter().filter(|request| matches!(request, BackendRequest::PausePeer { session_id, .. } if session_id == "a")).count(), 1);
+}
+
+#[test]
 fn pending_actions_have_a_visible_activity_indicator() {
     let mut app = app(&["a"]);
     let (tx, _rx) = mpsc::channel(8);

@@ -3105,9 +3105,11 @@ fn handle_stopped_thread(
 }
 
 fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_id: String) {
-    app.select_pause_thread(&thread_id);
     app.all_stop_cause.get_or_insert_with(|| thread_id.clone());
+    // The event can precede its snapshot. Reconcile its stopped state before
+    // selecting the pause owner, or a later interrupted peer can steal focus.
     pause_running_peers(app, requests, &thread_id);
+    app.select_pause_thread(&thread_id);
     let should_inspect = match app.current_thread().map(|thread| thread.id.as_str()) {
         None => true,
         Some(active) if active == thread_id => !app.thread_inspection_requested(&thread_id),
