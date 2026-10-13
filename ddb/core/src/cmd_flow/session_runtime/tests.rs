@@ -608,6 +608,111 @@ async fn shutdown_interrupts_projector_backpressure() {
 }
 
 #[tokio::test]
+async fn continue_acknowledgment_does_not_overwrite_a_newer_native_stop() {
+    use crate::{
+        cmd_flow::{
+            api::CommandExecutor,
+            execution::ExecutionService,
+            input::ParsedInputCmd,
+            router::{Router, Target},
+            transaction::TransactionCoordinator,
+        },
+        common::Config,
+        debugger::gdb::backend::GdbBackend,
+        feature::{proclet_query::ProcletQueryService, proclet_restore::ProcletRestorationMgr},
+        plugin::resolve_framework_plugin,
+        state::ThreadStatus,
+    };
+    let model = RuntimeModel::new();
+    model.register_session(1, "fixture", None).await;
+    model.register_thread_group(1, "i1").await.unwrap();
+    model.register_thread(1, 1, "i1").await.unwrap();
+    model
+        .update_thread_statuses(1, &[1], ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    let before = model.thread_snapshots_for_sessions(&[1]).await[0].execution_revision;
+    let reducer = DebuggerEventReducer::new(
+        model.clone(),
+        BreakpointEventPublisher::new(
+            Arc::new(NotificationManager::new()),
+            crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+            crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
+        ),
+    );
+    let (transport, requests, events) = test_transport(4);
+    let (handle, task, _terminations) = spawn_runtime_with_reducer(1, transport, reducer);
+    let router = Arc::new(Router::new(model.clone()));
+    router.add_session(handle.clone());
+    let executor = CommandExecutor::new(router.clone());
+    let config = Arc::new(Config::from_str("Framework: unspecified\n").unwrap());
+    let plugin = resolve_framework_plugin(&config);
+    let queries = ProcletQueryService::connect(&config, plugin.as_ref())
+        .await
+        .unwrap();
+    let service = ExecutionService::new(
+        model.clone(),
+        config,
+        Arc::new(ProcletRestorationMgr::new(
+            model.clone(),
+            executor.clone(),
+            queries,
+        )),
+        executor,
+        TransactionCoordinator::new(model.clone(), router),
+        Arc::new(GdbBackend),
+    );
+    let continuation = tokio::spawn(async move {
+        service
+            .continue_command(ParsedInputCmd {
+                external_token: None,
+                prefix: "-exec-continue".into(),
+                args: String::new(),
+                target: Target::Session(1),
+                metadata: Default::default(),
+            })
+            .await
+    });
+    let (wire, written) = receive_write(&requests).await;
+    written.send(Ok(())).unwrap();
+    events.send_async(TransportEvent::Stdout(Bytes::from_static(
+        b"*running,thread-id=\"all\"\n*stopped,reason=\"end-stepping-range\",thread-id=\"1\",stopped-threads=\"all\",frame={file=\"main.c\",line=\"7\"}\n"
+    ))).await.unwrap();
+    let stopped = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let state = model.thread_snapshots_for_sessions(&[1]).await.remove(0);
+            if state.status == ThreadStatus::STOPPED && state.execution_revision > before {
+                break state;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let token = wire
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from(format!(
+            "{token}^running\n"
+        ))))
+        .await
+        .unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, continuation)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        model.thread_snapshots_for_sessions(&[1]).await[0],
+        stopped,
+        "a command acknowledgment is not evidence of execution after a newer stop"
+    );
+    stop(&handle, task).await;
+}
+
+#[tokio::test]
 async fn completion_mode_controls_state_projection_watermark() {
     let (transport, requests, events) = test_transport(4);
     let config = RuntimeConfig {

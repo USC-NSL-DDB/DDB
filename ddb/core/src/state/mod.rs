@@ -22,5 +22,5 @@ pub(crate) use runtime_model::{RuntimeChange, RuntimeModel, RuntimeResourceId, S
 pub(crate) use session_mgr::{
     SessionStatus, ThreadContext, ThreadLocation, ThreadStatus, ThreadStopKind, ThreadStopReason,
 };
-pub(crate) use state_mgr::{GlobalThreadIdentity, StateTransitionResult};
+pub(crate) use state_mgr::GlobalThreadIdentity;
 pub(crate) use thread_mgr::LocalThreadId;

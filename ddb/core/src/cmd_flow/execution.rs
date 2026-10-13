@@ -8,7 +8,7 @@ use crate::{
     common::Config,
     debugger::{DebuggerBackend, DebuggerSignal},
     feature::proclet_restore::ProcletRestorationMgr,
-    state::{LocalThreadId, RuntimeModel, ThreadContext, ThreadStatus},
+    state::{LocalThreadId, RuntimeModel, ThreadContext},
 };
 
 use super::{
@@ -226,13 +226,8 @@ impl ExecutionService {
             .executor
             .execute_parsed_exclusive(command, execution_target, transaction.lease())
             .await?;
-        if response
-            .get_responses()
-            .iter()
-            .all(|response| response.get_message() != "error")
-        {
-            transaction.mark_all_threads(ThreadStatus::RUNNING).await?;
-        }
+        // Running/stopped events own execution state. A fast breakpoint can
+        // precede this acknowledgment; synthesizing Running here erases it.
         Ok(response)
     }
 

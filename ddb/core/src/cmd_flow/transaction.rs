@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::cmd_flow::{router::Router, session_runtime::SessionLease};
-use crate::state::{RuntimeModel, SessionSnapshot, ThreadContext, ThreadStatus};
+use crate::state::{RuntimeModel, SessionSnapshot, ThreadContext};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionError {
@@ -54,13 +54,6 @@ impl SessionTransaction {
 
     pub(crate) async fn all_threads_stopped(&self) -> Option<bool> {
         self.model.all_threads_stopped(self.primary_sid).await
-    }
-
-    pub(crate) async fn mark_all_threads(
-        &self,
-        status: ThreadStatus,
-    ) -> crate::state::StateTransitionResult<()> {
-        self.model.mark_all_threads(self.primary_sid, status).await
     }
 }
 
