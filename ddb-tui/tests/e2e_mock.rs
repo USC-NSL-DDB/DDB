@@ -214,6 +214,9 @@ fn greeter_auto_attach_single_config_managed_terminal_workflow() {
         )
     };
     let mut tui = Tui::spawn_shell(&launch).with_timeline();
+    if provided.is_none() {
+        tui.backend_log = Some(directory.path().join("backend.log"));
+    }
     // Browse a frontend-local file before even creating a debuggee.
     tui.wait_for_current_frame(|screen| screen.contains("0 sessions"));
     tui.send(b"o");
@@ -3276,6 +3279,7 @@ StaticSessions:
         self.base_url.clone()
     }
 
+    #[track_caller]
     fn wait_for_snapshot(&mut self, predicate: impl Fn(&v2::Snapshot) -> bool) -> v2::Snapshot {
         let deadline = Instant::now() + TIMEOUT;
         loop {
@@ -3414,19 +3418,7 @@ StaticSessions:
                 .collect::<Vec<_>>();
             paths.sort();
             for path in paths {
-                if let Ok(bytes) = fs::read(&path) {
-                    output.push_str(&format!(
-                        "\nBackend log {}:\n",
-                        path.file_name().unwrap().to_string_lossy()
-                    ));
-                    if bytes.len() > 32_768 {
-                        output.push_str(&String::from_utf8_lossy(&bytes[..16_384]));
-                        output.push_str("\n... middle of log omitted ...\n");
-                        output.push_str(&String::from_utf8_lossy(&bytes[bytes.len() - 16_384..]));
-                    } else {
-                        output.push_str(&String::from_utf8_lossy(&bytes));
-                    }
-                }
+                append_backend_log(&mut output, &path);
             }
         }
         output
@@ -3449,6 +3441,22 @@ impl Drop for Ddb {
     }
 }
 
+fn append_backend_log(output: &mut String, path: &Path) {
+    if let Ok(bytes) = fs::read(path) {
+        output.push_str(&format!(
+            "\nBackend log {}:\n",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+        if bytes.len() > 32_768 {
+            output.push_str(&String::from_utf8_lossy(&bytes[..16_384]));
+            output.push_str("\n... middle of log omitted ...\n");
+            output.push_str(&String::from_utf8_lossy(&bytes[bytes.len() - 16_384..]));
+        } else {
+            output.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+}
+
 struct Tui {
     child: Child,
     stdin: ChildStdin,
@@ -3456,6 +3464,7 @@ struct Tui {
     frames: Arc<Mutex<VecDeque<String>>>,
     drain_threads: Vec<thread::JoinHandle<()>>,
     stopped: bool,
+    backend_log: Option<PathBuf>,
 }
 
 impl Tui {
@@ -3592,6 +3601,7 @@ impl Tui {
             frames,
             drain_threads,
             stopped: false,
+            backend_log: None,
         }
     }
 
@@ -3829,6 +3839,7 @@ impl Tui {
         });
     }
 
+    #[track_caller]
     fn wait_for_current_frame(&mut self, predicate: impl Fn(&str) -> bool) {
         let deadline = Instant::now() + TIMEOUT;
         loop {
@@ -3873,6 +3884,7 @@ impl Tui {
         }
     }
 
+    #[track_caller]
     fn wait_for_source_marker(&mut self, marker: char, line_number: usize) {
         let deadline = Instant::now() + TIMEOUT;
         let patterns = [false, true]
@@ -3973,7 +3985,11 @@ impl Tui {
             .back()
             .cloned()
             .unwrap_or_default();
-        format!("Current virtual screen:\n{screen}\nRaw PTY output:\n{raw}")
+        let mut output = format!("Current virtual screen:\n{screen}\nRaw PTY output:\n{raw}");
+        if let Some(log) = &self.backend_log {
+            append_backend_log(&mut output, log);
+        }
+        output
     }
 
     fn contains(&self, needle: &str) -> bool {
