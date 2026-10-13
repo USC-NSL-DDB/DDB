@@ -189,7 +189,7 @@ impl SubBkptMeta {
         &self.subbkpt_type
     }
 
-    fn local_ids(&self) -> Vec<(SessionId, u64)> {
+    pub(crate) fn local_ids(&self) -> Vec<(SessionId, u64)> {
         match &self.subbkpt_type {
             SubBkptType::Session(sess_subbkpt) => {
                 vec![(sess_subbkpt.target_session(), sess_subbkpt.local_id())]
@@ -255,6 +255,7 @@ impl BkptMeta {
         Some(self.subbkpts.remove(index))
     }
 
+    #[cfg(test)]
     fn remove_all_subbkpts(&mut self) -> Vec<SubBkptMeta> {
         std::mem::take(&mut self.subbkpts)
     }
@@ -469,6 +470,7 @@ impl BreakpointMgr {
         }
     }
 
+    #[cfg(test)]
     pub fn remove_breakpoint(&self, bkpt_id: u64) -> bool {
         let mut state = self.state.write().unwrap();
         if let Some(mut bkpt) = state.bkpts.remove(&bkpt_id) {
@@ -491,18 +493,6 @@ impl BreakpointMgr {
         {
             Self::register_subbkpt(&mut state, &subbkpt);
         }
-    }
-
-    pub fn sub_breakpoint(&self, bkpt_id: u64, sub_bkpt_id: u64) -> Option<SubBkptMeta> {
-        self.state
-            .read()
-            .unwrap()
-            .bkpts
-            .get(&bkpt_id)?
-            .sub_breakpoints()
-            .iter()
-            .find(|subbkpt| subbkpt.id == sub_bkpt_id)
-            .cloned()
     }
 
     pub fn remove_sub_breakpoint(&self, bkpt_id: u64, subbkpt_id: u64) -> BreakpointStateChange {

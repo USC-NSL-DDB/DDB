@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, OwnedMutexGuard};
 
 use super::{
-    bkpt_mgr::{BkptLoc, BkptMeta, BreakpointMgr, BreakpointStateChange, SubBkptMeta, SubBkptSpec},
+    bkpt_mgr::{BkptLoc, BkptMeta, BreakpointMgr, BreakpointStateChange, SubBkptSpec},
     bkpt_snapshot::BreakpointSnapshot,
     group_mgr::{GroupMeta, GroupMgr},
     group_operation::GroupOperationCoordinator,
@@ -763,6 +763,7 @@ impl RuntimeModel {
         breakpoint
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_breakpoint(&self, breakpoint_id: u64) {
         if self.breakpoints.remove_breakpoint(breakpoint_id) {
             self.notify_change(RuntimeChange {
@@ -771,15 +772,6 @@ impl RuntimeModel {
                 removed: vec![RuntimeResourceId::Breakpoint(breakpoint_id)],
             });
         }
-    }
-
-    pub(crate) fn sub_breakpoint(
-        &self,
-        breakpoint_id: u64,
-        sub_breakpoint_id: u64,
-    ) -> Option<SubBkptMeta> {
-        self.breakpoints
-            .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
     }
 
     pub(crate) fn remove_sub_breakpoint(

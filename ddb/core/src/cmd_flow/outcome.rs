@@ -70,10 +70,6 @@ impl CommandOutcome {
         )
     }
 
-    pub fn push_record(&mut self, record: impl Into<String>) {
-        self.cli_output.push(CliOutputPart::Record(record.into()));
-    }
-
     pub fn insert_record(&mut self, index: usize, record: impl Into<String>) {
         self.cli_output
             .insert(index, CliOutputPart::Record(record.into()));

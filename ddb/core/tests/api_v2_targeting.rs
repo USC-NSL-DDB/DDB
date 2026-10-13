@@ -85,6 +85,148 @@ fn raw_breakpoint_count(ddb: &DdbProcess, session_id: &str, idempotency_key: &st
 }
 
 #[test]
+fn deleting_one_session_breakpoint_does_not_delete_other_session_rules() {
+    scoped_breakpoint_deletion(false);
+}
+
+#[test]
+fn deleting_one_group_rule_preserves_other_groups_and_rejects_inherited_session_deletion() {
+    scoped_breakpoint_deletion(true);
+}
+
+fn scoped_breakpoint_deletion(group_rules: bool) {
+    let mut ddb = DdbProcess::spawn_with_v2_auth(
+        &["scope-a", "scope-b"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, tag)| SessionSpec {
+                tag,
+                alias: tag,
+                hash: if group_rules { tag } else { "scope-group" },
+                pid: 821 + index as u64,
+                start_delay_ms: 0,
+                source_file: "src/scope.rs",
+                source_line: 10,
+                function: "scope",
+                exit_on_continue: false,
+            })
+            .collect::<Vec<_>>(),
+    );
+    ddb.wait_for_sessions_len(2);
+    ddb.wait_for_stdout_count("*stopped", 2);
+    let (status, sessions) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListSessions"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK);
+    let ids = ["scope-a", "scope-b"].map(|tag| {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["tag"] == tag)
+            .unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    let (status, groups) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListGroups"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK);
+    let group_ids = ids.each_ref().map(|id| {
+        groups["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| {
+                group["sessionIds"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|member| member == id)
+            })
+            .unwrap()["groupId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    let create_target = if group_rules {
+        json!({"multiple": {"targets": group_ids.iter().map(|id| json!({"group": {"groupId": id}})).collect::<Vec<_>>()}})
+    } else {
+        json!({"sessionSet": {"sessionIds": ids}})
+    };
+    let (status, admitted) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerControlService", "CreateBreakpoint"),
+        &json!({
+            "context": {"idempotencyKey": "session-rules-create"},
+            "target": create_target,
+            "breakpoint": {"source": {"source": "src/scope.rs", "line": 10}}
+        }),
+        V2_TEST_CONTROL_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+    let created =
+        wait_for_terminal_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
+    assert_eq!(created["state"], "OPERATION_STATE_COMPLETED", "{created}");
+    let id = created["result"]["breakpoint"]["breakpointId"]
+        .as_str()
+        .unwrap();
+    if group_rules {
+        let (status, _) = ddb.api_post_json_with_bearer(
+            &rpc("DebuggerControlService", "DeleteBreakpoint"),
+            &json!({"context": {"idempotencyKey": "reject-inherited-session-delete"}, "breakpointId": id, "target": {"session": {"sessionId": ids[0]}}}),
+            V2_TEST_CONTROL_TOKEN,
+        );
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            raw_breakpoint_count(&ddb, &ids[0], "inherited-unchanged"),
+            1
+        );
+    }
+    let delete_target = if group_rules {
+        json!({"group": {"groupId": group_ids[0]}})
+    } else {
+        json!({"session": {"sessionId": ids[0]}})
+    };
+    let (status, admitted) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerControlService", "DeleteBreakpoint"),
+        &json!({
+            "context": {"idempotencyKey": "session-rule-delete"},
+            "breakpointId": id,
+            "target": delete_target
+        }),
+        V2_TEST_CONTROL_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+    let deleted =
+        wait_for_terminal_operation(&ddb, admitted["operation"]["operationId"].as_str().unwrap());
+    assert_eq!(deleted["state"], "OPERATION_STATE_COMPLETED", "{deleted}");
+    assert_eq!(raw_breakpoint_count(&ddb, &ids[0], "scope-inspect-a"), 0);
+    assert_eq!(
+        raw_breakpoint_count(&ddb, &ids[1], "scope-inspect-b"),
+        1,
+        "scoped deletion must not touch an independent session rule"
+    );
+    let (status, listed) = ddb.api_post_json_with_bearer(
+        &rpc("DebuggerService", "ListBreakpoints"),
+        &json!({}),
+        V2_TEST_READ_TOKEN,
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["breakpoints"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["breakpoints"][0]["breakpointId"], id);
+    assert_eq!(
+        listed["breakpoints"][0]["subBreakpoints"][0]["sessionId"],
+        ids[1]
+    );
+    assert_eq!(deleted["result"]["breakpoint"]["breakpointId"], id);
+}
+
+#[test]
 fn group_execution_control_never_broadcasts_outside_the_resolved_target() {
     let mut ddb = DdbProcess::spawn_with_v2_auth(&[
         SessionSpec {
