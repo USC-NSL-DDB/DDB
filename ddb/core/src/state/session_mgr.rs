@@ -499,6 +499,14 @@ impl SessionMeta {
         true
     }
 
+    /// Register changes invalidate inspection handles even while the thread
+    /// remains stopped and no native execution-state event is emitted.
+    pub(crate) fn invalidate_thread_context(&mut self, tid: u64) {
+        if let Some(revision) = self.t_revisions.get_mut(&tid) {
+            *revision = revision.saturating_add(1);
+        }
+    }
+
     #[inline]
     pub fn update_all_status(&mut self, new_status: ThreadStatus) {
         if new_status != ThreadStatus::STOPPED {

@@ -439,7 +439,18 @@ impl RuntimeModel {
     pub(crate) async fn finish_context_restore(&self, sid: u64, restored: bool) -> bool {
         let changed = self
             .state
-            .with_session_mut(sid, |session| session.exit_custom_context(restored))
+            .with_session_mut(sid, |session| {
+                if restored && session.is_in_custom_context() {
+                    if let Some(owner) = session
+                        .current_context()
+                        .and_then(|context| self.state.local_thread_id(context.tid))
+                        .filter(|owner| owner.session_id() == sid)
+                    {
+                        session.invalidate_thread_context(owner.thread_id());
+                    }
+                }
+                session.exit_custom_context(restored);
+            })
             .await
             .is_some();
         if changed {
@@ -1101,6 +1112,54 @@ mod tests {
             .await
             .expect("dropping the retirement should release the group gate")
             .expect("contender task should not panic");
+    }
+
+    #[tokio::test]
+    async fn context_restore_expires_only_its_owner_without_waiting_for_native_events() {
+        let model = RuntimeModel::new();
+        model.register_session(1, "caller", None).await;
+        model.register_thread_group(1, "i1").await.unwrap();
+        let owner = model.register_thread(1, 10, "i1").await.unwrap().thread_id;
+        let peer = model.register_thread(1, 20, "i1").await.unwrap().thread_id;
+        model
+            .update_thread_statuses(1, &[10, 20], ThreadStatus::STOPPED)
+            .await
+            .unwrap();
+        model
+            .enter_custom_context(
+                1,
+                ThreadContext {
+                    tid: owner,
+                    ctx: std::collections::HashMap::from([("pc".to_string(), 42)]),
+                },
+            )
+            .await;
+        let before = model.thread_snapshots_for_sessions(&[1]).await;
+
+        model.finish_context_restore(1, false).await;
+        assert!(model.session_snapshot(1).await.unwrap().in_custom_context);
+        assert_eq!(model.thread_snapshots_for_sessions(&[1]).await, before);
+
+        model.finish_context_restore(1, true).await;
+        let after = model.thread_snapshots_for_sessions(&[1]).await;
+        let thread = |threads: &[ThreadSnapshot], id| {
+            threads
+                .iter()
+                .find(|thread| thread.global_id == id)
+                .unwrap()
+                .clone()
+        };
+        assert!(
+            thread(&after, owner).execution_revision > thread(&before, owner).execution_revision,
+            "restoring registers must expire the reconstructed caller's frame handles"
+        );
+        assert_eq!(thread(&after, peer), thread(&before, peer));
+        assert!(after
+            .iter()
+            .all(|thread| thread.status == ThreadStatus::STOPPED));
+
+        model.finish_context_restore(1, true).await;
+        assert_eq!(model.thread_snapshots_for_sessions(&[1]).await, after);
     }
 
     #[tokio::test]
