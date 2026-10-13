@@ -340,7 +340,8 @@ jobs:
           echo "revision=$(git rev-parse HEAD:fwks/grpc)" >> "$GITHUB_OUTPUT"
 
       - name: Cache instrumented greeter compilation
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: greeter-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
           key: greeter-${{ runner.os }}-${{ runner.arch }}-${{ steps.grpc-source.outputs.revision }}-${{ hashFiles('connector/include/**', 'ddb/core/tests/fixtures/greeter/*.cc', 'ddb/core/tests/fixtures/greeter/*.hpp', 'ddb/core/tests/fixtures/greeter/CMakeLists.txt') }}
@@ -356,6 +357,13 @@ jobs:
         run: |
           bash ddb/tools/build-ci-greeters.sh
           echo "DDB_GREETER_WORKSPACE=$GITHUB_WORKSPACE/ddb/core/tests/fixtures/greeter" >> "$GITHUB_ENV"
+
+      - name: Save instrumented greeter compilation
+        if: steps.greeter-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.greeter-cache.outputs.cache-primary-key }}
 
       - name: Install greeter launch runtime
         id: greeter-runtime
