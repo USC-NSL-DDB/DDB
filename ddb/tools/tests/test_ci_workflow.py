@@ -75,6 +75,16 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.validate(self.workflow.replace(name, "Greeter setup")), [])
 
+    def test_greeter_inputs_trigger_push_and_pull_request_checks(self):
+        for path in (
+            "ddb/core/tests/fixtures/greeter/**",
+            "connector/include/**",
+            "fwks/grpc",
+            "wrapper/ddb_runapp.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(self.validate(self.workflow.replace(f"'{path}'", "''", 1)))
+
 
 if __name__ == "__main__":
     unittest.main()

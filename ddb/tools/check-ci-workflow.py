@@ -85,6 +85,16 @@ def validate_workflows(text: str, docs_text: str, fuzz_text: str) -> list[str]:
             "core CI must validate fuzz workflow changes on pushes and pull requests"
         )
 
+    triggers = text.split("\njobs:\n", maxsplit=1)[0]
+    for path in (
+        "ddb/core/tests/fixtures/greeter/**",
+        "connector/include/**",
+        "fwks/grpc",
+        "wrapper/ddb_runapp.sh",
+    ):
+        if triggers.count(f"'{path}'") != 2:
+            errors.append(f"core CI must track {path} on pushes and pull requests")
+
     fuzz_blocks = job_blocks(fuzz_text)
     if set(fuzz_blocks) != {"fuzz"}:
         errors.append(
