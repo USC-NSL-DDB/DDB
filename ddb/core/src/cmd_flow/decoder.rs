@@ -266,7 +266,7 @@ impl SourceFiles {
                     expected: "a dictionary",
                 });
             };
-            match file.get("fullname") {
+            match file.get("fullname").or_else(|| file.get("file")) {
                 None => {}
                 Some(Value::String(path)) => paths.push(path.clone()),
                 Some(_) => {
@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn source_listing_skips_unresolved_files_and_preserves_full_paths() {
+    fn source_listing_preserves_full_paths_and_unresolved_debugger_names() {
         let payload: Dict = HashMap::from([(
             "files".to_string(),
             Value::List(vec![
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(
             SourceFiles::decode(&completion(3, Some(payload))).unwrap(),
             SourceFiles {
-                paths: vec!["/src/main.rs".to_string()],
+                paths: vec!["/src/main.rs".to_string(), "generated.rs".to_string()],
             }
         );
     }

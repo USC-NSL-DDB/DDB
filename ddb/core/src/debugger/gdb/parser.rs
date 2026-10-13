@@ -63,10 +63,10 @@ mod tests {
     use gdbmi::{parser::*, Token};
 
     #[test]
-    #[should_panic]
-    fn test_parse_imcomplete_result() {
+    fn test_parse_incomplete_result_returns_error() {
         let output = r#"1^done,threads=[{id="1",target-id="LWP 17",name="server.out",frame={level="0",addr="0x000000000047b7a3",func="runtime.futex",args=[],file="/home/cc/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.21.6.linux-amd64/src/runtime/sys_linux_amd64.s",fullname="/home/cc"#;
-        let _ = GdbParser::parse_multiple(output.trim());
+        assert!(GdbParser::parse(output).is_err());
+        assert!(GdbParser::parse_multiple(output).is_empty());
     }
 
     #[test]

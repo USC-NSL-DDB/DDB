@@ -1,0 +1,7 @@
+# Optional frontend-only preferences, loaded only with --tui-config.
+# There is no Tui wrapper in this file and it cannot configure DDB sessions.
+stack_mode: distributed
+source_search: exact
+values_formatting: pretty-printers
+refresh_ms: 2000
+trace_api: false

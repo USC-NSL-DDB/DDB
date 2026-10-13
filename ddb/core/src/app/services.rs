@@ -161,7 +161,7 @@ impl ApplicationServices {
             runtime_status,
             Arc::clone(&shutdown),
             api_config,
-        );
+        )?;
         let session_supervisor = SessionSupervisor::new(
             Arc::clone(&config),
             Arc::clone(&plugin),

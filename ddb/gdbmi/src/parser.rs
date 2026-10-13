@@ -20,6 +20,8 @@ pub enum Error {
     ExpectedDictValueUnexpectedChar(char),
     /// Failed to parse token, got {0}
     TokenParse(String, #[source] std::num::ParseIntError),
+    /// Invalid MI C string: {0}
+    InvalidCString(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,7 +258,7 @@ fn parse_val(stream: &mut StringStream) -> Result<Value> {
         DICT_START => Ok(Value::Dict(parse_dict(stream)?)),
         ARRAY_START => Ok(Value::List(parse_array(stream)?)),
         b'"' => {
-            let val = stream.advance_past_string_with_gdb_escapes();
+            let val = stream.advance_past_string_with_gdb_escapes()?;
             Ok(Value::String(val))
         }
         _ => Err(Error::ExpectedDictValueUnexpectedChar(c as char)),
@@ -406,6 +408,53 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn result_c_strings_decode_utf8_and_c_escapes() -> Result {
+        for (record, expected) in [
+            (r#"1^done,fullname="/src/源码/file.c""#, "/src/源码/file.c"),
+            (
+                r#"1^done,fullname="/src/\346\272\220\347\240\201/file.c""#,
+                "/src/源码/file.c",
+            ),
+            (
+                r#"1^done,fullname="line\n\t\r\b\f\v\a\033\x1b\\\"\?\'\000""#,
+                "line\n\t\r\u{8}\u{c}\u{b}\u{7}\u{1b}\u{1b}\\\"?'\0",
+            ),
+            (r#"1^done,fullname="\1012\77!""#, "A2?!"),
+        ] {
+            let Message::Response(Response::Result {
+                payload: Some(payload),
+                ..
+            }) = parse_message(record)?
+            else {
+                panic!("expected result payload");
+            };
+            assert_eq!(
+                payload.0.get("fullname"),
+                Some(&Value::String(expected.to_owned()))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_result_c_strings_return_errors() {
+        for record in [
+            "1^done,value=\"unterminated",
+            "1^done,value=\"trailing\\",
+            r#"1^done,value="\x""#,
+            r#"1^done,value="\x100""#,
+            r#"1^done,value="\400""#,
+            r#"1^done,value="\377""#,
+        ] {
+            assert!(
+                parse_message(record).is_err(),
+                "accepted malformed C string {:?}",
+                record
+            );
+        }
     }
 
     #[test]

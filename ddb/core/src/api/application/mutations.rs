@@ -33,7 +33,7 @@ use crate::{
     common::config::DebuggerBackendKind,
     debugger::protocol::{Dict, Value as DebuggerValue},
     shutdown::ShutdownCause,
-    state::{BkptLoc, BreakpointProperties},
+    state::{BkptLoc, BreakpointProperties, BreakpointSnapshot, SubBreakpointSnapshot},
 };
 
 use super::service::StopFrameKey;
@@ -48,6 +48,51 @@ const MAX_DYNAMIC_NODES: usize = 2_048;
 const MAX_RETAINED_RESULT_BYTES: usize = 48 * 1024;
 const DEFAULT_DISTRIBUTED_FRAMES: usize = 256;
 const MAX_DISTRIBUTED_FRAMES: usize = 4_096;
+
+/// Deletion targets installation rules, not their current process membership.
+/// A session selector cannot remove an inherited group rule or an unrelated rule.
+fn deletion_rule_ids(
+    breakpoint: &BreakpointSnapshot,
+    target: &CommandTarget,
+) -> Result<Vec<u64>, ApplicationError> {
+    if let CommandTarget::Multiple(targets) = target {
+        let mut ids = Vec::new();
+        for target in targets {
+            ids.extend(deletion_rule_ids(breakpoint, target)?);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        return Ok(ids);
+    }
+    if let CommandTarget::SessionSet(sessions) = target {
+        let mut ids = Vec::new();
+        for session in sessions {
+            ids.extend(deletion_rule_ids(
+                breakpoint,
+                &CommandTarget::Session(*session),
+            )?);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        return Ok(ids);
+    }
+    let ids = breakpoint.subbkpts.iter().filter_map(|rule| {
+        let (id, matches) = match rule {
+            SubBreakpointSnapshot::Session { id, target_session, .. } => (*id,
+                matches!(target, CommandTarget::Broadcast)
+                    || matches!(target, CommandTarget::Session(session) if session == target_session)),
+            SubBreakpointSnapshot::Group { id, target_group, .. } => (*id,
+                matches!(target, CommandTarget::Broadcast)
+                    || matches!(target, CommandTarget::Group(group) if group.value() == *target_group)),
+        };
+        matches.then_some(id)
+    }).collect::<Vec<_>>();
+    if ids.is_empty() {
+        return Err(ApplicationError::invalid("target",
+            "does not select an installed breakpoint rule; inherited members must be deleted using their group, not a session selector"));
+    }
+    Ok(ids)
+}
 
 #[derive(Clone)]
 enum CompletionProjection {
@@ -248,7 +293,7 @@ impl DdbApplicationService {
         };
         let command = match object.as_ref() {
             Some(object) => format!(
-                "-var-create{frame_option} {} * {}",
+                "-ddb-var-create{frame_option} {} * {}",
                 object.name,
                 quote(&request.expression)
             ),
@@ -572,6 +617,15 @@ impl DdbApplicationService {
             .target_resolver()
             .resolve(request.target.as_ref(), TargetPurpose::Breakpoint)
             .await?;
+        let members = deletion_rule_ids(&snapshot, &resolved.command)?;
+        let command = format!(
+            "-break-delete {internal_id} {}",
+            members
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         scope.ensure_active()?;
         self.admit_command(
             principal,
@@ -580,7 +634,7 @@ impl DdbApplicationService {
             &fingerprint,
             OperationKind::DeleteBreakpoint,
             resolved,
-            format!("-break-delete {internal_id}"),
+            command,
             CompletionProjection::DeletedBreakpoint {
                 internal_id,
                 public_id: request.breakpoint_id,
@@ -1407,7 +1461,7 @@ impl DdbApplicationService {
                     value: decoded.value,
                     type_name: decoded.type_name,
                     variable_id,
-                    address: None,
+                    address: decoded.address,
                     has_children: decoded.has_children,
                     child_count: decoded.child_count,
                     presentation_hint: decoded.presentation_hint,
@@ -1459,6 +1513,18 @@ impl DdbApplicationService {
                 public_id,
                 context,
             } => {
+                if self
+                    .queries
+                    .breakpoints()
+                    .iter()
+                    .any(|bp| bp.id == internal_id)
+                {
+                    let breakpoint = self.project_breakpoint(internal_id)?;
+                    self.publish_breakpoint_upsert(request_id, operation_id, &breakpoint)?;
+                    return Ok(OperationResult {
+                        value: Some(operation_result::Value::Breakpoint(breakpoint)),
+                    });
+                }
                 let revision = self
                     .resources
                     .bump(ResourceIdKind::Breakpoint, internal_id)?
@@ -1853,7 +1919,7 @@ fn debugger_setting_command(
                 }
             }
             let prefix = if matches!(backend, DebuggerBackendKind::Lldb) {
-                "settings append -- target.source-map"
+                "settings append target.source-map"
             } else {
                 "set substitute-path"
             };
@@ -2391,6 +2457,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deletion_scope_distinguishes_group_rules_from_independent_sessions() {
+        use crate::state::{GroupId, RuntimeModel, SubBkptSpec};
+        let model = RuntimeModel::new();
+        let breakpoint = model
+            .insert_breakpoint(
+                BkptLoc::new("main.rs", 10),
+                BreakpointProperties::default(),
+                vec![
+                    SubBkptSpec::Session {
+                        sid: 1,
+                        local_id: 11,
+                    },
+                    SubBkptSpec::Session {
+                        sid: 2,
+                        local_id: 22,
+                    },
+                    SubBkptSpec::Group {
+                        group_id: GroupId::new(7),
+                        locals: vec![(3, 33)],
+                    },
+                ],
+            )
+            .unwrap();
+        let snapshot = BreakpointSnapshot::from(&breakpoint);
+        let one = deletion_rule_ids(&snapshot, &CommandTarget::Session(1)).unwrap();
+        let group = deletion_rule_ids(&snapshot, &CommandTarget::Group(GroupId::new(7))).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(group.len(), 1);
+        assert_ne!(one, group);
+        assert!(deletion_rule_ids(&snapshot, &CommandTarget::Session(3)).is_err());
+        assert!(deletion_rule_ids(&snapshot, &CommandTarget::Group(GroupId::new(8))).is_err());
+        assert_eq!(
+            deletion_rule_ids(
+                &snapshot,
+                &CommandTarget::Multiple(vec![
+                    CommandTarget::Session(1),
+                    CommandTarget::Group(GroupId::new(7)),
+                ])
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+        assert_eq!(
+            deletion_rule_ids(&snapshot, &CommandTarget::Broadcast)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
     fn missing_concrete_completion_becomes_a_target_failure() {
         let outcome = CommandOutcome::silent(FinishedCmd::new(
             Some(51),
@@ -2464,6 +2582,25 @@ fn typed_execution_defaults_to_ddb_history_recording() {
         ..Default::default()
     };
     assert_eq!(execution_command(&interrupt).unwrap(), "-exec-interrupt");
+}
+
+#[test]
+fn lldb_source_mapping_uses_settings_append_without_an_option_separator() {
+    let request = ConfigureDebuggerRequest {
+        setting: Some(configure_debugger_request::Setting::SourceMapping(
+            ddb_api_types::v2::SourcePathMapping {
+                from: "/build with spaces".into(),
+                to: "/source with spaces".into(),
+            },
+        )),
+        ..Default::default()
+    };
+    let command = debugger_setting_command(&request, &DebuggerBackendKind::Lldb).unwrap();
+    let encoded = command.strip_prefix("-interpreter-exec console ").unwrap();
+    assert_eq!(
+        serde_json::from_str::<String>(encoded).unwrap(),
+        "settings append target.source-map \"/build with spaces\" \"/source with spaces\""
+    );
 }
 
 #[test]

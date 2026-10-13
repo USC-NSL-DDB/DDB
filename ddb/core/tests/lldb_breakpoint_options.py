@@ -15,6 +15,128 @@ with patch.dict(sys.modules, {"lldb": types.ModuleType("lldb")}):
     spec.loader.exec_module(bridge_module)
 
 
+class SourceDirectoryPatternTest(unittest.TestCase):
+    def setUp(self):
+        self.paths = [
+            "/repo/src[x]/requested.c",
+            "/repo/src[x]/nested/child.c",
+            "/repo/src[x]-other/other.c",
+            "/other/repo/src[x]/unrelated.c",
+            r'/repo/src+(){}^$?*|\"/quoted.c',
+            "/root_file.c",
+        ]
+        units = []
+        for path in self.paths:
+            unit = Mock()
+            unit.GetFileSpec.return_value = path
+            units.append(unit)
+        module = Mock()
+        module.compile_unit_iter.return_value = units
+        target = Mock()
+        target.module_iter.return_value = [module]
+        self.bridge = object.__new__(bridge_module.Bridge)
+        self.bridge._target = Mock(return_value=target)
+        self.file_path = patch.object(bridge_module, "_file_path", side_effect=lambda path: path)
+        self.file_path.start()
+        self.addCleanup(self.file_path.stop)
+
+    def sources(self, arguments):
+        result, payload = self.bridge._source_files(arguments)
+        self.assertEqual(result, "done")
+        return [source["fullname"] for source in payload["files"]]
+
+    def test_literal_directory_expression_matches_exact_parent(self):
+        self.assertEqual(
+            self.sources(["--dirname", r"^/repo/src\[x\]$"]),
+            self.paths[:1],
+        )
+
+    def test_directory_expression_matches_directory_not_basename(self):
+        self.assertEqual(self.sources(["--dirname", "nested$"]), [self.paths[1]])
+        self.assertEqual(self.sources(["--dirname", "requested"]), [])
+
+    def test_unfiltered_and_exact_root_queries(self):
+        self.assertEqual(self.sources([]), sorted(self.paths))
+        self.assertEqual(self.sources(["--dirname", "^/$"]), [self.paths[-1]])
+
+    def test_portable_literals_survive_mi_command_tokenization(self):
+        pattern = r'^/repo/src[+][(][)][{][}]\^\$[?]\*[|]\\' + '"$'
+        command = "-file-list-exec-source-files --dirname " + bridge_module.json.dumps(pattern)
+        self.bridge._select_thread = Mock()
+        result, payload = self.bridge.execute(command)
+        self.assertEqual(result, "done")
+        self.assertEqual([source["fullname"] for source in payload["files"]], [self.paths[-2]])
+
+    def test_missing_or_invalid_expression_is_not_an_empty_listing(self):
+        with self.assertRaisesRegex(ValueError, "requires a regular expression"):
+            self.sources(["--dirname"])
+        with self.assertRaises(bridge_module.re.error):
+            self.sources(["--dirname", "["])
+        self.bridge._target.assert_not_called()
+
+    def test_source_probe_accepts_only_an_exact_debugger_path(self):
+        self.bridge._select_thread = Mock()
+        for path, expected in [(self.paths[0], [self.paths[0]]), ("/not-compiled/requested.c", [])]:
+            result, payload = self.bridge.execute("-ddb-probe-source " + bridge_module.json.dumps(path))
+            self.assertEqual(result, "done")
+            self.assertEqual([source["fullname"] for source in payload["files"]], expected)
+            self.assertEqual(payload["source_status"], "present" if expected else "unknown")
+
+    def test_source_probe_rejects_missing_and_relative_paths(self):
+        self.bridge._select_thread = Mock()
+        for command in ["-ddb-probe-source", "-ddb-probe-source requested.c"]:
+            with self.assertRaises(ValueError):
+                self.bridge.execute(command)
+
+
+class StorageAddressTest(unittest.TestCase):
+    def value(self, address):
+        value = Mock()
+        value.IsValid.return_value = True
+        value.GetError.return_value.Fail.return_value = False
+        value.GetLoadAddress.return_value = address
+        return value
+
+    def test_storage_address_is_not_displayed_pointer_value(self):
+        value = self.value(0x1234)
+        value.GetValue.return_value = "0x9876"
+        self.assertEqual(bridge_module._storage_address_metadata(value), {"address": "0x1234"})
+        value.GetValue.assert_not_called()
+
+    def test_invalid_and_unavailable_values_have_no_address(self):
+        value = self.value(bridge_module.INVALID_ADDRESS)
+        self.assertEqual(bridge_module._storage_address_metadata(value), {})
+        value.GetLoadAddress.reset_mock()
+        value.GetError.return_value.Fail.return_value = True
+        self.assertEqual(bridge_module._storage_address_metadata(value), {})
+        value.GetLoadAddress.assert_not_called()
+
+    def test_scope_lookahead_does_not_resolve_storage(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        first, lookahead = self.value(0x1000), self.value(0x2000)
+        first.GetName.return_value = "first"
+        lookahead.GetName.return_value = "second"
+        first.GetExpressionPath.return_value = False
+        bridge._frame_and_arguments = Mock(return_value=(Mock(), ["globals", "0", "2"]))
+        bridge._scope_symbols = Mock(return_value=[
+            (("first", "file", 1), first), (("second", "file", 2), lookahead),
+        ])
+        with patch.object(bridge_module.lldb, "SBStream", Mock(), create=True):
+            _, payload = bridge._list_scope_variables([])
+        self.assertEqual(payload["variables"][0]["address"], "0x1000")
+        self.assertNotIn("address", payload["variables"][1])
+        lookahead.GetLoadAddress.assert_not_called()
+
+    def test_no_values_stack_does_not_resolve_storage(self):
+        bridge = object.__new__(bridge_module.Bridge)
+        value = self.value(0x1000)
+        bridge._frame_and_arguments = Mock(return_value=(Mock(), ["--no-values"]))
+        bridge._lexical_variables = Mock(return_value=[value])
+        _, payload = bridge._stack_variables([])
+        self.assertNotIn("address", payload["variables"][0])
+        value.GetLoadAddress.assert_not_called()
+
+
 class ProcessMonitorTest(unittest.TestCase):
     def setUp(self):
         self.api = patch.multiple(

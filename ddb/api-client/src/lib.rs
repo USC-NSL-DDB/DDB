@@ -10,15 +10,19 @@ mod output_sync;
 mod projection;
 mod stream;
 mod sync;
+mod trace;
+#[cfg(test)]
+mod trace_tests;
 
 pub use error::{ClientError, Result};
-pub use http::{ClientConfig, DdbClient};
+pub use http::{ClientConfig, DdbClient, SourceCatalog};
 pub use output_sync::{OutputSync, OutputSyncItem, OutputSyncOptions};
 pub use projection::{ProjectionUpdate, StateProjection};
 pub use stream::NdjsonStream;
 pub use sync::{
     ProjectedStateSync, ProjectedStateSyncItem, StateSync, StateSyncItem, StateSyncOptions,
 };
+pub use trace::{RequestTrace, RequestTraceOutcome};
 
 /// Canonical public request, response, resource, and event types.
 pub use ddb_api_types::v2;

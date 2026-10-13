@@ -383,6 +383,82 @@ message ReadMemoryResponse {
   MemoryBlock memory = 2;
 }
 
+// ListSourcesRequest discovers sources from debug information without selecting a frame.
+message ListSourcesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional owner filter. Absence selects all sessions.
+  optional Target target = 2;
+  // Stable, revision-bound pagination; changed catalogs expire old tokens.
+  optional PageRequest page = 3;
+  // Case-insensitive substring matched against debugger source paths.
+  string query = 4;
+  // Refresh debugger catalogs on the first page. Never interrupts running targets.
+  // Later pages must leave this false. Per-session failures are reported as warnings.
+  bool refresh = 5;
+}
+
+// ListSourcesResponse retains unavailable files and session-qualified identities.
+message ListSourcesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Debugger-known sources in stable session/path order.
+  repeated SourceFile sources = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+  // Discovery failures. A successful response with warnings is not exhaustive.
+  repeated SourceDiscoveryWarning warnings = 4;
+}
+
+// ListSourceRootsRequest pages configured read-only directory exports.
+message ListSourceRootsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Optional collection page.
+  optional PageRequest page = 2;
+}
+
+// ListSourceRootsResponse describes roots, not their host filesystem paths.
+message ListSourceRootsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Configured roots in stable name order.
+  repeated SourceRoot roots = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+}
+
+// ListSourceEntriesRequest lists one directory, never an implicit recursive scan.
+message ListSourceEntriesRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Opaque exported root identity.
+  string root_reference = 2;
+  // Root-relative directory path; empty selects the root. Parent traversal is invalid.
+  string directory = 3;
+  // Revision-bound pagination. First pages always refresh the entry set.
+  // Continuations may reuse a snapshot for up to 30 seconds, rechecking access.
+  // Observed metadata changes or a fresh listing invalidate that snapshot;
+  // a changed entry set then expires old page tokens. No recursive scan occurs.
+  optional PageRequest page = 4;
+  // Includes dot-prefixed entries. This does not bypass export permissions.
+  bool include_hidden = 5;
+}
+
+// ListSourceEntriesResponse returns immediate children of one exported directory.
+message ListSourceEntriesResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Bounded child entry page, directories first and names sorted within each kind.
+  repeated SourceEntry entries = 2;
+  // Continuation metadata.
+  PageInfo page = 3;
+  // Revision of the complete directory entry set.
+  string revision = 4;
+  // Entries omitted because their names are not representable safe UTF-8 paths.
+  uint32 unsupported_names = 5;
+}
+
 // ResolveSourceRequest maps a backend source location to a readable reference.
 message ResolveSourceRequest {
   // Request controls; READ permission is required.
@@ -391,6 +467,9 @@ message ResolveSourceRequest {
   optional Target target = 2;
   // Backend-reported source location.
   SourceLocation location = 3;
+  // When present, location.path is relative to this exported root, not a debugger
+  // path. A source_reference and root_reference cannot be supplied together.
+  optional string root_reference = 4;
 }
 
 // ResolveSourceResponse returns a stable source reference.
@@ -399,6 +478,99 @@ message ResolveSourceResponse {
   ResponseContext context = 1;
   // Resolved source identity.
   SourceFile source = 2;
+}
+
+// ResolveSourceTargetsRequest discovers breakpoint installation scopes for a file.
+message ResolveSourceTargetsRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Exact debugger path, after applying frontend source-workspace mappings.
+  // This is file membership, not verification that a line is executable.
+  string source = 2;
+  // Optional scope restriction; absence considers every current session.
+  optional Target target = 3;
+  // Refresh stopped sessions' catalogs. Running sessions are never interrupted.
+  bool refresh = 4;
+}
+
+// SourceTarget is a server-resolved, source-relevant breakpoint installation scope.
+message SourceTarget {
+  // Exactly one session or group selector; never an unfiltered broadcast.
+  Target target = 1;
+  // Server-provided session/group name for display.
+  string display_name = 2;
+  // Number of current sessions in this scope known to contain the exact source.
+  // A group may have other members. Installing a group breakpoint retains DDB's
+  // normal inheritance semantics; this count does not redefine group membership.
+  uint32 matching_session_count = 3;
+}
+
+// ResolveSourceTargetsResponse contains only proven source matches.
+message ResolveSourceTargetsResponse {
+  // Common success metadata.
+  ResponseContext context = 1;
+  // Group targets first, then session targets, in stable ID order. Bounded to
+  // 10,000 entries; overflow returns RESOURCE_EXHAUSTED rather than truncation.
+  repeated SourceTarget targets = 2;
+  // Discovery failures or unknown membership, without hiding successful matches.
+  repeated SourceDiscoveryWarning warnings = 3;
+  // True only when every considered session's membership could be determined.
+  // Empty targets with complete=false does not prove there are no owners.
+  bool complete = 4;
+}
+
+// SourceSearchMode defines matching within individual source lines.
+enum SourceSearchMode {
+  SOURCE_SEARCH_MODE_UNSPECIFIED = 0;
+  // Case-sensitive contiguous text.
+  SOURCE_SEARCH_MODE_EXACT = 1;
+  // Case-insensitive Unicode lowercase subsequence, not edit distance.
+  SOURCE_SEARCH_MODE_FUZZY = 2;
+}
+
+// SearchSourceRequest searches the entire bounded source document, not a window.
+// Each line is considered once, in the requested direction, wrapping at EOF.
+message SearchSourceRequest {
+  // Request controls; READ permission is required.
+  RequestContext context = 1;
+  // Existing source capability from discovery or source reads.
+  string source_reference = 2;
+  // Nonempty single-line text, at most 1024 UTF-8 bytes. Tabs are allowed.
+  string query = 3;
+  // Explicit matching mode; UNSPECIFIED is invalid.
+  SourceSearchMode mode = 4;
+  // One-based origin line, clamped to the current document if the file changed.
+  uint32 origin_line = 5;
+  // Search previous matching lines rather than following lines.
+  bool backward = 6;
+  // Include the origin line, normally true for a new query and false for repeat.
+  bool include_origin = 7;
+  // Bound the returned context window by the advertised source line limit.
+  uint32 max_lines = 8;
+}
+
+// SourceSearchMatch identifies a matching line. Columns are one-based Unicode
+// scalar positions, not bytes or UTF-16 units; the end column is exclusive.
+message SourceSearchMatch {
+  uint32 line = 1;
+  uint32 start_column = 2;
+  // Fuzzy matches report the bounding range, including gaps.
+  uint32 end_column = 3;
+  // The matching line was found after wrapping past the document boundary.
+  bool wrapped = 4;
+}
+
+// SearchSourceResponse pins the match and returned window to one file version.
+message SearchSourceResponse {
+  ResponseContext context = 1;
+  // Absent if no line matches. One result per line, not per occurrence.
+  SourceSearchMatch result = 2;
+  // Context from the same immutable snapshot. Centered on the match, or on the
+  // clamped origin if no line matches. Empty documents return an empty window.
+  SourceContent source = 3;
+  // Version of the searched document, including no-match responses.
+  string content_hash = 4;
+  uint32 total_lines = 5;
 }
 
 // ReadSourceRequest reads one bounded source window.
@@ -812,10 +984,20 @@ service DebuggerService {
   rpc ListSignals(ListSignalsRequest) returns (ListSignalsResponse);
   // Reads bounded memory. Requires CONTROL permission and backend capability.
   rpc ReadMemory(ReadMemoryRequest) returns (ReadMemoryResponse);
+  // Lists debugger-known sources without requiring a selected or stopped frame.
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+  // Lists explicitly configured source directory exports. Requires READ permission.
+  rpc ListSourceRoots(ListSourceRootsRequest) returns (ListSourceRootsResponse);
+  // Lists one exported directory with bounded, revision-bound pagination.
+  rpc ListSourceEntries(ListSourceEntriesRequest) returns (ListSourceEntriesResponse);
   // Resolves a backend location to a stable source reference.
   rpc ResolveSource(ResolveSourceRequest) returns (ResolveSourceResponse);
+  // Resolves relevant session/group breakpoint targets without reading source content.
+  rpc ResolveSourceTargets(ResolveSourceTargetsRequest) returns (ResolveSourceTargetsResponse);
   // Reads a bounded source window. Requires READ permission.
   rpc ReadSource(ReadSourceRequest) returns (ReadSourceResponse);
+  // Searches a whole source and returns matching context from the same version.
+  rpc SearchSource(SearchSourceRequest) returns (SearchSourceResponse);
   // Lists logical breakpoints. Requires READ permission.
   rpc ListBreakpoints(ListBreakpointsRequest) returns (ListBreakpointsResponse);
   // Gets one logical breakpoint. Requires READ permission.

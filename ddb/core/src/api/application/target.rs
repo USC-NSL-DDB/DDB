@@ -236,14 +236,18 @@ impl<'a> TargetResolver<'a> {
                 }
                 Ok(ResolvedNode {
                     public: public.clone(),
-                    command: CommandTarget::SessionSet(sessions.clone()),
+                    command: session_set_command(&sessions, purpose),
                     sessions,
                     allows_empty: false,
                 })
             }
             target::Selector::Broadcast(_) => Ok(ResolvedNode {
                 public: public.clone(),
-                command: CommandTarget::Broadcast,
+                command: if purpose == TargetPurpose::Breakpoint {
+                    session_set_command(active_sessions, purpose)
+                } else {
+                    CommandTarget::Broadcast
+                },
                 sessions: active_sessions.clone(),
                 allows_empty: false,
             }),
@@ -293,7 +297,14 @@ impl<'a> TargetResolver<'a> {
                     }
                     allows_empty &= node.allows_empty;
                     sessions.extend(node.sessions);
-                    commands.push(node.command);
+                    match node.command {
+                        CommandTarget::Multiple(children)
+                            if purpose == TargetPurpose::Breakpoint =>
+                        {
+                            commands.extend(children);
+                        }
+                        command => commands.push(command),
+                    }
                     public_targets.push(node.public);
                 }
                 Ok(ResolvedNode {
@@ -342,6 +353,18 @@ impl<'a> TargetResolver<'a> {
     }
 }
 
+// Breakpoint insertion records session/group membership, rather than routing
+// an arbitrary debugger command. Resolve non-inheriting fanout selectors to
+// explicit sessions; keep group selectors intact in resolve_node.
+fn session_set_command(sessions: &HashSet<u64>, purpose: TargetPurpose) -> CommandTarget {
+    if purpose == TargetPurpose::Command {
+        return CommandTarget::SessionSet(sessions.clone());
+    }
+    let mut sessions = sessions.iter().copied().collect::<Vec<_>>();
+    sessions.sort_unstable();
+    CommandTarget::Multiple(sessions.into_iter().map(CommandTarget::Session).collect())
+}
+
 struct ResolvedNode {
     public: v2::Target,
     command: CommandTarget,
@@ -357,5 +380,24 @@ impl ResolvedNode {
             sessions: HashSet::from([sid]),
             allows_empty: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn breakpoint_session_sets_are_explicit_and_deterministic() {
+        let sessions = HashSet::from([7, 2]);
+        assert!(
+            matches!(session_set_command(&sessions, TargetPurpose::Breakpoint),
+            CommandTarget::Multiple(targets)
+                if matches!(targets.as_slice(), [CommandTarget::Session(2), CommandTarget::Session(7)]))
+        );
+        assert!(
+            matches!(session_set_command(&sessions, TargetPurpose::Command),
+            CommandTarget::SessionSet(actual) if actual == sessions)
+        );
     }
 }

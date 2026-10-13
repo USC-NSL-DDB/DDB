@@ -33,13 +33,58 @@ ddb-tui ./debug.yaml
 
 The TUI starts `ddb serve`, uses authenticated loopback port `0`, waits for its
 atomic startup report, verifies API v2 and schema compatibility, and shuts down
-only that owned backend. DDB is the only configuration parser. Local, remote-
+only that owned backend. DDB alone parses the backend configuration. Local, remote-
 target, and distributed configurations all use this one-command form.
 
 `--config ./debug.yaml` is equivalent to the positional path. Use `--ddb-path`
 only for source-tree development or deliberate binary selection. Use
 `--startup-timeout SECONDS` for unusually slow hosts and `--backend-log PATH`
 to retain backend output at a specific new path.
+
+### One file for the project
+
+Put persistent GDB/LLDB setup under `Conf.Debugger` and frontend preferences
+under `Tui` in that same YAML. The frontend reads its `Tui` section using the
+shared `ddb-config` schema. DDB owns native session startup and does not open
+frontend-local source paths. For example:
+
+```yaml
+Conf:
+  Debugger:
+    backend: gdb
+    gdb:
+      commands: [set print elements 33]
+Tui:
+  source_roots:
+    - name: application
+      path: ../src
+      debugger_path: /build/application
+  stack_mode: distributed
+  source_search: exact
+```
+
+`o` browses this local tree before any target attaches. `Tui.source_roots` does
+not export files through the backend; DDB `SourceRoots` remains an explicit
+backend-host export. Relative paths in these sections resolve against the
+containing YAML. Source mappings in `Conf.Debugger` refer to absolute
+debugger-host paths instead.
+
+Only the selected backend's commands run, once per session bootstrap, including
+automatic attachment. Refreshing or reconnecting the TUI does not repeat them.
+Only use trusted configurations; native commands can control the debuggee.
+Unknown fields and invalid values are rejected.
+
+Optional `--tui-config preferences.yaml` reads frontend-only fields without a
+`Tui` wrapper. Defaults are overridden by project `Tui`, then the preferences
+file, then explicit CLI options. `--ddb-set Conf.Debugger.backend=lldb` forwards
+a backend override to DDB's canonical parser. Managed transport/authentication
+and frontend settings cannot be changed with that option. Separate
+`--source-workspace` files and API-based `--session-profile` are optional, not
+required for the normal project workflow.
+
+The [complete configuration reference](../../ddb-tui/README.md#one-project-configuration)
+and [instrumented helloworld example](../../ddb-tui/examples/helloworld.yaml)
+include C++ printer setup and automatic discovery.
 
 ### Launch a local program
 
@@ -70,15 +115,9 @@ ddb-tui connect --api https://debug.example.com --token "$DDB_API_TOKEN"
 
 Use connect only when a service manager, container, Kubernetes workload, shared
 team service, or automation owns DDB. Quitting does not stop that backend. The
-legacy `ddb-tui --api URL` form remains supported. Explicit v1 fallback is for a
-controlled migration of an external deployment only:
-
-```bash
-ddb-tui connect --api URL --api-version v1-fallback
-```
-
-Managed startup never falls back to v1. Authentication, permission, network,
-malformed-protocol, or version errors also never trigger a downgrade.
+`ddb-tui --api URL` shorthand remains supported. Both managed and external
+connections require the current API v2. There is no v1 fallback; upgrade paired
+backend/frontend binaries together when the contract changes.
 
 ### Headless backend
 
@@ -99,12 +138,71 @@ events. A delayed remote target does not block the entire frontend.
 
 ### DDB-native interaction model
 
-The left topology is DDB group → session → thread, not a flat local-thread list.
-Selecting a group or session changes the execution target while retaining the
-thread under inspection; selecting a thread changes both. `c` cycles the target
-through thread, session, group, and all eligible sessions. Unsupported actions
-are hidden; an action on an unsupported scope is rejected before it can be
-queued, according to `GetCapabilities`.
+The toolbar groups bounded, labeled execution and navigation buttons, sharing
+a row when they fit. Whole buttons wrap on narrower terminals. Press `?` for
+their shortcuts. The title is `DDB TU`, with Scope on the top-right border.
+Connection state and running/stopped totals are on the bottom Status border.
+Pending execution buttons show an in-place spinner and ignore repeated input
+for that action and target until the receipt settles. `Frame source` or F8 opens
+or retries the selected stack frame's
+source at its line. F8 is a shortcut, not a frame number, and the action does not
+resume or step execution. `f` instead follows the selected thread's execution location.
+
+The left topology is DDB group → session → thread. Controls start in `Auto`.
+Continue and Pause broadcast to all sessions. Stepping uses the selected paused
+frame's owning thread, or the selected paused thread if no frame is loaded.
+This also applies to a caller frame in another session's distributed stack.
+Boundary rows cannot be stepped. Browsing a group or session does not change
+these defaults. `c` explicitly overrides controls through thread, session, group,
+and all eligible sessions, then returns to `Auto`. While an override is active,
+topology selection changes that target. Unsupported action/scope combinations
+are hidden and rejected before queueing, according to `GetCapabilities`.
+
+In Topology, `T` switches to sessions only and hides every thread. `C`/Run and
+`I`/Pause control only the visible selected session, independently of toolbar
+scope; in thread view they use that thread's owning session. A group selection
+does not pick a session implicitly. Signal is visible beside Kill. In session-only
+view, `s` targets the selected session, including custom signals. `K` keeps its
+explicit termination confirmation. Toggling views preserves inspection and scope.
+
+Breakpoint insertion has separate Session and Group tabs. Switch with Tab,
+Left/Right, or a tab click; the previous type's selections are cleared. Session
+rules are independent. Group rules include current and future members.
+Breakpoint rows identify the rule type; inherited members are labeled separately.
+Delete opens a scope confirmation for one session rule, one group rule, or a
+separately labeled all-rules choice. Selecting an inherited child preselects its
+group rule and warns that current and future members are affected. Empty pending
+group rules remain manageable. Changed scope or a replaced backend cancels the
+confirmation rather than redirecting it.
+
+The first observed ordinary stop selects its actual owning thread, expands its
+topology ancestors, and loads its frame and source. Other concurrent stops do not
+steal focus while that owner remains paused. Breakpoint rows and the panel title
+count current paused hits separately from historical hit counts. Use `H` for the
+live hit view through `Paused [H]`, or `P` to choose a hit. Enabled/disabled
+breakpoint dots remain at the start of each row. Right-aligned `[1 hit]` or
+`[N hits]` badges show current matching hits. General running/stopped state and
+pause reasons appear only in Topology. Principal triggering threads and sessions
+show `trigger` plus the reason, including the signal name. Process-wide stopped
+siblings and peers interrupted by this frontend's global pause policy show only
+`stopped`. Automatic provenance applies only to the observed stop revision, not
+to later independent stops. Muted `total hits:N` values show DDB-observed
+stop counts for the logical breakpoint and each installed member. Ignored native
+encounters, steps, refreshes, and all-stop peers do not increment them. Retiring
+a member preserves the logical lifetime total. Horizontal scrolling preserves
+the badge, and the grouping control stays in the footer rather than covering
+the title. Automatically paused peers are not counted as breakpoint hits.
+Existing stops received together at bootstrap or recovery
+use snapshot order; DDB does not compare remote wall clocks to order them.
+
+Breakpoint and member rows retain their first-seen order across frame inspection
+and snapshot refreshes. New rows append without moving existing rows. File
+grouping remains explicitly sorted by full path and line. Selection stays tied
+to breakpoint/member identity.
+
+Use Ctrl+P to move up and Ctrl+N to move down in every non-Source panel and
+navigation overlay. Source uses hjkl and arrows; Ctrl+P there still opens the
+debugger file catalog. These navigation aliases do not alter prompt editing.
 
 The center stack is DDB distributed backtrace by default. Selecting a stopped
 thread or receiving a stop refreshes its cross-session call chain automatically.
@@ -120,6 +218,37 @@ hit, condition, ignore-count, and diagnostic state. Optional framework features
 come from public extension descriptors/state/actions instead of hard-coded TUI
 knowledge. The complete keyboard, mouse, and gutter reference is in the
 `ddb-tui` README.
+
+Source browsing is independent of frame inspection. Use `o` or the source
+panel's Open button for local roots and configured DDB `SourceRoots`, and `Ctrl-P` for the
+debugger catalog. The source title identifies its owners; `f` returns to the
+selected thread's execution location. A breakpoint uses the document's declared
+debugger path, and its target picker defaults to the document's single owner,
+not whichever thread is selected. Unmapped files cannot create source
+breakpoints. Multiple matching logical breakpoints require a choice in the
+breakpoint manager before deletion.
+
+An untagged local root opened without a frame-owner hint shows exact-path source
+markers across sessions. It does not imply a single owner; choose breakpoint
+targets from DDB's discovered candidates. Tagged local roots and remote source
+documents retain owner-specific matching.
+
+Pending controls, mutations, and source/frame/variable reads show an animated
+spinner. Its 100 ms animation is local and adds no API polling. Normal feedback
+uses action names and developer-facing target labels. Use `--trace-api` for
+operation IDs, stop revisions, and connection diagnostics.
+
+Confirmed completions clear after five seconds; confirmed errors/cancellations
+clear after eight seconds, restoring the original keyboard hints. Pending and
+unconfirmed outcomes remain visible. Timeline retains the operation transitions.
+
+Prefer inline `Tui.source_roots`. Optionally pass `--source-workspace ./workspace.yaml` to `ddb tui` or `ddb-tui` for explicit
+directories on the frontend host. This separate file contains a `roots` list of
+`name`, `path`, optional `debugger_path`, and optional `session_tags`. Paths are
+relative to that file. DDB exports and local directories are labelled separately;
+the backend never receives the local grants. Local documents and history survive
+backend replacement. See the [source explorer configuration](../../ddb-tui/README.md#source-explorer)
+for examples, mapping precedence, resource bounds, and keyboard/mouse controls.
 
 The existing global policy remains the compatibility default:
 

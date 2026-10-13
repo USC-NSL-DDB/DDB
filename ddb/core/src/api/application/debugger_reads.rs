@@ -22,6 +22,7 @@ pub(crate) struct DecodedFrame {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVariable {
     pub(crate) name: String,
+    pub(crate) address: Option<String>,
     pub(crate) evaluate_name: Option<String>,
     pub(crate) value: String,
     pub(crate) type_name: Option<String>,
@@ -32,6 +33,7 @@ pub(crate) struct DecodedVariable {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVariableChild {
     pub(crate) object_name: String,
+    pub(crate) address: Option<String>,
     pub(crate) display_name: String,
     pub(crate) value: String,
     pub(crate) type_name: Option<String>,
@@ -143,6 +145,7 @@ pub(crate) fn decode_variables(
                 .ok_or_else(|| malformed("debugger variable is missing its name"))?;
             let (child_count, has_children) = variable_child_metadata(variable)?;
             Ok(DecodedVariable {
+                address: optional_storage_address(variable)?,
                 evaluate_name: optional_string(variable, "evaluate-name")?,
                 name,
                 value: optional_string(variable, "value")?.unwrap_or_default(),
@@ -152,6 +155,20 @@ pub(crate) fn decode_variables(
             })
         })
         .collect()
+}
+
+fn optional_storage_address(value: &Dict) -> Result<Option<String>, ApplicationError> {
+    let address = optional_string(value, "address")?;
+    if let Some(address) = &address {
+        if !address.strip_prefix("0x").is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(malformed(
+                "debugger variable has an invalid storage address",
+            ));
+        }
+    }
+    Ok(address)
 }
 
 pub(crate) fn decode_signals(
@@ -353,6 +370,7 @@ pub(crate) fn decode_variable_object(
     let (child_count, has_children) = variable_child_metadata(payload)?;
     let name = decode_variable_object_name(outcome)?;
     Ok(DecodedVariableChild {
+        address: optional_storage_address(payload)?,
         object_name: name.clone(),
         display_name: name,
         value: optional_string(payload, "value")?.unwrap_or_default(),
@@ -418,6 +436,7 @@ pub(crate) fn decode_variable_children(
                 .unwrap_or_else(|| object_name.clone());
             let (child_count, has_children) = variable_child_metadata(child)?;
             Ok(DecodedVariableChild {
+                address: optional_storage_address(child)?,
                 object_name,
                 display_name,
                 value: optional_string(child, "value")?.unwrap_or_default(),
@@ -627,6 +646,41 @@ mod tests {
     }
 
     #[test]
+    fn storage_addresses_survive_all_variable_decode_paths() {
+        for address in [None, Some("0x0"), Some("0x1234ABCD")] {
+            let mut fields = HashMap::from([
+                ("name".into(), Value::String("value".into())),
+                ("value".into(), Value::String("0x9999".into())),
+            ]);
+            if let Some(address) = address {
+                fields.insert("address".into(), Value::String(address.into()));
+            }
+            let row = Dict::new(fields);
+            let object = decode_variable_object(&outcome(row.clone())).unwrap();
+            assert_eq!(object.address.as_deref(), address);
+            let variables = decode_variables(&outcome(Dict::new(HashMap::from([(
+                "variables".into(),
+                Value::List(vec![Value::Dict(row.clone())]),
+            )]))))
+            .unwrap();
+            assert_eq!(variables[0].address.as_deref(), address);
+            let children = decode_variable_children(&outcome(Dict::new(HashMap::from([(
+                "children".into(),
+                Value::List(vec![Value::Dict(row)]),
+            )]))))
+            .unwrap();
+            assert_eq!(children.children[0].address.as_deref(), address);
+        }
+        for address in ["", "0x", "42", "0x1234 <symbol>", "&(value)", "0x-1"] {
+            let row = Dict::new(HashMap::from([
+                ("name".into(), Value::String("value".into())),
+                ("address".into(), Value::String(address.into())),
+            ]));
+            assert!(decode_variable_object(&outcome(row)).is_err(), "{address}");
+        }
+    }
+
+    #[test]
     fn decodes_typed_variables_and_rejects_invalid_child_counts() {
         let variable = Dict::new(HashMap::from([
             ("name".to_string(), Value::String("request".to_string())),
@@ -641,6 +695,7 @@ mod tests {
         assert_eq!(
             decode_variables(&outcome(payload)).unwrap(),
             vec![DecodedVariable {
+                address: None,
                 evaluate_name: None,
                 name: "request".to_string(),
                 value: "0x1000".to_string(),
@@ -701,6 +756,7 @@ mod tests {
             let variable = projection
                 .variable(
                     &DecodedVariable {
+                        address: child.address,
                         evaluate_name: None,
                         name: child.display_name,
                         value: child.value,

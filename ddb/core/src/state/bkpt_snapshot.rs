@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::state::{BkptLoc, BkptMeta, SubBkptMeta, SubBkptType};
@@ -12,6 +14,8 @@ pub struct BreakpointSnapshot {
     pub location: BreakpointLocationSnapshot,
     pub enabled: bool,
     pub times: u64,
+    #[serde(skip)]
+    pub member_hits: HashMap<(u64, u64), u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
     pub temporary: bool,
@@ -50,11 +54,13 @@ pub enum SubBreakpointSnapshot {
 
 impl From<&BkptMeta> for BreakpointSnapshot {
     fn from(breakpoint: &BkptMeta) -> Self {
+        let hits = breakpoint.hit_counts();
         Self {
             id: breakpoint.id(),
             location: breakpoint.location().into(),
             enabled: breakpoint.is_enabled(),
-            times: breakpoint.times(),
+            times: hits.total,
+            member_hits: hits.members,
             condition: breakpoint.properties().condition.clone(),
             temporary: breakpoint.properties().temporary,
             hardware: breakpoint.properties().hardware,

@@ -681,29 +681,41 @@ impl BreakpointService {
             bail!("No breakpoint id provided for deletion.");
         }
 
-        if let Some((breakpoint_id, sub_breakpoint_id)) = args.split_once(char::is_whitespace) {
-            let breakpoint_id = breakpoint_id
-                .parse::<u64>()
-                .with_context(|| format!("Invalid breakpoint id {}", breakpoint_id))?;
-            let sub_breakpoint_id = sub_breakpoint_id
-                .parse::<u64>()
-                .with_context(|| format!("Invalid sub-breakpoint id {}", sub_breakpoint_id))?;
-            let change = self
-                .delete_sub_breakpoint(breakpoint_id, sub_breakpoint_id)
-                .await?;
-            return self
-                .explicit_delete_outcome(command.external_token, change)
-                .await;
-        }
-
-        let breakpoint_id = args
+        let mut parts = args.split_whitespace();
+        let breakpoint_id = parts
+            .next()
+            .expect("nonempty deletion arguments")
             .parse::<u64>()
             .with_context(|| format!("Invalid breakpoint id {}", args))?;
+        let selected = parts
+            .map(|id| {
+                id.parse::<u64>()
+                    .with_context(|| format!("Invalid sub-breakpoint id {id}"))
+            })
+            .collect::<Result<HashSet<_>>>()?;
         let group_operations = self
             .model
             .lock_group_operations(self.group_ids_for_breakpoint(breakpoint_id))
             .await;
-        let mut local_ids = self.model.local_breakpoint_ids(breakpoint_id);
+        let breakpoint = self
+            .model
+            .breakpoint(breakpoint_id)
+            .ok_or_else(|| anyhow!("Breakpoint {breakpoint_id} does not exist"))?;
+        let rules = breakpoint.sub_breakpoints();
+        if selected
+            .iter()
+            .any(|id| !rules.iter().any(|rule| rule.id() == *id))
+        {
+            bail!("A selected breakpoint rule no longer exists");
+        }
+        let rules = rules
+            .iter()
+            .filter(|rule| selected.is_empty() || selected.contains(&rule.id()))
+            .collect::<Vec<_>>();
+        let mut local_ids = rules
+            .iter()
+            .flat_map(|rule| rule.local_ids())
+            .collect::<Vec<_>>();
         local_ids.sort_unstable();
         let mut successful_sessions = Vec::new();
         let mut failures = Vec::new();
@@ -725,11 +737,19 @@ impl BreakpointService {
         }
 
         if failures.is_empty() {
-            self.model.remove_breakpoint(breakpoint_id);
-            change = BreakpointStateChange::Removed(breakpoint_id);
+            for rule in rules {
+                self.model.remove_sub_breakpoint(breakpoint_id, rule.id());
+            }
+        }
+        if !matches!(change, BreakpointStateChange::None) || failures.is_empty() {
+            change = self
+                .model
+                .breakpoint(breakpoint_id)
+                .map(BreakpointStateChange::TargetChanged)
+                .unwrap_or(BreakpointStateChange::Removed(breakpoint_id));
         }
         drop(group_operations);
-        self.events.publish_state_change(change).await;
+        self.events.publish_state_change(change.clone()).await;
 
         let responses = if failures.is_empty() {
             vec![ParsedSessionResponse::new(0, "done".to_string(), None)]
@@ -741,12 +761,20 @@ impl BreakpointService {
         };
         let completion =
             CommandFanoutReport::new(command.external_token, responses, failures).into_result()?;
-        let record = MiFormatter::format(
-            "=",
-            "breakpoint-deleted",
-            Some(&bkpt_deleted_payload(breakpoint_id)),
-            None,
-        );
+        let record = match change {
+            BreakpointStateChange::TargetChanged(breakpoint) => MiFormatter::format(
+                "=",
+                "breakpoint-modified",
+                Some(&bkpt_payload(&BreakpointSnapshot::from(&breakpoint))),
+                None,
+            ),
+            _ => MiFormatter::format(
+                "=",
+                "breakpoint-deleted",
+                Some(&bkpt_deleted_payload(breakpoint_id)),
+                None,
+            ),
+        };
         let mut outcome = CommandOutcome::response(completion, Presentation::Plain);
         outcome.insert_record(0, record);
         Ok(outcome)
@@ -783,146 +811,6 @@ impl BreakpointService {
         Ok(self
             .model
             .record_local_breakpoint_deletion(session_id, local_breakpoint_id))
-    }
-
-    async fn delete_sub_breakpoint(
-        &self,
-        breakpoint_id: u64,
-        sub_breakpoint_id: u64,
-    ) -> Result<BreakpointStateChange> {
-        let mut sub_breakpoint = self
-            .model
-            .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "No sub-breakpoint found for deletion with bkpt_id {} and subbkpt_id {}",
-                    breakpoint_id,
-                    sub_breakpoint_id
-                )
-            })?;
-        let group_operation = match sub_breakpoint.kind() {
-            SubBkptType::Group(group_breakpoint) => Some(
-                self.model
-                    .lock_group_operation(group_breakpoint.target_group())
-                    .await,
-            ),
-            SubBkptType::Session(_) => None,
-        };
-        if group_operation.is_some() {
-            sub_breakpoint = self
-                .model
-                .sub_breakpoint(breakpoint_id, sub_breakpoint_id)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Sub-breakpoint {} of breakpoint {} disappeared while waiting for its group operation",
-                        sub_breakpoint_id,
-                        breakpoint_id
-                    )
-                })?;
-        }
-
-        match sub_breakpoint.kind() {
-            SubBkptType::Session(session_breakpoint) => self
-                .delete_local_breakpoint(
-                    session_breakpoint.target_session(),
-                    session_breakpoint.local_id(),
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to delete breakpoint {} from session {}",
-                        session_breakpoint.local_id(),
-                        session_breakpoint.target_session()
-                    )
-                }),
-            SubBkptType::Group(group_breakpoint) => {
-                let local_ids = group_breakpoint.local_ids();
-                if local_ids.is_empty() {
-                    return Ok(self.finalize_empty_sub_breakpoint(breakpoint_id, sub_breakpoint_id));
-                }
-
-                let mut change = BreakpointStateChange::None;
-                let mut failed = false;
-                for (session_id, local_breakpoint_id) in local_ids {
-                    match self
-                        .delete_local_breakpoint(session_id, local_breakpoint_id)
-                        .await
-                    {
-                        Ok(local_change) => {
-                            change = merge_state_changes(change, local_change);
-                        }
-                        Err(error) => {
-                            failed = true;
-                            error!(
-                                session_id,
-                                local_breakpoint_id,
-                                %error,
-                                "failed to delete group breakpoint target"
-                            );
-                        }
-                    }
-                }
-                if failed {
-                    bail!(
-                        "Failed to delete some breakpoints from group sub-breakpoint {}",
-                        sub_breakpoint_id
-                    );
-                }
-                Ok(change)
-            }
-        }
-    }
-
-    fn finalize_empty_sub_breakpoint(
-        &self,
-        breakpoint_id: u64,
-        sub_breakpoint_id: u64,
-    ) -> BreakpointStateChange {
-        self.model
-            .remove_sub_breakpoint(breakpoint_id, sub_breakpoint_id)
-    }
-
-    async fn explicit_delete_outcome(
-        &self,
-        external_token: Option<u64>,
-        change: BreakpointStateChange,
-    ) -> Result<CommandOutcome> {
-        match change {
-            BreakpointStateChange::TargetChanged(breakpoint) => {
-                let snapshot = BreakpointSnapshot::from(&breakpoint);
-                let record = MiFormatter::format(
-                    "=",
-                    "breakpoint-modified",
-                    Some(&bkpt_payload(&snapshot)),
-                    None,
-                );
-                self.events
-                    .broadcast(BreakpointChangeEvent::Updated(snapshot))
-                    .await;
-
-                let mut outcome =
-                    CommandOutcome::completed(external_token, 0, "done", None, Presentation::Plain);
-                outcome.push_record(record);
-                Ok(outcome)
-            }
-            BreakpointStateChange::Removed(breakpoint_id) => {
-                let record = MiFormatter::format(
-                    "=",
-                    "breakpoint-deleted",
-                    Some(&bkpt_deleted_payload(breakpoint_id)),
-                    None,
-                );
-                self.events
-                    .broadcast(BreakpointChangeEvent::Removed(breakpoint_id))
-                    .await;
-
-                let mut outcome =
-                    CommandOutcome::completed(external_token, 0, "done", None, Presentation::Plain);
-                outcome.push_record(record);
-                Ok(outcome)
-            }
-            BreakpointStateChange::None => Ok(CommandOutcome::empty()),
-        }
     }
 }
 

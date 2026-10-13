@@ -166,6 +166,26 @@ cargo test --manifest-path ddb/Cargo.toml \
 python3 ddb/core/tests/lldb_breakpoint_options.py
 ```
 
+Literal source-directory discovery has a separate real-GDB regression, also
+run by the Rust test workflow. It compiles an isolated `-g -O0` fixture under
+directories containing regex punctuation, spaces, quotes, backslashes, and
+Unicode. It verifies the production command builder and decoded source paths.
+Exact parent-directory queries exclude sibling and descendant directories;
+full-catalog queries remain unfiltered. The LLDB bridge unit suite checks the
+same literal-pattern convention through its command tokenizer.
+
+The same native test verifies the exact-path source probe before catalog
+enumeration. A positive match must retain the debugger's exact path. A native
+unknown-file result proves absence; data-only files, headers without executable
+lines, and unrecognized diagnostics must not become false negatives. The
+provider's ordinary unit tests verify that positive/negative proofs avoid
+enumeration and that inconclusive probes still perform directory discovery.
+
+```sh
+cargo test --manifest-path ddb/Cargo.toml --locked -p ddb --bin ddb \
+  real_gdb_source_directory_is_literal_and_exact -- --ignored
+```
+
 The adapter repository contains `examples/grpc/` profiles and an extension-host
 scenario that drives the actual greeter client and server. That scenario is
 required in addition to the synthetic fixtures to validate C++ RPC caller

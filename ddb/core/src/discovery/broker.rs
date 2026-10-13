@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs::{self};
 use std::io::Write;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tracing::{debug, error, info};
@@ -56,18 +56,24 @@ fn extract_embedded_file_content(content: &[u8]) -> Result<NamedTempFile> {
 // Mosquitto implementation
 pub struct MosquittoBroker {
     temp_config_file: Option<NamedTempFile>,
+    child: Option<Child>,
 }
 
 impl MosquittoBroker {
     pub fn new() -> Self {
         Self {
             temp_config_file: None,
+            child: None,
         }
     }
 }
 
 impl MessageBroker for MosquittoBroker {
     fn start(&mut self, broker_info: &BrokerInfo) -> Result<()> {
+        anyhow::ensure!(self.child.is_none(), "managed Mosquitto is already started");
+        // Refuse an occupied listener instead of silently adopting another broker.
+        let reservation = std::net::TcpListener::bind(("0.0.0.0", broker_info.port))
+            .context("managed Mosquitto port is already occupied")?;
         let config_path = broker_info
             .broker_config
             .as_ref()
@@ -76,9 +82,11 @@ impl MessageBroker for MosquittoBroker {
         let mqtt_conf_path = match config_path {
             Some(path) => path.to_string(),
             None => {
-                let conf = Asset::get("conf/mosquitto.conf")
-                    .context("Failed to get Mosquitto config file")?;
-                let temp_conf_file = extract_embedded_file_content(conf.data.as_ref())?;
+                let conf = format!(
+                    "listener {}\nallow_anonymous true\npersistence false\nlog_dest stderr\n",
+                    broker_info.port
+                );
+                let temp_conf_file = extract_embedded_file_content(conf.as_bytes())?;
                 self.temp_config_file = Some(temp_conf_file);
                 self.temp_config_file
                     .as_ref()
@@ -90,10 +98,36 @@ impl MessageBroker for MosquittoBroker {
             }
         };
 
-        fs::create_dir_all("/tmp/ddb/brokers/mosquitto")?;
-        let result = run_command::<true, true>("mosquitto", &["-c", &mqtt_conf_path, "-d"]);
+        drop(reservation);
+        let result = Command::new("mosquitto")
+            .args(["-c", &mqtt_conf_path])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn();
         match result {
-            Ok(_) => {
+            Ok(child) => {
+                self.child = Some(child);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if let Some(status) = self.child.as_mut().unwrap().try_wait()? {
+                        self.child = None;
+                        anyhow::bail!("managed Mosquitto exited before readiness: {status}");
+                    }
+                    if std::net::TcpStream::connect((
+                        broker_info.hostname.as_str(),
+                        broker_info.port,
+                    ))
+                    .is_ok()
+                    {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        self.stop()?;
+                        anyhow::bail!("managed Mosquitto did not listen on its configured port");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
                 info!("Mosquitto broker started successfully!");
                 Ok(())
             }
@@ -109,27 +143,40 @@ impl MessageBroker for MosquittoBroker {
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Try with sudo first, fall back to regular pkill if sudo is not available
-        // let kill_result = if Command::new("which").arg("sudo").status().is_ok() {
-        //     Command::new("sudo")
-        //         .args(["pkill", "-9", "mosquitto"])
-        //         .stdout(Stdio::null())
-        //         .stderr(Stdio::null())
-        //         .status()
-        // } else {
-        //     Command::new("pkill").args(["-9", "mosquitto"]).status()
-        // };
-        let kill_result = Command::new("pkill").args(["-9", "mosquitto"]).status();
-        match kill_result {
-            Ok(_) => {
-                debug!("Mosquitto broker terminated successfully!");
-                Ok(())
+        if let Some(mut child) = self.child.take() {
+            if child.try_wait()?.is_none() {
+                child.kill()?;
             }
-            Err(e) => {
-                error!("Failed to terminate Mosquitto broker: {}", e);
-                Err(BrokerError::StopError(e.to_string()).into())
-            }
+            child.wait()?;
+            debug!("owned Mosquitto broker terminated");
         }
+        Ok(())
+    }
+}
+
+impl Drop for MosquittoBroker {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod mosquitto_tests {
+    use super::*;
+    #[test]
+    fn shutdown_only_terminates_the_owned_process_and_is_idempotent() {
+        let mut unrelated = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut broker = MosquittoBroker::new();
+        broker.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
+        broker.stop().unwrap();
+        broker.stop().unwrap();
+        let unrelated_running = unrelated.try_wait().unwrap().is_none();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+        assert!(
+            unrelated_running,
+            "another process must survive broker shutdown"
+        );
     }
 }
 

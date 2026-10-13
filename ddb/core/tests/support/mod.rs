@@ -108,6 +108,12 @@ impl DdbProcess {
         Self::spawn_with_config("ddb-v2-integration.yaml", config_contents)
     }
 
+    pub fn spawn_with_source_roots(sessions: &[SessionSpec<'_>], roots_yaml: &str) -> Self {
+        let mut config = with_v2_auth(render_mock_config(sessions, false));
+        config.push_str(roots_yaml);
+        Self::spawn_with_config("ddb-source-integration.yaml", config)
+    }
+
     /// Starts an authenticated v2 server with additional `Conf` entries.
     ///
     /// This is intentionally limited to integration tests so deployment-policy
@@ -211,13 +217,13 @@ impl DdbProcess {
     }
 
     pub fn spawn_real_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
-        let config_contents = render_real_dbt_config(sessions, "gdb");
+        let config_contents = with_v2_auth(render_real_dbt_config(sessions, "gdb"));
         Self::spawn_with_config("ddb-real-dbt-integration.yaml", config_contents)
     }
 
     pub fn spawn_lldb_dbt_sessions(sessions: &[BinarySessionSpec<'_>]) -> Self {
         ensure_debugger_environment("lldb");
-        let config_contents = render_real_dbt_config(sessions, "lldb");
+        let config_contents = with_v2_auth(render_real_dbt_config(sessions, "lldb"));
         Self::spawn_with_config("ddb-real-lldb-dbt-integration.yaml", config_contents)
     }
 

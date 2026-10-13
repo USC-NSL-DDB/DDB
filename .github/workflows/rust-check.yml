@@ -232,6 +232,10 @@ jobs:
         working-directory: ddb
         run: cargo test --workspace --all-targets
 
+      - name: Verify literal debugger source directories
+        working-directory: ddb
+        run: cargo test --locked -p ddb --bin ddb real_gdb_source_directory_is_literal_and_exact -- --ignored
+
       - name: Verify optimized thread state transitions
         working-directory: ddb
         run: cargo test -p ddb --release thread_status_mutation_is_not_debug_only
@@ -336,10 +340,13 @@ jobs:
       - name: Build DDB for TUI PTY tests
         run: cargo build -p ddb --manifest-path ddb/Cargo.toml
 
-      - name: Build debuggable real fixture for TUI PTY tests
+      - name: Build debuggable real fixtures for TUI PTY tests
         env:
           CARGO_PROFILE_DEV_DEBUG: '2'
-        run: cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml
+          CARGO_PROFILE_DEV_OPT_LEVEL: '0'
+        run: |
+          cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_loop/Cargo.toml --target-dir ddb/core/tests/fixtures/real_loop/target
+          cargo build --profile dev --manifest-path ddb/core/tests/fixtures/real_dbt/Cargo.toml --target-dir ddb/core/tests/fixtures/real_dbt/target
 
       - name: Run ddb-tui Mock, GDB, and LLDB PTY workflows
         working-directory: ddb-tui

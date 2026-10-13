@@ -22,6 +22,7 @@ import struct
 import platform
 import inspect
 import signal
+import re
 import gdb  # type: ignore
 
 # try:
@@ -609,6 +610,177 @@ def scope_symbols(kind):
     return sorted(symbols.items(), key=lambda item: (item[1].name, item[0]))
 
 
+def storage_path(expression):
+    """Parse a bounded native lvalue path, never a general expression."""
+    if len(expression) > 4096:
+        raise ValueError("storage path too long")
+    tokens = re.findall(r"\$ddb_scope_symbol|(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|0[xX][0-9a-fA-F]+|[0-9]+|->|\S", expression)
+    if len(tokens) > 512:
+        raise ValueError("storage path too deep")
+    position = 0
+
+    def take(expected=None):
+        nonlocal position
+        if position >= len(tokens):
+            raise ValueError("incomplete storage path")
+        token = tokens[position]
+        if expected is not None and token != expected:
+            raise ValueError("unsupported storage path")
+        position += 1
+        return token
+
+    def integer():
+        token = take()
+        if not re.fullmatch(r"0[xX][0-9a-fA-F]+|[0-9]+", token):
+            raise ValueError("literal index required")
+        value = int(token, 16 if token.lower().startswith("0x") else 10)
+        if value > (1 << 63) - 1:
+            raise ValueError("index too large")
+        return value
+
+    def parse(depth=0):
+        if depth > 64:
+            raise ValueError("storage path too deep")
+        token = take()
+        if token == "*":
+            return ("deref", parse(depth + 1))
+        if token == "(":
+            node = parse(depth + 1)
+            take(")")
+        elif token == "$ddb_scope_symbol":
+            take("(")
+            kind = integer()
+            take(",")
+            ordinal = integer()
+            take(")")
+            if kind not in (0, 1):
+                raise ValueError("invalid native scope")
+            node = ("scope", kind, ordinal)
+        elif re.fullmatch(r"(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*", token):
+            node = ("symbol", token)
+        else:
+            raise ValueError("native symbol required")
+        while position < len(tokens):
+            operator = tokens[position]
+            if operator in (".", "->"):
+                take()
+                field = take()
+                if not re.fullmatch(r"[A-Za-z_]\w*", field):
+                    raise ValueError("native field required")
+                if operator == "->":
+                    node = ("deref", node)
+                node = ("field", node, field)
+            elif operator == "[":
+                take()
+                index = integer()
+                take("]")
+                node = ("index", node, index)
+            else:
+                break
+        return node
+
+    result = parse()
+    if position != len(tokens):
+        raise ValueError("not a native lvalue path")
+    return result
+
+
+def storage_value(path):
+    kind = path[0]
+    if kind == "scope":
+        symbols = scope_symbols("statics" if path[1] else "globals")
+        return symbols[path[2]][1].value(gdb.selected_frame())
+    if kind == "symbol":
+        name = path[1]
+        if name.startswith("::"):
+            symbol = gdb.lookup_global_symbol(name[2:])
+            implicit_this = False
+        else:
+            symbol, implicit_this = gdb.lookup_symbol(name)
+        if implicit_this or symbol is None or not (
+            symbol.is_variable or symbol.is_argument or symbol.is_constant
+        ):
+            raise ValueError("no native variable symbol")
+        return symbol.value(gdb.selected_frame())
+    value = storage_value(path[1])
+    if value.type.strip_typedefs().code in (gdb.TYPE_CODE_REF, gdb.TYPE_CODE_RVALUE_REF):
+        value = value.referenced_value()
+    code = value.type.strip_typedefs().code
+    if kind == "deref" and code == gdb.TYPE_CODE_PTR:
+        return value.dereference()
+    if kind == "field" and code in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_UNION):
+        return value[path[2]]
+    if kind == "index" and code in (gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_PTR):
+        return value[path[2]]
+    raise ValueError("no native storage for this path")
+
+
+def storage_metadata(expression):
+    try:
+        address = storage_value(storage_path(expression)).address
+        return {} if address is None else {"address": hex(int(address))}
+    except (gdb.error, RuntimeError, ValueError, IndexError, TypeError):
+        return {}
+
+
+class ProbeSourceMICommand(gdb.MICommand):
+    """Probe exact-path membership without canonicalizing the entire catalog."""
+
+    def __init__(self):
+        super().__init__("-ddb-probe-source")
+
+    def invoke(self, arguments):
+        if len(arguments) != 1 or not os.path.isabs(arguments[0]):
+            raise gdb.GdbError("source probe requires one absolute debugger path")
+        requested = arguments[0]
+        try:
+            result = gdb.execute_mi("-symbol-list-lines", requested)
+        except gdb.error as error:
+            # This native error specifically means lookup_symtab found no file.
+            # Other failures, including localized/unrecognized diagnostics, are
+            # inconclusive. Never turn an arbitrary debugger error into absence.
+            status = "absent" if str(error) == "-symbol-list-lines: Unknown source file name." else "unknown"
+            return {"files": [], "source_status": status}
+        for entry in result["lines"]:
+            if int(entry["line"]) == 0:
+                continue
+            location = gdb.find_pc_line(int(entry["pc"], 0))
+            if location.symtab is not None:
+                fullname = location.symtab.fullname()
+                if fullname == requested:
+                    return {"files": [{"fullname": fullname}], "source_status": "present"}
+        # Files with debug information but no executable lines reach this path.
+        # A full directory listing can still establish their membership.
+        return {"files": [], "source_status": "unknown"}
+
+
+class VariableCreateMICommand(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-ddb-var-create")
+
+    def invoke(self, arguments):
+        result = gdb.execute_mi("-var-create", *arguments)
+        if len(arguments) == 3 and arguments[1] == "*":
+            result.update(storage_metadata(arguments[2]))
+        return result
+
+
+class VariableChildrenMICommand(gdb.MICommand):
+    def __init__(self):
+        super().__init__("-ddb-var-list-children")
+
+    def invoke(self, arguments):
+        result = gdb.execute_mi("-var-list-children", *arguments)
+        if "--no-values" not in arguments:
+            for child in result.get("children", []):
+                try:
+                    path = gdb.execute_mi("-var-info-path-expression", child["name"])
+                    child.update(storage_metadata(path["path_expr"]))
+                except (gdb.error, KeyError):
+                    pass  # Synthetic pretty-printer children may lack a path.
+        return result
+
+
 class ScopeSymbolValue(gdb.Function):
     def __init__(self):
         super().__init__("ddb_scope_symbol")
@@ -652,6 +824,7 @@ class ListScopeVariablesMICommand(gdb.MICommand):
                         int(kind == "statics"), start + offset
                     )
                     metadata = gdb.execute_mi("-var-create", "-", "*", expression)
+                    metadata.update(storage_metadata(expression))
                     root = metadata["name"]
                 except gdb.error:
                     metadata.update(value="<unavailable>", numchild=0)
@@ -677,7 +850,7 @@ class ScopeVarCreateMICommand(gdb.MICommand):
         expression = "$ddb_scope_symbol({}, {})".format(
             int(kind == "statics"), int(ordinal)
         )
-        return gdb.execute_mi("-var-create", name, "*", expression)
+        return gdb.execute_mi("-ddb-var-create", name, "*", expression)
 
 
 class ListSignalsMICommand(gdb.MICommand):
@@ -1197,3 +1370,6 @@ InterruptIfRunningMICommand()
 ScopeSymbolValue()
 ListScopeVariablesMICommand()
 ScopeVarCreateMICommand()
+VariableCreateMICommand()
+VariableChildrenMICommand()
+ProbeSourceMICommand()

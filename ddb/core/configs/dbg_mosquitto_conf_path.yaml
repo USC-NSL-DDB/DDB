@@ -1,30 +1,15 @@
 ---
-# PreTasks:
-# - name: "Restart runtime"
-#   command: "./nu_scripts/start_rt.sh"
-
-# PostTasks:
-# - name: "Shutdown runtime"
-#   command: "./nu_scripts/stop_rt.sh"
-# Framework: serviceweaverkube
-# Framework: nu
-
-# PrerunGdbCommands:
-# - name: "enable script"
-#   command: "source ../gdb_ext/runtime-gdb-grpc.py"
-# - name: "enable non-stop mode"
-#   command: "set non-stop off"
-
-# SSH:
-#   user: ybyan
-  # port: 22
+# Replace config_path with your Mosquitto configuration's absolute path.
+# It must listen on port 10101 and must not enable daemon mode.
+# Omit config_path to let DDB generate its managed broker configuration.
 
 ServiceDiscovery:
   Broker:
     hostname: 127.0.0.1
+    port: 10101
     managed:
       type: mosquitto
-      confg_path: /home/ybyan/projs/DDB/ddb/core/assets/conf/emqx.conf
+      config_path: /absolute/path/to/mosquitto.conf
     max_timeout_secs: 60
 
 Conf:

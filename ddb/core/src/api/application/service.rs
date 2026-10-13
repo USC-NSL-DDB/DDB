@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -23,9 +22,8 @@ use ddb_api_types::v2::{
     ListSessionsResponse, ListSignalsRequest, ListSignalsResponse, ListThreadsRequest,
     ListThreadsResponse, ListVariablesRequest, ListVariablesResponse, MemoryBlock, OperationKind,
     OperationState, OutputEvent, OutputGap, OutputStreamKind, ReadMemoryRequest,
-    ReadMemoryResponse, ReadSourceRequest, ReadSourceResponse, Register, RegisterFormat,
-    ResolveSourceRequest, ResolveSourceResponse, ResourceKind, Selection, ServerInfo, Snapshot,
-    SnapshotSection, SourceContent, SourceFile, StateEvent, StateEventKind, SubscribeOutputRequest,
+    ReadMemoryResponse, Register, RegisterFormat, ResourceKind, Selection, ServerInfo, Snapshot,
+    SnapshotSection, StateEvent, StateEventKind, SubscribeOutputRequest,
     SubscribeStateEventsRequest, TransportEndpoint, TransportKind, WireEncoding,
 };
 use prost::Message;
@@ -64,7 +62,6 @@ use super::{
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 200;
 const MAX_EXTENSION_PAYLOAD_BYTES: usize = 1024 * 1024;
-const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_REGISTER_NAMES: usize = 4_096;
 const MAX_SIGNAL_COUNT: usize = 4_096;
 const MAX_ADDRESS_BYTES: usize = 1_024;
@@ -348,7 +345,7 @@ impl DdbApplicationConfig {
             max_operation_bytes: resource_limits.operation_bytes as u64,
             max_operation_record_bytes: resource_limits.operation_record_bytes as u64,
             max_output_event_bytes: resource_limits.output_event_bytes as u64,
-            max_source_bytes: MAX_SOURCE_BYTES,
+            max_source_bytes: ddb_source_workspace::Limits::default().max_file_bytes as u64,
         };
         Self {
             transports: vec![TransportEndpoint {
@@ -385,13 +382,14 @@ pub(crate) struct DdbApplicationService {
     pub(super) config: Arc<Config>,
     runtime_status: Arc<RuntimeStatus>,
     pub(super) shutdown_ctrl: Arc<ShutdownCtrl>,
-    server_instance_id: String,
+    pub(super) server_instance_id: String,
     started_at: ddb_api_types::wkt::Timestamp,
     pub(super) api_config: DdbApplicationConfig,
     pub(super) ids: Arc<OpaqueIdRegistry>,
     pub(super) resources: ResourceCatalog,
     pub(super) variable_objects: super::variable_objects::VariableObjects,
-    pages: PageCodec,
+    pub(super) pages: PageCodec,
+    pub(super) sources: Arc<super::sources::SourceStore>,
     pub(super) operations: OperationStore,
     pub(super) journal: StateJournal,
     output: Arc<OutputHub>,
@@ -407,7 +405,8 @@ impl DdbApplicationService {
         runtime_status: Arc<RuntimeStatus>,
         shutdown_ctrl: Arc<ShutdownCtrl>,
         api_config: DdbApplicationConfig,
-    ) -> Arc<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
+        let sources = Arc::new(super::sources::SourceStore::new(&config.source_roots)?);
         let runtime_changes = queries.subscribe_runtime_changes();
         let pending_changes = queries.subscribe_pending_changes();
         let server_instance_id = format!("ddb_{}", uuid::Uuid::new_v4().simple());
@@ -430,6 +429,7 @@ impl DdbApplicationService {
             max_subscribers: api_config.limits.max_subscribers as usize,
         };
         let service = Arc::new(Self {
+            sources,
             queries,
             command_port,
             config,
@@ -455,7 +455,7 @@ impl DdbApplicationService {
             .runtime_event_tasks
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = tasks;
-        service
+        Ok(service)
     }
 
     pub(crate) fn validate_response_bytes(
@@ -1059,6 +1059,7 @@ impl DdbApplicationService {
                     .create_variable_object(&scope, &frame, &variable.name, None)
                     .await?;
                 variable.value = metadata.value;
+                variable.address = metadata.address.or(variable.address);
                 variable.type_name = metadata.type_name.or(variable.type_name);
                 variable.child_count = metadata.child_count;
                 variable.has_children = metadata.has_children;
@@ -1186,7 +1187,7 @@ impl DdbApplicationService {
                 frame.global_thread_id, frame.level, object.name
             ),
             None => format!(
-                "-var-create --thread {} --frame {} {} * {expression}",
+                "-ddb-var-create --thread {} --frame {} {} * {expression}",
                 frame.global_thread_id, frame.level, object.name
             ),
         };
@@ -1343,7 +1344,13 @@ impl DdbApplicationService {
                     "variable child identity no longer addresses the collection",
                 )
             })?;
-            let command = variable_children_command(&object_name, *index, high);
+            let command = variable_children_command(
+                &object_name,
+                *index,
+                high,
+                frame.global_thread_id,
+                frame.level,
+            );
             let outcome = scope
                 .wait(self.command_port.execute(&command, target.clone()))
                 .await?
@@ -1396,7 +1403,8 @@ impl DdbApplicationService {
                     "variable page range no longer addresses the collection",
                 )
             })?;
-        let command = variable_children_command(&object_name, low, high);
+        let command =
+            variable_children_command(&object_name, low, high, frame.global_thread_id, frame.level);
         let outcome = scope
             .wait(self.command_port.execute(&command, target))
             .await?
@@ -1425,6 +1433,7 @@ impl DdbApplicationService {
                 child_identity.path.push(child_index);
                 let internal_id = encode_variable_identity(&child_identity)?;
                 let variable = DecodedVariable {
+                    address: child.address,
                     evaluate_name: None,
                     name: child.display_name,
                     value: child.value,
@@ -1837,165 +1846,6 @@ impl DdbApplicationService {
             )
             .retryable(true)),
         }
-    }
-
-    pub(crate) async fn resolve_source(
-        &self,
-        request: ResolveSourceRequest,
-    ) -> Result<ResolveSourceResponse, ApplicationError> {
-        let scope = RequestScope::begin(request.context.as_ref())?;
-        let location = request
-            .location
-            .as_ref()
-            .ok_or_else(|| ApplicationError::invalid("location", "is required"))?;
-        if let Some(reference) = location.source_reference.as_deref() {
-            let path = self.ids.decode(ResourceIdKind::Source, reference)?;
-            let source = self.source_file(reference.to_string(), path, None).await?;
-            return Ok(ResolveSourceResponse {
-                context: Some(scope.response_context(&self.server_instance_id)),
-                source: Some(source),
-            });
-        }
-        let reported_path = location
-            .path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .ok_or_else(|| ApplicationError::invalid("location.path", "is required"))?;
-
-        let source_group_ids = self
-            .queries
-            .group_ids_for_source(reported_path)
-            .await
-            .map_err(|_| ApplicationError::backend("debugger source resolution failed"))?;
-        if source_group_ids.is_empty() {
-            return Err(ApplicationError::not_found("source"));
-        }
-        if request.target.is_some() {
-            let resolved = TargetResolver::new(self.queries.as_ref(), &self.ids)
-                .resolve(request.target.as_ref(), TargetPurpose::Command)
-                .await?;
-            let belongs_to_target = self.queries.groups().into_iter().any(|group| {
-                source_group_ids.contains(&group.id)
-                    && group
-                        .sids
-                        .iter()
-                        .any(|sid| resolved.session_ids.contains(sid))
-            });
-            if !belongs_to_target {
-                return Err(ApplicationError::not_found("source for target"));
-            }
-        }
-
-        let canonical = tokio::fs::canonicalize(reported_path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        let canonical = canonical
-            .to_str()
-            .ok_or_else(|| ApplicationError::not_found("UTF-8 source path"))?
-            .to_string();
-        let source_reference = self.ids.encode(ResourceIdKind::Source, &canonical)?;
-        let source = self.source_file(source_reference, canonical, None).await?;
-        Ok(ResolveSourceResponse {
-            context: Some(scope.response_context(&self.server_instance_id)),
-            source: Some(source),
-        })
-    }
-
-    pub(crate) async fn read_source(
-        &self,
-        request: ReadSourceRequest,
-    ) -> Result<ReadSourceResponse, ApplicationError> {
-        let scope = RequestScope::begin(request.context.as_ref())?;
-        if request.start_line == 0 {
-            return Err(ApplicationError::invalid(
-                "start_line",
-                "must be greater than zero",
-            ));
-        }
-        if request.max_lines == 0 || request.max_lines > self.api_config.limits.max_source_lines {
-            return Err(ApplicationError::invalid(
-                "max_lines",
-                format!(
-                    "must be between 1 and {}",
-                    self.api_config.limits.max_source_lines
-                ),
-            ));
-        }
-        let path = self
-            .ids
-            .decode(ResourceIdKind::Source, &request.source_reference)?;
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("UTF-8 source content"))?;
-        if contents.len() as u64 > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let lines = contents.lines().collect::<Vec<_>>();
-        let start = request.start_line.saturating_sub(1) as usize;
-        let end = start
-            .saturating_add(request.max_lines as usize)
-            .min(lines.len());
-        let selected = if start < lines.len() {
-            &lines[start..end]
-        } else {
-            &[]
-        };
-        let content = selected.join("\n");
-        let content_hash = format!("sha256:{:x}", Sha256::digest(contents.as_bytes()));
-        let source = self
-            .source_file(request.source_reference, path, Some(content_hash))
-            .await?;
-        Ok(ReadSourceResponse {
-            context: Some(scope.response_context(&self.server_instance_id)),
-            source: Some(SourceContent {
-                source: Some(source),
-                start_line: request.start_line,
-                content,
-                line_count: selected.len() as u32,
-                has_more: end < lines.len(),
-            }),
-        })
-    }
-
-    async fn source_file(
-        &self,
-        source_reference: String,
-        path: String,
-        content_hash: Option<String>,
-    ) -> Result<SourceFile, ApplicationError> {
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|_| ApplicationError::not_found("source content"))?;
-        if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
-            return Err(ApplicationError::new(
-                DdbErrorCode::ResourceExhausted,
-                "source content exceeds the server read bound",
-            ));
-        }
-        let name = Path::new(&path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| ApplicationError::not_found("source name"))?
-            .to_string();
-        Ok(SourceFile {
-            source_reference,
-            path: Some(path),
-            name,
-            media_type: "text/plain; charset=utf-8".to_string(),
-            content_hash,
-        })
     }
 
     pub(crate) async fn list_groups(
@@ -2728,10 +2578,12 @@ fn validate_variable_object_name(name: &str) -> Result<(), ApplicationError> {
     Ok(())
 }
 
-fn variable_children_command(name: &str, from: u32, to: u32) -> String {
+fn variable_children_command(name: &str, from: u32, to: u32, thread: u64, frame: u32) -> String {
     let name = serde_json::to_string(name)
         .expect("serializing a validated variable-object name cannot fail");
-    format!("-var-list-children --all-values {name} {from} {to}")
+    format!(
+        "-ddb-var-list-children --thread {thread} --frame {frame} --all-values {name} {from} {to}"
+    )
 }
 
 fn register_unavailable(value: &str) -> bool {
@@ -2857,6 +2709,14 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn variable_child_query_carries_the_owning_thread_and_frame() {
+        assert_eq!(
+            variable_children_command("object.1", 2, 4, 42, 3),
+            "-ddb-var-list-children --thread 42 --frame 3 --all-values \"object.1\" 2 4"
+        );
+    }
 
     #[derive(Default)]
     struct RecordingCommandPort {
@@ -3000,7 +2860,14 @@ mod tests {
         config.conf.debugger.backend = DebuggerBackendKind::Mock;
         let config = Arc::new(config);
         let plugin = resolve_framework_plugin(config.as_ref());
-        service_with_components(model, command_port, output, config, plugin)
+        service_with_components(
+            model,
+            command_port,
+            output,
+            config,
+            plugin,
+            Arc::new(SourceCatalog::new()),
+        )
     }
 
     fn service_with_plugin(
@@ -3015,6 +2882,7 @@ mod tests {
             crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
             Arc::new(config),
             plugin,
+            Arc::new(SourceCatalog::new()),
         )
     }
 
@@ -3024,10 +2892,11 @@ mod tests {
         output: Arc<crate::cmd_flow::output_hub::OutputHub>,
         config: Arc<Config>,
         plugin: Arc<dyn FrameworkPlugin>,
+        catalog: Arc<SourceCatalog>,
     ) -> Arc<DdbApplicationService> {
         let router = Arc::new(Router::new(Arc::clone(&model)));
         let resolver = SourceResolver::new(
-            Arc::new(SourceCatalog::new()),
+            catalog,
             Arc::clone(&model) as _,
             CommandExecutor::new(Arc::clone(&router)),
             SourceResolutionPolicy::OnDemand,
@@ -3050,6 +2919,7 @@ mod tests {
                 &resource_limits,
             ),
         )
+        .unwrap()
     }
 
     fn session_target(session_id: impl Into<String>) -> PublicTarget {
@@ -3123,6 +2993,62 @@ mod tests {
         })
         .await
         .expect("resource event should arrive")
+    }
+
+    #[tokio::test]
+    async fn exact_source_resolution_uses_partial_membership_without_full_catalog_io() {
+        let model = RuntimeModel::new();
+        let identity = crate::state::ServiceIdentity::new("binary", "worker");
+        model
+            .register_session(42, "worker", Some(identity.clone()))
+            .await;
+        drop(model.register_service_group(42, &identity).await);
+        let group = model.group_id_by_session(42).unwrap();
+        let catalog = Arc::new(SourceCatalog::new());
+        catalog
+            .record_path_listing("/src/main.rs", 42, group, ["/src/main.rs".into()])
+            .unwrap();
+        catalog
+            .record_path_listing("/src/missing.rs", 42, group, [])
+            .unwrap();
+        assert!(!catalog.has_full_listing(42));
+        let mut config = Config::default();
+        config.conf.debugger.backend = DebuggerBackendKind::Mock;
+        let plugin = resolve_framework_plugin(&config);
+        // No backend is registered in the fixture router. Any unnecessary
+        // full enumeration therefore fails immediately instead of hiding
+        // behind a generous timeout or a fake fast debugger.
+        let service = service_with_components(
+            model,
+            Arc::new(super::super::NoopCommandPort),
+            crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
+            Arc::new(config),
+            plugin,
+            catalog.clone(),
+        );
+        assert!(service.queries.sessions().await[0].all_threads_stopped);
+        let request = |path: &str| ddb_api_types::v2::ResolveSourceRequest {
+            location: Some(ddb_api_types::v2::SourceLocation {
+                path: Some(path.into()),
+                line: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let source = service
+            .resolve_source(request("/src/main.rs"))
+            .await
+            .unwrap()
+            .source
+            .unwrap();
+        assert_eq!(source.debugger_path.as_deref(), Some("/src/main.rs"));
+        let missing = service
+            .resolve_source(request("/src/missing.rs"))
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code(), DdbErrorCode::NotFound);
+        assert!(!catalog.has_full_listing(42));
+        assert_eq!(catalog.membership("/other/unknown.rs", 42), None);
     }
 
     async fn public_session_id(service: &DdbApplicationService) -> String {
@@ -3554,6 +3480,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breakpoint_fanout_resolves_broadcast_sets_and_nested_selectors() {
+        use ddb_api_types::v2;
+        let model = RuntimeModel::new();
+        for sid in [42, 7] {
+            model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
+        }
+        let service = service(model);
+        let broadcast = PublicTarget {
+            selector: Some(target::Selector::Broadcast(v2::BroadcastTarget {})),
+        };
+        let set = PublicTarget {
+            selector: Some(target::Selector::SessionSet(v2::SessionSetTarget {
+                session_ids: [42, 7]
+                    .into_iter()
+                    .map(|sid| service.ids.encode(ResourceIdKind::Session, sid).unwrap())
+                    .collect(),
+            })),
+        };
+        let nested = PublicTarget {
+            selector: Some(target::Selector::Multiple(MultipleTarget {
+                targets: vec![PublicTarget {
+                    selector: Some(target::Selector::Multiple(MultipleTarget {
+                        targets: vec![set.clone()],
+                    })),
+                }],
+            })),
+        };
+        for target in [broadcast.clone(), set, nested] {
+            let resolved = TargetResolver::new(&service.queries, &service.ids)
+                .resolve(Some(&target), TargetPurpose::Breakpoint)
+                .await
+                .unwrap();
+            assert_eq!(resolved.session_ids, [7, 42]);
+            assert!(matches!(resolved.command, CommandTarget::Multiple(targets)
+                if matches!(targets.as_slice(), [CommandTarget::Session(7), CommandTarget::Session(42)])));
+        }
+        let command = TargetResolver::new(&service.queries, &service.ids)
+            .resolve(Some(&broadcast), TargetPurpose::Command)
+            .await
+            .unwrap();
+        assert!(matches!(command.command, CommandTarget::Broadcast));
+    }
+
+    #[tokio::test]
     async fn runtime_topology_selection_and_breakpoint_paths_are_event_complete() {
         let model = RuntimeModel::new();
         let service = service(Arc::clone(&model));
@@ -3773,6 +3744,16 @@ mod tests {
         )
         .await;
         assert!(breakpoint_hit.resource_revision > breakpoint_created.resource_revision);
+        let Some(state_event::Payload::Upsert(upsert)) = &breakpoint_hit.payload else {
+            panic!("breakpoint hits must publish a resource upsert");
+        };
+        let Some(ddb_api_types::v2::resource_upsert::Resource::Breakpoint(hit)) = &upsert.resource
+        else {
+            panic!("breakpoint hit event must contain the updated breakpoint");
+        };
+        assert_eq!(hit.hit_count, 1);
+        assert_eq!(hit.sub_breakpoints[0].hit_count, 1);
+        assert!(hit.sub_breakpoints[0].revision > breakpoint.sub_breakpoints[0].revision);
 
         let internal_breakpoint = service
             .ids
@@ -4050,9 +4031,22 @@ mod tests {
         );
         assert!(second.revision > first.revision);
 
+        model.record_breakpoint_hit(42, 7).unwrap();
+        model.record_breakpoint_hit(43, 8).unwrap();
+        model.record_breakpoint_hit(42, 7).unwrap();
+        let hits = read();
+        assert_eq!(hits.hit_count, 3);
+        assert_eq!(hits.sub_breakpoints[0].hit_count, 2);
+        assert_eq!(hits.sub_breakpoints[1].hit_count, 1);
+        assert_eq!(read(), hits, "reads do not increment hit counters");
+
         model.record_local_breakpoint_deletion(42, 7);
         let remaining = read();
-        assert_eq!(remaining.sub_breakpoints, second.sub_breakpoints[1..]);
+        assert_eq!(remaining.sub_breakpoints, hits.sub_breakpoints[1..]);
+        assert_eq!(
+            remaining.hit_count, 3,
+            "retiring a member preserves history"
+        );
         assert!(remaining.verified);
         model.record_local_breakpoint_deletion(43, 8);
         assert_eq!(
@@ -4109,7 +4103,14 @@ mod tests {
             .remove(0);
         assert_eq!(hit.hit_count, initial.hit_count + 1);
         assert_eq!(hit.revision, initial.revision + 1);
-        assert_eq!(hit.sub_breakpoints, initial.sub_breakpoints);
+        assert_eq!(
+            hit.sub_breakpoints[0].hit_count,
+            initial.sub_breakpoints[0].hit_count + 1
+        );
+        assert_eq!(
+            hit.sub_breakpoints[0].revision,
+            initial.sub_breakpoints[0].revision + 1
+        );
         assert_eq!(
             service
                 .list_breakpoints(ListBreakpointsRequest::default())

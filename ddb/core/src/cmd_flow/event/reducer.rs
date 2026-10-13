@@ -484,6 +484,11 @@ mod tests {
                     (kind == ThreadStopKind::Signal).then_some("SIGUSR1")
                 );
             }
+            // A process-wide stop is one observed hit, not one per peer.
+            // Step/signal stops must not increment a previous breakpoint.
+            assert_eq!(breakpoint.times(), 1);
+            let counts = breakpoint.hit_counts();
+            assert_eq!(counts.members.values().sum::<u64>(), 1);
         }
     }
 

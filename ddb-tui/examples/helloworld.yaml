@@ -1,0 +1,31 @@
+# Copy to your instrumented grpc/examples/cpp/helloworld/.ddb/ddb.yaml.
+# Set debugger_path to the absolute helloworld path in the debug information.
+# This file is explicitly trusted: Conf.Debugger commands execute in GDB.
+Framework: grpc
+FrameFilter:
+  filter_preset: [cpp-stdlib, protobuf-gen, ddb-runtime]
+ServiceDiscovery:
+  Broker:
+    hostname: 127.0.0.1
+    port: 10101
+    managed:
+      type: mosquitto
+Conf:
+  auto_shutdown: false
+  on_exit: kill
+  Debugger:
+    backend: gdb
+    pretty_printing: true
+    gdb:
+      # Trusted system GCC printers. Adjust the installation path as needed.
+      # This does not broaden GDB's auto-load safe-path.
+      commands:
+        - 'python import sys; sys.path.insert(0, "/usr/share/gcc/python"); from libstdcxx.v6 import register_libstdcxx_printers; register_libstdcxx_printers(None)'
+Tui:
+  source_roots:
+    - name: helloworld
+      path: ..
+      debugger_path: /absolute/path/to/grpc/examples/cpp/helloworld
+  stack_mode: distributed
+  values_formatting: pretty-printers
+  source_search: exact

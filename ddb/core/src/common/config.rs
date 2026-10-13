@@ -1,12 +1,17 @@
 use super::default_vals;
 use super::mock_fixture::MockSessionConfig;
 use anyhow::Result;
+pub use ddb_config::{
+    BackendKind as DebuggerBackendKind, DebuggerConfig as DebuggerConf,
+    SourceRoot as SourceRootConfig,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(rename = "PreTasks", default)]
     pub pre_tasks: Vec<Task>,
@@ -48,6 +53,14 @@ pub struct Config {
 
     #[serde(rename = "StaticSessions", default)]
     pub static_sessions: Vec<StaticSessionConfig>,
+
+    /// Read-only directories deliberately exported to API clients.
+    #[serde(rename = "SourceRoots", default)]
+    pub source_roots: Vec<SourceRootConfig>,
+
+    /// Frontend preferences are validated but never applied or exported by DDB.
+    #[serde(rename = "Tui", default)]
+    pub tui: ddb_config::TuiConfig,
 }
 
 impl Config {
@@ -78,6 +91,7 @@ impl FrameFilterMatchType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct FrameFilterPatternConfig {
     #[serde(rename = "pattern")]
     pub pattern: String,
@@ -86,6 +100,7 @@ pub struct FrameFilterPatternConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct FrameFilterConfig {
     #[serde(default)]
     pub filter_file: Vec<FrameFilterPatternConfig>,
@@ -96,6 +111,7 @@ pub struct FrameFilterConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceWeaverConf {
     pub service_name: String,
     pub kubectl_config_path: String,
@@ -114,12 +130,14 @@ fn default_pod_ssh_password() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GdbConf {
     #[serde(default)]
     pub logging: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct StaticSessionConfig {
     #[serde(default)]
     pub tag: String,
@@ -176,38 +194,6 @@ pub enum StaticSessionStartMode {
     Binary,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum DebuggerBackendKind {
-    #[default]
-    Gdb,
-    Lldb,
-    Mock,
-    #[serde(other)]
-    Unknown,
-}
-
-fn default_eager_stack_warmup() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct DebuggerConf {
-    #[serde(default)]
-    pub backend: DebuggerBackendKind,
-    #[serde(default = "default_eager_stack_warmup")]
-    pub eager_stack_warmup: bool,
-}
-
-impl Default for DebuggerConf {
-    fn default() -> Self {
-        Self {
-            backend: DebuggerBackendKind::Gdb,
-            eager_stack_warmup: true,
-        }
-    }
-}
-
 fn default_auto_shutdown() -> bool {
     true
 }
@@ -225,6 +211,7 @@ fn default_api_requests_per_second() -> u32 {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ApiResourceLimits {
     /// Replayable state events retained before the oldest event is evicted.
     #[serde(default = "default_api_state_replay_events")]
@@ -324,6 +311,7 @@ fn default_api_output_event_bytes() -> usize {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Conf {
     #[serde(default)]
     pub sudo: bool,
@@ -437,6 +425,7 @@ impl Default for Framework {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     #[serde(default)]
     pub name: String,
@@ -445,6 +434,7 @@ pub struct Task {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DebuggerCommand {
     #[serde(default)]
     pub name: String,
@@ -464,12 +454,14 @@ impl DebuggerCommand {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     #[serde(rename = "DebuggerScripts", default)]
     pub debugger_scripts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SshConfig {
     #[serde(default = "default_ssh_user")]
     pub user: String,
@@ -478,6 +470,7 @@ pub struct SshConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceDiscovery {
     #[serde(rename = "Broker", default)]
     pub broker: BrokerConfig,
@@ -488,6 +481,7 @@ pub struct ServiceDiscovery {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct BrokerConfig {
     #[serde(default = "default_broker_hostname")]
     pub hostname: String,
@@ -510,6 +504,7 @@ pub enum BrokerType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ManagedBrokerConfig {
     #[serde(rename = "type", default)]
     pub broker_type: BrokerType,
@@ -576,14 +571,47 @@ impl Default for SshConfig {
 impl Config {
     /// Load configuration from a YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let contents = fs::read_to_string(path)?;
-        Self::from_str(&contents)
+        Self::from_file_with_overrides(path, &[], false)
+    }
+
+    pub fn from_file_with_overrides<P: AsRef<Path>>(
+        path: P,
+        overrides: &[String],
+        managed: bool,
+    ) -> Result<Self> {
+        let path = fs::canonicalize(path)?;
+        let mut document = ddb_config::read_yaml(&path, ddb_config::MAX_CONFIG_BYTES)?;
+        anyhow::ensure!(
+            overrides.len() <= 32,
+            "at most 32 configuration overrides are allowed"
+        );
+        for assignment in overrides {
+            ddb_config::apply_override(&mut document, assignment, managed)?;
+        }
+        let mut config: Self = serde_yml::from_value(document)?;
+        config.validate()?;
+        let base = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("configuration path has no parent"))?;
+        for root in &mut config.source_roots {
+            if root.path.is_relative() {
+                root.path = base.join(&root.path);
+            }
+        }
+        Ok(config)
     }
 
     /// Parse configuration from a YAML string
     pub fn from_str(contents: &str) -> Result<Self> {
-        let config = serde_yml::from_str(contents)?;
+        let config: Self = serde_yml::from_str(contents)?;
+        config.validate()?;
         Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        self.conf.debugger.validate()?;
+        self.tui.validate()?;
+        Ok(())
     }
 
     /// Load configuration from a path, or use defaults when no path is supplied.
@@ -601,11 +629,86 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn unified_config_keeps_frontend_sources_private_and_debugger_setup_typed() {
+        let config = Config::from_str("Framework: grpc\nConf:\n  Debugger:\n    gdb:\n      commands: ['set print elements 33']\n    lldb:\n      commands: ['settings set target.max-children-count 33']\nTui:\n  source_roots: [{name: local, path: /frontend/source}]\n  stack_mode: distributed\n").unwrap();
+        assert!(config.source_roots.is_empty());
+        assert_eq!(
+            config.tui.source_roots.unwrap()[0].path,
+            Path::new("/frontend/source")
+        );
+        assert_eq!(config.conf.debugger.gdb.commands, ["set print elements 33"]);
+        for invalid in [
+            "Tui: {source_root: []}",
+            "Conf: {Debugger: {gdb: {command: foo}}}",
+            "ServiceDiscovery: {Broker: {porrt: 4}}",
+            "Conf: {api_server_porrt: 4}",
+        ] {
+            assert!(Config::from_str(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn backend_overrides_use_the_canonical_config_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ddb.yaml");
+        std::fs::write(&path, "Conf: {on_exit: detach}").unwrap();
+        let config = Config::from_file_with_overrides(
+            &path,
+            &[
+                "Conf.Debugger.backend=lldb".into(),
+                "Conf.on_exit=kill".into(),
+            ],
+            true,
+        )
+        .unwrap();
+        assert_eq!(config.conf.debugger.backend, DebuggerBackendKind::Lldb);
+        assert_eq!(config.conf.on_exit, OnExit::KILL);
+        for assignment in [
+            "Conf.typo=true",
+            "Conf.sudo=not-a-bool",
+            "ServiceDiscovery.Broker.porrt=123",
+            "Conf.api_server_port=123",
+        ] {
+            assert!(
+                Config::from_file_with_overrides(&path, &[assignment.into()], true).is_err(),
+                "{assignment}"
+            );
+        }
+    }
+
     fn load_repo_config(file_name: &str) -> Config {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("configs")
             .join(file_name);
         Config::from_file(path).expect("config in repository should parse")
+    }
+
+    #[test]
+    fn every_active_project_example_uses_the_current_configuration_schema() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("configs");
+        let mut errors = Vec::new();
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml")
+            {
+                if let Err(error) = Config::from_file(&path) {
+                    errors.push(format!("{}: {error:#}", path.display()));
+                }
+            }
+        }
+        let example =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ddb-tui/examples/helloworld.yaml");
+        Config::from_file(example)
+            .expect("unified helloworld project example must use the canonical schema");
+        errors.sort();
+        assert!(
+            errors.is_empty(),
+            "invalid active examples:\n{}",
+            errors.join("\n")
+        );
     }
 
     #[test]
@@ -629,6 +732,28 @@ mod tests {
             load_repo_config("pidconfig.yaml").framework,
             Framework::Unspecified
         );
+    }
+
+    #[test]
+    fn source_root_paths_are_relative_to_the_startup_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ddb.yaml");
+        std::fs::write(&path, "SourceRoots:\n  - name: app\n    path: checkout\n    debugger_path: /build/app\n    session_tags: [worker]\n").unwrap();
+        let config = Config::from_file(&path).unwrap();
+        assert_eq!(config.source_roots.len(), 1);
+        assert_eq!(
+            config.source_roots[0].path,
+            directory.path().canonicalize().unwrap().join("checkout")
+        );
+        assert_eq!(config.source_roots[0].session_tags, ["worker"]);
+    }
+
+    #[test]
+    fn source_root_configuration_rejects_unknown_fields() {
+        assert!(Config::from_str(
+            "SourceRoots:\n  - name: app\n    path: checkout\n    debugger_paths: /typo\n"
+        )
+        .is_err());
     }
 
     #[test]

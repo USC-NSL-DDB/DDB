@@ -2,17 +2,11 @@ use anyhow::{bail, Result};
 use ddb_api_client::v2::{self, target};
 
 pub use ddb_api_client::{
-    ClientConfig, DdbClient as V2ApiClient, OutputSyncItem, OutputSyncOptions,
+    ClientConfig, DdbClient as ApiClient, OutputSyncItem, OutputSyncOptions,
     ProjectedStateSyncItem, StateSyncOptions,
 };
 
 pub const TUI_API_COMPATIBILITY: &str = "API versions [v2], schema >=2.0.0 and <3.0.0";
-
-#[derive(Clone, Debug)]
-pub enum ApiClient {
-    V2(V2ApiClient),
-    V1Fallback(crate::legacy_v1::Client),
-}
 
 /// UI intent for the installation scope of a logical breakpoint.
 ///
@@ -39,36 +33,6 @@ impl BreakpointTarget {
                     targets: targets.into_iter().map(Self::into_api_target).collect(),
                 })),
             },
-        }
-    }
-
-    pub fn matches(&self, candidate: &v2::Target) -> bool {
-        matches!(
-            (self, candidate.selector.as_ref()),
-            (
-                Self::Session(expected),
-                Some(target::Selector::Session(v2::SessionTarget { session_id }))
-            ) if expected == session_id
-        ) || matches!(
-            (self, candidate.selector.as_ref()),
-            (
-                Self::Group(expected),
-                Some(target::Selector::Group(v2::GroupTarget { group_id }))
-            ) if expected == group_id
-        ) || matches!(
-            (self, candidate.selector.as_ref()),
-            (Self::Broadcast, Some(target::Selector::Broadcast(_)))
-        ) || match (self, candidate.selector.as_ref()) {
-            (Self::Multiple(expected), Some(target::Selector::Multiple(candidate))) => {
-                expected.len() == candidate.targets.len()
-                    && expected.iter().all(|expected| {
-                        candidate
-                            .targets
-                            .iter()
-                            .any(|candidate| expected.matches(candidate))
-                    })
-            }
-            _ => false,
         }
     }
 }
@@ -100,8 +64,8 @@ pub fn group_target(group_id: impl Into<String>) -> v2::Target {
 pub trait CapabilitiesExt {
     fn validate_for_tui(&self) -> Result<()>;
     fn supports_inspection(&self, capability: &str) -> bool;
-    fn supports_execution(&self, action: &str) -> bool;
-    fn supports_execution_target(&self, action: &str, target: &v2::Target) -> bool;
+    fn supports_execution(&self, action: v2::ExecutionAction) -> bool;
+    fn supports_execution_target(&self, action: v2::ExecutionAction, target: &v2::Target) -> bool;
     fn supports_breakpoint_action(&self, action: &str) -> bool;
     fn supports_ddb_feature(&self, capability: &str) -> bool;
 }
@@ -140,17 +104,11 @@ impl CapabilitiesExt for v2::Capabilities {
         }
     }
 
-    fn supports_execution(&self, action: &str) -> bool {
-        let Some(action) = execution_action(action) else {
-            return false;
-        };
+    fn supports_execution(&self, action: v2::ExecutionAction) -> bool {
         self.execution_actions.contains(&(action as i32))
     }
 
-    fn supports_execution_target(&self, action: &str, target: &v2::Target) -> bool {
-        let Some(action) = execution_action(action) else {
-            return false;
-        };
+    fn supports_execution_target(&self, action: v2::ExecutionAction, target: &v2::Target) -> bool {
         if !self.execution_actions.contains(&(action as i32)) {
             return false;
         }
@@ -159,7 +117,7 @@ impl CapabilitiesExt for v2::Capabilities {
             .iter()
             .find(|capability| capability.action == action as i32)
         else {
-            return true;
+            return false;
         };
         let Some(scope) = execution_scope(target) else {
             return false;
@@ -173,6 +131,10 @@ impl CapabilitiesExt for v2::Capabilities {
                 v2::BreakpointFeature::Source,
                 Some(v2::OperationKind::CreateBreakpoint),
             ),
+            "create_function" => (
+                v2::BreakpointFeature::Function,
+                Some(v2::OperationKind::CreateBreakpoint),
+            ),
             "delete" => (
                 v2::BreakpointFeature::Source,
                 Some(v2::OperationKind::DeleteBreakpoint),
@@ -183,6 +145,7 @@ impl CapabilitiesExt for v2::Capabilities {
                 Some(v2::OperationKind::UpdateBreakpoint),
             ),
             "conditional" => (v2::BreakpointFeature::Condition, None),
+            "ignore_count" => (v2::BreakpointFeature::IgnoreCount, None),
             "temporary" => (v2::BreakpointFeature::Temporary, None),
             "hardware" => (v2::BreakpointFeature::Hardware, None),
             "distributed" => (v2::BreakpointFeature::Distributed, None),
@@ -205,17 +168,21 @@ impl CapabilitiesExt for v2::Capabilities {
     }
 }
 
-fn execution_action(action: &str) -> Option<v2::ExecutionAction> {
-    Some(match action {
-        "continue" => v2::ExecutionAction::Continue,
-        "interrupt" => v2::ExecutionAction::Interrupt,
-        "next" => v2::ExecutionAction::Next,
-        "step_in" => v2::ExecutionAction::StepIn,
-        "step_out" => v2::ExecutionAction::StepOut,
-        "jump" => v2::ExecutionAction::Jump,
-        "send_signal" => v2::ExecutionAction::Signal,
-        _ => return None,
-    })
+/// Developer-facing labels never participate in capability checks or routing.
+pub fn execution_action_label(action: v2::ExecutionAction) -> &'static str {
+    match action {
+        v2::ExecutionAction::Unspecified => "unspecified",
+        v2::ExecutionAction::Continue => "continue",
+        v2::ExecutionAction::Interrupt => "interrupt",
+        v2::ExecutionAction::Next => "next",
+        v2::ExecutionAction::StepIn => "step_in",
+        v2::ExecutionAction::StepOut => "step_out",
+        v2::ExecutionAction::Jump => "jump",
+        v2::ExecutionAction::Signal => "send_signal",
+        v2::ExecutionAction::ReverseContinue => "reverse_continue",
+        v2::ExecutionAction::ReverseNext => "reverse_next",
+        v2::ExecutionAction::ReverseStepIn => "reverse_step_in",
+    }
 }
 
 fn execution_scope(target: &v2::Target) -> Option<v2::ExecutionScopeKind> {
@@ -239,10 +206,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn control_actions_have_one_typed_mapping_and_display_labels_are_separate() {
+        use crate::model::Control;
+        for (control, action, label) in [
+            (Control::Continue, v2::ExecutionAction::Continue, "continue"),
+            (
+                Control::Interrupt,
+                v2::ExecutionAction::Interrupt,
+                "interrupt",
+            ),
+            (Control::Next, v2::ExecutionAction::Next, "next"),
+            (Control::StepIn, v2::ExecutionAction::StepIn, "step_in"),
+            (Control::StepOut, v2::ExecutionAction::StepOut, "step_out"),
+        ] {
+            assert_eq!(control.execution_action(), Some(action));
+            assert_eq!(control.action_name(), Some(label));
+        }
+        for control in [
+            Control::CycleScope,
+            Control::Refresh,
+            Control::RefreshStack,
+            Control::RevealFrame,
+        ] {
+            assert!(control.execution_action().is_none());
+            assert!(control.action_name().is_none());
+        }
+    }
+
+    #[test]
     fn breakpoint_target_keeps_opaque_identifiers() {
         let target = BreakpointTarget::Group("group/alpha:7".to_string());
-        assert!(target.matches(&target.clone().into_api_target()));
-        assert!(!target.matches(&session_target("group/alpha:7")));
+        assert_eq!(target.into_api_target(), group_target("group/alpha:7"));
+        assert_ne!(
+            group_target("group/alpha:7"),
+            session_target("group/alpha:7")
+        );
     }
 
     #[test]
@@ -270,10 +268,13 @@ mod tests {
             ..Default::default()
         };
         capabilities.validate_for_tui().unwrap();
-        assert!(capabilities.supports_execution("next"));
-        assert!(capabilities.supports_execution_target("next", &thread_target("thread/a")));
-        assert!(!capabilities.supports_execution_target("next", &group_target("group/a")));
-        assert!(!capabilities.supports_execution_target("next", &session_target("session/a")));
+        assert!(capabilities.supports_execution(v2::ExecutionAction::Next));
+        assert!(capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &thread_target("thread/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &group_target("group/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &session_target("session/a")));
         assert!(capabilities.supports_breakpoint_action("disable"));
         assert!(capabilities.supports_breakpoint_action("create"));
         assert!(!capabilities.supports_breakpoint_action("delete"));
@@ -281,7 +282,19 @@ mod tests {
         assert!(capabilities.supports_breakpoint_action("group_inheritance"));
         assert!(!capabilities.supports_breakpoint_action("hardware"));
         assert!(capabilities.supports_inspection("evaluate"));
-        assert!(!capabilities.supports_execution("continue"));
+        assert!(!capabilities.supports_execution(v2::ExecutionAction::Continue));
+    }
+
+    #[test]
+    fn execution_requires_an_advertised_action_scope() {
+        let capabilities = v2::Capabilities {
+            execution_actions: vec![v2::ExecutionAction::Next as i32],
+            ..Default::default()
+        };
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &thread_target("thread/a")));
+        assert!(!capabilities
+            .supports_execution_target(v2::ExecutionAction::Next, &group_target("group/a")));
     }
 
     #[test]

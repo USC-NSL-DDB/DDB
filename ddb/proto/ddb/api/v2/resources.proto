@@ -412,6 +412,9 @@ message Session {
   google.protobuf.Timestamp created_at = 9;
   // Resource revision for idempotent event application.
   uint64 revision = 10;
+  // Configured session tag, distinct from the display label and opaque ID.
+  // Frontends may use it for explicit workspace/source-map selection.
+  string tag = 11;
 }
 
 // Group describes a DDB logical session group.
@@ -580,6 +583,70 @@ message DebuggerSignal {
   optional string description = 5;
 }
 
+// SourceOrigin distinguishes debugger identities from explicitly exported files.
+enum SourceOrigin {
+  SOURCE_ORIGIN_UNSPECIFIED = 0;
+  SOURCE_ORIGIN_DEBUGGER = 1;
+  SOURCE_ORIGIN_WORKSPACE = 2;
+}
+
+// SourceAvailability is a discovery-time hint, not a guarantee of future access.
+enum SourceAvailability {
+  SOURCE_AVAILABILITY_UNSPECIFIED = 0;
+  SOURCE_AVAILABILITY_AVAILABLE = 1;
+  SOURCE_AVAILABILITY_UNAVAILABLE = 2;
+}
+
+// SourceOwner associates a source identity with one session and its DDB group.
+message SourceOwner {
+  // Opaque session identity. Never infer ownership from a pathname alone.
+  string session_id = 1;
+  // Opaque group identity when the session belongs to a group.
+  optional string group_id = 2;
+}
+
+// SourceRoot is an explicitly configured, read-only DDB-host directory export.
+// The export's host filesystem pathname is intentionally not published.
+message SourceRoot {
+  // Opaque root identity accepted by ListSourceEntries and ResolveSource.
+  string root_reference = 1;
+  // Configured unique display name.
+  string name = 2;
+  // Optional debugger path prefix mapped to this root for source content.
+  optional string debugger_path = 3;
+  // Sessions matched by this root's configured session tags. Empty is unscoped.
+  repeated SourceOwner owners = 4;
+}
+
+// SourceEntryKind describes a directory entry without dereferencing symlinks.
+enum SourceEntryKind {
+  SOURCE_ENTRY_KIND_UNSPECIFIED = 0;
+  SOURCE_ENTRY_KIND_DIRECTORY = 1;
+  SOURCE_ENTRY_KIND_FILE = 2;
+  SOURCE_ENTRY_KIND_SYMLINK = 3;
+  SOURCE_ENTRY_KIND_OTHER = 4;
+}
+
+// SourceEntry is one immediate child of an exported directory.
+message SourceEntry {
+  // Entry name, not a host-absolute path.
+  string name = 1;
+  // Path relative to the addressed root, accepted by ResolveSource.
+  string relative_path = 2;
+  // Entry type. Symlink traversal remains confined to the root.
+  SourceEntryKind kind = 3;
+  // Present for discoverable files; content can still be unavailable.
+  optional SourceFile source = 4;
+}
+
+// SourceDiscoveryWarning reports incomplete discovery without hiding other sessions.
+message SourceDiscoveryWarning {
+  // Session whose debugger catalog could not be refreshed.
+  string session_id = 1;
+  // Safe explanatory text. Existing cached entries can still be returned.
+  string message = 2;
+}
+
 // SourceFile identifies resolved source independently of local filesystem access.
 message SourceFile {
   // Stable source reference accepted by ReadSource.
@@ -592,6 +659,21 @@ message SourceFile {
   string media_type = 4;
   // Optional content hash for frontend caching.
   optional string content_hash = 5;
+  // Origin of this identity. Equal paths from different origins are not aliases.
+  SourceOrigin origin = 6;
+  // Exported root used for content, if one exists.
+  optional string root_reference = 7;
+  // Path relative to the exported root, if one exists.
+  optional string relative_path = 8;
+  // Explicit owners. An unbound workspace document can have no owners.
+  repeated SourceOwner owners = 9;
+  // Discovery-time accessibility hint. ReadSource performs authorization again.
+  SourceAvailability availability = 10;
+  // Safe reason for unavailable content, when known.
+  optional string unavailable_reason = 11;
+  // Backend source path for breakpoint placement, distinct from content location.
+  // Absence means no debugger path mapping has been established.
+  optional string debugger_path = 12;
 }
 
 // SourceContent is one bounded source window.
@@ -606,6 +688,8 @@ message SourceContent {
   uint32 line_count = 4;
   // True when more lines exist after this window.
   bool has_more = 5;
+  // Exact total lines in this content version, including zero for an empty file.
+  uint32 total_lines = 6;
 }
 
 // MemoryBlock is one bounded memory read.

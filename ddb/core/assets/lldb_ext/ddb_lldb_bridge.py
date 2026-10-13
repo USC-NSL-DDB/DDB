@@ -74,6 +74,16 @@ def _text(value):
     return str(value)
 
 
+def _storage_address_metadata(value):
+    """Storage, not a pointer's pointee; call only for requested values."""
+    if not value or not value.IsValid() or value.GetError().Fail():
+        return {}
+    address = value.GetLoadAddress()
+    if not isinstance(address, int) or address < 0 or address == INVALID_ADDRESS:
+        return {}
+    return {"address": hex(address)}
+
+
 class Emitter(object):
     def __init__(self, channel_id):
         if not re.match(r"^[0-9a-f]{32}$", channel_id):
@@ -653,14 +663,17 @@ class Bridge(object):
             # LLDB SBValue uses installed formatters by default.
             "-enable-pretty-printing": lambda arguments: ("done", None),
             "-var-create": self._var_create,
+            "-ddb-var-create": self._var_create,
             "-ddb-list-scope-variables": self._list_scope_variables,
             "-ddb-scope-var-create": self._scope_var_create,
             "-var-list-children": self._var_list_children,
+            "-ddb-var-list-children": self._var_list_children,
             "-var-delete": self._var_delete,
             "-var-assign": self._var_assign,
             "-data-evaluate-expression": self._evaluate_expression,
             "-data-read-memory-bytes": self._read_memory_bytes,
             "-file-list-exec-source-files": self._source_files,
+            "-ddb-probe-source": self._probe_source,
             "-file-list-lines": self._source_lines,
             "-break-insert": self._break_insert,
             "-break-list": self._break_list,
@@ -1101,6 +1114,7 @@ class Bridge(object):
             }
             if include_values:
                 record["value"] = _value_text(value)
+                record.update(_storage_address_metadata(value))
             variables.append(record)
         return "done", {"variables": variables}
 
@@ -1264,6 +1278,8 @@ class Bridge(object):
                 unavailable = value.GetError().Fail()
                 metadata["value"] = "<unavailable>" if unavailable else rendered
                 metadata["numchild"] = "0" if unavailable else _text(value.GetNumChildren())
+                if not unavailable:
+                    metadata.update(_storage_address_metadata(value))
             variables.append(metadata)
         return "done", {"variables": variables}
 
@@ -1316,9 +1332,11 @@ class Bridge(object):
             "value": _value_text(value),
             "type": _text(value.GetTypeName()),
             "has_more": "0",
+            **_storage_address_metadata(value),
         }
 
     def _var_list_children(self, arguments):
+        _, arguments = self._frame_and_arguments(arguments)
         include_values = "--no-values" not in arguments
         positional = [
             argument
@@ -1354,6 +1372,7 @@ class Bridge(object):
             }
             if include_values:
                 record["value"] = _value_text(child)
+                record.update(_storage_address_metadata(child))
             children.append(record)
         return "done", {
             "numchild": _text(count),
@@ -1453,12 +1472,27 @@ class Bridge(object):
             ]
         }
 
+    def _probe_source(self, arguments):
+        if len(arguments) != 1 or not os.path.isabs(arguments[0]):
+            raise ValueError("source probe requires one absolute debugger path")
+        requested = arguments[0]
+        for module in self._target().module_iter():
+            for unit in module.compile_unit_iter():
+                path = _normalized_source_path(_file_path(unit.GetFileSpec()))
+                if path == requested:
+                    return "done", {"files": [{"fullname": path}], "source_status": "present"}
+        # A miss never establishes absence from the full debugger catalog.
+        return "done", {"files": [], "source_status": "unknown"}
+
     def _source_files(self, arguments):
-        dirname = None
+        directory_pattern = None
         if "--dirname" in arguments:
             index = arguments.index("--dirname")
-            if index + 1 < len(arguments):
-                dirname = os.path.realpath(arguments[index + 1])
+            if index + 1 >= len(arguments):
+                raise ValueError("--dirname requires a regular expression")
+            # Match MI semantics. DDB escapes literal directories before sending
+            # them; interpreting that expression as a realpath loses sources.
+            directory_pattern = re.compile(arguments[index + 1])
         paths = set()
         target = self._target()
         for module in target.module_iter():
@@ -1467,8 +1501,8 @@ class Bridge(object):
                 if not path:
                     continue
                 full_path = os.path.realpath(_normalized_source_path(path))
-                if dirname and not (
-                    full_path == dirname or full_path.startswith(dirname + os.sep)
+                if directory_pattern is not None and not directory_pattern.search(
+                    os.path.dirname(full_path)
                 ):
                     continue
                 paths.add(full_path)

@@ -23,8 +23,13 @@ export interface MethodMap {
   "DebuggerService.ListRegisters": { request: t.ListRegistersRequest; response: t.ListRegistersResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListSignals": { request: t.ListSignalsRequest; response: t.ListSignalsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ReadMemory": { request: t.ReadMemoryRequest; response: t.ReadMemoryResponse; serverStreaming: false; scope: "control" };
+  "DebuggerService.ListSources": { request: t.ListSourcesRequest; response: t.ListSourcesResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.ListSourceRoots": { request: t.ListSourceRootsRequest; response: t.ListSourceRootsResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.ListSourceEntries": { request: t.ListSourceEntriesRequest; response: t.ListSourceEntriesResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ResolveSource": { request: t.ResolveSourceRequest; response: t.ResolveSourceResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.ResolveSourceTargets": { request: t.ResolveSourceTargetsRequest; response: t.ResolveSourceTargetsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ReadSource": { request: t.ReadSourceRequest; response: t.ReadSourceResponse; serverStreaming: false; scope: "read" };
+  "DebuggerService.SearchSource": { request: t.SearchSourceRequest; response: t.SearchSourceResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListBreakpoints": { request: t.ListBreakpointsRequest; response: t.ListBreakpointsResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.GetBreakpoint": { request: t.GetBreakpointRequest; response: t.GetBreakpointResponse; serverStreaming: false; scope: "read" };
   "DebuggerService.ListPendingCommands": { request: t.ListPendingCommandsRequest; response: t.ListPendingCommandsResponse; serverStreaming: false; scope: "read" };
@@ -79,8 +84,13 @@ export const METHODS = {
   "DebuggerService.ListRegisters": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListRegisters", serverStreaming: false, scope: "read" },
   "DebuggerService.ListSignals": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSignals", serverStreaming: false, scope: "read" },
   "DebuggerService.ReadMemory": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadMemory", serverStreaming: false, scope: "control" },
+  "DebuggerService.ListSources": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSources", serverStreaming: false, scope: "read" },
+  "DebuggerService.ListSourceRoots": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceRoots", serverStreaming: false, scope: "read" },
+  "DebuggerService.ListSourceEntries": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries", serverStreaming: false, scope: "read" },
   "DebuggerService.ResolveSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource", serverStreaming: false, scope: "read" },
+  "DebuggerService.ResolveSourceTargets": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets", serverStreaming: false, scope: "read" },
   "DebuggerService.ReadSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource", serverStreaming: false, scope: "read" },
+  "DebuggerService.SearchSource": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource", serverStreaming: false, scope: "read" },
   "DebuggerService.ListBreakpoints": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints", serverStreaming: false, scope: "read" },
   "DebuggerService.GetBreakpoint": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/GetBreakpoint", serverStreaming: false, scope: "read" },
   "DebuggerService.ListPendingCommands": { path: "/api/v2/rpc/ddb.api.v2.DebuggerService/ListPendingCommands", serverStreaming: false, scope: "read" },
@@ -118,6 +128,8 @@ export interface PaginatedMethodMap {
   "DebuggerService.ExpandVariable": { item: t.Variable; itemsField: "variables" };
   "DebuggerService.ListRegisters": { item: t.Register; itemsField: "registers" };
   "DebuggerService.ListSignals": { item: t.DebuggerSignal; itemsField: "signals" };
+  "DebuggerService.ListSourceRoots": { item: t.SourceRoot; itemsField: "roots" };
+  "DebuggerService.ListSourceEntries": { item: t.SourceEntry; itemsField: "entries" };
   "DebuggerService.ListBreakpoints": { item: t.Breakpoint; itemsField: "breakpoints" };
   "DebuggerService.ListPendingCommands": { item: t.PendingCommand; itemsField: "pendingCommands" };
   "DebuggerService.ListOperations": { item: t.Operation; itemsField: "operations" };
@@ -138,6 +150,8 @@ export const PAGINATED_METHODS = {
   "DebuggerService.ExpandVariable": { itemsField: "variables" },
   "DebuggerService.ListRegisters": { itemsField: "registers" },
   "DebuggerService.ListSignals": { itemsField: "signals" },
+  "DebuggerService.ListSourceRoots": { itemsField: "roots" },
+  "DebuggerService.ListSourceEntries": { itemsField: "entries" },
   "DebuggerService.ListBreakpoints": { itemsField: "breakpoints" },
   "DebuggerService.ListPendingCommands": { itemsField: "pendingCommands" },
   "DebuggerService.ListOperations": { itemsField: "operations" },

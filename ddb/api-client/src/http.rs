@@ -77,6 +77,13 @@ impl<T> PageCollector<T> {
     }
 }
 
+/// A complete bounded catalog, including warnings from every discovery page.
+#[derive(Clone, Debug)]
+pub struct SourceCatalog {
+    pub sources: Vec<v2::SourceFile>,
+    pub warnings: Vec<v2::SourceDiscoveryWarning>,
+}
+
 /// Runtime bounds and credentials for one reusable HTTP/ProtoJSON client.
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -135,6 +142,7 @@ impl fmt::Debug for ClientConfig {
 }
 
 struct Inner {
+    traces: crate::trace::TraceHub,
     http: Client,
     rpc_base: Url,
     bearer_token: Option<String>,
@@ -195,6 +203,7 @@ impl DdbClient {
             .build()?;
         Ok(Self {
             inner: Arc::new(Inner {
+                traces: Default::default(),
                 http,
                 rpc_base: endpoint,
                 bearer_token: config.bearer_token,
@@ -206,6 +215,16 @@ impl DdbClient {
                 mutation_retry_delay: config.mutation_retry_delay,
             }),
         })
+    }
+
+    /// Opt into request metadata tracing. Retains at most 256 records per
+    /// client, never blocks requests, and reports lag through the receiver.
+    /// Subscribe before handshake to include discovery. No payloads, headers,
+    /// endpoint prefixes, query values or raw errors are included.
+    pub fn subscribe_request_traces(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::RequestTrace> {
+        self.inner.traces.subscribe()
     }
 
     /// Verifies v2 support and returns the initial discovery documents.
@@ -335,8 +354,8 @@ impl DdbClient {
 
     async fn unary<Req, Res>(
         &self,
-        service: &str,
-        method: &str,
+        service: &'static str,
+        method: &'static str,
         request: &Req,
         authenticated: bool,
         retry_mutation: bool,
@@ -371,9 +390,13 @@ impl DdbClient {
             if authenticated {
                 builder = self.authorize(builder);
             }
+            let trace = self.inner.traces.begin(service, method);
             let result = match builder.send().await {
                 Ok(response) => {
                     let status = response.status();
+                    if let Some(trace) = trace {
+                        trace.finish(crate::RequestTraceOutcome::Response(status.as_u16()));
+                    }
                     match read_bounded(response, self.inner.max_response_bytes).await {
                         Ok(body) if status.is_success() => serde_json::from_slice(&body)
                             .map_err(|error| ClientError::Protocol(error.to_string())),
@@ -381,7 +404,12 @@ impl DdbClient {
                         Err(error) => Err(error),
                     }
                 }
-                Err(error) => Err(ClientError::Transport(error)),
+                Err(error) => {
+                    if let Some(trace) = trace {
+                        trace.finish(crate::RequestTraceOutcome::TransportFailed);
+                    }
+                    Err(ClientError::Transport(error))
+                }
             };
             match result {
                 Ok(response) => return Ok(response),
@@ -402,8 +430,8 @@ impl DdbClient {
 
     async fn post_stream<Req, Event>(
         &self,
-        service: &str,
-        method: &str,
+        service: &'static str,
+        method: &'static str,
         request: &Req,
     ) -> Result<NdjsonStream<Event>>
     where
@@ -417,17 +445,31 @@ impl DdbClient {
                 limit: self.inner.max_request_bytes,
             });
         }
-        let response = self
-            .authorize(
-                self.inner
-                    .http
-                    .post(self.rpc_url(service, method)?)
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(ACCEPT, "application/x-ndjson")
-                    .body(body),
-            )
-            .send()
-            .await?;
+        let builder = self.authorize(
+            self.inner
+                .http
+                .post(self.rpc_url(service, method)?)
+                .header(CONTENT_TYPE, "application/json")
+                .header(ACCEPT, "application/x-ndjson")
+                .body(body),
+        );
+        let trace = self.inner.traces.begin(service, method);
+        let response = match builder.send().await {
+            Ok(response) => {
+                if let Some(trace) = trace {
+                    trace.finish(crate::RequestTraceOutcome::Response(
+                        response.status().as_u16(),
+                    ));
+                }
+                response
+            }
+            Err(error) => {
+                if let Some(trace) = trace {
+                    trace.finish(crate::RequestTraceOutcome::TransportFailed);
+                }
+                return Err(error.into());
+            }
+        };
         let status = response.status();
         if !status.is_success() {
             let body = read_bounded(response, self.inner.max_response_bytes).await?;
@@ -515,6 +557,46 @@ impl DdbClient {
         "GetServerInfo",
         false
     );
+
+    /// Collects sources without discarding partial-discovery warnings. Refresh
+    /// applies only to the first page; expired revisions remain explicit errors.
+    /// The item bound independently limits sources and distinct warnings.
+    pub async fn collect_sources(
+        &self,
+        mut request: v2::ListSourcesRequest,
+        max_items: usize,
+    ) -> Result<SourceCatalog> {
+        let page_size = request.page.as_ref().map_or(0, |page| page.page_size);
+        let first_token = request
+            .page
+            .as_ref()
+            .and_then(|page| page.page_token.clone());
+        let mut collector = PageCollector::new(first_token, max_items);
+        let mut warnings = Vec::new();
+        let mut seen_warnings = HashSet::new();
+        loop {
+            request.page = Some(v2::PageRequest {
+                page_size,
+                page_token: collector.next_token().cloned(),
+            });
+            let response = self.list_sources(request.clone()).await?;
+            request.refresh = false;
+            for warning in response.warnings {
+                if seen_warnings.insert((warning.session_id.clone(), warning.message.clone())) {
+                    if warnings.len() >= max_items {
+                        return Err(ClientError::CollectionTooLarge { limit: max_items });
+                    }
+                    warnings.push(warning);
+                }
+            }
+            if collector.push_page(response.sources, response.page)? {
+                return Ok(SourceCatalog {
+                    sources: collector.finish(),
+                    warnings,
+                });
+            }
+        }
+    }
 
     collect_pages_method!(
         collect_sessions,
@@ -773,6 +855,47 @@ impl DdbClient {
         true
     );
     unary_method!(
+        list_sources,
+        v2::ListSourcesRequest,
+        v2::ListSourcesResponse,
+        DEBUGGER_SERVICE,
+        "ListSources",
+        true
+    );
+    unary_method!(
+        list_source_roots,
+        v2::ListSourceRootsRequest,
+        v2::ListSourceRootsResponse,
+        DEBUGGER_SERVICE,
+        "ListSourceRoots",
+        true
+    );
+    unary_method!(
+        list_source_entries,
+        v2::ListSourceEntriesRequest,
+        v2::ListSourceEntriesResponse,
+        DEBUGGER_SERVICE,
+        "ListSourceEntries",
+        true
+    );
+    collect_pages_method!(
+        collect_source_roots,
+        list_source_roots,
+        v2::ListSourceRootsRequest,
+        v2::ListSourceRootsResponse,
+        v2::SourceRoot,
+        roots
+    );
+    collect_pages_method!(
+        collect_source_entries,
+        list_source_entries,
+        v2::ListSourceEntriesRequest,
+        v2::ListSourceEntriesResponse,
+        v2::SourceEntry,
+        entries
+    );
+
+    unary_method!(
         resolve_source,
         v2::ResolveSourceRequest,
         v2::ResolveSourceResponse,
@@ -781,11 +904,27 @@ impl DdbClient {
         true
     );
     unary_method!(
+        resolve_source_targets,
+        v2::ResolveSourceTargetsRequest,
+        v2::ResolveSourceTargetsResponse,
+        DEBUGGER_SERVICE,
+        "ResolveSourceTargets",
+        true
+    );
+    unary_method!(
         read_source,
         v2::ReadSourceRequest,
         v2::ReadSourceResponse,
         DEBUGGER_SERVICE,
         "ReadSource",
+        true
+    );
+    unary_method!(
+        search_source,
+        v2::SearchSourceRequest,
+        v2::SearchSourceResponse,
+        DEBUGGER_SERVICE,
+        "SearchSource",
         true
     );
     unary_method!(

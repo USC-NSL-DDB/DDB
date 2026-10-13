@@ -43,10 +43,20 @@ const V2_DEBUGGER_SERVICE_LIST_SIGNALS_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSignals";
 const V2_DEBUGGER_SERVICE_READ_MEMORY_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadMemory";
+const V2_DEBUGGER_SERVICE_LIST_SOURCES_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSources";
+const V2_DEBUGGER_SERVICE_LIST_SOURCE_ROOTS_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceRoots";
+const V2_DEBUGGER_SERVICE_LIST_SOURCE_ENTRIES_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ListSourceEntries";
 const V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSource";
+const V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_TARGETS_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/ResolveSourceTargets";
 const V2_DEBUGGER_SERVICE_READ_SOURCE_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ReadSource";
+const V2_DEBUGGER_SERVICE_SEARCH_SOURCE_PATH: &str =
+    "/api/v2/rpc/ddb.api.v2.DebuggerService/SearchSource";
 const V2_DEBUGGER_SERVICE_LIST_BREAKPOINTS_PATH: &str =
     "/api/v2/rpc/ddb.api.v2.DebuggerService/ListBreakpoints";
 const V2_DEBUGGER_SERVICE_GET_BREAKPOINT_PATH: &str =
@@ -194,11 +204,28 @@ fn v2_contract_router(authorization: &Arc<ApiAuthorization>) -> Router<ApiState>
             post(v2_list_registers),
         )
         .route(V2_DEBUGGER_SERVICE_LIST_SIGNALS_PATH, post(v2_list_signals))
+        .route(V2_DEBUGGER_SERVICE_LIST_SOURCES_PATH, post(v2_list_sources))
+        .route(
+            V2_DEBUGGER_SERVICE_LIST_SOURCE_ROOTS_PATH,
+            post(v2_list_source_roots),
+        )
+        .route(
+            V2_DEBUGGER_SERVICE_LIST_SOURCE_ENTRIES_PATH,
+            post(v2_list_source_entries),
+        )
         .route(
             V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_PATH,
             post(v2_resolve_source),
         )
+        .route(
+            V2_DEBUGGER_SERVICE_RESOLVE_SOURCE_TARGETS_PATH,
+            post(v2_resolve_source_targets),
+        )
         .route(V2_DEBUGGER_SERVICE_READ_SOURCE_PATH, post(v2_read_source))
+        .route(
+            V2_DEBUGGER_SERVICE_SEARCH_SOURCE_PATH,
+            post(v2_search_source),
+        )
         .route(
             V2_DEBUGGER_SERVICE_LIST_BREAKPOINTS_PATH,
             post(v2_list_breakpoints),
