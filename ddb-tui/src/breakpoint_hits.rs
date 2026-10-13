@@ -1,15 +1,5 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemberState {
-    Offline,
-    Unavailable,
-    Unknown,
-    Running,
-    Mixed,
-    Stopped(v2::StopReasonKind),
-}
-
 /// A current stop, not the breakpoint's cumulative hit counter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BreakpointHit {
@@ -61,56 +51,6 @@ pub struct HitRow {
 }
 
 impl App {
-    /// Process status comes from current typed execution states, never the
-    /// inspected frame or a breakpoint's historical hit count.
-    pub fn breakpoint_member_state(&self, session: &str) -> MemberState {
-        if !self.api_connected {
-            return MemberState::Offline;
-        }
-        let mut running = false;
-        let mut stopped = false;
-        let mut reason = None;
-        for thread in self
-            .threads
-            .iter()
-            .filter(|thread| thread.session_id == session)
-        {
-            running |= thread.state == "running";
-            stopped |= thread.state == "stopped";
-            if thread.state != "stopped" {
-                continue;
-            }
-            let kind = self.execution_states.iter().find_map(|state| {
-                let target::Selector::Thread(target) = state.target.as_ref()?.selector.as_ref()?
-                else {
-                    return None;
-                };
-                let cause = state.stop_reason.as_ref()?;
-                (!state.running
-                    && target.thread_id == thread.id
-                    && cause
-                        .thread_id
-                        .as_deref()
-                        .is_none_or(|owner| owner == thread.id))
-                .then(|| v2::StopReasonKind::try_from(cause.kind).ok())
-                .flatten()
-            });
-            if let Some(kind) = kind {
-                if reason.is_some_and(|previous| previous != kind) {
-                    return MemberState::Mixed;
-                }
-                reason = Some(kind);
-            }
-        }
-        match (running, stopped, reason) {
-            (true, true, _) => MemberState::Mixed,
-            (true, false, _) => MemberState::Running,
-            (false, true, Some(kind)) => MemberState::Stopped(kind),
-            (false, true, None) => MemberState::Unknown,
-            _ => MemberState::Unavailable,
-        }
-    }
-
     pub fn toggle_hit_view(&mut self) {
         self.breakpoint_hit_view.visible = !self.breakpoint_hit_view.visible;
         if self.breakpoint_hit_view.visible && self.current_visible_hit().is_none() {
@@ -475,37 +415,6 @@ mod tests {
         })
         .collect();
         app
-    }
-
-    #[test]
-    fn member_state_ignores_peer_causes_and_reports_mixed_unknown_and_offline() {
-        let mut app = fixture();
-        assert_eq!(
-            app.breakpoint_member_state("session/a"),
-            MemberState::Stopped(v2::StopReasonKind::Breakpoint)
-        );
-        app.execution_states[2].stop_reason.as_mut().unwrap().kind =
-            v2::StopReasonKind::Signal as i32;
-        assert_eq!(
-            app.breakpoint_member_state("session/a"),
-            MemberState::Stopped(v2::StopReasonKind::Breakpoint)
-        );
-        app.mark_running(Some("thread/peer"));
-        assert_eq!(app.breakpoint_member_state("session/a"), MemberState::Mixed);
-        app.execution_states[1].stop_reason = None;
-        assert_eq!(
-            app.breakpoint_member_state("session/b"),
-            MemberState::Unknown
-        );
-        assert_eq!(
-            app.breakpoint_member_state("missing"),
-            MemberState::Unavailable
-        );
-        app.backend_unavailable("lost connection");
-        assert_eq!(
-            app.breakpoint_member_state("session/a"),
-            MemberState::Offline
-        );
     }
 
     #[test]

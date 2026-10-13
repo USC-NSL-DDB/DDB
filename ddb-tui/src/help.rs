@@ -127,7 +127,12 @@ const ENTRIES: &[Entry] = &[
     Entry {
         section: "Breakpoints",
         keys: "Space / x / Delete",
-        description: "Toggle enabled / remove the selected breakpoint",
+        description: "Toggle enabled / choose and confirm a session or group rule to delete",
+    },
+    Entry {
+        section: "Breakpoints",
+        keys: "Picker: Tab / Left / Right",
+        description: "Switch Session / Group rule tabs; switching clears the previous selection",
     },
     Entry {
         section: "Breakpoints",
@@ -173,6 +178,21 @@ const ENTRIES: &[Entry] = &[
         section: "Topology",
         keys: "v",
         description: "Toggle grouped / flat sessions without changing execution scope",
+    },
+    Entry {
+        section: "Topology",
+        keys: "T / Sessions button",
+        description: "Hide all threads / restore threads; keep toolbar scope and inspection unchanged",
+    },
+    Entry {
+        section: "Topology",
+        keys: "C / I; Run / Pause buttons",
+        description: "Continue / pause only the visible selected session or thread's owning session",
+    },
+    Entry {
+        section: "Topology",
+        keys: "s / Signal button",
+        description: "Choose a signal beside Kill; session-only view targets that session independently of the toolbar",
     },
     Entry {
         section: "Topology",

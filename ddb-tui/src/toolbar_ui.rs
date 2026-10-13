@@ -12,7 +12,7 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
     let mut buttons = Vec::new();
     let mut row = 0;
     let mut x: u16 = 0;
-    let groups = [
+    let groups: [Vec<(Control, &str, String)>; 2] = [
         vec![
             (Control::Continue, "▶", "Continue".into()),
             (Control::Interrupt, "⏸", "Pause".into()),
@@ -33,11 +33,6 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
                 .into(),
             ),
             (Control::Refresh, "", "Refresh".into()),
-            (
-                Control::CycleScope,
-                "",
-                format!("Scope: {}", app.control_scope_label()),
-            ),
         ],
     ];
     for group in groups {
@@ -55,7 +50,13 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
                 | Control::CycleScope => ACCENT,
                 _ => Color::White,
             };
-            let icon = if icon.is_empty() {
+            let pending = control
+                .action_name()
+                .and_then(|action| app.control_target(action))
+                .is_some_and(|target| app.operations.control_pending(control, &target));
+            let icon = if pending {
+                format!("{} ", app.operations.spinner())
+            } else if icon.is_empty() {
                 String::new()
             } else {
                 format!("{icon} ")
@@ -110,8 +111,8 @@ fn layout(app: &App, width: u16) -> (Vec<Button>, u16) {
             buttons.push(button);
         }
     }
-    let height = buttons.last().map_or(1, |button| button.area.y + 2);
-    (buttons, height) // The last row is status, never a click target.
+    let height = buttons.last().map_or(1, |button| button.area.y + 1);
+    (buttons, height)
 }
 
 fn available(app: &App, control: Control) -> bool {
@@ -137,17 +138,37 @@ pub(super) fn height(app: &App, width: u16) -> u16 {
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiAreas) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        " DDB Debugger · ? help ",
+        " DDB TU · ? help ",
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let reserved_title = 22;
+    let scope_width = area.width.saturating_sub(reserved_title);
+    if scope_width >= 17 && area.height > 0 {
+        let label = crate::display_text::truncate_line(
+            Line::raw(terminal_text(&app.control_scope_label())),
+            usize::from(scope_width).saturating_sub(14),
+        );
+        let scope = Line::raw(format!(" Scope: {} [c] ", label));
+        let rect = Rect::new(
+            area.right() - scope.width() as u16 - 1,
+            area.y,
+            scope.width() as u16,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(scope).style(Style::default().fg(ACCENT)),
+            rect,
+        );
+        areas.controls.push((Control::CycleScope, rect));
+    }
     if inner.is_empty() {
         return;
     }
     let (buttons, _) = layout(app, inner.width);
     for button in buttons {
-        if button.area.y >= inner.height.saturating_sub(1) {
+        if button.area.y >= inner.height {
             continue;
         }
         let rect = Rect::new(
@@ -162,6 +183,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiA
         );
         areas.controls.push((button.control, rect));
     }
+}
+
+pub(super) fn connection_summary(app: &App) -> Line<'static> {
     let connection = if app.api_connected {
         Span::styled("● connected", Style::default().fg(GREEN))
     } else {
@@ -192,11 +216,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, areas: &mut UiA
                 .count()
         )
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            connection,
-            Span::styled(terminal_text(&detail), Style::default().fg(MUTED)),
-        ])),
-        Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
-    );
+    Line::from(vec![
+        connection,
+        Span::styled(terminal_text(&detail), Style::default().fg(MUTED)),
+    ])
 }

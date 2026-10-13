@@ -54,6 +54,8 @@ use crossterm::{
 };
 use ddb_api_client::v2;
 use futures_util::StreamExt;
+#[cfg(test)]
+use model::TopologyRowKind;
 use model::{
     App, BackendRequest, BreakpointOptions, Control, DebuggerActivity, EventStreamStatus, Focus,
     InputMode, UiMessage,
@@ -328,8 +330,9 @@ async fn run(
         }
 
         tokio::select! {
-            _ = animation.tick(), if app.has_activity() => {
+            _ = animation.tick(), if app.has_activity() || app.operations.has_expiring_feedback() || app.receipt_status_pending() => {
                 app.operations.tick();
+                app.expire_receipt_status();
             }
             record = async { traces.as_mut().expect("guarded receiver").recv().await }, if traces.is_some() => {
                 if !apply_api_trace(app, record) { traces = None; }
@@ -480,6 +483,7 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         || app.source_explorer.visible
         || app.show_help
         || app.breakpoint_target_picker.is_some()
+        || app.breakpoint_deletion.is_some()
         || app.signal_picker.is_some()
         || app.breakpoint_hit_picker.is_some();
     let key = if app.input_mode == InputMode::Normal
@@ -599,6 +603,16 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
             KeyCode::Home => app.help_scroll = 0,
             KeyCode::End => app.help_scroll = app.help_max_scroll,
+            _ => {}
+        }
+        return;
+    }
+    if app.breakpoint_deletion.is_some() {
+        match key.code {
+            KeyCode::Esc => app.breakpoint_deletion = None,
+            KeyCode::Up | KeyCode::Char('k') => app.move_breakpoint_deletion(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.move_breakpoint_deletion(1),
+            KeyCode::Enter => submit_breakpoint_deletion(app, requests),
             _ => {}
         }
         return;
@@ -832,6 +846,13 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
             }
         }
         KeyCode::Char('v') if app.focus == Focus::Threads => app.toggle_topology_grouping(),
+        KeyCode::Char('T') if app.focus == Focus::Threads => app.toggle_topology_sessions(),
+        KeyCode::Char('C') if app.focus == Focus::Threads => {
+            dispatch_session_control(app, requests, Control::Continue)
+        }
+        KeyCode::Char('I') if app.focus == Focus::Threads => {
+            dispatch_session_control(app, requests, Control::Interrupt)
+        }
         KeyCode::Char('i') if app.focus == Focus::Threads => {
             if let Err(error) = app.open_topology_details(app.selected_topology_row()) {
                 app.error(error);
@@ -902,17 +923,8 @@ fn handle_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<BackendReque
         KeyCode::Char('g') => app.start_input(InputMode::GotoLine),
         KeyCode::Char('d') => refresh_stack(app, requests),
         KeyCode::Delete | KeyCode::Backspace if app.focus == Focus::Breakpoints => {
-            if !app.capabilities.supports_breakpoint_action("delete") {
-                app.status = "breakpoint deletion is not supported by this DDB API".to_string();
-            } else if let Some((id, target)) = app
-                .current_breakpoint()
-                .and_then(|breakpoint| Some((breakpoint.id.clone(), breakpoint.target.clone()?)))
-            {
-                queue_request(
-                    app,
-                    requests,
-                    BackendRequest::DeleteBreakpoint { id, target },
-                );
+            if let Err(error) = app.open_breakpoint_deletion() {
+                app.error(error);
             }
         }
         KeyCode::Char('x') | KeyCode::Char(' ') if app.focus == Focus::Breakpoints => {
@@ -982,6 +994,9 @@ fn handle_breakpoint_target_key(
 ) {
     match key.code {
         KeyCode::Esc => app.cancel_breakpoint_target_picker(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+            app.toggle_breakpoint_kind()
+        }
         KeyCode::Up | KeyCode::Char('k') => app.move_breakpoint_target_picker(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_breakpoint_target_picker(1),
         KeyCode::PageUp => app.move_breakpoint_target_picker(
@@ -992,6 +1007,13 @@ fn handle_breakpoint_target_key(
         KeyCode::Char(' ') => app.toggle_breakpoint_target_choice(),
         KeyCode::Enter => submit_breakpoint_target_picker(app, requests),
         _ => {}
+    }
+}
+
+fn submit_breakpoint_deletion(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
+    match app.commit_breakpoint_deletion() {
+        Ok(request) => queue_request(app, requests, request),
+        Err(error) => app.error(error),
     }
 }
 
@@ -1037,6 +1059,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
         }
         KeyCode::Enter => {
             let mode = app.input_mode;
+            let signal_target = app.custom_signal_target.take();
             let input = app.commit_input();
             if mode == InputMode::InspectExpression && input.is_empty() {
                 app.clear_expression_inspection();
@@ -1240,12 +1263,27 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         });
                     }
                     InputMode::Signal => {
-                        queue_execution_operation(app, requests, "send_signal", |target| {
-                            BackendRequest::SendSignal {
-                                signal: input,
-                                target,
+                        if let Some((instance, target)) = signal_target {
+                            if instance != app.logpoint_instance() {
+                                app.error("DDB instance changed; choose the signal target again");
+                                return;
                             }
-                        });
+                            queue_request(
+                                app,
+                                requests,
+                                BackendRequest::SendSignal {
+                                    signal: input,
+                                    target,
+                                },
+                            );
+                        } else {
+                            queue_execution_operation(app, requests, "send_signal", |target| {
+                                BackendRequest::SendSignal {
+                                    signal: input,
+                                    target,
+                                }
+                            });
+                        }
                     }
                     InputMode::GotoLine => goto_source_line(app, requests, &input),
                     InputMode::Breakpoint => match parse_breakpoint_options(&input) {
@@ -1326,7 +1364,11 @@ fn request_signal_picker(app: &mut App, requests: &mpsc::Sender<BackendRequest>)
         app.status = "the connected DDB backend does not support send_signal".to_string();
         return;
     }
-    let Some(target) = app.execution_target() else {
+    let Some(target) = (if app.focus == Focus::Threads && app.topology_sessions_only {
+        app.selected_topology_session_id().map(api::session_target)
+    } else {
+        app.execution_target()
+    }) else {
         app.status = "select a DDB thread or session before sending a signal".to_string();
         return;
     };
@@ -1349,8 +1391,13 @@ fn handle_signal_picker_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sende
         KeyCode::PageUp => app.move_signal_picker(-(app.areas.signal_rows.len().max(1) as isize)),
         KeyCode::PageDown => app.move_signal_picker(app.areas.signal_rows.len().max(1) as isize),
         KeyCode::Char('f') => {
+            let target = app
+                .signal_picker
+                .as_ref()
+                .map(|picker| picker.target.clone());
             app.cancel_signal_picker();
             app.start_input(InputMode::Signal);
+            app.custom_signal_target = target.map(|target| (app.logpoint_instance(), target));
         }
         KeyCode::Enter => submit_signal_picker(app, requests),
         _ => {}
@@ -1416,6 +1463,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
         && app.session_termination.is_none()
         && app.signal_picker.is_none()
         && app.breakpoint_target_picker.is_none()
+        && app.breakpoint_deletion.is_none()
         && app.breakpoint_hit_picker.is_none()
     {
         if let Some((kind, _)) = app.areas.topology_rows.iter().find(|(_, area)| {
@@ -1475,10 +1523,52 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
         handle_explorer_mouse(app, mouse, requests);
         return;
     }
+    if app.breakpoint_deletion.is_some() {
+        let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((index, _)) = app
+                    .areas
+                    .breakpoint_deletion_rows
+                    .iter()
+                    .find(|(_, rect)| rect.contains(position))
+                {
+                    app.breakpoint_deletion.as_mut().unwrap().cursor = *index;
+                } else if app
+                    .areas
+                    .breakpoint_deletion_confirm
+                    .is_some_and(|rect| rect.contains(position))
+                {
+                    submit_breakpoint_deletion(app, requests);
+                } else if app
+                    .areas
+                    .breakpoint_deletion_cancel
+                    .is_some_and(|rect| rect.contains(position))
+                {
+                    app.breakpoint_deletion = None;
+                }
+            }
+            MouseEventKind::ScrollUp => app.move_breakpoint_deletion(-1),
+            MouseEventKind::ScrollDown => app.move_breakpoint_deletion(1),
+            _ => {}
+        }
+        return;
+    }
     if app.breakpoint_target_picker.is_some() {
         match mouse.kind {
             MouseEventKind::Down(_) => {
-                if let Some(index) = app.areas.breakpoint_target_at(mouse.column, mouse.row) {
+                if let Some((kind, _)) = app
+                    .areas
+                    .breakpoint_kind_tabs
+                    .iter()
+                    .find(|(_, rect)| {
+                        rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                    })
+                    .copied()
+                {
+                    app.set_breakpoint_kind(kind);
+                } else if let Some(index) = app.areas.breakpoint_target_at(mouse.column, mouse.row)
+                {
                     app.select_breakpoint_target_choice(index);
                 } else if app
                     .areas
@@ -1590,6 +1680,38 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, requests: &mpsc::Sender<Backen
                     app.error(error);
                 }
                 return;
+            }
+            if button == MouseButton::Left {
+                let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if app
+                    .areas
+                    .topology_signal
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.focus = Focus::Threads;
+                    request_signal_picker(app, requests);
+                    return;
+                }
+                if app
+                    .areas
+                    .topology_sessions_toggle
+                    .is_some_and(|area| area.contains(position))
+                {
+                    app.focus = Focus::Threads;
+                    app.toggle_topology_sessions();
+                    return;
+                }
+                if let Some((control, _)) = app
+                    .areas
+                    .topology_session_controls
+                    .iter()
+                    .find(|(_, area)| area.contains(position))
+                    .copied()
+                {
+                    app.focus = Focus::Threads;
+                    dispatch_session_control(app, requests, control);
+                    return;
+                }
             }
             if button == MouseButton::Left
                 && app.areas.breakpoint_hit_view_toggle.is_some_and(|area| {
@@ -2098,6 +2220,26 @@ fn inspect_thread(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread
             }),
         },
     );
+}
+
+fn dispatch_session_control(
+    app: &mut App,
+    requests: &mpsc::Sender<BackendRequest>,
+    control: Control,
+) {
+    let Some(id) = app.selected_topology_session_id() else {
+        app.error("Select a session in Topology, not a group");
+        return;
+    };
+    let target = api::session_target(id);
+    let Some(action) = control.action_name() else {
+        return;
+    };
+    if !app.capabilities.supports_execution_target(action, &target) {
+        app.error(format!("{action} is not supported for this session"));
+        return;
+    }
+    queue_request(app, requests, BackendRequest::Control(control, target));
 }
 
 fn dispatch_control(app: &mut App, requests: &mpsc::Sender<BackendRequest>, control: Control) {
@@ -2626,6 +2768,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         } => {
             if app.control_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
                 app.peer_pauses.remove(&session_id);
+                app.cancel_pending_automatic_pauses(Some(&session_id));
                 app.error(format!("Could not pause DDB session {session_id}: {error}"));
             }
         }
@@ -3008,6 +3151,7 @@ fn pause_running_peers(
         };
         match requests.try_send(request) {
             Ok(()) => {
+                app.note_automatic_pause(&session_id);
                 app.peer_pauses.insert(session_id);
             }
             Err(error) => app.error(format!(
@@ -3056,6 +3200,11 @@ fn configure_sessions(app: &mut App, requests: &mpsc::Sender<BackendRequest>) {
 }
 
 fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request: BackendRequest) {
+    if let BackendRequest::Control(control, target) = &request {
+        if app.operations.control_pending(*control, target) {
+            return;
+        }
+    }
     if let BackendRequest::LoadSource(request) = &request {
         app.begin_frame_source_read(request);
     }
@@ -3083,7 +3232,14 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
         app.supersede_automatic_control();
     }
     let ticket = if let Some(label) = request.feedback_label(app) {
-        match app.operations.queue(label) {
+        let queued = match &request {
+            BackendRequest::Control(control, target) => {
+                app.operations
+                    .queue_control(label, *control, target.clone())
+            }
+            _ => app.operations.queue(label),
+        };
+        match queued {
             Ok((ticket, message)) => {
                 app.push_timeline(message);
                 Some(ticket)
@@ -3564,10 +3720,14 @@ mod tests {
         terminal
             .draw(|frame| app.areas = ui::draw(frame, &mut app))
             .unwrap();
-        let (x, y) = (0..18)
-            .flat_map(|y| (0..90).map(move |x| (x, y)))
-            .find(|(x, y)| matches!(app.areas.item_at(*x, *y), Some((Focus::Threads, 1))))
-            .unwrap();
+        let row = app
+            .areas
+            .topology_rows
+            .iter()
+            .find(|(kind, _)| matches!(kind, TopologyRowKind::Session(_)))
+            .unwrap()
+            .1;
+        let (x, y) = (row.x, row.y);
         handle_mouse(
             &mut app,
             MouseEvent {
@@ -3958,19 +4118,19 @@ mod tests {
                 app.areas = ui::draw(frame, &mut app);
             })
             .unwrap();
-        let panel = app
+        let row = app
             .areas
-            .panels
+            .topology_rows
             .iter()
-            .find(|panel| panel.focus == Focus::Threads)
+            .find(|(kind, _)| *kind == TopologyRowKind::Thread("thread/child".into()))
             .unwrap()
-            .area;
+            .1;
         handle_mouse(
             &mut app,
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
-                column: panel.x + 2,
-                row: panel.y + 2,
+                column: row.x + 2,
+                row: row.y,
                 modifiers: KeyModifiers::NONE,
             },
             &tx,

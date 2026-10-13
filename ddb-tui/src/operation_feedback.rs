@@ -1,8 +1,11 @@
 //! Local intent identity is independent of DDB operation identity. A request can
 //! wait in the worker queue, or fail before DDB returns an admission receipt.
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
-use crate::model::{App, BackendRequest};
+use crate::model::{App, BackendRequest, Control};
 use ddb_api_client::v2;
 
 const HISTORY_LIMIT: usize = 64;
@@ -112,6 +115,9 @@ struct Entry {
     operation_id: Option<String>,
     detail: Option<String>,
     retired: bool,
+    control: Option<(Control, v2::Target)>,
+    settled_at: Option<Instant>,
+    dismissed: bool,
 }
 
 impl Entry {
@@ -153,10 +159,34 @@ impl Feedback {
             operation_id: None,
             detail: None,
             retired: false,
+            control: None,
+            settled_at: None,
+            dismissed: false,
         };
         let text = entry.text();
         self.entries.push_back(entry);
         Ok((self.next_ticket, text))
+    }
+
+    pub fn queue_control(
+        &mut self,
+        label: String,
+        control: Control,
+        target: v2::Target,
+    ) -> Result<(u64, String), String> {
+        let result = self.queue(label)?;
+        self.entries.back_mut().expect("queued entry").control = Some((control, target));
+        Ok(result)
+    }
+
+    pub fn control_pending(&self, control: Control, target: &v2::Target) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.state.active()
+                && entry
+                    .control
+                    .as_ref()
+                    .is_some_and(|(action, scope)| *action == control && scope == target)
+        })
     }
 
     /// Only the exact intent can advance. Late progress cannot regress a final
@@ -227,6 +257,9 @@ impl Feedback {
             }
         }
         let text = entry.text();
+        if entry.state.terminal() {
+            entry.settled_at = Some(Instant::now());
+        }
         (text != old).then_some(text)
     }
 
@@ -258,7 +291,7 @@ impl Feedback {
     }
 
     pub fn display(&self) -> Option<String> {
-        let entry = self.entries.back()?;
+        let entry = self.entries.iter().rev().find(|entry| !entry.dismissed)?;
         let active = self
             .entries
             .iter()
@@ -275,8 +308,29 @@ impl Feedback {
         self.entries.iter().any(|entry| entry.state.active())
     }
 
+    pub fn has_expiring_feedback(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.state.terminal() && !entry.dismissed)
+    }
+
     pub fn tick(&mut self) {
         self.animation_frame = (self.animation_frame + 1) % 10;
+        let now = Instant::now();
+        for entry in &mut self.entries {
+            let timeout = if entry.state == State::Completed {
+                5
+            } else {
+                8
+            };
+            if entry.state.terminal()
+                && entry.settled_at.is_some_and(|settled| {
+                    now.saturating_duration_since(settled) >= Duration::from_secs(timeout)
+                })
+            {
+                entry.dismissed = true;
+            }
+        }
     }
 
     pub fn indicator(&self) -> &'static str {
@@ -294,7 +348,7 @@ impl Feedback {
     }
 
     pub fn diagnostics(&self) -> Option<String> {
-        let entry = self.entries.back()?;
+        let entry = self.entries.iter().rev().find(|entry| !entry.dismissed)?;
         Some(format!(
             "#{} {}{}",
             entry.ticket,
@@ -308,18 +362,73 @@ impl Feedback {
     }
 
     pub fn has_error(&self) -> bool {
-        self.entries.back().is_some_and(|entry| {
-            matches!(
-                entry.state,
-                State::Failed | State::Cancelled | State::Unconfirmed
-            )
-        })
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| !entry.dismissed)
+            .is_some_and(|entry| {
+                matches!(
+                    entry.state,
+                    State::Failed | State::Cancelled | State::Unconfirmed
+                )
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmed_feedback_expires_but_pending_and_unconfirmed_outcomes_do_not() {
+        let mut feedback = Feedback::default();
+        let (completed, _) = feedback.queue("continue".into()).unwrap();
+        feedback.update(completed, Update::LocalCompleted);
+        assert!(feedback.display().unwrap().contains("completed"));
+        assert!(feedback.has_expiring_feedback());
+        feedback.entries.back_mut().unwrap().settled_at =
+            Some(Instant::now() - Duration::from_secs(6));
+        feedback.tick();
+        assert!(feedback.display().is_none());
+        assert!(feedback.diagnostics().is_none());
+        assert!(!feedback.has_expiring_feedback());
+        let (pending, _) = feedback.queue("pause".into()).unwrap();
+        feedback.entries.back_mut().unwrap().settled_at =
+            Some(Instant::now() - Duration::from_secs(600));
+        feedback.tick();
+        assert!(feedback.display().unwrap().contains("queued"));
+        assert!(!feedback.has_expiring_feedback());
+        feedback.update(
+            pending,
+            Update::Admitted(operation("op/pause", v2::OperationState::Running)),
+        );
+        feedback.disconnected(false);
+        feedback.tick();
+        assert!(feedback.display().unwrap().contains("unconfirmed"));
+        assert!(!feedback.has_expiring_feedback());
+        feedback.update(
+            pending,
+            Update::Finished(operation("op/pause", v2::OperationState::Completed)),
+        );
+        feedback.entries.back_mut().unwrap().settled_at =
+            Some(Instant::now() - Duration::from_secs(6));
+        feedback.tick();
+        assert!(feedback.display().is_none());
+    }
+
+    #[test]
+    fn pending_toolbar_identity_includes_both_action_and_target() {
+        let mut feedback = Feedback::default();
+        let target = crate::api::session_target("a");
+        let (ticket, _) = feedback
+            .queue_control("continue".into(), Control::Continue, target.clone())
+            .unwrap();
+        assert!(feedback.control_pending(Control::Continue, &target));
+        assert!(!feedback.control_pending(Control::Interrupt, &target));
+        assert!(!feedback.control_pending(Control::Continue, &crate::api::session_target("b")));
+        feedback.update(ticket, Update::LocalCompleted);
+        assert!(!feedback.control_pending(Control::Continue, &target));
+    }
 
     fn operation(id: &str, state: v2::OperationState) -> v2::Operation {
         v2::Operation {

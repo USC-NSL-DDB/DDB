@@ -535,7 +535,7 @@ fn ordinary_action_feedback_does_not_expose_internal_ids() {
 }
 
 #[test]
-fn breakpoint_member_badges_distinguish_hits_steps_signals_and_running() {
+fn breakpoint_member_badges_only_report_current_breakpoint_hits() {
     let mut app = app(&["a"]);
     let mut state = snapshot(&["a"], 1);
     state.breakpoints[0]
@@ -558,13 +558,273 @@ fn breakpoint_member_badges_distinguish_hits_steps_signals_and_running() {
         next.execution_states[0].stop_reason.as_mut().unwrap().kind = kind as i32;
         app.apply_snapshot(next);
         let screen = render(&mut app);
-        assert!(screen.contains(label), "{label}: {screen}");
+        assert!(!screen.contains(label), "{label}: {screen}");
         assert!(!screen.contains("[1 hit]"));
     }
     app.mark_running(Some("thread/a"));
-    assert!(render(&mut app).contains("[running]"));
+    assert!(!render(&mut app).contains("[running]"));
     app.backend_unavailable("offline");
-    assert!(render(&mut app).contains("[offline]"));
+    assert!(!render(&mut app).contains("[offline]"));
+}
+
+#[test]
+fn topology_marks_only_principal_stops_and_preserves_automatic_pause_provenance() {
+    let mut app = app(&["a"]);
+    app.note_automatic_pause("b");
+    let mut stopped = snapshot(&["a", "b"], 2);
+    stopped.execution_states[1].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGINT".into()),
+        thread_id: Some("thread/b".into()),
+        ..Default::default()
+    });
+    app.apply_snapshot(stopped.clone());
+    app.apply_threads(stopped.threads.clone());
+    assert!(app
+        .topology_stop_label(&app.threads[0])
+        .unwrap()
+        .contains("breakpoint hit"));
+    assert!(
+        app.topology_stop_label(&app.threads[1]).is_none(),
+        "automatically interrupted peers are just stopped"
+    );
+    app.apply_snapshot(stopped.clone());
+    assert!(
+        app.topology_stop_label(&app.threads[1]).is_none(),
+        "duplicate snapshots retain exact-stop provenance"
+    );
+    stopped.execution_states[1].revision = 3;
+    stopped.execution_states[1]
+        .stop_reason
+        .as_mut()
+        .unwrap()
+        .signal_name = Some("SIGUSR1".into());
+    app.apply_snapshot(stopped.clone());
+    assert!(
+        app.topology_stop_label(&app.threads[1])
+            .unwrap()
+            .contains("SIGUSR1"),
+        "a later independent signal must not be hidden"
+    );
+    stopped.execution_states[1].revision = 4;
+    stopped.execution_states[1]
+        .stop_reason
+        .as_mut()
+        .unwrap()
+        .thread_id = Some("thread/a".into());
+    app.apply_snapshot(stopped);
+    assert!(
+        app.topology_stop_label(&app.threads[1]).is_none(),
+        "process siblings do not become triggering threads"
+    );
+}
+
+#[test]
+fn automatic_pause_never_hides_concurrent_independent_breakpoint_or_signal() {
+    for kind in [v2::StopReasonKind::Breakpoint, v2::StopReasonKind::Signal] {
+        let mut app = app(&["a"]);
+        app.note_automatic_pause("b");
+        let mut stopped = snapshot(&["a", "b"], 2);
+        let reason = stopped.execution_states[1].stop_reason.as_mut().unwrap();
+        reason.kind = kind as i32;
+        reason.signal_name = Some("SIGUSR1".into());
+        app.apply_snapshot(stopped.clone());
+        app.apply_threads(stopped.threads);
+        assert!(app.topology_stop_label(&app.threads[1]).is_some());
+    }
+}
+
+#[test]
+fn session_only_topology_controls_selected_session_without_changing_toolbar_scope() {
+    let mut app = app(&["a", "b"]);
+    for capability in &mut app.capabilities.execution_action_capabilities {
+        capability
+            .scopes
+            .push(v2::ExecutionScopeKind::Session as i32);
+    }
+    app.focus = Focus::Threads;
+    app.select_visible_topology(&TopologyRowKind::Thread("thread/b".into()))
+        .unwrap();
+    let toolbar = app.control_target("continue");
+    app.toggle_topology_sessions();
+    assert!(app
+        .topology_rows()
+        .iter()
+        .all(|row| !matches!(row.kind, TopologyRowKind::Thread(_))));
+    assert_eq!(app.selected_topology_session_id().as_deref(), Some("b"));
+    assert_eq!(app.control_target("continue"), toolbar);
+    let (tx, mut rx) = mpsc::channel(8);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap().untracked(), BackendRequest::Control(Control::Continue, target) if target == api::session_target("b"))
+    );
+    assert_eq!(app.control_target("continue"), toolbar);
+    let screen = render(&mut app);
+    assert!(screen.contains("Signal [s]"));
+    assert!(app.areas.topology_sessions_toggle.is_some());
+    app.toggle_topology_sessions();
+    assert!(app
+        .topology_rows()
+        .iter()
+        .any(|row| matches!(row.kind, TopologyRowKind::Thread(_))));
+}
+
+#[test]
+fn breakpoint_type_tabs_exclude_hidden_targets_and_clear_cross_type_selection() {
+    let mut app = app(&["a"]);
+    app.capabilities.breakpoint_features.extend([
+        v2::BreakpointFeature::Function as i32,
+        v2::BreakpointFeature::Distributed as i32,
+        v2::BreakpointFeature::GroupInheritance as i32,
+    ]);
+    app.start_function_breakpoint_picker("main".into(), Default::default())
+        .unwrap();
+    let picker = app.breakpoint_target_picker.as_ref().unwrap();
+    assert!(picker.visible_indices().iter().all(|index| !matches!(
+        picker.choices[*index].target,
+        api::BreakpointTarget::Group(_)
+    )));
+    app.toggle_breakpoint_target_choice();
+    assert!(app
+        .breakpoint_target_picker
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .any(|choice| choice.selected));
+    let (tx, mut rx) = mpsc::channel(8);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        &tx,
+    );
+    let picker = app.breakpoint_target_picker.as_ref().unwrap();
+    assert!(picker.choices.iter().all(|choice| !choice.selected));
+    assert!(picker.visible_indices().iter().all(|index| matches!(
+        picker.choices[*index].target,
+        api::BreakpointTarget::Group(_)
+    )));
+    let _ = render(&mut app);
+    assert_eq!(app.areas.breakpoint_kind_tabs.len(), 2);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &tx,
+    );
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap().untracked(), BackendRequest::CreateBreakpoint { target: api::BreakpointTarget::Group(group), .. } if group == "workers")
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn inherited_member_deletion_confirms_the_group_rule_and_rejects_changed_scope() {
+    let mut app = app(&["a", "b"]);
+    app.breakpoints[0].target = Some(v2::Target {
+        selector: Some(v2::target::Selector::Multiple(v2::MultipleTarget {
+            targets: vec![api::session_target("a"), api::group_target("workers")],
+        })),
+    });
+    app.breakpoints[0].sub_breakpoints.push(v2::SubBreakpoint {
+        session_id: "b".into(),
+        inherited_from_group_id: Some("workers".into()),
+        ..Default::default()
+    });
+    app.selected_breakpoint_site = Some(0);
+    app.focus = Focus::Breakpoints;
+    let (tx, mut rx) = mpsc::channel(8);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "Delete must first show the scope confirmation"
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("current and future members"), "{screen}");
+    assert!(screen.contains("Group rule"));
+    assert!(screen.contains("Session rule"));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap().untracked(), BackendRequest::DeleteBreakpoint { target, .. } if target == api::group_target("workers"))
+    );
+    app.open_breakpoint_deletion().unwrap();
+    app.breakpoints[0].target = Some(api::session_target("a"));
+    assert!(app
+        .commit_breakpoint_deletion()
+        .unwrap_err()
+        .contains("changed"));
+}
+
+#[test]
+fn pending_group_rules_are_manageable_without_installed_members() {
+    let mut app = app(&[]);
+    app.breakpoints[0].target = Some(api::group_target("workers"));
+    assert_eq!(app.breakpoints[0].rule_kind(), "Group");
+    assert!(app.breakpoints[0].sub_breakpoints.is_empty());
+    app.open_breakpoint_deletion().unwrap();
+    assert!(
+        matches!(app.commit_breakpoint_deletion().unwrap(), BackendRequest::DeleteBreakpoint { target, .. } if target == api::group_target("workers"))
+    );
+}
+
+#[test]
+fn custom_session_signal_keeps_its_chosen_target_and_rejects_replaced_backend() {
+    for replace in [false, true] {
+        let mut app = app(&["a", "b"]);
+        app.open_signal_picker(
+            api::session_target("b"),
+            vec![v2::DebuggerSignal {
+                name: "SIGUSR1".into(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            &tx,
+        );
+        app.execution_target = Some(api::session_target("a"));
+        app.insert_input("SIGUSR2");
+        if replace {
+            let mut replacement = snapshot(&["a", "b"], 1);
+            replacement.server_instance_id = "replacement".into();
+            app.apply_snapshot(replacement);
+        }
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        );
+        if replace {
+            assert!(
+                rx.try_recv().is_err(),
+                "do not send an old prompt to a replacement backend"
+            );
+            assert!(app.status.contains("instance changed"));
+        } else {
+            assert!(
+                matches!(rx.try_recv().unwrap().untracked(), BackendRequest::SendSignal { target, signal } if target == api::session_target("b") && signal == "SIGUSR2")
+            );
+        }
+    }
 }
 
 #[test]
@@ -716,6 +976,76 @@ fn source_hjkl_moves_the_document_and_ctrl_p_keeps_the_file_picker() {
     );
     assert!(app.source_explorer.visible);
     assert_eq!(app.source_browser.document().unwrap().cursor, 2);
+}
+
+#[test]
+fn pause_reason_belongs_to_topology_not_the_breakpoint_panel() {
+    let mut app = app(&["a"]);
+    let mut state = snapshot(&["a"], 2);
+    state.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGUSR1".into()),
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    state.breakpoints[0]
+        .sub_breakpoints
+        .push(v2::SubBreakpoint {
+            sub_breakpoint_id: "member/a".into(),
+            session_id: "a".into(),
+            ..Default::default()
+        });
+    app.apply_snapshot(state);
+    app.focus = Focus::Breakpoints;
+    app.expanded_pane = true;
+    assert!(!render(&mut app).contains("[signal]"));
+    app.focus = Focus::Threads;
+    let topology = render(&mut app);
+    assert!(topology.contains("signal SIGUSR1"), "{topology}");
+    assert!(topology.contains("trigger"), "{topology}");
+}
+
+#[test]
+fn pending_toolbar_action_is_visible_in_place_and_repeated_click_is_not_queued() {
+    let mut app = app(&["a"]);
+    let (tx, mut rx) = mpsc::channel(16);
+    dispatch_control(&mut app, &tx, Control::Continue);
+    render(&mut app);
+    let (_, area) = app
+        .areas
+        .controls
+        .iter()
+        .find(|(control, _)| *control == Control::Continue)
+        .unwrap();
+    let area = *area;
+    let screen = render(&mut app);
+    let button = screen
+        .lines()
+        .nth(area.y as usize)
+        .unwrap()
+        .chars()
+        .skip(area.x as usize)
+        .take(area.width as usize)
+        .collect::<String>();
+    assert!(button.contains(app.operations.spinner()), "{button}");
+    dispatch_control(&mut app, &tx, Control::Continue);
+    for _ in 0..3 {
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &tx,
+        );
+    }
+    assert!(rx.try_recv().is_ok());
+    assert!(
+        rx.try_recv().is_err(),
+        "do not submit the same pending action twice"
+    );
 }
 
 #[test]

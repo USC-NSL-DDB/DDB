@@ -6,6 +6,9 @@ impl App {
         self.full_topology_rows()
             .into_iter()
             .filter(|row| {
+                if self.topology_sessions_only && matches!(row.kind, TopologyRowKind::Thread(_)) {
+                    return false;
+                }
                 if hidden_below.is_some_and(|depth| row.depth > depth) {
                     return false;
                 }
@@ -25,7 +28,8 @@ impl App {
                 .iter()
                 .any(|session| session.group_id.as_deref().unwrap_or("") == id),
             TopologyRowKind::Session(id) => {
-                self.threads.iter().any(|thread| thread.session_id == *id)
+                !self.topology_sessions_only
+                    && self.threads.iter().any(|thread| thread.session_id == *id)
             }
             TopologyRowKind::Thread(_) => false,
         }
@@ -141,7 +145,46 @@ impl App {
             self.collapsed_topology.remove(&kind);
             parent = self.topology_parent(&kind);
         }
-        self.selected_topology = Some(kind);
+        self.selected_topology = if self.topology_sessions_only {
+            self.topology_parent(&kind)
+        } else {
+            Some(kind)
+        };
+    }
+
+    pub fn toggle_topology_sessions(&mut self) {
+        self.topology_sessions_only = !self.topology_sessions_only;
+        if self.topology_sessions_only {
+            if let Some(TopologyRowKind::Thread(id)) =
+                self.selected_topology.clone().or_else(|| {
+                    self.current_thread()
+                        .map(|thread| TopologyRowKind::Thread(thread.id.clone()))
+                })
+            {
+                self.selected_topology = self.topology_parent(&TopologyRowKind::Thread(id));
+            }
+        }
+        self.topology_viewport = Default::default();
+        self.status = format!(
+            "Topology: {} · toolbar scope unchanged",
+            if self.topology_sessions_only {
+                "sessions only"
+            } else {
+                "sessions and threads"
+            }
+        );
+    }
+
+    pub fn selected_topology_session_id(&self) -> Option<String> {
+        match &self.topology_rows().get(self.selected_topology_row())?.kind {
+            TopologyRowKind::Session(id) => Some(id.clone()),
+            TopologyRowKind::Thread(id) => self
+                .threads
+                .iter()
+                .find(|thread| thread.id == *id)
+                .map(|thread| thread.session_id.clone()),
+            TopologyRowKind::Group(_) => None,
+        }
     }
 
     pub(super) fn prune_topology_folds(&mut self) {

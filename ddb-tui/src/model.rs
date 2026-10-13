@@ -131,6 +131,10 @@ pub struct UiAreas {
     pub breakpoint_target_rows: Vec<(usize, Rect)>,
     pub breakpoint_target_apply: Option<Rect>,
     pub breakpoint_target_cancel: Option<Rect>,
+    pub breakpoint_kind_tabs: Vec<(BreakpointKind, Rect)>,
+    pub breakpoint_deletion_rows: Vec<(usize, Rect)>,
+    pub breakpoint_deletion_confirm: Option<Rect>,
+    pub breakpoint_deletion_cancel: Option<Rect>,
     pub signal_rows: Vec<(usize, Rect)>,
     pub signal_cancel: Option<Rect>,
     pub source_explorer_rows: Vec<(usize, Rect)>,
@@ -141,6 +145,9 @@ pub struct UiAreas {
     pub source_search_mode: Option<Rect>,
     pub source_search_bar: Option<Rect>,
     pub topology_grouping: Option<Rect>,
+    pub topology_sessions_toggle: Option<Rect>,
+    pub topology_session_controls: Vec<(Control, Rect)>,
+    pub topology_signal: Option<Rect>,
     pub breakpoint_grouping: Option<Rect>,
     pub termination_confirm: Option<Rect>,
     pub termination_cancel: Option<Rect>,
@@ -469,6 +476,27 @@ pub struct BreakpointTargetPicker {
     pub lookup: Option<SourceTargetLookup>,
     pub loading: bool,
     pub message: Option<String>,
+    pub kind: BreakpointKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BreakpointKind {
+    #[default]
+    Session,
+    Group,
+}
+
+impl BreakpointTargetPicker {
+    pub fn visible_indices(&self) -> Vec<usize> {
+        self.choices
+            .iter()
+            .enumerate()
+            .filter_map(|(index, choice)| {
+                let group = matches!(choice.target, BreakpointTarget::Group(_));
+                (group == (self.kind == BreakpointKind::Group)).then_some(index)
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -503,6 +531,7 @@ pub struct App {
     pub input_mode: InputMode,
     pub input: String,
     pub signal_picker: Option<SignalPicker>,
+    pub custom_signal_target: Option<(Option<String>, v2::Target)>,
     pub session_termination: Option<SessionTermination>,
     pub topology_details: Option<TopologyDetails>,
     pending_details_export: Option<Vec<String>>,
@@ -537,6 +566,7 @@ pub struct App {
     pub groups: Vec<v2::Group>,
     pub threads: Vec<ThreadItem>,
     execution_states: Vec<v2::ExecutionState>,
+    automatic_pauses: HashMap<String, topology_status::AutomaticPause>,
     pub frames: Vec<StackFrame>,
     pub frame_sources: frame_sources::Sources,
     pub distributed_stack_truncation: Option<String>,
@@ -552,6 +582,7 @@ pub struct App {
     pub extension_document: Option<crate::wrapped_text::WrappedText>,
     pub breakpoints: Vec<Breakpoint>,
     pub breakpoint_target_picker: Option<BreakpointTargetPicker>,
+    pub breakpoint_deletion: Option<breakpoint_management::BreakpointDeletion>,
     pub execution_target: Option<v2::Target>,
     execution_target_retired: bool,
     pub execution_scope_override: bool,
@@ -561,6 +592,7 @@ pub struct App {
     pub selected_frame: usize,
     selected_topology: Option<TopologyRowKind>,
     pub topology_grouped: bool,
+    pub topology_sessions_only: bool,
     collapsed_topology: std::collections::BTreeSet<TopologyRowKind>,
     pub selected_variable: usize,
     pub selected_breakpoint: usize,
@@ -588,6 +620,7 @@ pub struct App {
     pub output: crate::output::OutputBuffer,
     pub show_output: bool,
     pub status: String,
+    receipt_status: Option<(String, std::time::Instant)>,
     /// Preserve a still-displayed error against routine snapshot summaries.
     /// Explicit action/result status changes supersede it without resurrecting it.
     status_error: Option<String>,
@@ -616,6 +649,7 @@ impl App {
             capabilities: v2::Capabilities::default(),
             focus: Focus::Source,
             signal_picker: None,
+            custom_signal_target: None,
             session_termination: None,
             topology_details: None,
             pending_details_export: None,
@@ -652,6 +686,7 @@ impl App {
             groups: Vec::new(),
             threads: Vec::new(),
             execution_states: Vec::new(),
+            automatic_pauses: HashMap::new(),
             extension_actions: Vec::new(),
             selected_extension_action: 0,
             pending_extension_action: None,
@@ -665,6 +700,7 @@ impl App {
             extension_panels: Vec::new(),
             extension_document: None,
             breakpoint_target_picker: None,
+            breakpoint_deletion: None,
             execution_target: None,
             execution_target_retired: false,
             execution_scope_override: false,
@@ -674,6 +710,7 @@ impl App {
             selected_thread: 0,
             selected_topology: None,
             topology_grouped: true,
+            topology_sessions_only: false,
             collapsed_topology: Default::default(),
             selected_frame: 0,
             selected_variable: 0,
@@ -701,6 +738,7 @@ impl App {
             output: Default::default(),
             show_output: false,
             status: "connecting to DDB…".to_string(),
+            receipt_status: None,
             status_error: None,
             pending_commands: 0,
             operations: Default::default(),
@@ -858,9 +896,11 @@ impl App {
                 self.logpoint_edit = None;
                 self.session_setup_attempted.clear();
                 self.supersede_automatic_control();
+                self.automatic_pauses.clear();
                 self.pause_focus = None;
                 self.source_explorer.invalidate_server();
                 self.breakpoint_target_picker = None;
+                self.breakpoint_deletion = None;
                 self.breakpoint_hit_picker = None;
                 self.clear_hit_selection();
                 self.collapsed_topology.clear();
@@ -889,6 +929,7 @@ impl App {
         });
         self.groups = snapshot.groups;
         self.execution_states = snapshot.execution_states;
+        self.reconcile_automatic_pauses();
         let mut breakpoints = snapshot
             .breakpoints
             .into_iter()
@@ -1670,6 +1711,7 @@ impl App {
             session.display_name.clone()
         };
         let session_state = session_status_name(session.status).to_string();
+        let stop = self.session_stop_label(&session.session_id);
         let thread_indices = self
             .threads
             .iter()
@@ -1687,8 +1729,12 @@ impl App {
                 .as_deref()
                 .filter(|detail| !detail.is_empty())
             {
-                Some(detail) => format!("{} threads · {detail}", thread_indices.len()),
-                None => format!("{} threads", thread_indices.len()),
+                Some(detail) => format!(
+                    "{}{} threads · {detail}",
+                    stop.map_or(String::new(), |reason| format!("{reason} · ")),
+                    thread_indices.len()
+                ),
+                None => stop.unwrap_or_else(|| format!("{} threads", thread_indices.len())),
             },
             state: Some(session_state),
         });
@@ -1702,7 +1748,9 @@ impl App {
                 kind: TopologyRowKind::Thread(thread.id.clone()),
                 depth: depth + 1,
                 label: thread.name.clone(),
-                detail: location,
+                detail: self
+                    .topology_stop_label(thread)
+                    .map_or(location.clone(), |cause| format!("{cause} · {location}")),
                 state: Some(thread.state.clone()),
             });
         }
@@ -1928,6 +1976,7 @@ impl App {
                 lookup: Some(lookup),
                 loading: true,
                 message: Some("Discovering source-relevant sessions and groups…".into()),
+                kind: BreakpointKind::Session,
             });
             return Ok(());
         }
@@ -1936,8 +1985,8 @@ impl App {
         if self.capabilities.supports_breakpoint_action("distributed") {
             choices.push(BreakpointTargetChoice {
                 target: BreakpointTarget::Broadcast,
-                label: "All eligible DDB sessions".to_string(),
-                detail: "server-resolved broadcast".to_string(),
+                label: "All current DDB sessions".to_string(),
+                detail: "independent session rules; no group inheritance".to_string(),
                 selected: false,
             });
         }
@@ -2018,6 +2067,7 @@ impl App {
             lookup: None,
             loading: false,
             message: None,
+            kind: BreakpointKind::Session,
         });
         self.status = "choose one or more DDB breakpoint targets".to_string();
         Ok(())
@@ -2087,7 +2137,7 @@ impl App {
                     target,
                     label: format!("{kind} · {}", entry.display_name),
                     detail: format!("{} matching sessions", entry.matching_session_count),
-                    selected,
+                    selected: selected && picker.kind == BreakpointKind::Session,
                 })
             })
             .collect();
@@ -2095,7 +2145,7 @@ impl App {
             .choices
             .iter()
             .position(|choice| choice.selected)
-            .unwrap_or(0);
+            .unwrap_or_else(|| picker.visible_indices().first().copied().unwrap_or(0));
         picker.message = if !response.complete {
             Some(format!(
                 "Incomplete discovery: {}",
@@ -2117,7 +2167,41 @@ impl App {
         let Some(picker) = self.breakpoint_target_picker.as_mut() else {
             return;
         };
-        picker.cursor = move_index(picker.cursor, picker.choices.len(), delta);
+        let indices = picker.visible_indices();
+        let current = indices
+            .iter()
+            .position(|index| *index == picker.cursor)
+            .unwrap_or(0);
+        picker.cursor = indices
+            .get(move_index(current, indices.len(), delta))
+            .copied()
+            .unwrap_or(0);
+    }
+
+    pub fn set_breakpoint_kind(&mut self, kind: BreakpointKind) {
+        let Some(picker) = self.breakpoint_target_picker.as_mut() else {
+            return;
+        };
+        if picker.kind == kind {
+            return;
+        }
+        picker.kind = kind;
+        for choice in &mut picker.choices {
+            choice.selected = false;
+        }
+        picker.cursor = picker.visible_indices().first().copied().unwrap_or(0);
+    }
+
+    pub fn toggle_breakpoint_kind(&mut self) {
+        let kind = match self
+            .breakpoint_target_picker
+            .as_ref()
+            .map(|picker| picker.kind)
+        {
+            Some(BreakpointKind::Session) => BreakpointKind::Group,
+            _ => BreakpointKind::Session,
+        };
+        self.set_breakpoint_kind(kind);
     }
 
     pub fn toggle_breakpoint_target_choice(&mut self) {
@@ -2125,6 +2209,9 @@ impl App {
             return;
         };
         let cursor = picker.cursor.min(picker.choices.len().saturating_sub(1));
+        if !picker.visible_indices().contains(&cursor) {
+            return;
+        }
         let broadcast = matches!(
             picker.choices.get(cursor).map(|choice| &choice.target),
             Some(BreakpointTarget::Broadcast)
@@ -2155,7 +2242,7 @@ impl App {
         let Some(picker) = self.breakpoint_target_picker.as_mut() else {
             return;
         };
-        if index >= picker.choices.len() {
+        if !picker.visible_indices().contains(&index) {
             return;
         }
         picker.cursor = index;
@@ -2179,7 +2266,11 @@ impl App {
         let mut targets = picker
             .choices
             .iter()
-            .filter(|choice| choice.selected)
+            .filter(|choice| {
+                choice.selected
+                    && matches!(choice.target, BreakpointTarget::Group(_))
+                        == (picker.kind == BreakpointKind::Group)
+            })
             .map(|choice| choice.target.clone())
             .collect::<Vec<_>>();
         if targets.is_empty() {
@@ -2193,24 +2284,6 @@ impl App {
             .any(|target| matches!(target, BreakpointTarget::Broadcast))
         {
             targets = vec![BreakpointTarget::Broadcast];
-        } else {
-            let selected_groups = targets
-                .iter()
-                .filter_map(|target| match target {
-                    BreakpointTarget::Group(group_id) => Some(group_id.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            targets.retain(|target| match target {
-                BreakpointTarget::Session(session_id) => !self.sessions.iter().any(|session| {
-                    session.session_id == *session_id
-                        && session
-                            .group_id
-                            .as_ref()
-                            .is_some_and(|group_id| selected_groups.contains(group_id))
-                }),
-                _ => true,
-            });
         }
         let target = if targets.len() == 1 {
             targets.remove(0)
@@ -2282,6 +2355,7 @@ impl App {
     }
 
     pub fn start_input(&mut self, mode: InputMode) {
+        self.custom_signal_target = None;
         self.pending_details_export = None;
         self.editing_watch = None;
         self.input_mode = mode;
@@ -2292,6 +2366,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
+        self.custom_signal_target = None;
         self.pending_details_export = None;
         self.editing_watch = None;
         if self.input_mode == InputMode::InspectExpression {
@@ -2634,6 +2709,30 @@ impl App {
         self.timeline_scroll = 0;
     }
 
+    pub fn receipt_status_pending(&self) -> bool {
+        self.receipt_status
+            .as_ref()
+            .is_some_and(|(status, _)| *status == self.status)
+    }
+
+    pub fn expire_receipt_status(&mut self) {
+        if self
+            .receipt_status
+            .as_ref()
+            .is_some_and(|(_, deadline)| std::time::Instant::now() >= *deadline)
+        {
+            if self.receipt_status_pending() {
+                self.status = format!(
+                    "{} sessions · {} groups · {} breakpoints",
+                    self.sessions.len(),
+                    self.groups.len(),
+                    self.breakpoints.len()
+                );
+            }
+            self.receipt_status = None;
+        }
+    }
+
     pub fn push_receipt(&mut self, label: &str, receipt: &v2::Operation) {
         let interactive = matches!(
             v2::OperationKind::try_from(receipt.kind),
@@ -2647,6 +2746,17 @@ impl App {
         }
         let state = operation_state_name(receipt.state);
         self.status = format!("{label}: {state}");
+        if matches!(
+            v2::OperationState::try_from(receipt.state),
+            Ok(v2::OperationState::Completed
+                | v2::OperationState::Failed
+                | v2::OperationState::Cancelled)
+        ) {
+            self.receipt_status = Some((
+                self.status.clone(),
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            ));
+        }
         let icon = if receipt.error.is_some() {
             "✗"
         } else {
@@ -2706,6 +2816,7 @@ impl App {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.peer_pauses.clear();
         self.all_stop_cause = None;
+        self.cancel_pending_automatic_pauses(None);
     }
 
     pub fn backend_unavailable(&mut self, error: impl ToString) {
@@ -3423,6 +3534,28 @@ pub enum EventStreamStatus {
 
 #[cfg(test)]
 mod v2_tests {
+    #[test]
+    fn receipt_expiry_restores_status_without_erasing_a_newer_message() {
+        let mut app = super::App::new("http://localhost".into());
+        let receipt = ddb_api_client::v2::Operation {
+            state: ddb_api_client::v2::OperationState::Completed as i32,
+            ..Default::default()
+        };
+        app.push_receipt("continue", &receipt);
+        assert!(app.receipt_status_pending());
+        app.receipt_status.as_mut().unwrap().1 =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.expire_receipt_status();
+        assert_eq!(app.status, "0 sessions · 0 groups · 0 breakpoints");
+        assert!(!app.receipt_status_pending());
+        app.push_receipt("continue", &receipt);
+        app.receipt_status.as_mut().unwrap().1 =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.status = "new source navigation message".into();
+        app.expire_receipt_status();
+        assert_eq!(app.status, "new source navigation message");
+    }
+
     fn finish_source_targets(app: &mut super::App) {
         use ddb_api_client::v2;
         let lookup = app
@@ -4115,6 +4248,7 @@ mod v2_tests {
             .iter()
             .position(|choice| choice.target == BreakpointTarget::Group("group/a".to_string()))
             .unwrap();
+        app.set_breakpoint_kind(BreakpointKind::Group);
         app.select_breakpoint_target_choice(group_index);
         let beta_index = app
             .breakpoint_target_picker
@@ -4389,8 +4523,11 @@ pub use topology_details::{DetailsExport, TopologyDetails};
 
 #[path = "breakpoint_hits.rs"]
 mod breakpoint_hits;
-pub use breakpoint_hits::MemberState;
+#[path = "breakpoint_management.rs"]
+mod breakpoint_management;
 #[path = "frame_sources.rs"]
 pub mod frame_sources;
 #[path = "topology_navigation.rs"]
 mod topology_navigation;
+#[path = "topology_status.rs"]
+mod topology_status;

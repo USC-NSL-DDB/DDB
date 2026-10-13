@@ -18,7 +18,7 @@ use ratatui::{
 use crate::{
     api::CapabilitiesExt,
     display_text::{horizontal_line, horizontal_text, terminal_text},
-    model::{App, Control, Focus, InputMode, MemberState, TopologyRowKind, UiAreas},
+    model::{App, Control, Focus, InputMode, TopologyRowKind, UiAreas},
 };
 
 const ACCENT: Color = Color::Rgb(86, 156, 214);
@@ -45,6 +45,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
             draw_help(frame, app, root);
         }
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
+        draw_breakpoint_deletion(frame, app, root, &mut areas);
         draw_signal_picker(frame, app, root, &mut areas);
         draw_breakpoint_hits(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
@@ -76,6 +77,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_signal_picker(frame, app, root, &mut areas);
         draw_breakpoint_hits(frame, app, root, &mut areas);
         draw_breakpoint_target_picker(frame, app, root, &mut areas);
+        draw_breakpoint_deletion(frame, app, root, &mut areas);
         explorer::draw(frame, app, root, &mut areas);
         draw_session_termination(frame, app, root, &mut areas);
         draw_topology_details(frame, app, root, &mut areas);
@@ -136,17 +138,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
             draw_timeline(frame, app, right[2]);
         }
     }
-    areas.add_panel(
-        Focus::Threads,
-        left[0],
-        list_first(
-            app.selected_topology_row(),
-            app.topology_rows().len(),
-            left[0],
-            1,
-        ),
-        1,
-    );
+    areas.add_focus_panel(Focus::Threads, left[0]);
     areas.add_panel(
         Focus::Source,
         source_hit_area(&areas, center[0]),
@@ -190,6 +182,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) -> UiAreas {
         draw_help(frame, app, root);
     }
     draw_breakpoint_target_picker(frame, app, root, &mut areas);
+    draw_breakpoint_deletion(frame, app, root, &mut areas);
     draw_signal_picker(frame, app, root, &mut areas);
     draw_breakpoint_hits(frame, app, root, &mut areas);
     explorer::draw(frame, app, root, &mut areas);
@@ -235,6 +228,14 @@ fn draw_pane_expanders(frame: &mut Frame<'_>, app: &App, areas: &mut UiAreas) {
                 button,
             );
             areas.termination_open = Some(button);
+            let signal = Rect::new(button.right() + 1, button.y, 10, 1);
+            if signal.right() < panel.area.right() - width - 1 {
+                frame.render_widget(
+                    Paragraph::new("Signal [s]").style(Style::default().fg(YELLOW)),
+                    signal,
+                );
+                areas.topology_signal = Some(signal);
+            }
         }
     }
 }
@@ -314,22 +315,8 @@ fn draw_mini_toolbar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         draw_operation_feedback(frame, app, area);
         return;
     }
-    let state = if app.api_connected {
-        "connected"
-    } else {
-        "reconnecting"
-    };
-    let detail = if app.trace_api {
-        format!(
-            " · {} · {}",
-            app.api_protocol,
-            endpoint_label(&app.api_endpoint)
-        )
-    } else {
-        String::new()
-    };
     frame.render_widget(
-        Paragraph::new(terminal_text(&format!(" DDB Debugger · {state}{detail} ")))
+        Paragraph::new(" DDB TU · ? help ")
             .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         area,
     );
@@ -341,8 +328,11 @@ fn draw_mini_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
     frame.render_widget(
-        Paragraph::new(terminal_text(&format!(" {} ", app.status)))
-            .style(Style::default().fg(MUTED)),
+        Paragraph::new(Line::from(vec![
+            Span::raw(toolbar::connection_summary(app).to_string()),
+            Span::raw(terminal_text(&format!(" · {}", app.status))),
+        ]))
+        .style(Style::default().fg(MUTED)),
         area,
     );
 }
@@ -369,16 +359,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
         Focus::Output => draw_output(frame, app, area),
     }
     let (hit_area, first_item, item_height) = match focus {
-        Focus::Threads => (
-            area,
-            list_first(
-                app.selected_topology_row(),
-                app.topology_rows().len(),
-                area,
-                1,
-            ),
-            1,
-        ),
+        Focus::Threads => (area, 0, 0),
         Focus::Breakpoints => (area, 0, 0),
         Focus::Registers => (
             area,
@@ -411,7 +392,7 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
         }
         Focus::Extensions | Focus::Timeline | Focus::Output => (area, 0, 0),
     };
-    if focus == Focus::Breakpoints {
+    if matches!(focus, Focus::Breakpoints | Focus::Threads) {
         // Hierarchical breakpoint hit rows are registered by draw_breakpoints.
     } else if item_height == 0 {
         areas.add_focus_panel(focus, hit_area);
@@ -424,6 +405,11 @@ fn draw_compact_panel(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &
 }
 
 fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut UiAreas) {
+    let list_area = if area.height >= 5 && area.width >= 24 {
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+    } else {
+        area
+    };
     let rows = app.topology_rows();
     let selected = app.selected_topology_row();
     let lines = rows
@@ -450,7 +436,14 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
                     },
                     Color::White,
                 ),
-                TopologyRowKind::Thread(_) => ("•", Color::Gray),
+                TopologyRowKind::Thread(_) => (
+                    if row.detail.starts_with("trigger") {
+                        "!"
+                    } else {
+                        "•"
+                    },
+                    Color::Gray,
+                ),
             };
             let state_color = match row.state.as_deref() {
                 Some("stopped") => YELLOW,
@@ -490,14 +483,14 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
         .collect();
     draw_selectable_list(
         frame,
-        area,
+        list_area,
         title(app, Focus::Threads, "DDB Topology"),
         items,
         selected,
         app.focus == Focus::Threads,
     );
-    let first = list_first(selected, rows.len(), area, 1);
-    let inner = area.inner(Margin {
+    let first = list_first(selected, rows.len(), list_area, 1);
+    let inner = list_area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -528,6 +521,72 @@ fn draw_threads(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mut Ui
             }
         }
     }
+    if list_area != area {
+        frame.render_widget(
+            panel_block(
+                &title(app, Focus::Threads, "DDB Topology"),
+                app.focus == Focus::Threads,
+            ),
+            area,
+        );
+        let y = area.y + 1;
+        frame.render_widget(Clear, Rect::new(area.x + 1, y, area.width - 2, 1));
+        let mut x = area.x + 1;
+        for (control, label) in [
+            (Control::Continue, "[Run C]"),
+            (Control::Interrupt, "[Pause I]"),
+        ] {
+            let rect = Rect::new(x, y, label.len() as u16, 1);
+            let target = app
+                .selected_topology_session_id()
+                .map(crate::api::session_target);
+            let pending = target
+                .as_ref()
+                .is_some_and(|target| app.operations.control_pending(control, target));
+            let text = if pending {
+                format!(
+                    "[{} {}]",
+                    app.operations.spinner(),
+                    if control == Control::Continue {
+                        " C "
+                    } else {
+                        "  I  "
+                    }
+                )
+            } else {
+                label.into()
+            };
+            let enabled = target.as_ref().is_some_and(|target| {
+                app.capabilities
+                    .supports_execution_target(control.action_name().unwrap(), target)
+            });
+            frame.render_widget(
+                Paragraph::new(text).style(Style::default().fg(if enabled {
+                    ACCENT
+                } else {
+                    MUTED
+                })),
+                rect,
+            );
+            if enabled {
+                areas.topology_session_controls.push((control, rect));
+            }
+            x = rect.right() + 1;
+        }
+        let label = if app.topology_sessions_only {
+            "[Threads T]"
+        } else {
+            "[Sessions T]"
+        };
+        let rect = Rect::new(x, y, label.len() as u16, 1);
+        if rect.right() < area.right() {
+            frame.render_widget(
+                Paragraph::new(label).style(Style::default().fg(ACCENT)),
+                rect,
+            );
+            areas.topology_sessions_toggle = Some(rect);
+        }
+    }
     if area.width >= 26 && area.height > 0 {
         let control = Rect::new(area.right() - 12, area.y, 11, 1);
         frame.render_widget(
@@ -550,7 +609,6 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
     }
     let mut rows = Vec::new();
     let hits = app.breakpoint_hits();
-    let mut member_states = std::collections::HashMap::new();
     let mut previous_file = None;
     for index in app.breakpoint_order() {
         let breakpoint = &app.breakpoints[index];
@@ -604,6 +662,10 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                 Span::styled(
                     if breakpoint.enabled { "● " } else { "○ " },
                     Style::default().fg(if breakpoint.enabled { RED } else { MUTED }),
+                ),
+                Span::styled(
+                    format!("{} · ", breakpoint.rule_kind()),
+                    Style::default().fg(YELLOW),
                 ),
                 Span::styled(
                     if app.logpoint_ids.contains(&breakpoint.id) {
@@ -674,7 +736,14 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                 Some(index),
                 Some(site),
                 Line::from(vec![
-                    Span::styled("  ↳ ", Style::default().fg(MUTED)),
+                    Span::styled(
+                        if member.inherited_from_group_id.is_some() {
+                            "  ↳ Group member · "
+                        } else {
+                            "  ↳ Session rule · "
+                        },
+                        Style::default().fg(MUTED),
+                    ),
                     Span::styled(session, Style::default().fg(Color::White)),
                     Span::styled(format!(" · {location} · "), Style::default().fg(MUTED)),
                     Span::styled(
@@ -690,13 +759,7 @@ fn draw_breakpoints(frame: &mut Frame<'_>, app: &mut App, area: Rect, areas: &mu
                         Style::default().fg(MUTED),
                     ),
                 ]),
-                Some(hit_badge(site_hits).unwrap_or_else(|| {
-                    member_badge(
-                        *member_states
-                            .entry(member.session_id.as_str())
-                            .or_insert_with(|| app.breakpoint_member_state(&member.session_id)),
-                    )
-                })),
+                hit_badge(site_hits),
             ));
         }
     }
@@ -796,28 +859,6 @@ fn hit_badge(hits: usize) -> Option<Span<'static>> {
             Style::default().fg(YELLOW).bg(Color::Rgb(58, 51, 29)),
         )
     })
-}
-
-fn member_badge(state: MemberState) -> Span<'static> {
-    use v2::StopReasonKind as Reason;
-    let (label, color) = match state {
-        MemberState::Offline => ("offline", MUTED),
-        MemberState::Unavailable => ("unavailable", MUTED),
-        MemberState::Unknown => ("unknown", MUTED),
-        MemberState::Running => ("running", GREEN),
-        MemberState::Mixed => ("mixed", YELLOW),
-        MemberState::Stopped(Reason::Step) => ("stepped", ACCENT),
-        MemberState::Stopped(Reason::Breakpoint) => ("bp stop", YELLOW),
-        MemberState::Stopped(Reason::Watchpoint) => ("watchpoint", YELLOW),
-        MemberState::Stopped(Reason::Signal) => ("signal", RED),
-        MemberState::Stopped(Reason::Exception) => ("exception", RED),
-        MemberState::Stopped(Reason::Entry) => ("entry", ACCENT),
-        MemberState::Stopped(Reason::Exit) => ("exited", MUTED),
-        MemberState::Stopped(Reason::Pause) => ("paused", MUTED),
-        MemberState::Stopped(Reason::Other) => ("stopped", MUTED),
-        MemberState::Stopped(Reason::Unspecified) => ("unknown", MUTED),
-    };
-    Span::styled(format!("[{label}]"), Style::default().fg(color))
 }
 
 fn breakpoint_line(
@@ -1772,6 +1813,7 @@ fn draw_prompt(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" {title} "))
+            .title_bottom(toolbar::connection_summary(app))
     } else {
         Block::default()
     };
@@ -2063,12 +2105,55 @@ fn draw_breakpoint_target_picker(
     ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let split = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(inner);
+    let mut x = split[0].x;
+    for (kind, label) in [
+        (crate::model::BreakpointKind::Session, "[ Session rules ]"),
+        (crate::model::BreakpointKind::Group, "[ Group rules ]"),
+    ] {
+        let width = label.len() as u16;
+        if split[0].height > 0 && x + width <= split[0].right() {
+            let rect = Rect::new(x, split[0].y, width, 1);
+            frame.render_widget(
+                Paragraph::new(label).style(Style::default().fg(if picker.kind == kind {
+                    GREEN
+                } else {
+                    MUTED
+                })),
+                rect,
+            );
+            areas.breakpoint_kind_tabs.push((kind, rect));
+            x += width + 1;
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(match picker.kind {
+            crate::model::BreakpointKind::Session => {
+                "Tab: change type · sessions are independent; no future inheritance"
+            }
+            crate::model::BreakpointKind::Group => {
+                "Tab: change type · groups include current and future members"
+            }
+        })
+        .style(Style::default().fg(MUTED)),
+        split[1],
+    );
+    let indices = picker.visible_indices();
+    let cursor = indices
+        .iter()
+        .position(|index| *index == picker.cursor)
+        .unwrap_or(0);
     let rows = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(if picker.message.is_some() { 3 } else { 0 }),
         Constraint::Length(1),
     ])
-    .split(inner);
+    .split(split[2]);
     if let Some(message) = &picker.message {
         frame.render_widget(
             Paragraph::new(terminal_text(message))
@@ -2078,15 +2163,14 @@ fn draw_breakpoint_target_picker(
         );
     }
     let visible = rows[0].height.max(1) as usize;
-    let first = picker
-        .cursor
+    let first = cursor
         .saturating_add(1)
         .saturating_sub(visible)
-        .min(picker.choices.len().saturating_sub(visible));
-    let items = picker
-        .choices
+        .min(indices.len().saturating_sub(visible));
+    let items = indices
         .iter()
-        .map(|choice| {
+        .map(|index| {
+            let choice = &picker.choices[*index];
             ListItem::new(Line::from(vec![
                 Span::styled(
                     if choice.selected { "[×] " } else { "[ ] " },
@@ -2105,7 +2189,7 @@ fn draw_breakpoint_target_picker(
         .collect::<Vec<_>>();
     let mut state = ListState::default();
     if !items.is_empty() {
-        state.select(Some(picker.cursor.min(items.len() - 1)));
+        state.select(Some(cursor.min(items.len() - 1)));
         *state.offset_mut() = first;
     }
     frame.render_stateful_widget(
@@ -2117,10 +2201,17 @@ fn draw_breakpoint_target_picker(
         rows[0],
         &mut state,
     );
-    let end = (first + visible).min(picker.choices.len());
-    for (row, index) in (first..end).enumerate() {
+    if indices.is_empty() && !picker.loading {
+        frame.render_widget(
+            Paragraph::new("No eligible targets for this breakpoint type.")
+                .style(Style::default().fg(MUTED)),
+            rows[0],
+        );
+    }
+    let end = (first + visible).min(indices.len());
+    for (row, index) in indices.iter().take(end).skip(first).enumerate() {
         areas.breakpoint_target_rows.push((
-            index,
+            *index,
             Rect::new(
                 rows[0].x,
                 rows[0].y.saturating_add(row as u16),
@@ -2167,6 +2258,72 @@ fn draw_breakpoint_target_picker(
     }
     areas.breakpoint_target_cancel = Some(actions[2]);
 }
+fn draw_breakpoint_deletion(frame: &mut Frame<'_>, app: &App, root: Rect, areas: &mut UiAreas) {
+    let Some(picker) = &app.breakpoint_deletion else {
+        return;
+    };
+    let area = centered(root, 86, 70);
+    frame.render_widget(Clear, area);
+    let block = panel_block("Delete breakpoint rule · confirm scope", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(3),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let height = usize::from(rows[0].height);
+    let first = picker.cursor.saturating_sub(height.saturating_sub(1));
+    let items = picker
+        .choices
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, choice)| {
+            areas.breakpoint_deletion_rows.push((
+                index,
+                Rect::new(
+                    rows[0].x,
+                    rows[0].y + (index - first) as u16,
+                    rows[0].width,
+                    1,
+                ),
+            ));
+            ListItem::new(terminal_text(&choice.label))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(picker.cursor.saturating_sub(first)));
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_symbol("▸ ")
+            .highlight_style(Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)),
+        rows[0],
+        &mut state,
+    );
+    if let Some(choice) = picker.choices.get(picker.cursor) {
+        frame.render_widget(
+            Paragraph::new(terminal_text(&choice.warning))
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(YELLOW)),
+            rows[1],
+        );
+    }
+    let actions =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).split(rows[2]);
+    frame.render_widget(
+        Paragraph::new("[Delete · Enter]").style(Style::default().fg(RED)),
+        actions[0],
+    );
+    frame.render_widget(
+        Paragraph::new("[Cancel · Esc]").style(Style::default().fg(ACCENT)),
+        actions[1],
+    );
+    areas.breakpoint_deletion_confirm = Some(actions[0]);
+    areas.breakpoint_deletion_cancel = Some(actions[1]);
+}
+
 fn draw_help(frame: &mut Frame<'_>, app: &mut App, root: Rect) {
     let area = centered(root, 96, 94);
     frame.render_widget(Clear, area);
@@ -2657,7 +2814,11 @@ mod v2_tests {
                     .take(rect.width as usize)
                     .collect::<String>();
                 assert!(
-                    button.starts_with('[') && button.ends_with(']'),
+                    if *control == Control::CycleScope {
+                        button.contains("Scope:") && button.contains("[c]")
+                    } else {
+                        button.starts_with('[') && button.ends_with(']')
+                    },
                     "{control:?}: {button}"
                 );
                 for x in rect.x..rect.right() {
@@ -2749,7 +2910,7 @@ mod v2_tests {
             .iter()
             .find(|(c, _)| *c == Control::CycleScope)
             .unwrap();
-        assert!(screen.lines().nth(area.y as usize).unwrap().contains(" ]"));
+        assert!(screen.lines().nth(area.y as usize).unwrap().contains("[c]"));
         for width in 1..60 {
             for height in [1, 5, 18, 19, 24] {
                 render(&mut app, width, height);
@@ -3131,10 +3292,7 @@ mod v2_tests {
         for (width, height) in [(40, 10), (60, 18), (89, 23), (99, 27)] {
             let mut app = App::new("http://127.0.0.1:5000".to_string());
             let screen = render(&mut app, width, height);
-            assert!(
-                screen.contains("DDB Debugger"),
-                "{width}x{height}: {screen:?}"
-            );
+            assert!(screen.contains("DDB TU"), "{width}x{height}: {screen:?}");
             assert!(screen.contains("Source"), "{width}x{height}: {screen:?}");
         }
     }
@@ -3527,6 +3685,7 @@ mod v2_tests {
         assert!(screen.contains("worker-1"), "{screen}");
 
         app.breakpoint_target_picker = Some(BreakpointTargetPicker {
+            kind: crate::model::BreakpointKind::Group,
             draft: BreakpointDraft {
                 location: v2::breakpoint_spec::Location::Source(v2::SourceBreakpointLocation {
                     source: "/src/main.rs".into(),
@@ -3560,7 +3719,7 @@ mod v2_tests {
         assert!(screen.contains("[ Apply ]"), "{screen}");
         let apply = app.areas.breakpoint_target_apply.unwrap();
         assert!(app.areas.breakpoint_target_apply_at(apply.x, apply.y));
-        let (_, row) = app.areas.breakpoint_target_rows[1];
+        let (_, row) = app.areas.breakpoint_target_rows[0];
         assert_eq!(app.areas.breakpoint_target_at(row.x, row.y), Some(1));
     }
 }
