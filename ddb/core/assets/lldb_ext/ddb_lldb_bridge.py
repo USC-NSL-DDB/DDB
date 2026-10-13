@@ -403,6 +403,20 @@ class ProcessMonitor(object):
             except Exception:
                 self.emitter.stream(traceback.format_exc(), "log")
 
+        # Async launch can publish running before LLDB exposes any threads.
+        # A running inferior may wait for another process indefinitely, so no
+        # further state event is guaranteed to trigger thread discovery. Retry
+        # only this incomplete startup, without manufacturing stopped events.
+        if self._group_started and not self._threads:
+            process = self.debugger.GetSelectedTarget().GetProcess()
+            if process and process.IsValid():
+                state = process.GetState()
+                if state in (lldb.eStateRunning, lldb.eStateStepping):
+                    try:
+                        self._publish_state(process, state)
+                    except Exception:
+                        self.emitter.stream(traceback.format_exc(), "log")
+
     def _ensure_process(self, process):
         uid = process.GetUniqueID()
         if self._process_uid != uid:

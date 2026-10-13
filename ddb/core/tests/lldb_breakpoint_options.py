@@ -193,9 +193,41 @@ class ProcessMonitorTest(unittest.TestCase):
         api.GetStateFromEvent.return_value = 5
         api.GetRestartedFromEvent.return_value = True
         self.monitor.listener.GetNextEvent.side_effect = [True, False]
+        self.monitor._group_started = True
+        self.monitor.debugger.GetSelectedTarget.return_value.GetProcess.return_value = self.process
         self.monitor._publish_state = Mock()
         self.monitor.poll()
         self.monitor._publish_state.assert_not_called()
+
+    def test_running_launch_publishes_threads_that_become_visible_without_an_event(self):
+        # LLDB can report a running process before its native thread list is
+        # available. A program waiting for its parent need not stop again.
+        self.process.GetState.return_value = 6
+        self.process.GetNumThreads.side_effect = [0, 1]
+        self.thread.GetIndexID.return_value = 1
+        self.monitor._sync_threads = (
+            bridge_module.ProcessMonitor._sync_threads.__get__(self.monitor)
+        )
+        self.monitor._group_started = True
+        self.monitor.debugger.GetSelectedTarget.return_value.GetProcess.return_value = self.process
+        self.monitor.listener.GetNextEvent.return_value = False
+        self.monitor.snapshot(self.process)
+        self.assertFalse(any(
+            call.args[0] == "thread-created"
+            for call in self.emitter.event.call_args_list
+        ))
+        self.monitor.poll()
+        self.assertIn(
+            unittest.mock.call(
+                "thread-created", {"id": "1", "group-id": bridge_module.GROUP_ID}
+            ),
+            self.emitter.event.call_args_list,
+        )
+        self.monitor.poll()
+        self.assertEqual(sum(
+            call.args[0] == "thread-created"
+            for call in self.emitter.event.call_args_list
+        ), 1)
 
 
 class BreakpointOptionsTest(unittest.TestCase):
