@@ -573,6 +573,42 @@ fn greeter_auto_attach_terminal_workflow(workflow: GreeterWorkflow) {
         .filter(|thread| thread.session_id == server.session_id)
         .map(|thread| thread.thread_id.as_str())
         .collect::<Vec<_>>();
+    // A frame's own path must resolve, not just the absolute path entered by
+    // the user earlier. MI frame filtering can otherwise lose source identity.
+    let hit_thread = stopped
+        .threads
+        .iter()
+        .find(|thread| {
+            thread.session_id == server.session_id
+                && thread
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| location.line == server_line as u32)
+        })
+        .unwrap();
+    let hit_frames = ddb
+        .runtime
+        .block_on(ddb.client.list_frames(v2::ListFramesRequest {
+            thread_id: hit_thread.thread_id.clone(),
+            ..Default::default()
+        }))
+        .unwrap();
+    let hit_location = hit_frames.frames.first().unwrap().location.clone().unwrap();
+    let resolution = ddb
+        .runtime
+        .block_on(ddb.client.resolve_source(v2::ResolveSourceRequest {
+            target: Some(v2::Target {
+                selector: Some(v2::target::Selector::Thread(v2::ThreadTarget {
+                    thread_id: hit_thread.thread_id.clone(),
+                })),
+            }),
+            location: Some(hit_location.clone()),
+            ..Default::default()
+        }));
+    assert!(
+        resolution.is_ok(),
+        "paused greeter source {hit_location:?}: {resolution:?}"
+    );
     let server_stops = stopped.execution_states.iter().filter(|state| {
         matches!(state.target.as_ref().and_then(|target| target.selector.as_ref()), Some(v2::target::Selector::Thread(target)) if server_threads.contains(&target.thread_id.as_str()))
     }).collect::<Vec<_>>();

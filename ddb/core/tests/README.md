@@ -184,7 +184,13 @@ enumeration and that inconclusive probes still perform directory discovery.
 ```sh
 cargo test --manifest-path ddb/Cargo.toml --locked -p ddb --bin ddb \
   real_gdb_source_directory_is_literal_and_exact -- --ignored
+cargo test --manifest-path ddb/Cargo.toml --locked -p ddb --bin ddb \
+  real_gdb_filtered_frames_preserve_canonical_source -- --ignored
 ```
+
+The filtered-frame regression compiles relative DWARF source names, as ccache
+can do. It verifies that MI frame-filter output retains canonical source paths
+and native frame levels, whether DDB frame hiding is enabled or disabled.
 
 The adapter repository contains `examples/grpc/` profiles and an extension-host
 scenario that drives the actual greeter client and server. That scenario is

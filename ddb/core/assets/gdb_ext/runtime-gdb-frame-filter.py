@@ -1,20 +1,11 @@
-from typing import Dict, List, Optional, Set, TYPE_CHECKING, Union, Any
+from typing import Dict, List, Optional, Set
 from enum import Enum
 import inspect
 import fnmatch
 import re
 
 import gdb  # type: ignore
-
-if TYPE_CHECKING:
-    from gdb.FrameDecorator import ( # type: ignore
-        FrameDecorator as _FrameDecorator,
-        DAPFrameDecorator as _DAPFrameDecorator,
-    )  # type: ignore
-
-    _GdbFrameDecorator = Union[_FrameDecorator, _DAPFrameDecorator]
-else:
-    _GdbFrameDecorator = Any
+from gdb.FrameDecorator import FrameDecorator  # type: ignore
 
 # try:
 #     import debugpy
@@ -308,6 +299,21 @@ FRAMEWORK_PRESETS = {
 }
 
 
+class CanonicalSourceFrame(FrameDecorator):
+    """Keep debugger source identity when MI filtering omits fullname."""
+
+    def filename(self):
+        filename = super().filename()
+        try:
+            symtab = self.inferior_frame().find_sal().symtab
+            # Preserve synthetic filenames supplied by another decorator.
+            if symtab is not None and filename == symtab.filename:
+                return symtab.fullname()
+        except (gdb.error, RuntimeError):
+            pass  # Stripped or invalid frames may have no source information.
+        return filename
+
+
 class DDBFrameFilter:
     """Main frame filter for DDB"""
 
@@ -323,15 +329,14 @@ class DDBFrameFilter:
         Filter the frame iterator.
         This is the main entry point called by GDB.
 
-        The key insight: we should only YIELD frames we want to keep.
-        Don't wrap frames - just check and yield or skip.
+        Keep native frame identities and canonical source paths, even when
+        hiding is disabled but GDB's MI frame-filter printing remains enabled.
         """
         dbg(LogLevel.TRACE, "DDBFrameFilter.filter() invoked")
 
         if not self.config.enabled:
-            # If filtering is disabled, yield all frames unchanged
             for frame in frame_iter:
-                yield frame
+                yield CanonicalSourceFrame(frame)
             return
 
         # Check each frame and only yield the ones we want to keep
@@ -363,8 +368,7 @@ class DDBFrameFilter:
                 )
                 # Don't yield this frame - it will be hidden
             else:
-                # Yield the frame unchanged
-                yield frame
+                yield CanonicalSourceFrame(frame)
 
 
 class DDBFilterCommand(gdb.Command):

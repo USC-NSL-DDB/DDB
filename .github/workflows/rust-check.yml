@@ -244,7 +244,9 @@ jobs:
 
       - name: Verify literal debugger source directories
         working-directory: ddb
-        run: cargo test --locked -p ddb --bin ddb real_gdb_source_directory_is_literal_and_exact -- --ignored
+        run: |
+          cargo test --locked -p ddb --bin ddb real_gdb_source_directory_is_literal_and_exact -- --ignored
+          cargo test --locked -p ddb --bin ddb real_gdb_filtered_frames_preserve_canonical_source -- --ignored
 
       - name: Verify optimized thread state transitions
         working-directory: ddb

@@ -616,6 +616,80 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires cc and real GDB"]
+    async fn real_gdb_filtered_frames_preserve_canonical_source() {
+        use std::process::Stdio;
+        use tokio::io::AsyncWriteExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let build = fixture.path().join("build");
+        std::fs::create_dir(&build).unwrap();
+        let source = fixture.path().join("source.c");
+        std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+        let executable = build.join("fixture");
+        // Relative DWARF names also arise when ccache rewrites compiler inputs.
+        let compilation = std::process::Command::new("cc")
+            .current_dir(&build)
+            .args(["-g", "-O0", "../source.c", "-o", "fixture"])
+            .output()
+            .unwrap();
+        assert!(
+            compilation.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compilation.stderr)
+        );
+
+        let filter = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/gdb_ext/runtime-gdb-frame-filter.py");
+        let load = serde_json::to_string(&format!("source {}", filter.display())).unwrap();
+        let mut gdb = tokio::process::Command::new("gdb")
+            .args(["--nx", "--quiet", "--interpreter=mi3"])
+            .arg(&executable)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut input = gdb.stdin.take().unwrap();
+        input.write_all(format!(
+            "0-interpreter-exec console {load}\n1-enable-frame-filters\n2-break-insert main\n3-exec-run\n4-stack-list-frames\n5-ddb-filter-config --enable\n6-stack-list-frames\n7-gdb-exit\n"
+        ).as_bytes()).await.unwrap();
+        drop(input);
+        let output = tokio::time::timeout(Duration::from_secs(10), gdb.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).unwrap();
+        for token in [4, 6] {
+            use crate::debugger::gdb::parser::{normalize_dict, GdbParser};
+            use gdbmi::parser::{Message, Response};
+            let line = output
+                .lines()
+                .find(|line| line.starts_with(&format!("{token}^done")))
+                .unwrap_or_else(|| panic!("missing filtered stack: {output}"));
+            let Message::Response(Response::Result {
+                payload: Some(payload),
+                ..
+            }) = GdbParser::parse(line).unwrap()
+            else {
+                panic!("missing stack payload: {line}");
+            };
+            let payload = normalize_dict(payload);
+            let frames = payload["stack"].expect_list_ref().unwrap();
+            assert_eq!(frames.len(), 1);
+            let frame = frames[0].expect_dict_ref().unwrap();
+            assert_eq!(frame["level"].expect_string_ref().unwrap(), "0");
+            assert_eq!(
+                frame["file"].expect_string_ref().unwrap(),
+                source.to_str().unwrap(),
+                "MI frame filters omit fullname, so file must retain canonical source identity"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires cc and real GDB"]
     async fn real_gdb_source_directory_is_literal_and_exact() {
         use std::process::Stdio;
         use tokio::io::AsyncWriteExt;
