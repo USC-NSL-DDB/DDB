@@ -119,7 +119,7 @@ port.
 ```bash
 cargo test --manifest-path ddb/Cargo.toml --locked --offline \
   -p ddb --test api_v2_targeting
-cargo test --manifest-path ddb/Cargo.toml --locked --offline -p ddb --lib
+cargo test --manifest-path ddb/Cargo.toml --locked --offline -p ddb --bin ddb
 cargo clippy --manifest-path ddb/Cargo.toml --locked --offline \
   -p ddb --all-targets --all-features --no-deps -- -D warnings
 
