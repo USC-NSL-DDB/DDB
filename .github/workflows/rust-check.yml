@@ -25,6 +25,9 @@ on:
       - 'ddb/docs/benchmark-suite.md'
       - 'ddb/benchmarks/**'
       - 'ddb-tui/**'
+      - 'connector/include/**'
+      - 'fwks/grpc'
+      - 'wrapper/ddb_runapp.sh'
       - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
       - '.github/workflows/api-fuzz.yml'
@@ -49,6 +52,9 @@ on:
       - 'ddb/docs/benchmark-suite.md'
       - 'ddb/benchmarks/**'
       - 'ddb-tui/**'
+      - 'connector/include/**'
+      - 'fwks/grpc'
+      - 'wrapper/ddb_runapp.sh'
       - '.github/actions/setup-rust-ci/**'
       - '.github/workflows/rust-check.yml'
       - '.github/workflows/api-fuzz.yml'
@@ -174,7 +180,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check CI workflow policy
-        run: python3 ddb/tools/check-ci-workflow.py
+        run: |
+          python3 -B -m unittest discover -s ddb/tools/tests -v
+          python3 ddb/tools/check-ci-workflow.py
 
       - name: Install Protobuf build dependencies
         timeout-minutes: 5
@@ -319,7 +327,42 @@ jobs:
 
       - name: Install debugger test dependencies
         timeout-minutes: 5
-        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime protobuf-compiler libprotobuf-dev
+        run: bash ddb/tools/install-ci-packages.sh gdb lldb libfaketime protobuf-compiler libprotobuf-dev cmake ninja-build ccache libssl-dev libc-ares-dev zlib1g-dev libpaho-mqtt-dev mosquitto
+
+      - name: Initialize pinned instrumented gRPC
+        id: grpc-source
+        timeout-minutes: 5
+        run: |
+          git submodule update --init --depth 1 fwks/grpc
+          git -C fwks/grpc submodule update --init --recursive --depth 1 third_party/abseil-cpp third_party/protobuf third_party/re2
+          echo "revision=$(git rev-parse HEAD:fwks/grpc)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache instrumented greeter compilation
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: greeter-${{ runner.os }}-${{ runner.arch }}-${{ steps.grpc-source.outputs.revision }}-${{ hashFiles('connector/include/**', 'ddb/core/tests/fixtures/greeter/*.cc', 'ddb/core/tests/fixtures/greeter/*.hpp', 'ddb/core/tests/fixtures/greeter/CMakeLists.txt') }}
+          restore-keys: |
+            greeter-${{ runner.os }}-${{ runner.arch }}-${{ steps.grpc-source.outputs.revision }}-
+
+      - name: Build instrumented auto-attach greeters
+        id: build-greeters
+        timeout-minutes: 25
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_MAXSIZE: 1G
+        run: |
+          bash ddb/tools/build-ci-greeters.sh
+          echo "DDB_GREETER_WORKSPACE=$GITHUB_WORKSPACE/ddb/core/tests/fixtures/greeter" >> "$GITHUB_ENV"
+
+      - name: Install greeter launch runtime
+        id: greeter-runtime
+        run: |
+          install -Dm0755 wrapper/ddb_runapp.sh "$RUNNER_TEMP/ddb-ci-bin/ddb_runapp"
+          faketime_library="$(dpkg-query -L libfaketime | awk '/\/libfaketimeMT\.so\.1$/ {print; exit}')"
+          test -f "$faketime_library"
+          install -Dm0644 "$faketime_library" "$HOME/.local/lib/faketime/libfaketimeMT.so.1"
+          echo "$RUNNER_TEMP/ddb-ci-bin" >> "$GITHUB_PATH"
 
       - name: Setup cached Rust toolchain
         uses: ./.github/actions/setup-rust-ci
@@ -341,6 +384,7 @@ jobs:
         run: cargo build -p ddb --manifest-path ddb/Cargo.toml
 
       - name: Build debuggable real fixtures for TUI PTY tests
+        id: build-debug-fixtures
         env:
           CARGO_PROFILE_DEV_DEBUG: '2'
           CARGO_PROFILE_DEV_OPT_LEVEL: '0'
@@ -350,7 +394,7 @@ jobs:
 
       - name: Run ddb-tui Mock, GDB, and LLDB PTY workflows
         working-directory: ddb-tui
-        run: cargo test --test e2e_mock -- --ignored --nocapture
+        run: cargo test --test e2e_mock -- --ignored --nocapture --test-threads=1
 
       - name: Build and smoke-test paired DDB/ddb-tui artifact
         working-directory: ddb

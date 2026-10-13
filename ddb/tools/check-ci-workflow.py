@@ -47,7 +47,6 @@ REQUIRED_GATES = {
     "Run API lifecycle soak",
     "Check, test, lint, and build ddb-tui",
     "Build DDB for TUI PTY tests",
-    "Build debuggable real fixture for TUI PTY tests",
     "Run ddb-tui Mock, GDB, and LLDB PTY workflows",
     "Run managed DDB process lifecycle tests",
     "Build and smoke-test paired DDB/ddb-tui artifact",
@@ -67,10 +66,7 @@ def job_blocks(text: str) -> dict[str, str]:
     }
 
 
-def main() -> int:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    docs_text = DOCS_WORKFLOW.read_text(encoding="utf-8")
-    fuzz_text = FUZZ_WORKFLOW.read_text(encoding="utf-8")
+def validate_workflows(text: str, docs_text: str, fuzz_text: str) -> list[str]:
     errors: list[str] = []
 
     if "'ddb/docs-site/**'" in text:
@@ -140,19 +136,69 @@ def main() -> int:
                 f"job {name} must install the Protobuf compiler and well-known schemas"
             )
 
-    install_steps = text.count(installer)
-    bounded_steps = text.count("        timeout-minutes: 5")
-    if install_steps != bounded_steps:
-        errors.append(
-            f"all package installs need five-minute step timeouts: "
-            f"{install_steps} installers, {bounded_steps} timeouts"
-        )
+    for step in re.split(r"(?m)(?=^      - name: )", text):
+        if installer in step and not re.search(
+            r"(?m)^        timeout-minutes: 5$", step
+        ):
+            errors.append("all package installs need five-minute step timeouts")
 
     step_names = set(re.findall(r"(?m)^      - name: (.+)$", text))
     missing_gates = sorted(REQUIRED_GATES - step_names)
     if missing_gates:
         errors.append("workflow lost required gates: " + ", ".join(missing_gates))
 
+    # Display names may change. Identify this gate by its stable step id and
+    # verify both debuggable fixture builds, not just the existence of a label.
+    tui = blocks.get("tui-integration", "")
+    step_ids = re.findall(r"(?m)^        id: ([a-z0-9-]+)$", tui)
+    for step_id in ("grpc-source", "build-greeters", "greeter-runtime"):
+        if step_ids.count(step_id) != 1:
+            errors.append(f"greeter CI requires one {step_id} step")
+    steps = re.split(r"(?m)(?=^      - name: )", tui)
+    fixture_steps = [
+        step
+        for step in steps
+        if re.search(r"(?m)^        id: build-debug-fixtures$", step)
+    ]
+    if len(fixture_steps) != 1:
+        errors.append("TUI CI requires one build-debug-fixtures step")
+    else:
+        fixture_step = fixture_steps[0]
+        for fixture in ("real_loop", "real_dbt"):
+            directory = f"ddb/core/tests/fixtures/{fixture}"
+            for argument in (
+                f"--manifest-path {directory}/Cargo.toml",
+                f"--target-dir {directory}/target",
+            ):
+                if argument not in fixture_step:
+                    errors.append(f"debug fixture build is missing {argument}")
+        for setting in (
+            "CARGO_PROFILE_DEV_DEBUG: '2'", "CARGO_PROFILE_DEV_OPT_LEVEL: '0'"
+        ):
+            if setting not in fixture_step:
+                errors.append(f"debug fixture build requires {setting}")
+
+    for prerequisite in (
+        "mosquitto",
+        "libpaho-mqtt-dev",
+        "libfaketime",
+        "bash ddb/tools/build-ci-greeters.sh",
+        "DDB_GREETER_WORKSPACE=",
+        "wrapper/ddb_runapp.sh",
+        "--test-threads=1",
+    ):
+        if prerequisite not in tui:
+            errors.append(f"greeter CI is missing prerequisite {prerequisite}")
+
+    return errors
+
+
+def main() -> int:
+    errors = validate_workflows(
+        WORKFLOW.read_text(encoding="utf-8"),
+        DOCS_WORKFLOW.read_text(encoding="utf-8"),
+        FUZZ_WORKFLOW.read_text(encoding="utf-8"),
+    )
     if errors:
         for error in errors:
             print(f"CI policy violation: {error}", file=sys.stderr)

@@ -990,8 +990,29 @@ also checks a second TUI in explicit local mode: the same callee
 retains source and variable inspection while the cross-session caller is absent.
 Run only these cases with `cargo test --test e2e_mock distributed_caller_memory -- --ignored --test-threads=1`.
 
-The opt-in auto-attach greeter regressions additionally require an instrumented
-gRPC helloworld checkout, `ddb_runapp`, and Mosquitto. They reserve a free loopback
+The opt-in auto-attach greeter regressions require instrumented gRPC greeters,
+`ddb_runapp`, and Mosquitto. CI builds the repository-owned fixture against the
+pinned `fwks/grpc` submodule and runs all five cases. To reproduce that build on
+Linux, install CMake, Ninja, ccache, OpenSSL/c-ares/zlib development packages,
+Paho MQTT C development headers, Mosquitto, GDB, LLDB, and libfaketime, then run:
+
+```bash
+git submodule update --init --depth 1 fwks/grpc
+git -C fwks/grpc submodule update --init --recursive --depth 1 \
+  third_party/abseil-cpp third_party/protobuf third_party/re2
+bash ddb/tools/build-ci-greeters.sh
+
+DDB_GREETER_WORKSPACE="$PWD/ddb/core/tests/fixtures/greeter" \
+  cargo test --manifest-path ddb-tui/Cargo.toml --test e2e_mock \
+  -- --ignored --test-threads=1
+```
+
+Run these commands from the repository root with the normal `ddb_runapp`
+wrapper installed and the sibling backend/real Rust fixtures built as described
+above. An existing instrumented helloworld checkout is still supported by
+setting `DDB_GREETER_WORKSPACE` to its directory instead.
+
+The greeter tests reserve a free loopback
 broker port, preserve and restore the prior `/tmp/ddb/service_discovery/config`
 bytes, and refuse an occupied configured broker port. They own their brokers
 and applications; do not run another discovery session while these tests run.
