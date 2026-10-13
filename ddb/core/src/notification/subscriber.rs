@@ -44,7 +44,7 @@ impl Subscriber {
 
     pub(super) fn record_ping(&self) {
         self.missed_heartbeats
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |missed| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |missed| {
                 Some(missed.saturating_add(1))
             })
             .ok();

@@ -150,7 +150,7 @@ impl OutputHub {
             return Err(OutputHubError::Closed);
         }
         self.subscribers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.config.max_subscribers).then_some(current + 1)
             })
             .map_err(|_| OutputHubError::SubscriberLimit)?;

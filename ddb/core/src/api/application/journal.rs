@@ -431,7 +431,7 @@ impl StateJournal {
     fn reserve_subscriber(&self) -> Result<(), ApplicationError> {
         self.inner
             .subscribers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.inner.config.max_subscribers).then_some(current + 1)
             })
             .map(|_| ())
