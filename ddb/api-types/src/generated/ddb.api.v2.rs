@@ -3391,8 +3391,10 @@ pub struct SearchSourceRequest {
 /// scalar positions, not bytes or UTF-16 units; the end column is exclusive.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SourceSearchMatch {
+    /// One-based line number of the match in the searched document.
     #[prost(uint32, tag = "1")]
     pub line: u32,
+    /// One-based Unicode scalar position of the first matched character.
     #[prost(uint32, tag = "2")]
     pub start_column: u32,
     /// Fuzzy matches report the bounding range, including gaps.
@@ -3405,6 +3407,7 @@ pub struct SourceSearchMatch {
 /// SearchSourceResponse pins the match and returned window to one file version.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchSourceResponse {
+    /// Common success metadata for this source search.
     #[prost(message, optional, tag = "1")]
     pub context: ::core::option::Option<ResponseContext>,
     /// Absent if no line matches. One result per line, not per occurrence.
@@ -3417,6 +3420,7 @@ pub struct SearchSourceResponse {
     /// Version of the searched document, including no-match responses.
     #[prost(string, tag = "4")]
     pub content_hash: ::prost::alloc::string::String,
+    /// Total line count of the immutable document version searched.
     #[prost(uint32, tag = "5")]
     pub total_lines: u32,
 }

@@ -552,7 +552,9 @@ message SearchSourceRequest {
 // SourceSearchMatch identifies a matching line. Columns are one-based Unicode
 // scalar positions, not bytes or UTF-16 units; the end column is exclusive.
 message SourceSearchMatch {
+  // One-based line number of the match in the searched document.
   uint32 line = 1;
+  // One-based Unicode scalar position of the first matched character.
   uint32 start_column = 2;
   // Fuzzy matches report the bounding range, including gaps.
   uint32 end_column = 3;
@@ -562,6 +564,7 @@ message SourceSearchMatch {
 
 // SearchSourceResponse pins the match and returned window to one file version.
 message SearchSourceResponse {
+  // Common success metadata for this source search.
   ResponseContext context = 1;
   // Absent if no line matches. One result per line, not per occurrence.
   SourceSearchMatch result = 2;
@@ -570,6 +573,7 @@ message SearchSourceResponse {
   SourceContent source = 3;
   // Version of the searched document, including no-match responses.
   string content_hash = 4;
+  // Total line count of the immutable document version searched.
   uint32 total_lines = 5;
 }
 
