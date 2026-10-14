@@ -5,6 +5,15 @@ struct PolicyTestPort {
     block_continue: AtomicBool,
     continue_queued: tokio::sync::Notify,
     release_continue: tokio::sync::Notify,
+    block_pause: AtomicBool,
+    pause_queued: tokio::sync::Notify,
+    release_pause: tokio::sync::Notify,
+    block_frames: AtomicBool,
+    frames_queued: tokio::sync::Notify,
+    release_frames: tokio::sync::Notify,
+    block_evaluation: AtomicBool,
+    evaluation_queued: tokio::sync::Notify,
+    release_evaluation: tokio::sync::Notify,
 }
 
 #[async_trait]
@@ -14,6 +23,10 @@ impl ApplicationCommandPort for PolicyTestPort {
         command: &str,
         target: CommandTarget,
     ) -> Result<CommandOutcome, CommandPortError> {
+        if command.starts_with("-stack-list-frames") && self.block_frames.load(Ordering::SeqCst) {
+            self.frames_queued.notify_one();
+            self.release_frames.notified().await;
+        }
         self.calls
             .lock()
             .unwrap()
@@ -26,10 +39,24 @@ impl ApplicationCommandPort for PolicyTestPort {
         if command == "-exec-interrupt" && self.fail_pause.load(Ordering::SeqCst) {
             return Err(CommandPortError::test("peer unavailable"));
         }
+        let payload = command.starts_with("-stack-list-frames").then(|| {
+            vec![(
+                "stack".into(),
+                Value::List(vec![Value::Dict(
+                    vec![
+                        ("level".into(), "0".into()),
+                        ("addr".into(), "0x10".into()),
+                        ("func".into(), "main".into()),
+                    ]
+                    .into(),
+                )]),
+            )]
+            .into()
+        });
         Ok(CommandOutcome::silent(FinishedCmd::new(
             None,
             sid,
-            vec![ParsedSessionResponse::new(sid, "done".into(), None)],
+            vec![ParsedSessionResponse::new(sid, "done".into(), payload)],
         )))
     }
 
@@ -45,11 +72,20 @@ impl ApplicationCommandPort for PolicyTestPort {
             self.continue_queued.notify_one();
             self.release_continue.notified().await;
         }
+        if command == "-exec-interrupt" && self.block_pause.load(Ordering::SeqCst) {
+            self.pause_queued.notify_one();
+            self.release_pause.notified().await;
+        }
+        if command.starts_with("-ddb-var-create") && self.block_evaluation.load(Ordering::SeqCst) {
+            self.evaluation_queued.notify_one();
+            self.release_evaluation.notified().await;
+        }
         if let Some(guard) = guard {
             guard
                 .check()
                 .await
                 .map_err(|_| CommandPortError::test("stale stop"))?;
+            guard.dispatched();
         }
         self.execute(command, target).await
     }
@@ -86,9 +122,18 @@ async fn policy_fixture() -> (
 }
 
 async fn policy_stop(model: &RuntimeModel, owner: u64, log_message: Option<&str>) {
+    policy_stop_in_session(model, 42, owner, log_message).await;
+}
+
+async fn policy_stop_in_session(
+    model: &RuntimeModel,
+    session: u64,
+    owner: u64,
+    log_message: Option<&str>,
+) {
     model
         .update_thread_statuses_with_details(
-            42,
+            session,
             &[11],
             ThreadStatus::STOPPED,
             None,
@@ -102,6 +147,228 @@ async fn policy_stop(model: &RuntimeModel, owner: u64, log_message: Option<&str>
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn an_ordinary_stop_and_logpoint_in_one_snapshot_are_both_handled() {
+    for logpoint_session in [42, 43] {
+        let (model, service, port, owner) = policy_fixture().await;
+        let peer = model.thread_snapshots_for_sessions(&[43]).await[0]
+            .global_id
+            .value();
+        let (logpoint, ordinary) = if logpoint_session == 42 {
+            (owner, peer)
+        } else {
+            (peer, owner)
+        };
+        // All fixture operations complete without yielding on this current-thread
+        // runtime, so the worker's first snapshot contains both native stops.
+        policy_stop_in_session(&model, logpoint_session, logpoint, Some("batched logpoint")).await;
+        policy_stop_in_session(
+            &model,
+            if logpoint_session == 42 { 43 } else { 42 },
+            ordinary,
+            None,
+        )
+        .await;
+        service
+            .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+            .unwrap();
+        let policy = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+        assert_eq!(
+            policy.initiating_stop.unwrap().target,
+            Some(service_thread_target(&service, ordinary))
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !port
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(command, _)| command == "-record-time-and-continue")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("ordinary cause must not invalidate the concurrent logpoint");
+    }
+}
+
+fn service_thread_target(service: &DdbApplicationService, thread: u64) -> PublicTarget {
+    PublicTarget {
+        selector: Some(target::Selector::Thread(ddb_api_types::v2::ThreadTarget {
+            thread_id: service.ids.encode(ResourceIdKind::Thread, thread).unwrap(),
+        })),
+    }
+}
+
+#[tokio::test]
+async fn queued_peer_pause_cannot_interrupt_a_newer_running_generation() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    tokio::time::timeout(Duration::from_secs(1), port.pause_queued.notified())
+        .await
+        .unwrap();
+    let first_revision = service.stop_policy_snapshot().unwrap().revision;
+    model
+        .update_thread_statuses(43, &[11], ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    model
+        .update_thread_statuses(43, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    port.block_pause.store(false, Ordering::SeqCst);
+    port.release_pause.notify_one();
+    let settled = wait_policy(&service, |policy| {
+        policy.revision > first_revision
+            && policy.pending_targets.is_empty()
+            && policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| outcome.succeeded)
+    })
+    .await;
+    assert!(settled.target_outcomes[0].succeeded);
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        [("-exec-interrupt".into(), CommandTarget::Session(43))],
+        "only the new running generation may reach native dispatch"
+    );
+    assert!(
+        service
+            .operations
+            .list_with_context()
+            .iter()
+            .any(
+                |entry| entry.operation.kind == OperationKind::Execute as i32
+                    && entry.operation.state == OperationState::Failed as i32
+            ),
+        "the old pause must fail instead of targeting new execution"
+    );
+}
+
+#[tokio::test]
+async fn an_undispatched_peer_pause_does_not_hide_a_manual_pause() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    tokio::time::timeout(Duration::from_secs(1), port.pause_queued.notified())
+        .await
+        .unwrap();
+    service.retire_stop_automation();
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    model
+        .update_thread_statuses_with_details(
+            43,
+            &[11],
+            ThreadStatus::STOPPED,
+            None,
+            Some(crate::state::ThreadStopReason {
+                kind: crate::state::ThreadStopKind::Pause,
+                signal_name: None,
+                breakpoint_id: None,
+                thread_id: Some(peer),
+                log_message: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let policy = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    assert_eq!(
+        policy.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, peer))
+    );
+    port.release_pause.notify_one();
+    assert!(port.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn logpoint_evaluation_cannot_execute_after_an_intervening_stop() {
+    for (queued_evaluation, explicit_pause) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let (model, service, port, owner) = policy_fixture().await;
+        if queued_evaluation {
+            port.block_evaluation.store(true, Ordering::SeqCst);
+        } else {
+            port.block_frames.store(true, Ordering::SeqCst);
+        }
+        policy_stop(&model, owner, Some("side effect={counter++}")).await;
+        let queued = if queued_evaluation {
+            &port.evaluation_queued
+        } else {
+            &port.frames_queued
+        };
+        tokio::time::timeout(Duration::from_secs(1), queued.notified())
+            .await
+            .unwrap();
+        if explicit_pause {
+            let request = execute_request(
+                "pause-evaluation",
+                session_target(service.ids.encode(ResourceIdKind::Session, 42).unwrap()),
+                ExecutionAction::Interrupt,
+            );
+            let operation = service
+                .execute(&PrincipalContext::new("second-client").unwrap(), request)
+                .await
+                .unwrap()
+                .operation
+                .unwrap();
+            terminal_operation(&service, &operation.operation_id).await;
+        } else {
+            policy_stop(&model, owner, None).await;
+        }
+        if queued_evaluation {
+            port.release_evaluation.notify_one();
+        } else {
+            port.release_frames.notify_one();
+        }
+        // The guard failure is surfaced through the operation when evaluation was
+        // admitted, or through the stopped frame query before admission.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let done = if queued_evaluation {
+                    service.operations.list_with_context().iter().any(|entry| {
+                        entry.operation.kind == OperationKind::Evaluate as i32
+                            && entry.operation.state == OperationState::Failed as i32
+                    })
+                } else {
+                    port.calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|(command, _)| command.starts_with("-stack-list-frames"))
+                };
+                if done {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !port
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(command, _)| command.starts_with("-ddb-var-create")
+                    || command == "-record-time-and-continue"),
+            "an old logpoint must not evaluate or resume the newer stop"
+        );
+    }
 }
 
 async fn wait_policy(

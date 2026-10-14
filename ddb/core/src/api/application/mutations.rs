@@ -107,6 +107,7 @@ pub(super) enum CompletionProjection {
     Evaluation {
         frame: Option<StopFrameKey>,
         object: Option<Arc<super::variable_objects::VariableObject>>,
+        dispatch_guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
     },
     VariableAssignment {
         frame: StopFrameKey,
@@ -263,6 +264,15 @@ impl DdbApplicationService {
         principal: &PrincipalContext,
         request: EvaluateRequest,
     ) -> Result<OperationAdmissionResponse, ApplicationError> {
+        self.evaluate_guarded(principal, request, None).await
+    }
+
+    pub(super) async fn evaluate_guarded(
+        self: &Arc<Self>,
+        principal: &PrincipalContext,
+        request: EvaluateRequest,
+        dispatch_guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
+    ) -> Result<OperationAdmissionResponse, ApplicationError> {
         let scope = RequestScope::begin(request.context.as_ref())?;
         let fingerprint = fingerprint_without_context(&request, |request| request.context = None);
         if let Some(response) =
@@ -341,7 +351,11 @@ impl DdbApplicationService {
             OperationKind::Evaluate,
             resolved,
             command,
-            CompletionProjection::Evaluation { frame, object },
+            CompletionProjection::Evaluation {
+                frame,
+                object,
+                dispatch_guard,
+            },
         )
     }
 
@@ -1175,6 +1189,7 @@ impl DdbApplicationService {
         let guard = match &projection {
             CompletionProjection::Execution(guard) => guard.clone(),
             CompletionProjection::AutomaticExecution(guard) => Some(guard.clone()),
+            CompletionProjection::Evaluation { dispatch_guard, .. } => dispatch_guard.clone(),
             _ => None,
         };
         match self
@@ -2553,6 +2568,7 @@ fn evaluation_rejection_has_context_without_masking_command_failures() {
     let evaluation = CompletionProjection::Evaluation {
         frame: None,
         object: None,
+        dispatch_guard: None,
     };
     let rejected = command_target_error(SessionCommandFailureKind::DebuggerRejected, &evaluation);
     assert_eq!(rejected.code(), DdbErrorCode::BackendFailed);

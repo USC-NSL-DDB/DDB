@@ -51,11 +51,12 @@ struct PolicyState {
     cause: Option<Stop>,
     attempts: BTreeMap<u64, Vec<(u64, u64)>>,
     next_attempt: u64,
-    automatic_pauses: HashMap<u64, u64>,
+    // Native revision and attempt identify only interrupts actually dispatched.
+    automatic_pauses: HashMap<u64, (u64, u64)>,
 }
 
 pub(super) struct StopPolicies {
-    state: Mutex<PolicyState>,
+    state: Arc<Mutex<PolicyState>>,
     epoch: Arc<AtomicU64>,
     wake: Arc<Notify>,
 }
@@ -68,7 +69,7 @@ impl StopPolicies {
 
     pub fn new(epoch: Arc<AtomicU64>) -> Self {
         Self {
-            state: Mutex::new(PolicyState {
+            state: Arc::new(Mutex::new(PolicyState {
                 public: v2::StopPolicy {
                     mode: v2::StopMode::Independent as i32,
                     revision: 1,
@@ -80,7 +81,7 @@ impl StopPolicies {
                 attempts: BTreeMap::new(),
                 next_attempt: 0,
                 automatic_pauses: HashMap::new(),
-            }),
+            })),
             epoch,
             wake: Arc::new(Notify::new()),
         }
@@ -111,6 +112,9 @@ impl DispatchGuard for ActiveGuard {
     fn is_automatic(&self) -> bool {
         true
     }
+    fn dispatched(&self) {
+        self.inner.dispatched();
+    }
     async fn check(&self) -> anyhow::Result<()> {
         if !self.active.load(Ordering::SeqCst) {
             return Err(StaleExecution.into());
@@ -130,6 +134,9 @@ struct PeerPauseGuard {
     epoch: Arc<AtomicU64>,
     stop: Stop,
     peer: u64,
+    running: Vec<(u64, u64)>,
+    attempt: u64,
+    state: Arc<Mutex<PolicyState>>,
 }
 
 impl std::fmt::Debug for PeerPauseGuard {
@@ -152,7 +159,63 @@ impl DispatchGuard for PeerPauseGuard {
                 && thread.status == crate::state::ThreadStatus::STOPPED
                 && thread.stop_revision == self.stop.thread.stop_revision
         });
-        if !current || self.epoch.load(Ordering::SeqCst) != self.stop.epoch {
+        let running = threads
+            .iter()
+            .filter(|thread| {
+                thread.session_id == self.peer
+                    && thread.status == crate::state::ThreadStatus::RUNNING
+            })
+            .map(|thread| (thread.global_id.value(), thread.stop_revision))
+            .collect::<Vec<_>>();
+        if !current
+            || running != self.running
+            || self.epoch.load(Ordering::SeqCst) != self.stop.epoch
+        {
+            return Err(StaleExecution.into());
+        }
+        Ok(())
+    }
+    fn dispatched(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for (thread, revision) in &self.running {
+            state
+                .automatic_pauses
+                .insert(*thread, (revision.saturating_add(1), self.attempt));
+        }
+    }
+}
+
+struct LogpointReadGuard {
+    model: Arc<RuntimeModel>,
+    epoch: Arc<AtomicU64>,
+    stop: Stop,
+}
+
+impl std::fmt::Debug for LogpointReadGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogpointReadGuard")
+            .field("thread", &self.stop.thread.global_id)
+            .finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl DispatchGuard for LogpointReadGuard {
+    async fn check(&self) -> anyhow::Result<()> {
+        let threads = self
+            .model
+            .thread_snapshots_for_sessions(&[self.stop.thread.session_id])
+            .await;
+        if self.epoch.load(Ordering::SeqCst) != self.stop.epoch
+            || !threads.iter().any(|thread| {
+                thread.global_id.value() == self.stop.thread.global_id
+                    && thread.status == crate::state::ThreadStatus::STOPPED
+                    && thread.stop_revision == self.stop.thread.stop_revision
+            })
+        {
             return Err(StaleExecution.into());
         }
         Ok(())
@@ -366,8 +429,10 @@ impl DdbApplicationService {
                     continue;
                 }
                 state.seen.insert(thread.global_id, thread.stop_revision);
-                let automatic_pause = state.automatic_pauses.remove(&thread.global_id)
-                    == Some(thread.stop_revision)
+                let automatic_pause = state
+                    .automatic_pauses
+                    .remove(&thread.global_id)
+                    .is_some_and(|(revision, _)| revision == thread.stop_revision)
                     && (reason.kind == ThreadStopKind::Pause
                         || reason
                             .signal_name
@@ -409,8 +474,8 @@ impl DdbApplicationService {
                     && !automatic_pause
                 {
                     state.public.generation += 1;
-                    let mut stop = stop;
-                    stop.epoch = self.stop_policies.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+                    // A native stop does not retire another thread's transparent
+                    // logpoint. Explicit client intent owns epoch cancellation.
                     state.public.initiating_stop = Some(stop.execution.clone());
                     state.public.target_outcomes.clear();
                     state.cause = Some(stop);
@@ -451,11 +516,6 @@ impl DdbApplicationService {
                         continue;
                     }
                     state.attempts.insert(session.sid, running.clone());
-                    for (thread, revision) in &running {
-                        state
-                            .automatic_pauses
-                            .insert(*thread, revision.saturating_add(1));
-                    }
                     state.public.pending_targets.push(target.clone());
                     state
                         .public
@@ -490,24 +550,53 @@ impl DdbApplicationService {
         for (stop, peer, target, attempt, running) in pauses {
             let service = self.clone();
             tasks.spawn(async move {
-                let guard = Arc::new(PeerPauseGuard { model: service.queries.model().clone(),
-                    epoch: service.stop_policies.epoch.clone(), stop: stop.clone(), peer });
-                let result = service.automatic_command(&stop, CommandTarget::Session(peer),
-                    peer, "-exec-interrupt", guard, &format!("pause-{attempt}")).await;
+                let guard = Arc::new(PeerPauseGuard {
+                    model: service.queries.model().clone(),
+                    epoch: service.stop_policies.epoch.clone(),
+                    stop: stop.clone(),
+                    peer,
+                    running: running.clone(),
+                    attempt,
+                    state: service.stop_policies.state.clone(),
+                });
+                let result = service
+                    .automatic_command(
+                        &stop,
+                        CommandTarget::Session(peer),
+                        peer,
+                        "-exec-interrupt",
+                        guard,
+                        &format!("pause-{attempt}"),
+                    )
+                    .await;
                 let mut state = service.stop_policies.state();
                 if result.is_err() {
                     for (thread, revision) in &running {
-                        if state.automatic_pauses.get(thread) == Some(&revision.saturating_add(1)) {
+                        if state.automatic_pauses.get(thread) == Some(&(revision.saturating_add(1), attempt)) {
                             state.automatic_pauses.remove(thread);
                         }
                     }
                 }
-                if state.cause.as_ref().is_none_or(|cause| cause.thread.global_id != stop.thread.global_id
-                    || cause.thread.stop_revision != stop.thread.stop_revision || cause.epoch != stop.epoch) { return }
+                if state.cause.as_ref().is_none_or(|cause| {
+                    cause.thread.global_id != stop.thread.global_id
+                        || cause.thread.stop_revision != stop.thread.stop_revision
+                        || cause.epoch != stop.epoch
+                }) {
+                    return;
+                }
                 state.public.pending_targets.retain(|pending| pending != &target);
-                let error = result.err().map(|_| ApplicationError::new(v2::DdbErrorCode::BackendFailed,
-                    "peer pause failed; inspect the automatic execute operation for target details").to_contract("stop-policy"));
-                state.public.target_outcomes.push(v2::TargetOutcome { target: Some(target), succeeded: error.is_none(), error });
+                let error = result.err().map(|_| {
+                    ApplicationError::new(
+                        v2::DdbErrorCode::BackendFailed,
+                        "peer pause failed; inspect the automatic execute operation for target details",
+                    )
+                    .to_contract("stop-policy")
+                });
+                state.public.target_outcomes.push(v2::TargetOutcome {
+                    target: Some(target),
+                    succeeded: error.is_none(),
+                    error,
+                });
                 let _ = service.publish_stop_policy(&mut state);
             });
         }
@@ -601,6 +690,17 @@ impl DdbApplicationService {
 
     async fn run_logpoint(self: &Arc<Self>, stop: &Stop, message: &str) -> anyhow::Result<()> {
         let template = Template::parse(message).map_err(anyhow::Error::msg)?;
+        let active = Arc::new(AtomicBool::new(true));
+        let _lease = AutomationLease(active.clone());
+        let read_guard: Arc<dyn DispatchGuard> = Arc::new(ActiveGuard {
+            inner: Arc::new(LogpointReadGuard {
+                model: self.queries.model().clone(),
+                epoch: self.stop_policies.epoch.clone(),
+                stop: stop.clone(),
+            }),
+            active,
+        });
+        read_guard.check().await?;
         let frame = if template
             .parts
             .iter()
@@ -627,17 +727,15 @@ impl DdbApplicationService {
         } else {
             None
         };
+        read_guard.check().await?;
         let mut message = String::new();
         for (index, part) in template.parts.iter().enumerate() {
-            ensure!(
-                self.stop_policies.epoch.load(Ordering::SeqCst) == stop.epoch,
-                "logpoint superseded"
-            );
+            read_guard.check().await?;
             let value = match part {
                 Part::Text(text) => text.clone(),
                 Part::Expression(expression) => {
                     let admission = self
-                        .evaluate(
+                        .evaluate_guarded(
                             &PrincipalContext::with_scope(
                                 "ddb-stop-policy",
                                 v2::PermissionScope::Control,
@@ -658,6 +756,7 @@ impl DdbApplicationService {
                                 evaluation_context: v2::EvaluationContext::Watch as i32,
                                 ..Default::default()
                             },
+                            Some(read_guard.clone()),
                         )
                         .await?;
                     let operation = self

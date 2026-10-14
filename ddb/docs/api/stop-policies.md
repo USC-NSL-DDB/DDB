@@ -70,9 +70,13 @@ dispatch. A later native stop or a second claim fails with
 caller-context restoration does not create another native stop. Retrying the
 same idempotency key returns the original operation.
 
+Native resume commands run the process, so a claim also consumes its stopped
+sibling threads. Clients cannot resume the same stop by naming different threads.
+
 A guard requires one explicit thread and supports Continue, Next, StepIn,
-StepOut, and Jump. A full transport queue fails the guarded command rather
-than delaying it after validation. A dispatched claim remains consumed if
+StepOut, and Jump. A busy transport writer or full queue fails the guarded command
+rather than delaying it after validation. Events arriving during validation also
+fail the dispatch. A claimed stop remains consumed if
 the debugger rejects the command. A client may issue a deliberate unguarded
 action or wait for a new native stop.
 
@@ -88,7 +92,10 @@ Literal text never becomes a debugger expression. Templates and rendered
 messages are limited to 64 KiB, with at most 128 expressions. At most 16
 automatic tasks run concurrently, with a 30-second deadline.
 
-DDB evaluates against the originating stopped frame. Its guarded continuation
+DDB checks the originating native stop around frame capture and at each expression
+dispatch. Cancellation also fences evaluations still waiting in a command queue.
+An ordinary stop in another session preserves transparent logpoint handling.
+Its guarded continuation
 revalidates and consumes that native stop at dispatch, then publishes one
 console output record attributed to its session and thread. Every output
 subscriber sees the same record, and thread filters can select logpoint
