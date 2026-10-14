@@ -35,6 +35,9 @@ impl Default for StateSyncOptions {
 
 /// One observable step in snapshot hydration and replayable state delivery.
 #[derive(Clone, Debug)]
+// Preserve the public value-based snapshot variant as additive contract fields
+// grow. Boxing it would require existing SDK consumers to change their code.
+#[allow(clippy::large_enum_variant)]
 pub enum StateSyncItem {
     /// A complete replacement for the consumer's derived projection.
     Snapshot(v2::Snapshot),

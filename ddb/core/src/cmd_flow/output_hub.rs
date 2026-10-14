@@ -26,6 +26,7 @@ pub(crate) struct DebuggerOutputRecord {
     pub(crate) sequence: u64,
     pub(crate) observed_at: SystemTime,
     pub(crate) session_id: Option<u64>,
+    pub(crate) thread_id: Option<u64>,
     pub(crate) stream: DebuggerOutputStream,
     pub(crate) text: String,
     pub(crate) truncated: bool,
@@ -116,6 +117,16 @@ impl OutputHub {
         stream: DebuggerOutputStream,
         text: impl Into<String>,
     ) -> Result<(), OutputHubError> {
+        self.publish_for_thread(session_id, None, stream, text)
+    }
+
+    pub(crate) fn publish_for_thread(
+        &self,
+        session_id: Option<u64>,
+        thread_id: Option<u64>,
+        stream: DebuggerOutputStream,
+        text: impl Into<String>,
+    ) -> Result<(), OutputHubError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(OutputHubError::Closed);
         }
@@ -130,6 +141,7 @@ impl OutputHub {
             sequence,
             observed_at: SystemTime::now(),
             session_id,
+            thread_id,
             stream,
             text,
             truncated,
@@ -408,6 +420,7 @@ mod tests {
     #[test]
     fn known_subscriber_queue_drops_accumulate_exact_bytes() {
         let first = DebuggerOutputRecord {
+            thread_id: None,
             sequence: 4,
             observed_at: SystemTime::UNIX_EPOCH,
             session_id: None,

@@ -20,6 +20,7 @@ mod resource_catalog;
 mod runtime_events;
 mod service;
 mod sources;
+mod stop_policies;
 mod target;
 mod variable_objects;
 pub(crate) use command_port::ApplicationCommandPort;

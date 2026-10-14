@@ -22,6 +22,8 @@ pub struct BreakpointSnapshot {
     pub hardware: bool,
     #[serde(skip)]
     pub ignore_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_message: Option<String>,
     pub subbkpts: Vec<SubBreakpointSnapshot>,
 }
 
@@ -65,6 +67,7 @@ impl From<&BkptMeta> for BreakpointSnapshot {
             temporary: breakpoint.properties().temporary,
             hardware: breakpoint.properties().hardware,
             ignore_count: breakpoint.properties().ignore_count,
+            log_message: breakpoint.properties().log_message.clone(),
             subbkpts: breakpoint
                 .sub_breakpoints()
                 .iter()

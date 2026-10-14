@@ -139,6 +139,7 @@ impl StateEventContext {
                 context.session_ids.push(resource.session_id.clone());
             }
             resource_upsert::Resource::Capabilities(_)
+            | resource_upsert::Resource::StopPolicy(_)
             | resource_upsert::Resource::ExtensionState(_) => context.global = true,
         }
         context.normalize();

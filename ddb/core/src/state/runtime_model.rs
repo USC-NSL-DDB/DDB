@@ -96,6 +96,7 @@ pub(crate) struct ThreadSnapshot {
     pub(crate) status: ThreadStatus,
     pub(crate) selected: bool,
     pub(crate) execution_revision: u64,
+    pub(crate) stop_revision: u64,
     pub(crate) location: Option<ThreadLocation>,
     pub(crate) stop_reason: Option<ThreadStopReason>,
 }
@@ -162,6 +163,7 @@ pub struct RuntimeModel {
     proclets: ProcletMgr,
     group_operations: GroupOperationCoordinator,
     changes: broadcast::Sender<RuntimeChange>,
+    execution_control_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl std::fmt::Debug for RuntimeModel {
@@ -182,11 +184,22 @@ impl RuntimeModel {
             proclets: ProcletMgr::new(),
             group_operations: GroupOperationCoordinator::new(),
             changes,
+            execution_control_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
     pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<RuntimeChange> {
         self.changes.subscribe()
+    }
+
+    pub(crate) fn execution_control_epoch(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.execution_control_epoch.clone()
+    }
+
+    pub(crate) fn retire_stop_automation(&self) {
+        self.execution_control_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.notify_change(RuntimeChange::topology());
     }
 
     fn notify_change(&self, change: RuntimeChange) {
@@ -317,6 +330,7 @@ impl RuntimeModel {
                         status: thread.status,
                         selected: selected == Some(thread.local_id),
                         execution_revision: thread.execution_revision,
+                        stop_revision: thread.stop_revision,
                         location: thread.location,
                         stop_reason: thread.stop_reason,
                     });
@@ -830,10 +844,11 @@ impl RuntimeModel {
         breakpoint_id: u64,
         enabled: bool,
         condition: Option<String>,
+        log_message: Option<String>,
     ) -> Option<BkptMeta> {
-        let breakpoint = self
-            .breakpoints
-            .update_breakpoint(breakpoint_id, enabled, condition);
+        let breakpoint =
+            self.breakpoints
+                .update_breakpoint(breakpoint_id, enabled, condition, log_message);
         if breakpoint.is_some() {
             self.notify_change(RuntimeChange::breakpoints());
         }

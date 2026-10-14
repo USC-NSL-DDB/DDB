@@ -238,6 +238,7 @@ impl CompatibilityCommandService {
         }
         let location = BkptLoc::new(request.source, request.line);
         let properties = BreakpointProperties {
+            log_message: None,
             enabled: true,
             condition: request.condition,
             temporary: request.temporary,

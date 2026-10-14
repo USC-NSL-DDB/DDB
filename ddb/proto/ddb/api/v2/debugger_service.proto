@@ -820,6 +820,8 @@ message ConfigureDebuggerRequest {
     Empty enable_pretty_printing = 3;
     // Adds one source-prefix rule. Matching order follows the backend's rules.
     SourcePathMapping source_mapping = 4;
+    // Shared backend policy. Requires a broadcast target, including with no sessions.
+    StopPolicyConfig stop_policy = 6;
   }
   // Optional optimistic mutation guards.
   optional Preconditions preconditions = 5;

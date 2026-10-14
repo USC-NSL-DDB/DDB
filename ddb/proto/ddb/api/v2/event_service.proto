@@ -23,6 +23,7 @@ message ResourceUpsert {
     Capabilities capabilities = 9;
     ExtensionState extension_state = 10;
     PendingCommand pending_command = 11;
+    StopPolicy stop_policy = 12;
   }
 }
 

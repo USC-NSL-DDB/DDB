@@ -240,20 +240,13 @@ fn v2_protojson_is_fail_closed_scope_checked_and_idempotent_end_to_end() {
         unauthenticated_output["code"],
         "DDB_ERROR_CODE_UNAUTHENTICATED"
     );
-    let (status, unsupported_output_filter) = ddb.api_post_json_with_bearer(
+    let (status, invalid_output_filter) = ddb.api_post_json_with_bearer(
         &rpc("DdbEventService", "SubscribeOutput"),
         &json!({"filter": {"threadIds": ["thr_invalid"]}}),
         V2_TEST_READ_TOKEN,
     );
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(
-        unsupported_output_filter["code"],
-        "DDB_ERROR_CODE_UNSUPPORTED"
-    );
-    assert_eq!(
-        unsupported_output_filter["requiredCapability"],
-        "output.thread_context"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(invalid_output_filter["code"], "DDB_ERROR_CODE_NOT_FOUND");
 
     let (status, pending) = ddb.api_post_json_with_bearer(
         &rpc("DebuggerService", "ListPendingCommands"),

@@ -21,6 +21,7 @@ pub struct BreakpointProperties {
     pub temporary: bool,
     pub hardware: bool,
     pub ignore_count: Option<u64>,
+    pub log_message: Option<String>,
 }
 
 impl Default for BreakpointProperties {
@@ -31,6 +32,7 @@ impl Default for BreakpointProperties {
             temporary: false,
             hardware: false,
             ignore_count: None,
+            log_message: None,
         }
     }
 }
@@ -591,6 +593,7 @@ impl BreakpointMgr {
         bkpt_id: u64,
         enabled: bool,
         condition: Option<String>,
+        log_message: Option<String>,
     ) -> Option<BkptMeta> {
         let mut state = self.state.write().unwrap();
         let breakpoint = state.bkpts.get_mut(&bkpt_id)?;
@@ -601,6 +604,7 @@ impl BreakpointMgr {
         }
         breakpoint.properties.enabled = enabled;
         breakpoint.properties.condition = condition;
+        breakpoint.properties.log_message = log_message;
         Some(breakpoint.clone())
     }
 
@@ -912,7 +916,12 @@ mod tests {
             .unwrap();
 
         let disabled = mgr
-            .update_breakpoint(breakpoint.id(), false, Some("counter > 0".to_string()))
+            .update_breakpoint(
+                breakpoint.id(),
+                false,
+                Some("counter > 0".to_string()),
+                None,
+            )
             .unwrap();
         assert!(!disabled.is_enabled());
         assert!(!mgr.breakpoint(breakpoint.id()).unwrap().is_enabled());
@@ -928,7 +937,7 @@ mod tests {
                 .as_deref(),
             Some("counter > 0")
         );
-        assert!(mgr.update_breakpoint(u64::MAX, true, None).is_none());
+        assert!(mgr.update_breakpoint(u64::MAX, true, None, None).is_none());
     }
 
     #[test]

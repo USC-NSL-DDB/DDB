@@ -331,6 +331,7 @@ async fn run_grpc_conformance(ddb: &DdbProcess, http_session_id: &str, http_disp
         .into_inner();
 
     let execution_request = ExecuteRequest {
+        execution_guard: None,
         context: Some(RequestContext {
             client_request_id: Some("grpc-conformance-next".to_string()),
             idempotency_key: Some("grpc-conformance-next-key".to_string()),

@@ -84,7 +84,7 @@ impl DdbApplicationService {
         Ok(Some(Arc::new(StopDispatchGuard {
             model: Arc::clone(self.queries.model()),
             thread,
-            revision: threads[0].execution_revision,
+            revision: threads[0].stop_revision,
         })))
     }
 }

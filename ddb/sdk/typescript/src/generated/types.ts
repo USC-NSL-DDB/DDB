@@ -22,6 +22,7 @@ export const BreakpointFeatureValues = {
   BREAKPOINT_FEATURE_ENABLE_DISABLE: "BREAKPOINT_FEATURE_ENABLE_DISABLE",
   BREAKPOINT_FEATURE_DISTRIBUTED: "BREAKPOINT_FEATURE_DISTRIBUTED",
   BREAKPOINT_FEATURE_GROUP_INHERITANCE: "BREAKPOINT_FEATURE_GROUP_INHERITANCE",
+  BREAKPOINT_FEATURE_LOGPOINT: "BREAKPOINT_FEATURE_LOGPOINT",
 } as const;
 export type BreakpointFeature = (typeof BreakpointFeatureValues)[keyof typeof BreakpointFeatureValues] | (string & {});
 
@@ -194,6 +195,7 @@ export const ResourceKindValues = {
   RESOURCE_KIND_CAPABILITIES: "RESOURCE_KIND_CAPABILITIES",
   RESOURCE_KIND_EXTENSION_STATE: "RESOURCE_KIND_EXTENSION_STATE",
   RESOURCE_KIND_PENDING_COMMAND: "RESOURCE_KIND_PENDING_COMMAND",
+  RESOURCE_KIND_STOP_POLICY: "RESOURCE_KIND_STOP_POLICY",
 } as const;
 export type ResourceKind = (typeof ResourceKindValues)[keyof typeof ResourceKindValues] | (string & {});
 
@@ -228,6 +230,7 @@ export const SnapshotSectionValues = {
   SNAPSHOT_SECTION_PENDING_OPERATIONS: "SNAPSHOT_SECTION_PENDING_OPERATIONS",
   SNAPSHOT_SECTION_EXTENSIONS: "SNAPSHOT_SECTION_EXTENSIONS",
   SNAPSHOT_SECTION_CAPABILITIES: "SNAPSHOT_SECTION_CAPABILITIES",
+  SNAPSHOT_SECTION_STOP_POLICY: "SNAPSHOT_SECTION_STOP_POLICY",
 } as const;
 export type SnapshotSection = (typeof SnapshotSectionValues)[keyof typeof SnapshotSectionValues] | (string & {});
 
@@ -280,6 +283,14 @@ export const StateEventKindValues = {
   STATE_EVENT_KIND_REQUIRED_RESYNC: "STATE_EVENT_KIND_REQUIRED_RESYNC",
 } as const;
 export type StateEventKind = (typeof StateEventKindValues)[keyof typeof StateEventKindValues] | (string & {});
+
+export const StopModeValues = {
+  STOP_MODE_UNSPECIFIED: "STOP_MODE_UNSPECIFIED",
+  STOP_MODE_INDEPENDENT: "STOP_MODE_INDEPENDENT",
+  STOP_MODE_ALL_STOP: "STOP_MODE_ALL_STOP",
+  STOP_MODE_GROUP_STOP: "STOP_MODE_GROUP_STOP",
+} as const;
+export type StopMode = (typeof StopModeValues)[keyof typeof StopModeValues] | (string & {});
 
 export const StopReasonKindValues = {
   STOP_REASON_KIND_UNSPECIFIED: "STOP_REASON_KIND_UNSPECIFIED",
@@ -378,6 +389,7 @@ export interface BreakpointSpec {
   "ignoreCount"?: string;
   "temporary"?: boolean;
   "hardware"?: boolean;
+  "logMessage"?: string;
 }
 
 export interface BroadcastTarget {
@@ -425,6 +437,7 @@ export interface ConfigureDebuggerRequest {
   "target"?: Target;
   "enablePrettyPrinting"?: Empty;
   "sourceMapping"?: SourcePathMapping;
+  "stopPolicy"?: StopPolicyConfig;
   "preconditions"?: Preconditions;
 }
 
@@ -1264,6 +1277,7 @@ export interface ResourceUpsert {
   "capabilities"?: Capabilities;
   "extensionState"?: ExtensionState;
   "pendingCommand"?: PendingCommand;
+  "stopPolicy"?: StopPolicy;
 }
 
 export interface ResourceVersion {
@@ -1389,6 +1403,7 @@ export interface Snapshot {
   "operations"?: Operation[];
   "extensionStates"?: ExtensionState[];
   "capabilities"?: Capabilities;
+  "stopPolicy"?: StopPolicy;
 }
 
 export interface SourceBreakpointLocation {
@@ -1495,6 +1510,20 @@ export interface StateEventFilter {
   "sessionIds"?: string[];
   "groupIds"?: string[];
   "includeExtensions"?: boolean;
+}
+
+export interface StopPolicy {
+  "stopPolicyId"?: string;
+  "mode"?: StopMode;
+  "generation"?: string;
+  "initiatingStop"?: ExecutionState;
+  "pendingTargets"?: Target[];
+  "targetOutcomes"?: TargetOutcome[];
+  "revision"?: string;
+}
+
+export interface StopPolicyConfig {
+  "mode"?: StopMode;
 }
 
 export interface StopReason {

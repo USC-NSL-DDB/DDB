@@ -174,3 +174,37 @@ async fn execution_guard_is_rechecked_after_admission_before_dispatch() {
     );
     assert_eq!(port.calls.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn native_stop_guard_survives_backend_context_restoration_but_not_a_new_stop() {
+    let (model, service, _, target) = guarded_fixture().await;
+    let thread = model.thread_snapshots_for_sessions(&[42]).await[0].global_id;
+    model
+        .enter_custom_context(
+            42,
+            crate::state::ThreadContext {
+                tid: thread,
+                ctx: std::collections::HashMap::from([("pc".into(), 42)]),
+            },
+        )
+        .await;
+    let request = guarded_request(&service, target.clone(), "restore").await;
+    let resolved = service
+        .target_resolver()
+        .resolve(Some(&target), super::super::TargetPurpose::Command)
+        .await
+        .unwrap();
+    let guard = service
+        .execution_guard(request.execution_guard.as_ref(), &resolved)
+        .await
+        .unwrap()
+        .unwrap();
+    model.finish_context_restore(42, true).await;
+    guard.check().await.unwrap();
+    assert!(guard.check().await.is_err());
+    model
+        .update_thread_statuses(42, &[11], ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    assert!(guard.check().await.is_err());
+}

@@ -501,6 +501,7 @@ impl<'a> ProjectionContext<'a> {
                 ignore_count: snapshot.ignore_count,
                 temporary: snapshot.temporary,
                 hardware: snapshot.hardware,
+                log_message: snapshot.log_message.clone(),
             }),
             verified,
             pending,
@@ -611,6 +612,7 @@ impl<'a> ProjectionContext<'a> {
             BreakpointFeature::EnableDisable as i32,
             BreakpointFeature::Distributed as i32,
             BreakpointFeature::GroupInheritance as i32,
+            BreakpointFeature::Logpoint as i32,
         ]);
 
         let execution_action_capabilities = execution_actions
@@ -661,6 +663,7 @@ impl<'a> ProjectionContext<'a> {
                 ResourceKind::Operation as i32,
                 ResourceKind::Capabilities as i32,
                 ResourceKind::ExtensionState as i32,
+                ResourceKind::StopPolicy as i32,
             ],
             supported_operations: supported_operations
                 .into_iter()
@@ -684,6 +687,8 @@ impl<'a> ProjectionContext<'a> {
                 "distributed_backtrace".to_string(),
                 "multi_target_routing".to_string(),
                 "group_breakpoints".to_string(),
+                "backend_stop_policies".to_string(),
+                "execution_guards".to_string(),
             ],
             limits: Some(limits),
             authentication_mode,

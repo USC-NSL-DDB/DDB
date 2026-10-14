@@ -186,6 +186,7 @@ pub(crate) struct ApplicationOutputSubscription {
     server_instance_id: String,
     streams: HashSet<i32>,
     session_ids: HashSet<u64>,
+    thread_ids: HashSet<u64>,
 }
 
 impl ApplicationOutputSubscription {
@@ -230,6 +231,26 @@ impl ApplicationOutputSubscription {
                     {
                         continue;
                     }
+                    if !self.thread_ids.is_empty()
+                        && !record
+                            .thread_id
+                            .is_some_and(|id| self.thread_ids.contains(&id))
+                    {
+                        continue;
+                    }
+                    let thread_id = match record.thread_id {
+                        Some(id) => match self.ids.encode(ResourceIdKind::Thread, id) {
+                            Ok(id) => Some(id),
+                            Err(_) => {
+                                return Some(output_projection_gap(
+                                    &self.server_instance_id,
+                                    record.sequence,
+                                    record.observed_at,
+                                ))
+                            }
+                        },
+                        None => None,
+                    };
                     let session_id = match record.session_id {
                         Some(sid) => match self.ids.encode(ResourceIdKind::Session, sid) {
                             Ok(id) => Some(id),
@@ -252,7 +273,7 @@ impl ApplicationOutputSubscription {
                             record.observed_at,
                         )),
                         session_id,
-                        thread_id: None,
+                        thread_id,
                         stream: stream as i32,
                         content: Some(output_event::Content::Text(record.text)),
                         gap: None,
@@ -392,7 +413,8 @@ pub(crate) struct DdbApplicationService {
     pub(super) sources: Arc<super::sources::SourceStore>,
     pub(super) operations: OperationStore,
     pub(super) journal: StateJournal,
-    output: Arc<OutputHub>,
+    pub(super) output: Arc<OutputHub>,
+    pub(super) stop_policies: super::stop_policies::StopPolicies,
     runtime_event_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -410,6 +432,8 @@ impl DdbApplicationService {
         let runtime_changes = queries.subscribe_runtime_changes();
         let pending_changes = queries.subscribe_pending_changes();
         let server_instance_id = format!("ddb_{}", uuid::Uuid::new_v4().simple());
+        let stop_policies =
+            super::stop_policies::StopPolicies::new(queries.model().execution_control_epoch());
         let operation_config = OperationStoreConfig {
             max_records: api_config.limits.max_operation_records as usize,
             max_bytes: api_config.limits.max_operation_bytes as usize,
@@ -444,12 +468,14 @@ impl DdbApplicationService {
             operations: OperationStore::new(&server_instance_id, operation_config),
             journal: StateJournal::new(&server_instance_id, journal_config),
             output,
+            stop_policies,
             runtime_event_tasks: Mutex::new(Vec::new()),
             server_instance_id,
         });
         let tasks = vec![
             service.spawn_runtime_event_bridge(runtime_changes),
             service.spawn_pending_event_bridge(pending_changes),
+            service.spawn_stop_policy_worker(),
         ];
         *service
             .runtime_event_tasks
@@ -546,13 +572,16 @@ impl DdbApplicationService {
     ) -> Result<ApplicationOutputSubscription, ApplicationError> {
         let _scope = RequestScope::begin(request.context.as_ref())?;
         let filter = request.filter.unwrap_or_default();
-        if !filter.thread_ids.is_empty() {
-            return Err(ApplicationError::new(
-                DdbErrorCode::Unsupported,
-                "thread-filtered output is unavailable because debugger streams have session scope",
-            )
-            .requiring("output.thread_context"));
-        }
+        let thread_ids = filter
+            .thread_ids
+            .iter()
+            .map(|id| {
+                self.ids
+                    .decode(ResourceIdKind::Thread, id)?
+                    .parse::<u64>()
+                    .map_err(|_| ApplicationError::not_found("output thread"))
+            })
+            .collect::<Result<HashSet<_>, ApplicationError>>()?;
         let mut streams = HashSet::new();
         for value in filter.streams {
             let stream = OutputStreamKind::try_from(value).map_err(|_| {
@@ -608,6 +637,7 @@ impl DdbApplicationService {
             server_instance_id: self.server_instance_id.clone(),
             streams,
             session_ids,
+            thread_ids,
         })
     }
 
@@ -2307,6 +2337,10 @@ impl DdbApplicationService {
                 operations,
                 extension_states,
                 capabilities,
+                stop_policy: sections
+                    .contains(&SnapshotSection::StopPolicy)
+                    .then(|| self.stop_policy_snapshot())
+                    .transpose()?,
             }),
         })
     }
@@ -2477,6 +2511,7 @@ fn snapshot_sections(values: &[i32]) -> Result<Vec<SnapshotSection>, Application
         SnapshotSection::PendingOperations,
         SnapshotSection::Extensions,
         SnapshotSection::Capabilities,
+        SnapshotSection::StopPolicy,
     ];
     let values = if values.is_empty() {
         return Ok(defaults.to_vec());
@@ -2671,6 +2706,7 @@ fn collect_command_group_ids(target: &CommandTarget, groups: &mut HashSet<u64>) 
 #[cfg(test)]
 mod tests {
     include!("execution_guard_tests.rs");
+    include!("stop_policy_tests.rs");
     use std::{
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
         time::Duration,

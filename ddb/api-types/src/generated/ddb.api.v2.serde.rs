@@ -1107,6 +1107,7 @@ impl serde::Serialize for BreakpointFeature {
             Self::EnableDisable => "BREAKPOINT_FEATURE_ENABLE_DISABLE",
             Self::Distributed => "BREAKPOINT_FEATURE_DISTRIBUTED",
             Self::GroupInheritance => "BREAKPOINT_FEATURE_GROUP_INHERITANCE",
+            Self::Logpoint => "BREAKPOINT_FEATURE_LOGPOINT",
         };
         serializer.serialize_str(variant)
     }
@@ -1129,6 +1130,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointFeature {
             "BREAKPOINT_FEATURE_ENABLE_DISABLE",
             "BREAKPOINT_FEATURE_DISTRIBUTED",
             "BREAKPOINT_FEATURE_GROUP_INHERITANCE",
+            "BREAKPOINT_FEATURE_LOGPOINT",
         ];
 
         struct GeneratedVisitor;
@@ -1180,6 +1182,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointFeature {
                     "BREAKPOINT_FEATURE_ENABLE_DISABLE" => Ok(BreakpointFeature::EnableDisable),
                     "BREAKPOINT_FEATURE_DISTRIBUTED" => Ok(BreakpointFeature::Distributed),
                     "BREAKPOINT_FEATURE_GROUP_INHERITANCE" => Ok(BreakpointFeature::GroupInheritance),
+                    "BREAKPOINT_FEATURE_LOGPOINT" => Ok(BreakpointFeature::Logpoint),
                     _ => Ok(BreakpointFeature::default()),
                 }
             }
@@ -1210,6 +1213,9 @@ impl serde::Serialize for BreakpointSpec {
         if self.hardware {
             len += 1;
         }
+        if self.log_message.is_some() {
+            len += 1;
+        }
         if self.location.is_some() {
             len += 1;
         }
@@ -1230,6 +1236,9 @@ impl serde::Serialize for BreakpointSpec {
         }
         if self.hardware {
             struct_ser.serialize_field("hardware", &self.hardware)?;
+        }
+        if let Some(v) = self.log_message.as_ref() {
+            struct_ser.serialize_field("logMessage", v)?;
         }
         if let Some(v) = self.location.as_ref() {
             match v {
@@ -1260,6 +1269,8 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
             "ignoreCount",
             "temporary",
             "hardware",
+            "log_message",
+            "logMessage",
             "source",
             "function",
             "address",
@@ -1272,6 +1283,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
             IgnoreCount,
             Temporary,
             Hardware,
+            LogMessage,
             Source,
             Function,
             Address,
@@ -1302,6 +1314,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
                             "ignoreCount" | "ignore_count" => Ok(GeneratedField::IgnoreCount),
                             "temporary" => Ok(GeneratedField::Temporary),
                             "hardware" => Ok(GeneratedField::Hardware),
+                            "logMessage" | "log_message" => Ok(GeneratedField::LogMessage),
                             "source" => Ok(GeneratedField::Source),
                             "function" => Ok(GeneratedField::Function),
                             "address" => Ok(GeneratedField::Address),
@@ -1329,6 +1342,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
                 let mut ignore_count__ = None;
                 let mut temporary__ = None;
                 let mut hardware__ = None;
+                let mut log_message__ = None;
                 let mut location__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -1364,6 +1378,12 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
                             }
                             hardware__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::LogMessage => {
+                            if log_message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("logMessage"));
+                            }
+                            log_message__ = map_.next_value()?;
+                        }
                         GeneratedField::Source => {
                             if location__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("source"));
@@ -1396,6 +1416,7 @@ impl<'de> serde::Deserialize<'de> for BreakpointSpec {
                     ignore_count: ignore_count__,
                     temporary: temporary__.unwrap_or_default(),
                     hardware: hardware__.unwrap_or_default(),
+                    log_message: log_message__,
                     location: location__,
                 })
             }
@@ -2350,6 +2371,9 @@ impl serde::Serialize for ConfigureDebuggerRequest {
                 configure_debugger_request::Setting::SourceMapping(v) => {
                     struct_ser.serialize_field("sourceMapping", v)?;
                 }
+                configure_debugger_request::Setting::StopPolicy(v) => {
+                    struct_ser.serialize_field("stopPolicy", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -2369,6 +2393,8 @@ impl<'de> serde::Deserialize<'de> for ConfigureDebuggerRequest {
             "enablePrettyPrinting",
             "source_mapping",
             "sourceMapping",
+            "stop_policy",
+            "stopPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2378,6 +2404,7 @@ impl<'de> serde::Deserialize<'de> for ConfigureDebuggerRequest {
             Preconditions,
             EnablePrettyPrinting,
             SourceMapping,
+            StopPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2405,6 +2432,7 @@ impl<'de> serde::Deserialize<'de> for ConfigureDebuggerRequest {
                             "preconditions" => Ok(GeneratedField::Preconditions),
                             "enablePrettyPrinting" | "enable_pretty_printing" => Ok(GeneratedField::EnablePrettyPrinting),
                             "sourceMapping" | "source_mapping" => Ok(GeneratedField::SourceMapping),
+                            "stopPolicy" | "stop_policy" => Ok(GeneratedField::StopPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2460,6 +2488,13 @@ impl<'de> serde::Deserialize<'de> for ConfigureDebuggerRequest {
                                 return Err(serde::de::Error::duplicate_field("sourceMapping"));
                             }
                             setting__ = map_.next_value::<::std::option::Option<_>>()?.map(configure_debugger_request::Setting::SourceMapping)
+;
+                        }
+                        GeneratedField::StopPolicy => {
+                            if setting__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopPolicy"));
+                            }
+                            setting__ = map_.next_value::<::std::option::Option<_>>()?.map(configure_debugger_request::Setting::StopPolicy)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -21319,6 +21354,7 @@ impl serde::Serialize for ResourceKind {
             Self::Capabilities => "RESOURCE_KIND_CAPABILITIES",
             Self::ExtensionState => "RESOURCE_KIND_EXTENSION_STATE",
             Self::PendingCommand => "RESOURCE_KIND_PENDING_COMMAND",
+            Self::StopPolicy => "RESOURCE_KIND_STOP_POLICY",
         };
         serializer.serialize_str(variant)
     }
@@ -21342,6 +21378,7 @@ impl<'de> serde::Deserialize<'de> for ResourceKind {
             "RESOURCE_KIND_CAPABILITIES",
             "RESOURCE_KIND_EXTENSION_STATE",
             "RESOURCE_KIND_PENDING_COMMAND",
+            "RESOURCE_KIND_STOP_POLICY",
         ];
 
         struct GeneratedVisitor;
@@ -21394,6 +21431,7 @@ impl<'de> serde::Deserialize<'de> for ResourceKind {
                     "RESOURCE_KIND_CAPABILITIES" => Ok(ResourceKind::Capabilities),
                     "RESOURCE_KIND_EXTENSION_STATE" => Ok(ResourceKind::ExtensionState),
                     "RESOURCE_KIND_PENDING_COMMAND" => Ok(ResourceKind::PendingCommand),
+                    "RESOURCE_KIND_STOP_POLICY" => Ok(ResourceKind::StopPolicy),
                     _ => Ok(ResourceKind::default()),
                 }
             }
@@ -21448,6 +21486,9 @@ impl serde::Serialize for ResourceUpsert {
                 resource_upsert::Resource::PendingCommand(v) => {
                     struct_ser.serialize_field("pendingCommand", v)?;
                 }
+                resource_upsert::Resource::StopPolicy(v) => {
+                    struct_ser.serialize_field("stopPolicy", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -21474,6 +21515,8 @@ impl<'de> serde::Deserialize<'de> for ResourceUpsert {
             "extensionState",
             "pending_command",
             "pendingCommand",
+            "stop_policy",
+            "stopPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -21489,6 +21532,7 @@ impl<'de> serde::Deserialize<'de> for ResourceUpsert {
             Capabilities,
             ExtensionState,
             PendingCommand,
+            StopPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -21522,6 +21566,7 @@ impl<'de> serde::Deserialize<'de> for ResourceUpsert {
                             "capabilities" => Ok(GeneratedField::Capabilities),
                             "extensionState" | "extension_state" => Ok(GeneratedField::ExtensionState),
                             "pendingCommand" | "pending_command" => Ok(GeneratedField::PendingCommand),
+                            "stopPolicy" | "stop_policy" => Ok(GeneratedField::StopPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -21619,6 +21664,13 @@ impl<'de> serde::Deserialize<'de> for ResourceUpsert {
                                 return Err(serde::de::Error::duplicate_field("pendingCommand"));
                             }
                             resource__ = map_.next_value::<::std::option::Option<_>>()?.map(resource_upsert::Resource::PendingCommand)
+;
+                        }
+                        GeneratedField::StopPolicy => {
+                            if resource__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopPolicy"));
+                            }
+                            resource__ = map_.next_value::<::std::option::Option<_>>()?.map(resource_upsert::Resource::StopPolicy)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -24120,6 +24172,9 @@ impl serde::Serialize for Snapshot {
         if self.capabilities.is_some() {
             len += 1;
         }
+        if self.stop_policy.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.Snapshot", len)?;
         if !self.server_instance_id.is_empty() {
             struct_ser.serialize_field("serverInstanceId", &self.server_instance_id)?;
@@ -24172,6 +24227,9 @@ impl serde::Serialize for Snapshot {
         if let Some(v) = self.capabilities.as_ref() {
             struct_ser.serialize_field("capabilities", v)?;
         }
+        if let Some(v) = self.stop_policy.as_ref() {
+            struct_ser.serialize_field("stopPolicy", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -24204,6 +24262,8 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
             "extension_states",
             "extensionStates",
             "capabilities",
+            "stop_policy",
+            "stopPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24223,6 +24283,7 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
             Operations,
             ExtensionStates,
             Capabilities,
+            StopPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -24260,6 +24321,7 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
                             "operations" => Ok(GeneratedField::Operations),
                             "extensionStates" | "extension_states" => Ok(GeneratedField::ExtensionStates),
                             "capabilities" => Ok(GeneratedField::Capabilities),
+                            "stopPolicy" | "stop_policy" => Ok(GeneratedField::StopPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -24294,6 +24356,7 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
                 let mut operations__ = None;
                 let mut extension_states__ = None;
                 let mut capabilities__ = None;
+                let mut stop_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ServerInstanceId => {
@@ -24388,6 +24451,12 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
                             }
                             capabilities__ = map_.next_value()?;
                         }
+                        GeneratedField::StopPolicy => {
+                            if stop_policy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopPolicy"));
+                            }
+                            stop_policy__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -24409,6 +24478,7 @@ impl<'de> serde::Deserialize<'de> for Snapshot {
                     operations: operations__.unwrap_or_default(),
                     extension_states: extension_states__.unwrap_or_default(),
                     capabilities: capabilities__,
+                    stop_policy: stop_policy__,
                 })
             }
         }
@@ -24430,6 +24500,7 @@ impl serde::Serialize for SnapshotSection {
             Self::PendingOperations => "SNAPSHOT_SECTION_PENDING_OPERATIONS",
             Self::Extensions => "SNAPSHOT_SECTION_EXTENSIONS",
             Self::Capabilities => "SNAPSHOT_SECTION_CAPABILITIES",
+            Self::StopPolicy => "SNAPSHOT_SECTION_STOP_POLICY",
         };
         serializer.serialize_str(variant)
     }
@@ -24449,6 +24520,7 @@ impl<'de> serde::Deserialize<'de> for SnapshotSection {
             "SNAPSHOT_SECTION_PENDING_OPERATIONS",
             "SNAPSHOT_SECTION_EXTENSIONS",
             "SNAPSHOT_SECTION_CAPABILITIES",
+            "SNAPSHOT_SECTION_STOP_POLICY",
         ];
 
         struct GeneratedVisitor;
@@ -24497,6 +24569,7 @@ impl<'de> serde::Deserialize<'de> for SnapshotSection {
                     "SNAPSHOT_SECTION_PENDING_OPERATIONS" => Ok(SnapshotSection::PendingOperations),
                     "SNAPSHOT_SECTION_EXTENSIONS" => Ok(SnapshotSection::Extensions),
                     "SNAPSHOT_SECTION_CAPABILITIES" => Ok(SnapshotSection::Capabilities),
+                    "SNAPSHOT_SECTION_STOP_POLICY" => Ok(SnapshotSection::StopPolicy),
                     _ => Ok(SnapshotSection::default()),
                 }
             }
@@ -27205,6 +27278,391 @@ impl<'de> serde::Deserialize<'de> for StateEventKind {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for StopMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "STOP_MODE_UNSPECIFIED",
+            Self::Independent => "STOP_MODE_INDEPENDENT",
+            Self::AllStop => "STOP_MODE_ALL_STOP",
+            Self::GroupStop => "STOP_MODE_GROUP_STOP",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for StopMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "STOP_MODE_UNSPECIFIED",
+            "STOP_MODE_INDEPENDENT",
+            "STOP_MODE_ALL_STOP",
+            "STOP_MODE_GROUP_STOP",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = StopMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok().or_else(|| Some(StopMode::default())))
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok().or_else(|| Some(StopMode::default())))
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "STOP_MODE_UNSPECIFIED" => Ok(StopMode::Unspecified),
+                    "STOP_MODE_INDEPENDENT" => Ok(StopMode::Independent),
+                    "STOP_MODE_ALL_STOP" => Ok(StopMode::AllStop),
+                    "STOP_MODE_GROUP_STOP" => Ok(StopMode::GroupStop),
+                    _ => Ok(StopMode::default()),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for StopPolicy {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.stop_policy_id.is_empty() {
+            len += 1;
+        }
+        if self.mode != 0 {
+            len += 1;
+        }
+        if self.generation != 0 {
+            len += 1;
+        }
+        if self.initiating_stop.is_some() {
+            len += 1;
+        }
+        if !self.pending_targets.is_empty() {
+            len += 1;
+        }
+        if !self.target_outcomes.is_empty() {
+            len += 1;
+        }
+        if self.revision != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.StopPolicy", len)?;
+        if !self.stop_policy_id.is_empty() {
+            struct_ser.serialize_field("stopPolicyId", &self.stop_policy_id)?;
+        }
+        if self.mode != 0 {
+            let v = StopMode::try_from(self.mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.mode)))?;
+            struct_ser.serialize_field("mode", &v)?;
+        }
+        if self.generation != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("generation", ToString::to_string(&self.generation).as_str())?;
+        }
+        if let Some(v) = self.initiating_stop.as_ref() {
+            struct_ser.serialize_field("initiatingStop", v)?;
+        }
+        if !self.pending_targets.is_empty() {
+            struct_ser.serialize_field("pendingTargets", &self.pending_targets)?;
+        }
+        if !self.target_outcomes.is_empty() {
+            struct_ser.serialize_field("targetOutcomes", &self.target_outcomes)?;
+        }
+        if self.revision != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("revision", ToString::to_string(&self.revision).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for StopPolicy {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "stop_policy_id",
+            "stopPolicyId",
+            "mode",
+            "generation",
+            "initiating_stop",
+            "initiatingStop",
+            "pending_targets",
+            "pendingTargets",
+            "target_outcomes",
+            "targetOutcomes",
+            "revision",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            StopPolicyId,
+            Mode,
+            Generation,
+            InitiatingStop,
+            PendingTargets,
+            TargetOutcomes,
+            Revision,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "stopPolicyId" | "stop_policy_id" => Ok(GeneratedField::StopPolicyId),
+                            "mode" => Ok(GeneratedField::Mode),
+                            "generation" => Ok(GeneratedField::Generation),
+                            "initiatingStop" | "initiating_stop" => Ok(GeneratedField::InitiatingStop),
+                            "pendingTargets" | "pending_targets" => Ok(GeneratedField::PendingTargets),
+                            "targetOutcomes" | "target_outcomes" => Ok(GeneratedField::TargetOutcomes),
+                            "revision" => Ok(GeneratedField::Revision),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = StopPolicy;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.StopPolicy")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<StopPolicy, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut stop_policy_id__ = None;
+                let mut mode__ = None;
+                let mut generation__ = None;
+                let mut initiating_stop__ = None;
+                let mut pending_targets__ = None;
+                let mut target_outcomes__ = None;
+                let mut revision__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::StopPolicyId => {
+                            if stop_policy_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stopPolicyId"));
+                            }
+                            stop_policy_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Mode => {
+                            if mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mode"));
+                            }
+                            mode__ = Some(map_.next_value::<StopMode>()? as i32);
+                        }
+                        GeneratedField::Generation => {
+                            if generation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("generation"));
+                            }
+                            generation__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::InitiatingStop => {
+                            if initiating_stop__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("initiatingStop"));
+                            }
+                            initiating_stop__ = map_.next_value()?;
+                        }
+                        GeneratedField::PendingTargets => {
+                            if pending_targets__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pendingTargets"));
+                            }
+                            pending_targets__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TargetOutcomes => {
+                            if target_outcomes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetOutcomes"));
+                            }
+                            target_outcomes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Revision => {
+                            if revision__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("revision"));
+                            }
+                            revision__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(StopPolicy {
+                    stop_policy_id: stop_policy_id__.unwrap_or_default(),
+                    mode: mode__.unwrap_or_default(),
+                    generation: generation__.unwrap_or_default(),
+                    initiating_stop: initiating_stop__,
+                    pending_targets: pending_targets__.unwrap_or_default(),
+                    target_outcomes: target_outcomes__.unwrap_or_default(),
+                    revision: revision__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.StopPolicy", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for StopPolicyConfig {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.mode != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.StopPolicyConfig", len)?;
+        if self.mode != 0 {
+            let v = StopMode::try_from(self.mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.mode)))?;
+            struct_ser.serialize_field("mode", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for StopPolicyConfig {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "mode",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Mode,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "mode" => Ok(GeneratedField::Mode),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = StopPolicyConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.StopPolicyConfig")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<StopPolicyConfig, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut mode__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Mode => {
+                            if mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mode"));
+                            }
+                            mode__ = Some(map_.next_value::<StopMode>()? as i32);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(StopPolicyConfig {
+                    mode: mode__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.StopPolicyConfig", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for StopReason {

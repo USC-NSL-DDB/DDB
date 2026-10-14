@@ -26,6 +26,7 @@ class BreakpointFeatureValues:
     BREAKPOINT_FEATURE_ENABLE_DISABLE = "BREAKPOINT_FEATURE_ENABLE_DISABLE"
     BREAKPOINT_FEATURE_DISTRIBUTED = "BREAKPOINT_FEATURE_DISTRIBUTED"
     BREAKPOINT_FEATURE_GROUP_INHERITANCE = "BREAKPOINT_FEATURE_GROUP_INHERITANCE"
+    BREAKPOINT_FEATURE_LOGPOINT = "BREAKPOINT_FEATURE_LOGPOINT"
 
 ChangeKind: TypeAlias = str
 class ChangeKindValues:
@@ -183,6 +184,7 @@ class ResourceKindValues:
     RESOURCE_KIND_CAPABILITIES = "RESOURCE_KIND_CAPABILITIES"
     RESOURCE_KIND_EXTENSION_STATE = "RESOURCE_KIND_EXTENSION_STATE"
     RESOURCE_KIND_PENDING_COMMAND = "RESOURCE_KIND_PENDING_COMMAND"
+    RESOURCE_KIND_STOP_POLICY = "RESOURCE_KIND_STOP_POLICY"
 
 ScopeKind: TypeAlias = str
 class ScopeKindValues:
@@ -214,6 +216,7 @@ class SnapshotSectionValues:
     SNAPSHOT_SECTION_PENDING_OPERATIONS = "SNAPSHOT_SECTION_PENDING_OPERATIONS"
     SNAPSHOT_SECTION_EXTENSIONS = "SNAPSHOT_SECTION_EXTENSIONS"
     SNAPSHOT_SECTION_CAPABILITIES = "SNAPSHOT_SECTION_CAPABILITIES"
+    SNAPSHOT_SECTION_STOP_POLICY = "SNAPSHOT_SECTION_STOP_POLICY"
 
 SortDirection: TypeAlias = str
 class SortDirectionValues:
@@ -258,6 +261,13 @@ class StateEventKindValues:
     STATE_EVENT_KIND_CAPABILITIES_CHANGED = "STATE_EVENT_KIND_CAPABILITIES_CHANGED"
     STATE_EVENT_KIND_EXTENSION_STATE_CHANGED = "STATE_EVENT_KIND_EXTENSION_STATE_CHANGED"
     STATE_EVENT_KIND_REQUIRED_RESYNC = "STATE_EVENT_KIND_REQUIRED_RESYNC"
+
+StopMode: TypeAlias = str
+class StopModeValues:
+    STOP_MODE_UNSPECIFIED = "STOP_MODE_UNSPECIFIED"
+    STOP_MODE_INDEPENDENT = "STOP_MODE_INDEPENDENT"
+    STOP_MODE_ALL_STOP = "STOP_MODE_ALL_STOP"
+    STOP_MODE_GROUP_STOP = "STOP_MODE_GROUP_STOP"
 
 StopReasonKind: TypeAlias = str
 class StopReasonKindValues:
@@ -366,6 +376,7 @@ BreakpointSpec = TypedDict(
         "ignoreCount": NotRequired["str"],
         "temporary": NotRequired["bool"],
         "hardware": NotRequired["bool"],
+        "logMessage": NotRequired["str"],
     },
 )
 
@@ -428,6 +439,7 @@ ConfigureDebuggerRequest = TypedDict(
         "target": NotRequired["Target"],
         "enablePrettyPrinting": NotRequired["Empty"],
         "sourceMapping": NotRequired["SourcePathMapping"],
+        "stopPolicy": NotRequired["StopPolicyConfig"],
         "preconditions": NotRequired["Preconditions"],
     },
 )
@@ -1654,6 +1666,7 @@ ResourceUpsert = TypedDict(
         "capabilities": NotRequired["Capabilities"],
         "extensionState": NotRequired["ExtensionState"],
         "pendingCommand": NotRequired["PendingCommand"],
+        "stopPolicy": NotRequired["StopPolicy"],
     },
 )
 
@@ -1824,6 +1837,7 @@ Snapshot = TypedDict(
         "operations": NotRequired["list[Operation]"],
         "extensionStates": NotRequired["list[ExtensionState]"],
         "capabilities": NotRequired["Capabilities"],
+        "stopPolicy": NotRequired["StopPolicy"],
     },
 )
 
@@ -1969,6 +1983,26 @@ StateEventFilter = TypedDict(
         "sessionIds": NotRequired["list[str]"],
         "groupIds": NotRequired["list[str]"],
         "includeExtensions": NotRequired["bool"],
+    },
+)
+
+StopPolicy = TypedDict(
+    "StopPolicy",
+    {
+        "stopPolicyId": NotRequired["str"],
+        "mode": NotRequired["StopMode"],
+        "generation": NotRequired["str"],
+        "initiatingStop": NotRequired["ExecutionState"],
+        "pendingTargets": NotRequired["list[Target]"],
+        "targetOutcomes": NotRequired["list[TargetOutcome]"],
+        "revision": NotRequired["str"],
+    },
+)
+
+StopPolicyConfig = TypedDict(
+    "StopPolicyConfig",
+    {
+        "mode": NotRequired["StopMode"],
     },
 )
 

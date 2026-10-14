@@ -27,6 +27,9 @@ pub(crate) struct ThreadStopReason {
     pub(crate) signal_name: Option<String>,
     pub(crate) breakpoint_id: Option<u64>,
     pub(crate) thread_id: Option<u64>,
+    // Capture the behavior at the hit, including temporary breakpoint deletion.
+    #[serde(skip)]
+    pub(crate) log_message: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize)]
@@ -46,6 +49,7 @@ pub(crate) struct LocalThreadStateSnapshot {
     pub(crate) local_id: u64,
     pub(crate) status: ThreadStatus,
     pub(crate) execution_revision: u64,
+    pub(crate) stop_revision: u64,
     pub(crate) location: Option<ThreadLocation>,
     pub(crate) stop_reason: Option<ThreadStopReason>,
 }
@@ -261,6 +265,7 @@ pub struct SessionMeta {
     // Monotonic execution generation for each thread. Frontend resources such
     // as frames and variables are valid only while this value is unchanged.
     t_revisions: HashMap<u64, u64>,
+    t_stop_revisions: HashMap<u64, u64>,
     t_stop_claims: HashMap<u64, u64>,
     t_locations: HashMap<u64, ThreadLocation>,
     t_stop_reasons: HashMap<u64, ThreadStopReason>,
@@ -287,6 +292,7 @@ impl SessionMeta {
             curr_tid: None,
             t_status: HashMap::new(),
             t_revisions: HashMap::new(),
+            t_stop_revisions: HashMap::new(),
             t_stop_claims: HashMap::new(),
             t_locations: HashMap::new(),
             t_stop_reasons: HashMap::new(),
@@ -303,6 +309,7 @@ impl SessionMeta {
         let created = self.threads.create_thread(tid, tgid, &mut self.t_status);
         if created {
             self.t_revisions.insert(tid, 1);
+            self.t_stop_revisions.insert(tid, 1);
         }
         created
     }
@@ -323,6 +330,7 @@ impl SessionMeta {
         if removed.is_some() {
             self.t_revisions.remove(&tid);
             self.t_stop_claims.remove(&tid);
+            self.t_stop_revisions.remove(&tid);
             self.t_locations.remove(&tid);
             self.t_stop_reasons.remove(&tid);
         }
@@ -340,6 +348,7 @@ impl SessionMeta {
         for tid in &removed {
             self.t_revisions.remove(tid);
             self.t_stop_claims.remove(tid);
+            self.t_stop_revisions.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
         }
@@ -357,6 +366,7 @@ impl SessionMeta {
         for tid in &removed {
             self.t_revisions.remove(tid);
             self.t_stop_claims.remove(tid);
+            self.t_stop_revisions.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
         }
@@ -433,6 +443,7 @@ impl SessionMeta {
                 local_id: *local_id,
                 status: *status,
                 execution_revision: self.t_revisions.get(local_id).copied().unwrap_or(1),
+                stop_revision: self.t_stop_revisions.get(local_id).copied().unwrap_or(1),
                 location: self.t_locations.get(local_id).cloned(),
                 stop_reason: self.t_stop_reasons.get(local_id).cloned(),
             })
@@ -466,6 +477,8 @@ impl SessionMeta {
             return false;
         }
         for tid in tids {
+            let revision = self.t_stop_revisions.entry(*tid).or_insert(1);
+            *revision = revision.saturating_add(1);
             self.t_stop_reasons.remove(tid);
             if status != ThreadStatus::STOPPED {
                 self.t_locations.remove(tid);
@@ -514,7 +527,7 @@ impl SessionMeta {
 
     pub(crate) fn claim_thread_stop(&mut self, tid: u64, revision: u64) -> bool {
         if self.t_status.get(&tid) != Some(&ThreadStatus::STOPPED)
-            || self.t_revisions.get(&tid).copied().unwrap_or(1) != revision
+            || self.t_stop_revisions.get(&tid).copied().unwrap_or(1) != revision
             || self.t_stop_claims.get(&tid) == Some(&revision)
         {
             return false;
@@ -525,6 +538,9 @@ impl SessionMeta {
 
     #[inline]
     pub fn update_all_status(&mut self, new_status: ThreadStatus) {
+        for revision in self.t_stop_revisions.values_mut() {
+            *revision = revision.saturating_add(1);
+        }
         if new_status != ThreadStatus::STOPPED {
             self.t_locations.clear();
             self.t_stop_reasons.clear();

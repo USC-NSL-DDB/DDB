@@ -165,6 +165,32 @@ impl CommandEngine {
     }
 
     async fn dispatch(&self, parsed: ParsedInputCmd) -> Result<CommandOutcome, CommandError> {
+        let automatic = parsed
+            .metadata
+            .dispatch_guard
+            .as_ref()
+            .is_some_and(|guard| guard.is_automatic());
+        let configuration = parsed.metadata.operation_kind
+            == Some(ddb_api_types::v2::OperationKind::ConfigureDebugger as u32);
+        if !automatic
+            && !configuration
+            && (parsed.prefix.starts_with("-exec-")
+                || parsed.prefix.starts_with("-record-time-and-")
+                || matches!(
+                    parsed.prefix.as_str(),
+                    "-send-signal"
+                        | "-interpreter-exec"
+                        | "-var-assign"
+                        | "-data-evaluate-expression"
+                        | "-break-update"
+                        | "-break-delete"
+                        | "-break-enable"
+                        | "-break-disable"
+                        | "-break-condition"
+                ))
+        {
+            self.model.retire_stop_automation();
+        }
         let external_token = parsed.external_token;
         let prefix = parsed.prefix.clone();
         debug!(%prefix, target = ?parsed.target, "dispatching command");

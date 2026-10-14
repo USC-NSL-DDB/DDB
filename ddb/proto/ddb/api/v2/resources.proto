@@ -20,6 +20,7 @@ enum ResourceKind {
   RESOURCE_KIND_CAPABILITIES = 9;
   RESOURCE_KIND_EXTENSION_STATE = 10;
   RESOURCE_KIND_PENDING_COMMAND = 11;
+  RESOURCE_KIND_STOP_POLICY = 12;
 }
 
 // BackendKind identifies the debugger implementation serving a session.
@@ -113,6 +114,7 @@ enum BreakpointFeature {
   BREAKPOINT_FEATURE_ENABLE_DISABLE = 8;
   BREAKPOINT_FEATURE_DISTRIBUTED = 9;
   BREAKPOINT_FEATURE_GROUP_INHERITANCE = 10;
+  BREAKPOINT_FEATURE_LOGPOINT = 11;
 }
 
 // OperationKind identifies an admitted mutation without exposing backend syntax.
@@ -744,6 +746,34 @@ message BreakpointSpec {
   bool temporary = 7;
   // Request hardware breakpoint resources.
   bool hardware = 8;
+  // Backend-owned logpoint. Absence stops normally. Braces interpolate expressions;
+  // doubled braces are literal. Failed evaluation leaves the stop inspectable.
+  optional string log_message = 9;
+}
+
+// StopMode controls which peers DDB pauses after an ordinary stop.
+enum StopMode {
+  STOP_MODE_UNSPECIFIED = 0;
+  STOP_MODE_INDEPENDENT = 1;
+  STOP_MODE_ALL_STOP = 2;
+  STOP_MODE_GROUP_STOP = 3;
+}
+
+// StopPolicyConfig changes shared backend behavior for every connected client.
+message StopPolicyConfig {
+  StopMode mode = 1;
+}
+
+// StopPolicy is the replayable singleton state of distributed stop coordination.
+// Successful pause commands are acknowledgments, not proof of a simultaneous stop.
+message StopPolicy {
+  string stop_policy_id = 1;
+  StopMode mode = 2;
+  uint64 generation = 3;
+  optional ExecutionState initiating_stop = 4;
+  repeated Target pending_targets = 5;
+  repeated TargetOutcome target_outcomes = 6;
+  uint64 revision = 7;
 }
 
 // SubBreakpoint describes one resolved member of a distributed breakpoint.
@@ -959,6 +989,7 @@ enum SnapshotSection {
   SNAPSHOT_SECTION_PENDING_OPERATIONS = 5;
   SNAPSHOT_SECTION_EXTENSIONS = 6;
   SNAPSHOT_SECTION_CAPABILITIES = 7;
+  SNAPSHOT_SECTION_STOP_POLICY = 8;
 }
 
 // Snapshot is a detached, bounded state projection captured at a journal cursor.
@@ -993,6 +1024,7 @@ message Snapshot {
   repeated ExtensionState extension_states = 14;
   // Current dynamic capability document.
   optional Capabilities capabilities = 15;
+  optional StopPolicy stop_policy = 16;
 }
 
 // ComponentHealth reports one safe operational dependency status.

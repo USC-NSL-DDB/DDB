@@ -158,6 +158,7 @@ struct Inner {
 #[derive(Clone)]
 pub struct DdbClient {
     inner: Arc<Inner>,
+    expected_server_instance_id: Option<String>,
 }
 
 impl fmt::Debug for DdbClient {
@@ -202,6 +203,7 @@ impl DdbClient {
             .connect_timeout(config.connect_timeout)
             .build()?;
         Ok(Self {
+            expected_server_instance_id: None,
             inner: Arc::new(Inner {
                 traces: Default::default(),
                 http,
@@ -520,6 +522,13 @@ macro_rules! mutation_method {
     ($name:ident, $request:ty, $service:expr, $method:literal) => {
         pub async fn $name(&self, mut request: $request) -> Result<v2::OperationAdmissionResponse> {
             self.prepare_context(&mut request.context, true);
+            if let Some(instance) = &self.expected_server_instance_id {
+                request
+                    .preconditions
+                    .get_or_insert_with(Default::default)
+                    .server_instance_id
+                    .get_or_insert_with(|| instance.clone());
+            }
             self.unary($service, $method, &request, true, true).await
         }
     };
@@ -549,6 +558,16 @@ macro_rules! collect_pages_method {
 }
 
 impl DdbClient {
+    /// Bind future mutations and their retries to an observed backend instance.
+    /// Reads and other clones remain usable after a restart. Explicit request
+    /// preconditions take precedence over this default.
+    pub fn for_server_instance(&self, instance: impl Into<String>) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            expected_server_instance_id: Some(instance.into()),
+        }
+    }
+
     unary_method!(
         get_server_info,
         v2::GetServerInfoRequest,

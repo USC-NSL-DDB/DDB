@@ -22,7 +22,7 @@ use tracing::warn;
 
 use crate::{
     cmd_flow::{
-        breakpoint::breakpoint_insert_command,
+        breakpoint::{log_message_argument, logical_breakpoint_insert_command},
         input::ParsedInputCmd,
         router::{
             CommandFanoutReport, SessionCommandFailure, SessionCommandFailureKind,
@@ -95,9 +95,14 @@ fn deletion_rule_ids(
 }
 
 #[derive(Clone)]
-enum CompletionProjection {
+pub(super) enum CompletionProjection {
     NoContent,
     Execution(Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>),
+    AutomaticExecution(Arc<dyn crate::cmd_flow::input::DispatchGuard>),
+    StopPolicy(
+        ddb_api_types::v2::StopMode,
+        Option<ddb_api_types::v2::ResourceVersion>,
+    ),
     Selection,
     Evaluation {
         frame: Option<StopFrameKey>,
@@ -153,7 +158,10 @@ impl CompletionProjection {
     fn requires_concrete_target_completions(&self) -> bool {
         matches!(
             self,
-            Self::NoContent | Self::Execution(_) | Self::RawCommand { .. }
+            Self::NoContent
+                | Self::Execution(_)
+                | Self::AutomaticExecution(_)
+                | Self::RawCommand { .. }
         )
     }
 }
@@ -392,6 +400,48 @@ impl DdbApplicationService {
         {
             return Ok(response);
         }
+        if let Some(configure_debugger_request::Setting::StopPolicy(config)) = &request.setting {
+            let mode = ddb_api_types::v2::StopMode::try_from(config.mode)
+                .ok()
+                .filter(|mode| *mode != ddb_api_types::v2::StopMode::Unspecified)
+                .ok_or_else(|| {
+                    ApplicationError::invalid("stop_policy.mode", "requires a supported stop mode")
+                })?;
+            let current = self.stop_policy_snapshot()?;
+            self.validate_preconditions(
+                request.preconditions.as_ref(),
+                Some((&current.stop_policy_id, current.revision)),
+            )?;
+            let target = request
+                .target
+                .clone()
+                .filter(|target| matches!(target.selector, Some(target::Selector::Broadcast(_))))
+                .ok_or_else(|| {
+                    ApplicationError::invalid("target", "stop policy requires a broadcast target")
+                })?;
+            scope.ensure_active()?;
+            return self.admit_command(
+                principal,
+                &scope,
+                request.context.as_ref(),
+                &fingerprint,
+                OperationKind::ConfigureDebugger,
+                ResolvedTarget {
+                    public: target,
+                    command: CommandTarget::Broadcast,
+                    session_ids: Vec::new(),
+                    resolved_target_count: 1,
+                },
+                String::new(),
+                CompletionProjection::StopPolicy(
+                    mode,
+                    request
+                        .preconditions
+                        .as_ref()
+                        .and_then(|preconditions| preconditions.resource_version.clone()),
+                ),
+            );
+        }
         let command = debugger_setting_command(&request, &self.config.conf.debugger.backend)?;
         self.validate_preconditions(request.preconditions.as_ref(), None)?;
         let resolved = self
@@ -497,7 +547,7 @@ impl DdbApplicationService {
             .target_resolver()
             .resolve(request.target.as_ref(), TargetPurpose::Breakpoint)
             .await?;
-        let command = breakpoint_insert_command(&location, &properties);
+        let command = logical_breakpoint_insert_command(&location, &properties);
         scope.ensure_active()?;
         self.admit_command(
             principal,
@@ -557,17 +607,29 @@ impl DdbApplicationService {
                     format!("contains duplicate field {field:?}"),
                 ));
             }
-            if !matches!(field.as_str(), "enabled" | "condition") {
+            if !matches!(field.as_str(), "enabled" | "condition" | "log_message") {
                 return Err(ApplicationError::new(
                     DdbErrorCode::Unsupported,
                     format!(
-                        "breakpoint field {field:?} cannot be updated; supported fields are enabled and condition"
+                        "breakpoint field {field:?} cannot be updated; supported fields are enabled, condition and log_message"
                     ),
                 )
                 .requiring(format!("breakpoints.update.{field}")));
             }
         }
         let mut command = format!("-break-update {internal_id}");
+        if fields.contains("log_message") {
+            match spec.log_message.as_deref() {
+                Some(message) => {
+                    crate::cmd_flow::logpoint_template::Template::parse(message).map_err(
+                        |error| ApplicationError::invalid("breakpoint.log_message", error),
+                    )?;
+                    command.push_str(" --log-message-json ");
+                    command.push_str(&log_message_argument(message));
+                }
+                None => command.push_str(" --clear-log-message"),
+            }
+        }
         if fields.contains("enabled") {
             let enabled = spec.enabled.ok_or_else(|| {
                 ApplicationError::invalid(
@@ -961,7 +1023,7 @@ impl DdbApplicationService {
         })
     }
 
-    fn target_resolver(&self) -> TargetResolver<'_> {
+    pub(super) fn target_resolver(&self) -> TargetResolver<'_> {
         TargetResolver::new(self.queries.as_ref(), &self.ids)
     }
 
@@ -983,7 +1045,7 @@ impl DdbApplicationService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn admit_command(
+    pub(super) fn admit_command(
         self: &Arc<Self>,
         principal: &PrincipalContext,
         scope: &RequestScope,
@@ -1009,6 +1071,19 @@ impl DdbApplicationService {
             fingerprint,
         )?;
         if admission.newly_admitted {
+            if kind == OperationKind::Execute
+                && !matches!(projection, CompletionProjection::AutomaticExecution(_))
+            {
+                self.retire_stop_automation();
+            }
+            if matches!(
+                kind,
+                OperationKind::UpdateBreakpoint
+                    | OperationKind::DeleteBreakpoint
+                    | OperationKind::RawCommand
+            ) {
+                self.retire_stop_automation();
+            }
             if let Err(error) = self.publish_operation(&admission.operation) {
                 let error = error.with_operation_id(&admission.operation.operation_id);
                 let _ = self.operations.fail(
@@ -1067,6 +1142,26 @@ impl DdbApplicationService {
             }
         }
 
+        if let CompletionProjection::StopPolicy(mode, ref expected) = projection {
+            match self.configure_stop_policy_checked(mode, expected.as_ref()) {
+                Ok(()) => {
+                    if let Ok(operation) = self.operations.complete(
+                        &operation_id,
+                        Some(OperationResult {
+                            value: Some(operation_result::Value::NoContent(Empty {})),
+                        }),
+                        Vec::new(),
+                        None,
+                        None,
+                    ) {
+                        let _ = self.publish_operation(&operation);
+                    }
+                }
+                Err(error) => self.fail_operation(&operation_id, &request_id, error, &session_ids),
+            }
+            return;
+        }
+
         let retained_object_name = match &projection {
             CompletionProjection::Evaluation {
                 object: Some(object),
@@ -1079,6 +1174,7 @@ impl DdbApplicationService {
         };
         let guard = match &projection {
             CompletionProjection::Execution(guard) => guard.clone(),
+            CompletionProjection::AutomaticExecution(guard) => Some(guard.clone()),
             _ => None,
         };
         match self
@@ -1457,7 +1553,10 @@ impl DdbApplicationService {
         outcome: &CommandOutcome,
     ) -> Result<OperationResult, ApplicationError> {
         let value = match projection {
-            CompletionProjection::NoContent | CompletionProjection::Execution(_) => {
+            CompletionProjection::NoContent
+            | CompletionProjection::Execution(_)
+            | CompletionProjection::AutomaticExecution(_)
+            | CompletionProjection::StopPolicy(_, _) => {
                 operation_result::Value::NoContent(Empty {})
             }
             CompletionProjection::Selection => {
@@ -1713,7 +1812,7 @@ impl DdbApplicationService {
             .collect()
     }
 
-    fn session_target(&self, sid: u64) -> Result<PublicTarget, ApplicationError> {
+    pub(super) fn session_target(&self, sid: u64) -> Result<PublicTarget, ApplicationError> {
         Ok(PublicTarget {
             selector: Some(target::Selector::Session(SessionTarget {
                 session_id: self.ids.encode(ResourceIdKind::Session, sid)?,
@@ -1952,6 +2051,10 @@ fn debugger_setting_command(
         .as_ref()
         .ok_or_else(|| ApplicationError::invalid("setting", "is required"))?
     {
+        configure_debugger_request::Setting::StopPolicy(_) => Err(ApplicationError::invalid(
+            "setting",
+            "stop policy is a backend setting",
+        )),
         configure_debugger_request::Setting::EnablePrettyPrinting(_) => {
             Ok("-enable-pretty-printing".to_string())
         }
@@ -2209,6 +2312,10 @@ fn jump_location(location: &SourceLocation) -> Result<String, ApplicationError> 
 fn breakpoint_definition(
     spec: &BreakpointSpec,
 ) -> Result<(BkptLoc, BreakpointProperties), ApplicationError> {
+    if let Some(message) = &spec.log_message {
+        crate::cmd_flow::logpoint_template::Template::parse(message)
+            .map_err(|error| ApplicationError::invalid("breakpoint.log_message", error))?;
+    }
     if let Some(condition) = spec.condition.as_deref() {
         require_nonempty_bounded("breakpoint.condition", condition, MAX_COMMAND_BYTES)?;
     }
@@ -2264,6 +2371,7 @@ fn breakpoint_definition(
             temporary: spec.temporary,
             hardware: spec.hardware,
             ignore_count: spec.ignore_count,
+            log_message: spec.log_message.clone(),
         },
     ))
 }
@@ -2352,9 +2460,10 @@ fn basic_retained_partial_result(
 ) -> Option<OperationResult> {
     let outcome = CommandOutcome::silent(report.completion().clone());
     let value = match projection {
-        CompletionProjection::NoContent | CompletionProjection::Execution(_) => {
-            operation_result::Value::NoContent(Empty {})
-        }
+        CompletionProjection::NoContent
+        | CompletionProjection::Execution(_)
+        | CompletionProjection::AutomaticExecution(_)
+        | CompletionProjection::StopPolicy(_, _) => operation_result::Value::NoContent(Empty {}),
         CompletionProjection::RawCommand { .. } => {
             operation_result::Value::RawCommand(raw_command_result(&outcome))
         }

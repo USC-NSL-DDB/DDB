@@ -1540,6 +1540,10 @@ pub struct BreakpointSpec {
     /// Request hardware breakpoint resources.
     #[prost(bool, tag = "8")]
     pub hardware: bool,
+    /// Backend-owned logpoint. Absence stops normally. Braces interpolate expressions;
+    /// doubled braces are literal. Failed evaluation leaves the stop inspectable.
+    #[prost(string, optional, tag = "9")]
+    pub log_message: ::core::option::Option<::prost::alloc::string::String>,
     /// Breakpoint location form.
     #[prost(oneof = "breakpoint_spec::Location", tags = "1, 2, 3")]
     pub location: ::core::option::Option<breakpoint_spec::Location>,
@@ -1556,6 +1560,31 @@ pub mod breakpoint_spec {
         #[prost(message, tag = "3")]
         Address(super::AddressBreakpointLocation),
     }
+}
+/// StopPolicyConfig changes shared backend behavior for every connected client.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StopPolicyConfig {
+    #[prost(enumeration = "StopMode", tag = "1")]
+    pub mode: i32,
+}
+/// StopPolicy is the replayable singleton state of distributed stop coordination.
+/// Successful pause commands are acknowledgments, not proof of a simultaneous stop.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StopPolicy {
+    #[prost(string, tag = "1")]
+    pub stop_policy_id: ::prost::alloc::string::String,
+    #[prost(enumeration = "StopMode", tag = "2")]
+    pub mode: i32,
+    #[prost(uint64, tag = "3")]
+    pub generation: u64,
+    #[prost(message, optional, tag = "4")]
+    pub initiating_stop: ::core::option::Option<ExecutionState>,
+    #[prost(message, repeated, tag = "5")]
+    pub pending_targets: ::prost::alloc::vec::Vec<Target>,
+    #[prost(message, repeated, tag = "6")]
+    pub target_outcomes: ::prost::alloc::vec::Vec<TargetOutcome>,
+    #[prost(uint64, tag = "7")]
+    pub revision: u64,
 }
 /// SubBreakpoint describes one resolved member of a distributed breakpoint.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1892,6 +1921,8 @@ pub struct Snapshot {
     /// Current dynamic capability document.
     #[prost(message, optional, tag = "15")]
     pub capabilities: ::core::option::Option<Capabilities>,
+    #[prost(message, optional, tag = "16")]
+    pub stop_policy: ::core::option::Option<StopPolicy>,
 }
 /// ComponentHealth reports one safe operational dependency status.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1938,6 +1969,7 @@ pub enum ResourceKind {
     Capabilities = 9,
     ExtensionState = 10,
     PendingCommand = 11,
+    StopPolicy = 12,
 }
 impl ResourceKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1958,6 +1990,7 @@ impl ResourceKind {
             Self::Capabilities => "RESOURCE_KIND_CAPABILITIES",
             Self::ExtensionState => "RESOURCE_KIND_EXTENSION_STATE",
             Self::PendingCommand => "RESOURCE_KIND_PENDING_COMMAND",
+            Self::StopPolicy => "RESOURCE_KIND_STOP_POLICY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1975,6 +2008,7 @@ impl ResourceKind {
             "RESOURCE_KIND_CAPABILITIES" => Some(Self::Capabilities),
             "RESOURCE_KIND_EXTENSION_STATE" => Some(Self::ExtensionState),
             "RESOURCE_KIND_PENDING_COMMAND" => Some(Self::PendingCommand),
+            "RESOURCE_KIND_STOP_POLICY" => Some(Self::StopPolicy),
             _ => None,
         }
     }
@@ -2250,6 +2284,7 @@ pub enum BreakpointFeature {
     EnableDisable = 8,
     Distributed = 9,
     GroupInheritance = 10,
+    Logpoint = 11,
 }
 impl BreakpointFeature {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2269,6 +2304,7 @@ impl BreakpointFeature {
             Self::EnableDisable => "BREAKPOINT_FEATURE_ENABLE_DISABLE",
             Self::Distributed => "BREAKPOINT_FEATURE_DISTRIBUTED",
             Self::GroupInheritance => "BREAKPOINT_FEATURE_GROUP_INHERITANCE",
+            Self::Logpoint => "BREAKPOINT_FEATURE_LOGPOINT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2285,6 +2321,7 @@ impl BreakpointFeature {
             "BREAKPOINT_FEATURE_ENABLE_DISABLE" => Some(Self::EnableDisable),
             "BREAKPOINT_FEATURE_DISTRIBUTED" => Some(Self::Distributed),
             "BREAKPOINT_FEATURE_GROUP_INHERITANCE" => Some(Self::GroupInheritance),
+            "BREAKPOINT_FEATURE_LOGPOINT" => Some(Self::Logpoint),
             _ => None,
         }
     }
@@ -2693,6 +2730,39 @@ impl SourceEntryKind {
         }
     }
 }
+/// StopMode controls which peers DDB pauses after an ordinary stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StopMode {
+    Unspecified = 0,
+    Independent = 1,
+    AllStop = 2,
+    GroupStop = 3,
+}
+impl StopMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STOP_MODE_UNSPECIFIED",
+            Self::Independent => "STOP_MODE_INDEPENDENT",
+            Self::AllStop => "STOP_MODE_ALL_STOP",
+            Self::GroupStop => "STOP_MODE_GROUP_STOP",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STOP_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "STOP_MODE_INDEPENDENT" => Some(Self::Independent),
+            "STOP_MODE_ALL_STOP" => Some(Self::AllStop),
+            "STOP_MODE_GROUP_STOP" => Some(Self::GroupStop),
+            _ => None,
+        }
+    }
+}
 /// SnapshotSection selects bounded optional material in a state snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2705,6 +2775,7 @@ pub enum SnapshotSection {
     PendingOperations = 5,
     Extensions = 6,
     Capabilities = 7,
+    StopPolicy = 8,
 }
 impl SnapshotSection {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2721,6 +2792,7 @@ impl SnapshotSection {
             Self::PendingOperations => "SNAPSHOT_SECTION_PENDING_OPERATIONS",
             Self::Extensions => "SNAPSHOT_SECTION_EXTENSIONS",
             Self::Capabilities => "SNAPSHOT_SECTION_CAPABILITIES",
+            Self::StopPolicy => "SNAPSHOT_SECTION_STOP_POLICY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2734,6 +2806,7 @@ impl SnapshotSection {
             "SNAPSHOT_SECTION_PENDING_OPERATIONS" => Some(Self::PendingOperations),
             "SNAPSHOT_SECTION_EXTENSIONS" => Some(Self::Extensions),
             "SNAPSHOT_SECTION_CAPABILITIES" => Some(Self::Capabilities),
+            "SNAPSHOT_SECTION_STOP_POLICY" => Some(Self::StopPolicy),
             _ => None,
         }
     }
@@ -3741,7 +3814,7 @@ pub struct ConfigureDebuggerRequest {
     #[prost(message, optional, tag = "5")]
     pub preconditions: ::core::option::Option<Preconditions>,
     /// Exactly one session-wide setting to apply to each resolved target.
-    #[prost(oneof = "configure_debugger_request::Setting", tags = "3, 4")]
+    #[prost(oneof = "configure_debugger_request::Setting", tags = "3, 4, 6")]
     pub setting: ::core::option::Option<configure_debugger_request::Setting>,
 }
 /// Nested message and enum types in `ConfigureDebuggerRequest`.
@@ -3756,6 +3829,9 @@ pub mod configure_debugger_request {
         /// Adds one source-prefix rule. Matching order follows the backend's rules.
         #[prost(message, tag = "4")]
         SourceMapping(super::SourcePathMapping),
+        /// Shared backend policy. Requires a broadcast target, including with no sessions.
+        #[prost(message, tag = "6")]
+        StopPolicy(super::StopPolicyConfig),
     }
 }
 /// CreateBreakpointRequest admits creation of a logical/distributed breakpoint.
@@ -4074,7 +4150,7 @@ pub struct ResourceUpsert {
     /// Strongly typed resource replacement.
     #[prost(
         oneof = "resource_upsert::Resource",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
     )]
     pub resource: ::core::option::Option<resource_upsert::Resource>,
 }
@@ -4105,6 +4181,8 @@ pub mod resource_upsert {
         ExtensionState(super::ExtensionState),
         #[prost(message, tag = "11")]
         PendingCommand(super::PendingCommand),
+        #[prost(message, tag = "12")]
+        StopPolicy(super::StopPolicy),
     }
 }
 /// ResourceDeleted removes a resource only when resource_revision is not older

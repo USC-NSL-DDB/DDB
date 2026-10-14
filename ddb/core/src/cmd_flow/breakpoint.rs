@@ -200,6 +200,7 @@ enum ConditionUpdate {
 struct BreakpointUpdate {
     enabled: Option<bool>,
     condition: ConditionUpdate,
+    log_message: ConditionUpdate,
 }
 
 #[derive(Default)]
@@ -213,6 +214,7 @@ impl BreakpointUpdate {
         Self {
             enabled: Some(enabled),
             condition: ConditionUpdate::Keep,
+            log_message: ConditionUpdate::Keep,
         }
     }
 
@@ -220,6 +222,7 @@ impl BreakpointUpdate {
         Self {
             enabled: None,
             condition: ConditionUpdate::Replace(condition),
+            log_message: ConditionUpdate::Keep,
         }
     }
 }
@@ -265,8 +268,12 @@ impl BreakpointService {
             bail!("break-insert requires a session, group, or multiple target");
         }
 
-        let debugger_command = command.full_cmd();
         let (location, properties) = parse_breakpoint_definition(&command.args)?;
+        let debugger_command = if properties.log_message.is_some() {
+            breakpoint_insert_command(&location, &properties)
+        } else {
+            command.full_cmd()
+        };
         let planned_targets = match &command.target {
             Target::Multiple(targets) => {
                 deduplicate_insertion_targets(self.model.as_ref(), targets)
@@ -498,7 +505,14 @@ impl BreakpointService {
         };
         let update_enabled = enabled != previous_enabled;
         let update_condition = condition != previous_condition;
-        if !update_enabled && !update_condition {
+        let log_message = match update.log_message {
+            ConditionUpdate::Keep => breakpoint.properties().log_message.clone(),
+            ConditionUpdate::Replace(message) => message,
+        };
+        if !update_enabled
+            && !update_condition
+            && log_message == breakpoint.properties().log_message
+        {
             return Ok(());
         }
 
@@ -554,7 +568,7 @@ impl BreakpointService {
 
         let breakpoint = self
             .model
-            .update_breakpoint(breakpoint_id, enabled, condition)
+            .update_breakpoint(breakpoint_id, enabled, condition, log_message)
             .ok_or_else(|| anyhow!("Breakpoint {} disappeared during update", breakpoint_id))?;
         drop(group_operations);
         self.events.publish_update(breakpoint).await;
@@ -834,6 +848,7 @@ fn parse_breakpoint_update(args: &str) -> Result<(u64, BreakpointUpdate)> {
     let mut update = BreakpointUpdate {
         enabled: None,
         condition: ConditionUpdate::Keep,
+        log_message: ConditionUpdate::Keep,
     };
     let mut index = 1;
     while index < arguments.len() {
@@ -869,10 +884,32 @@ fn parse_breakpoint_update(args: &str) -> Result<(u64, BreakpointUpdate)> {
                 update.condition = ConditionUpdate::Replace(None);
                 index += 1;
             }
+            "--log-message" | "--log-message-json" | "--clear-log-message" => {
+                if !matches!(update.log_message, ConditionUpdate::Keep) {
+                    bail!("Duplicate logpoint update");
+                }
+                if arguments[index] != "--clear-log-message" {
+                    let value = arguments
+                        .get(index + 1)
+                        .ok_or_else(|| anyhow!("--log-message requires a template"))?;
+                    let value =
+                        decode_log_message(value, arguments[index] == "--log-message-json")?;
+                    super::logpoint_template::Template::parse(&value)
+                        .map_err(anyhow::Error::msg)?;
+                    update.log_message = ConditionUpdate::Replace(Some(value));
+                    index += 2;
+                } else {
+                    update.log_message = ConditionUpdate::Replace(None);
+                    index += 1;
+                }
+            }
             option => bail!("Unknown breakpoint update option {option}"),
         }
     }
-    if update.enabled.is_none() && matches!(&update.condition, ConditionUpdate::Keep) {
+    if update.enabled.is_none()
+        && matches!(&update.condition, ConditionUpdate::Keep)
+        && matches!(&update.log_message, ConditionUpdate::Keep)
+    {
         bail!("No breakpoint fields were provided for update");
     }
     Ok((breakpoint_id, update))
@@ -914,6 +951,40 @@ pub(crate) fn breakpoint_insert_command(
     format!("-break-insert {}", arguments.join(" "))
 }
 
+/// Only the logical command carries the template. Inferior installations use
+/// breakpoint_insert_command so templates never become debugger commands.
+pub(crate) fn logical_breakpoint_insert_command(
+    location: &BkptLoc,
+    properties: &BreakpointProperties,
+) -> String {
+    let command = breakpoint_insert_command(location, properties);
+    match &properties.log_message {
+        Some(message) => format!(
+            "-break-insert --log-message-json {} {}",
+            log_message_argument(message),
+            command
+                .strip_prefix("-break-insert ")
+                .expect("breakpoint command")
+        ),
+        None => command,
+    }
+}
+
+pub(crate) fn log_message_argument(message: &str) -> String {
+    // The command tokenizer removes shell quoting. Encode the JSON string
+    // inside that quoting so newlines, control bytes and backslashes survive.
+    serde_json::to_string(&serde_json::to_string(message).expect("string serialization"))
+        .expect("string serialization")
+}
+
+fn decode_log_message(message: &str, json: bool) -> Result<String> {
+    if json {
+        Ok(serde_json::from_str(message)?)
+    } else {
+        Ok(message.to_owned())
+    }
+}
+
 #[cfg(test)]
 fn parse_breakpoint_location(args: &str) -> Result<BkptLoc> {
     parse_breakpoint_definition(args).map(|(location, _)| location)
@@ -945,6 +1016,13 @@ fn parse_breakpoint_definition(args: &str) -> Result<(BkptLoc, BreakpointPropert
             "-c" | "--condition" if index + 1 < arguments.len() - 1 => {
                 index += 1;
                 properties.condition = Some(arguments[index].clone());
+            }
+            "--log-message" | "--log-message-json" if index + 1 < arguments.len() - 1 => {
+                let json = arguments[index] == "--log-message-json";
+                index += 1;
+                let message = decode_log_message(&arguments[index], json)?;
+                super::logpoint_template::Template::parse(&message).map_err(anyhow::Error::msg)?;
+                properties.log_message = Some(message);
             }
             _ => {}
         }
@@ -1061,6 +1139,36 @@ fn merge_state_changes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn logical_logpoint_templates_round_trip_without_reaching_native_installations() {
+        use super::*;
+        for message in [
+            "",
+            "line\nnext\t\u{0}",
+            r#"quoted "text" C:\\path {counter}"#,
+        ] {
+            let properties = BreakpointProperties {
+                log_message: Some(message.into()),
+                ..Default::default()
+            };
+            let location = BkptLoc::function("tick");
+            let command = logical_breakpoint_insert_command(&location, &properties);
+            let (_, parsed) =
+                parse_breakpoint_definition(command.strip_prefix("-break-insert ").unwrap())
+                    .unwrap();
+            assert_eq!(parsed.log_message.as_deref(), Some(message));
+            assert!(!breakpoint_insert_command(&location, &properties).contains("log-message"));
+            let (_, update) = parse_breakpoint_update(&format!(
+                "42 --log-message-json {}",
+                log_message_argument(message)
+            ))
+            .unwrap();
+            assert_eq!(
+                update.log_message,
+                ConditionUpdate::Replace(Some(message.into()))
+            );
+        }
+    }
     use super::*;
 
     #[test]
@@ -1108,6 +1216,7 @@ mod tests {
             temporary: true,
             hardware: false,
             ignore_count: None,
+            log_message: None,
         };
         let command = breakpoint_insert_command(
             &BkptLoc::new("C:/workspace/service main.rs", 42),
@@ -1151,6 +1260,7 @@ mod tests {
             BreakpointUpdate {
                 enabled: Some(false),
                 condition: ConditionUpdate::Replace(Some("request.id == \"special\"".to_string())),
+                log_message: ConditionUpdate::Keep,
             }
         );
 

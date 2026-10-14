@@ -152,11 +152,13 @@ impl DebuggerEventReducer {
                     }
                 }
 
+                let mut log_message = None;
                 let breakpoint = if is_breakpoint {
                     match local_breakpoint_id.and_then(|local_breakpoint_id| {
                         self.model.record_breakpoint_hit(sid, local_breakpoint_id)
                     }) {
                         Some((breakpoint_id, sub_breakpoint_id, breakpoint)) => {
+                            log_message = breakpoint.properties().log_message.clone();
                             self.breakpoint_events.publish_update(breakpoint).await;
                             Some((breakpoint_id, sub_breakpoint_id))
                         }
@@ -199,6 +201,7 @@ impl DebuggerEventReducer {
                                 .then(|| signal_name.clone())
                                 .flatten(),
                             breakpoint_id: breakpoint.map(|(id, _)| id),
+                            log_message,
                             thread_id: principal
                                 .and_then(|id| self.model.global_thread_id(sid, id))
                                 .map(|id| id.value()),

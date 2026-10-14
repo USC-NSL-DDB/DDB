@@ -5,6 +5,9 @@ use anyhow::{anyhow, bail, Context, Result};
 #[async_trait::async_trait]
 pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
     async fn check(&self) -> Result<()>;
+    fn is_automatic(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

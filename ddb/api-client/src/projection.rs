@@ -36,6 +36,7 @@ pub struct StateProjection {
     extension_states: BTreeMap<String, v2::ExtensionState>,
     pending_commands: BTreeMap<String, v2::PendingCommand>,
     capabilities: Option<v2::Capabilities>,
+    stop_policy: Option<v2::StopPolicy>,
     tombstones: HashMap<(i32, String), u64>,
 }
 
@@ -60,6 +61,15 @@ impl StateProjection {
             ));
         }
 
+        if snapshot
+            .stop_policy
+            .as_ref()
+            .is_some_and(|policy| policy.stop_policy_id.is_empty() || policy.revision == 0)
+        {
+            return Err(ClientError::Protocol(
+                "snapshot stop policy has invalid identity or revision".into(),
+            ));
+        }
         if let Some(capabilities) = snapshot.capabilities.as_ref() {
             if capabilities.capabilities_id.is_empty()
                 || capabilities.revision == 0
@@ -78,6 +88,7 @@ impl StateProjection {
             state_revision: snapshot.base_state_revision,
             included_sections: snapshot.included_sections,
             capabilities: snapshot.capabilities,
+            stop_policy: snapshot.stop_policy,
             ..Self::default()
         };
         insert_snapshot_resources(
@@ -247,6 +258,10 @@ impl StateProjection {
         self.capabilities.as_ref()
     }
 
+    pub fn stop_policy(&self) -> Option<&v2::StopPolicy> {
+        self.stop_policy.as_ref()
+    }
+
     /// Returns a detached, deterministic snapshot of the converged projection.
     ///
     /// This is intended for UI state handoff: the SDK remains responsible for
@@ -269,6 +284,7 @@ impl StateProjection {
             operations: self.operations.values().cloned().collect(),
             extension_states: self.extension_states.values().cloned().collect(),
             capabilities: self.capabilities.clone(),
+            stop_policy: self.stop_policy.clone(),
         }
     }
 
@@ -326,6 +342,18 @@ impl StateProjection {
                 upsert_newer(&mut self.operations, id, revision, value, |item| {
                     item.revision
                 })
+            }
+            resource_upsert::Resource::StopPolicy(value) => {
+                if self
+                    .stop_policy
+                    .as_ref()
+                    .is_some_and(|current| current.revision >= revision)
+                {
+                    false
+                } else {
+                    self.stop_policy = Some(value);
+                    true
+                }
             }
             resource_upsert::Resource::Capabilities(value) => {
                 if self
@@ -428,6 +456,17 @@ impl StateProjection {
                 deleted.resource_revision,
                 |item| item.revision,
             ),
+            Ok(v2::ResourceKind::StopPolicy) => {
+                if self
+                    .stop_policy
+                    .as_ref()
+                    .is_some_and(|item| item.revision > deleted.resource_revision)
+                {
+                    false
+                } else {
+                    self.stop_policy.take().is_some()
+                }
+            }
             Ok(v2::ResourceKind::Capabilities) => {
                 if self
                     .capabilities
@@ -535,6 +574,11 @@ fn resource_metadata(resource: &resource_upsert::Resource) -> (v2::ResourceKind,
         resource_upsert::Resource::Operation(item) => (
             v2::ResourceKind::Operation,
             item.operation_id.clone(),
+            item.revision,
+        ),
+        resource_upsert::Resource::StopPolicy(item) => (
+            v2::ResourceKind::StopPolicy,
+            item.stop_policy_id.clone(),
             item.revision,
         ),
         resource_upsert::Resource::Capabilities(item) => (

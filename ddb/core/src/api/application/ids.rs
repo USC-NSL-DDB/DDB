@@ -25,6 +25,7 @@ pub(crate) enum ResourceIdKind {
     Extension,
     Selection,
     Capabilities,
+    StopPolicy,
 }
 
 impl ResourceIdKind {
@@ -46,6 +47,7 @@ impl ResourceIdKind {
             Self::Extension => "ext",
             Self::Selection => "sel",
             Self::Capabilities => "cap",
+            Self::StopPolicy => "pol",
         }
     }
 
@@ -67,6 +69,7 @@ impl ResourceIdKind {
             Self::Extension => "extension",
             Self::Selection => "selection",
             Self::Capabilities => "capabilities",
+            Self::StopPolicy => "stop policy",
         }
     }
 }
