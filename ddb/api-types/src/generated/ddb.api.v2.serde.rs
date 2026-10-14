@@ -5521,6 +5521,9 @@ impl serde::Serialize for ExecuteRequest {
         if self.preconditions.is_some() {
             len += 1;
         }
+        if self.execution_guard.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.ExecuteRequest", len)?;
         if let Some(v) = self.context.as_ref() {
             struct_ser.serialize_field("context", v)?;
@@ -5542,6 +5545,9 @@ impl serde::Serialize for ExecuteRequest {
         if let Some(v) = self.preconditions.as_ref() {
             struct_ser.serialize_field("preconditions", v)?;
         }
+        if let Some(v) = self.execution_guard.as_ref() {
+            struct_ser.serialize_field("executionGuard", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5560,6 +5566,8 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
             "signal_name",
             "signalName",
             "preconditions",
+            "execution_guard",
+            "executionGuard",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5570,6 +5578,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
             JumpLocation,
             SignalName,
             Preconditions,
+            ExecutionGuard,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5598,6 +5607,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
                             "jumpLocation" | "jump_location" => Ok(GeneratedField::JumpLocation),
                             "signalName" | "signal_name" => Ok(GeneratedField::SignalName),
                             "preconditions" => Ok(GeneratedField::Preconditions),
+                            "executionGuard" | "execution_guard" => Ok(GeneratedField::ExecutionGuard),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5623,6 +5633,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
                 let mut jump_location__ = None;
                 let mut signal_name__ = None;
                 let mut preconditions__ = None;
+                let mut execution_guard__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Context => {
@@ -5661,6 +5672,12 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
                             }
                             preconditions__ = map_.next_value()?;
                         }
+                        GeneratedField::ExecutionGuard => {
+                            if execution_guard__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("executionGuard"));
+                            }
+                            execution_guard__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5673,6 +5690,7 @@ impl<'de> serde::Deserialize<'de> for ExecuteRequest {
                     jump_location: jump_location__,
                     signal_name: signal_name__,
                     preconditions: preconditions__,
+                    execution_guard: execution_guard__,
                 })
             }
         }
@@ -5893,6 +5911,141 @@ impl<'de> serde::Deserialize<'de> for ExecutionActionCapability {
             }
         }
         deserializer.deserialize_struct("ddb.api.v2.ExecutionActionCapability", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ExecutionGuard {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.server_instance_id.is_empty() {
+            len += 1;
+        }
+        if !self.execution_state_id.is_empty() {
+            len += 1;
+        }
+        if self.revision != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("ddb.api.v2.ExecutionGuard", len)?;
+        if !self.server_instance_id.is_empty() {
+            struct_ser.serialize_field("serverInstanceId", &self.server_instance_id)?;
+        }
+        if !self.execution_state_id.is_empty() {
+            struct_ser.serialize_field("executionStateId", &self.execution_state_id)?;
+        }
+        if self.revision != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("revision", ToString::to_string(&self.revision).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExecutionGuard {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "server_instance_id",
+            "serverInstanceId",
+            "execution_state_id",
+            "executionStateId",
+            "revision",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ServerInstanceId,
+            ExecutionStateId,
+            Revision,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "serverInstanceId" | "server_instance_id" => Ok(GeneratedField::ServerInstanceId),
+                            "executionStateId" | "execution_state_id" => Ok(GeneratedField::ExecutionStateId),
+                            "revision" => Ok(GeneratedField::Revision),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ExecutionGuard;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct ddb.api.v2.ExecutionGuard")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ExecutionGuard, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut server_instance_id__ = None;
+                let mut execution_state_id__ = None;
+                let mut revision__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ServerInstanceId => {
+                            if server_instance_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("serverInstanceId"));
+                            }
+                            server_instance_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ExecutionStateId => {
+                            if execution_state_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("executionStateId"));
+                            }
+                            execution_state_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Revision => {
+                            if revision__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("revision"));
+                            }
+                            revision__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ExecutionGuard {
+                    server_instance_id: server_instance_id__.unwrap_or_default(),
+                    execution_state_id: execution_state_id__.unwrap_or_default(),
+                    revision: revision__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("ddb.api.v2.ExecutionGuard", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ExecutionScopeKind {
@@ -18941,6 +19094,9 @@ impl serde::Serialize for Preconditions {
         if self.state_revision.is_some() {
             len += 1;
         }
+        if self.server_instance_id.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.Preconditions", len)?;
         if let Some(v) = self.resource_version.as_ref() {
             struct_ser.serialize_field("resourceVersion", v)?;
@@ -18949,6 +19105,9 @@ impl serde::Serialize for Preconditions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("stateRevision", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.server_instance_id.as_ref() {
+            struct_ser.serialize_field("serverInstanceId", v)?;
         }
         struct_ser.end()
     }
@@ -18964,12 +19123,15 @@ impl<'de> serde::Deserialize<'de> for Preconditions {
             "resourceVersion",
             "state_revision",
             "stateRevision",
+            "server_instance_id",
+            "serverInstanceId",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             ResourceVersion,
             StateRevision,
+            ServerInstanceId,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -18994,6 +19156,7 @@ impl<'de> serde::Deserialize<'de> for Preconditions {
                         match value {
                             "resourceVersion" | "resource_version" => Ok(GeneratedField::ResourceVersion),
                             "stateRevision" | "state_revision" => Ok(GeneratedField::StateRevision),
+                            "serverInstanceId" | "server_instance_id" => Ok(GeneratedField::ServerInstanceId),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -19015,6 +19178,7 @@ impl<'de> serde::Deserialize<'de> for Preconditions {
             {
                 let mut resource_version__ = None;
                 let mut state_revision__ = None;
+                let mut server_instance_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ResourceVersion => {
@@ -19031,6 +19195,12 @@ impl<'de> serde::Deserialize<'de> for Preconditions {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::ServerInstanceId => {
+                            if server_instance_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("serverInstanceId"));
+                            }
+                            server_instance_id__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -19039,6 +19209,7 @@ impl<'de> serde::Deserialize<'de> for Preconditions {
                 Ok(Preconditions {
                     resource_version: resource_version__,
                     state_revision: state_revision__,
+                    server_instance_id: server_instance_id__,
                 })
             }
         }

@@ -1,12 +1,23 @@
 use super::{router::Target, session_runtime::CompletionConsistency};
 use anyhow::{anyhow, bail, Context, Result};
 
+/// Checked by the session actor after queued events commit and before wire I/O.
+#[async_trait::async_trait]
+pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
+    async fn check(&self) -> Result<()>;
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("execution stop was superseded or already consumed")]
+pub(crate) struct StaleExecution;
+
 /// Safe correlation metadata carried alongside a command. It is never encoded
 /// onto the debugger wire and intentionally contains no command arguments.
 #[derive(Debug, Clone, Default)]
 pub struct CommandMetadata {
     pub operation_id: Option<String>,
     pub operation_kind: Option<u32>,
+    pub dispatch_guard: Option<std::sync::Arc<dyn DispatchGuard>>,
 }
 
 /// Routing-layer envelope: what to run and how completion is judged. Wire

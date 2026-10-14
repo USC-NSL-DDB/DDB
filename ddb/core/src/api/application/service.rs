@@ -2670,6 +2670,7 @@ fn collect_command_group_ids(target: &CommandTarget, groups: &mut HashSet<u64>) 
 
 #[cfg(test)]
 mod tests {
+    include!("execution_guard_tests.rs");
     use std::{
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
         time::Duration,

@@ -27,7 +27,27 @@ pub(crate) trait ApplicationCommandPort: Send + Sync {
         let _ = (operation_id, operation_kind);
         self.execute(command, target).await
     }
+
+    async fn execute_guarded(
+        &self,
+        command: &str,
+        target: Target,
+        operation_id: &str,
+        operation_kind: OperationKind,
+        guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
+    ) -> Result<CommandOutcome, CommandPortError> {
+        if let Some(guard) = guard {
+            guard.check().await.map_err(|source| CommandPortError {
+                source,
+                fanout: None,
+            })?;
+        }
+        self.execute_tracked(command, target, operation_id, operation_kind)
+            .await
+    }
 }
+
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 #[error("debugger command failed")]
@@ -38,6 +58,17 @@ pub(crate) struct CommandPortError {
 }
 
 impl CommandPortError {
+    pub(crate) fn is_stale_execution(&self) -> bool {
+        self.source
+            .downcast_ref::<crate::cmd_flow::input::StaleExecution>()
+            .is_some()
+            || self.fanout.as_ref().is_some_and(|report| {
+                report
+                    .failures()
+                    .iter()
+                    .all(|failure| failure.kind() == SessionCommandFailureKind::StaleExecution)
+            })
+    }
     #[cfg(test)]
     pub(crate) fn test(message: impl Into<String>) -> Self {
         Self {
@@ -131,6 +162,30 @@ impl ApplicationCommandPort for CommandEngine {
                 crate::cmd_flow::input::CommandMetadata {
                     operation_id: Some(operation_id.to_string()),
                     operation_kind: Some(operation_kind as u32),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(CommandPortError::from_command_error)?;
+        CommandPortError::classify_debugger_responses(outcome)
+    }
+
+    async fn execute_guarded(
+        &self,
+        command: &str,
+        target: Target,
+        operation_id: &str,
+        operation_kind: OperationKind,
+        guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
+    ) -> Result<CommandOutcome, CommandPortError> {
+        let outcome = self
+            .execute_api_with_metadata(
+                command,
+                Some(target),
+                crate::cmd_flow::input::CommandMetadata {
+                    operation_id: Some(operation_id.to_string()),
+                    operation_kind: Some(operation_kind as u32),
+                    dispatch_guard: guard,
                 },
             )
             .await

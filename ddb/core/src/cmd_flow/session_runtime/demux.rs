@@ -27,6 +27,16 @@ pub(super) struct OutputDemux {
 }
 
 impl OutputDemux {
+    pub(super) async fn fence(&mut self) -> Result<()> {
+        while *self.applied.borrow_and_update() < self.event_sequence {
+            self.applied
+                .changed()
+                .await
+                .map_err(|_| anyhow!("session event projector is closed"))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn new(
         sid: u64,
         event_tx: mpsc::Sender<ProjectedEvent>,

@@ -255,6 +255,19 @@ impl RuntimeModel {
         Some(session.read_with(SessionSnapshot::from_meta).await)
     }
 
+    /// Consume a specific observed stop while holding the session state lock.
+    /// Two clients cannot dispatch guarded actions for the same stop twice.
+    pub(crate) async fn claim_thread_stop(&self, thread: GlobalThreadId, revision: u64) -> bool {
+        let Some(LocalThreadId(sid, tid)) = self.local_thread_id(thread) else {
+            return false;
+        };
+        let Some(session) = self.state.session(sid) else {
+            return false;
+        };
+        let claimed = session.write().await.claim_thread_stop(tid, revision);
+        claimed
+    }
+
     pub(crate) async fn session_snapshots(&self) -> Vec<SessionSnapshot> {
         let mut snapshots = Vec::new();
         for session in self.state.sessions() {

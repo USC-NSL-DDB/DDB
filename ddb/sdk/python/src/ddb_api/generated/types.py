@@ -628,6 +628,7 @@ ExecuteRequest = TypedDict(
         "jumpLocation": NotRequired["SourceLocation"],
         "signalName": NotRequired["str"],
         "preconditions": NotRequired["Preconditions"],
+        "executionGuard": NotRequired["ExecutionGuard"],
     },
 )
 
@@ -636,6 +637,15 @@ ExecutionActionCapability = TypedDict(
     {
         "action": NotRequired["ExecutionAction"],
         "scopes": NotRequired["list[ExecutionScopeKind]"],
+    },
+)
+
+ExecutionGuard = TypedDict(
+    "ExecutionGuard",
+    {
+        "serverInstanceId": NotRequired["str"],
+        "executionStateId": NotRequired["str"],
+        "revision": NotRequired["str"],
     },
 )
 
@@ -1495,6 +1505,7 @@ Preconditions = TypedDict(
     {
         "resourceVersion": NotRequired["ResourceVersion"],
         "stateRevision": NotRequired["str"],
+        "serverInstanceId": NotRequired["str"],
     },
 )
 

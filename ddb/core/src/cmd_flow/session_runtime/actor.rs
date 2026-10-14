@@ -179,12 +179,31 @@ pub(super) async fn run_session(
                                 continue;
                             }
                         };
-                        let acknowledgement = guarded!(
-                            &mut control,
-                            writer.start_write(wire),
-                            shutdown_ack,
-                            'runtime
-                        );
+                        if let Some(guard) = &command.metadata.dispatch_guard {
+                            let result = guarded!(
+                                &mut control,
+                                async {
+                                    demux.fence().await?;
+                                    guard.check().await
+                                },
+                                shutdown_ack,
+                                'runtime
+                            );
+                            if let Err(error) = result {
+                                pending.fail(token, error);
+                                continue;
+                            }
+                        }
+                        let acknowledgement = if command.metadata.dispatch_guard.is_some() {
+                            writer.try_start_write(wire)
+                        } else {
+                            guarded!(
+                                &mut control,
+                                writer.start_write(wire),
+                                shutdown_ack,
+                                'runtime
+                            )
+                        };
                         match acknowledgement {
                             Ok(acknowledgement) => write_completions.push(await_write(
                                 WriteOwner::Command(token),

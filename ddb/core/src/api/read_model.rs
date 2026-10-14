@@ -55,7 +55,6 @@ impl ApiQueries {
         self.router.subscribe_pending_changes()
     }
 
-    #[cfg(test)]
     pub(crate) fn model(&self) -> &Arc<RuntimeModel> {
         &self.model
     }

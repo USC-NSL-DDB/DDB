@@ -21,6 +21,33 @@ use crate::{
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
+#[derive(Debug)]
+struct RejectStop;
+
+#[async_trait::async_trait]
+impl crate::cmd_flow::input::DispatchGuard for RejectStop {
+    async fn check(&self) -> Result<()> {
+        Err(crate::cmd_flow::input::StaleExecution.into())
+    }
+}
+
+#[tokio::test]
+async fn stale_execution_guard_never_reaches_the_transport() {
+    let (transport, requests, _events) = test_transport(8);
+    let (handle, task, _terminations) = spawn_runtime(53, transport);
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(Arc::new(RejectStop));
+    let ticket = handle.submit(guarded).await.unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.is::<crate::cmd_flow::input::StaleExecution>());
+    assert!(requests.try_recv().is_err());
+    wait_for_no_in_flight(&handle).await;
+    stop(&handle, task).await;
+}
+
 fn test_reducer() -> Arc<DebuggerEventReducer> {
     test_reducer_with_notifications(Arc::new(NotificationManager::new()))
 }

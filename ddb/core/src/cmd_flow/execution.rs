@@ -200,10 +200,11 @@ impl ExecutionService {
         // mix running peers with newly attached or breakpoint-stopped targets.
         // Check under the lease so queued execution commands cannot both resume
         // the same process. Unknown/empty state still goes through the backend.
-        if transaction
-            .session_snapshot()
-            .await
-            .is_some_and(|snapshot| snapshot.all_threads_running && !snapshot.in_custom_context)
+        if command.metadata.dispatch_guard.is_none()
+            && transaction
+                .session_snapshot()
+                .await
+                .is_some_and(|snapshot| snapshot.all_threads_running && !snapshot.in_custom_context)
         {
             return Ok(FinishedCmd::new(
                 command.external_token,

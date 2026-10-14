@@ -311,6 +311,9 @@ pub struct Preconditions {
     /// Require the exact committed global state revision.
     #[prost(uint64, optional, tag = "2")]
     pub state_revision: ::core::option::Option<u64>,
+    /// Reject mutations addressed to a previous backend process, including after restart.
+    #[prost(string, optional, tag = "3")]
+    pub server_instance_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// PermissionScope is the minimum authorization class for an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -3644,6 +3647,20 @@ pub struct ExecuteRequest {
     /// Optional optimistic mutation guards.
     #[prost(message, optional, tag = "6")]
     pub preconditions: ::core::option::Option<Preconditions>,
+    /// Optional guard for one explicit thread stop. Checked again at wire dispatch.
+    /// A successful dispatch consumes the stop, including before a running event.
+    #[prost(message, optional, tag = "7")]
+    pub execution_guard: ::core::option::Option<ExecutionGuard>,
+}
+/// ExecutionGuard binds an action to a stopped thread in one backend instance.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExecutionGuard {
+    #[prost(string, tag = "1")]
+    pub server_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub execution_state_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub revision: u64,
 }
 /// SelectThreadRequest admits a thread-selection operation.
 #[derive(Clone, PartialEq, ::prost::Message)]

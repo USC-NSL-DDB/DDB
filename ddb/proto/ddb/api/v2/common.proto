@@ -306,4 +306,6 @@ message Preconditions {
   optional ResourceVersion resource_version = 1;
   // Require the exact committed global state revision.
   optional uint64 state_revision = 2;
+  // Reject mutations addressed to a previous backend process, including after restart.
+  optional string server_instance_id = 3;
 }

@@ -745,6 +745,16 @@ message ExecuteRequest {
   optional string signal_name = 5;
   // Optional optimistic mutation guards.
   optional Preconditions preconditions = 6;
+  // Optional guard for one explicit thread stop. Checked again at wire dispatch.
+  // A successful dispatch consumes the stop, including before a running event.
+  optional ExecutionGuard execution_guard = 7;
+}
+
+// ExecutionGuard binds an action to a stopped thread in one backend instance.
+message ExecutionGuard {
+  string server_instance_id = 1;
+  string execution_state_id = 2;
+  uint64 revision = 3;
 }
 
 // SelectThreadRequest admits a thread-selection operation.

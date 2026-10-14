@@ -30,6 +30,7 @@ pub(crate) enum SessionCommandFailureKind {
     ResponseFailed,
     DebuggerRejected,
     ExecutionFailed,
+    StaleExecution,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -337,9 +338,13 @@ impl Router {
             let sid = ticket.sid();
             match timeout(COMMAND_TIMEOUT, ticket.complete()).await {
                 Ok(Ok(response)) => Ok(response),
-                Ok(Err(_)) => Err(SessionCommandFailure::new(
+                Ok(Err(error)) => Err(SessionCommandFailure::new(
                     sid,
-                    SessionCommandFailureKind::ResponseFailed,
+                    if error.is::<super::input::StaleExecution>() {
+                        SessionCommandFailureKind::StaleExecution
+                    } else {
+                        SessionCommandFailureKind::ResponseFailed
+                    },
                 )),
                 Err(_) => Err(SessionCommandFailure::new(
                     sid,
@@ -382,13 +387,17 @@ impl Router {
         let session_command = route.command(&command);
         let response = match timeout(COMMAND_TIMEOUT, lease.execute(session_command)).await {
             Ok(Ok(response)) => response,
-            Ok(Err(_)) => {
+            Ok(Err(error)) => {
                 return CommandFanoutReport::new(
                     command.external_token,
                     Vec::new(),
                     vec![SessionCommandFailure::new(
                         lease.sid(),
-                        SessionCommandFailureKind::ResponseFailed,
+                        if error.is::<super::input::StaleExecution>() {
+                            SessionCommandFailureKind::StaleExecution
+                        } else {
+                            SessionCommandFailureKind::ResponseFailed
+                        },
                     )],
                 )
                 .into_result();

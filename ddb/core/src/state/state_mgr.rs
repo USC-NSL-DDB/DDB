@@ -410,6 +410,13 @@ impl StateMgr {
                 thread_id: tids.first().copied().unwrap_or_default(),
             });
         }
+        // Every native stop is a new execution generation, even if a running
+        // record was omitted and its reason and location match the last stop.
+        if status == session_mgr::ThreadStatus::STOPPED {
+            for tid in tids {
+                session.invalidate_thread_context(*tid);
+            }
+        }
         if let Some(reason) = stop_reason {
             for tid in tids {
                 session.set_thread_stop_reason(*tid, reason.clone());

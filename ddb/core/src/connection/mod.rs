@@ -33,6 +33,19 @@ pub struct TransportWriter {
 }
 
 impl TransportWriter {
+    /// Guarded execution must not wait in this queue after validating its stop.
+    /// Saturation fails closed so a delayed write cannot resume a newer stop.
+    pub(crate) fn try_start_write(
+        &self,
+        data: Bytes,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<()>>> {
+        let (written, result) = tokio::sync::oneshot::channel();
+        self.requests
+            .try_send(TransportRequest::Write { data, written })
+            .map_err(|_| anyhow::anyhow!("guarded transport request queue is unavailable"))?;
+        Ok(result)
+    }
+
     pub(crate) async fn start_write(
         &self,
         data: Bytes,

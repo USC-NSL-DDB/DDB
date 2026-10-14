@@ -261,6 +261,7 @@ pub struct SessionMeta {
     // Monotonic execution generation for each thread. Frontend resources such
     // as frames and variables are valid only while this value is unchanged.
     t_revisions: HashMap<u64, u64>,
+    t_stop_claims: HashMap<u64, u64>,
     t_locations: HashMap<u64, ThreadLocation>,
     t_stop_reasons: HashMap<u64, ThreadStopReason>,
     curr_ctx: Option<ThreadContext>,
@@ -286,6 +287,7 @@ impl SessionMeta {
             curr_tid: None,
             t_status: HashMap::new(),
             t_revisions: HashMap::new(),
+            t_stop_claims: HashMap::new(),
             t_locations: HashMap::new(),
             t_stop_reasons: HashMap::new(),
             curr_ctx: None,
@@ -320,6 +322,7 @@ impl SessionMeta {
         let removed = self.threads.remove_thread(tid, &mut self.t_status);
         if removed.is_some() {
             self.t_revisions.remove(&tid);
+            self.t_stop_claims.remove(&tid);
             self.t_locations.remove(&tid);
             self.t_stop_reasons.remove(&tid);
         }
@@ -336,6 +339,7 @@ impl SessionMeta {
         let removed = self.threads.remove_thread_group(tgid, &mut self.t_status);
         for tid in &removed {
             self.t_revisions.remove(tid);
+            self.t_stop_claims.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
         }
@@ -352,6 +356,7 @@ impl SessionMeta {
         let removed = self.threads.exit_thread_group(tgid, &mut self.t_status);
         for tid in &removed {
             self.t_revisions.remove(tid);
+            self.t_stop_claims.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
         }
@@ -505,6 +510,17 @@ impl SessionMeta {
         if let Some(revision) = self.t_revisions.get_mut(&tid) {
             *revision = revision.saturating_add(1);
         }
+    }
+
+    pub(crate) fn claim_thread_stop(&mut self, tid: u64, revision: u64) -> bool {
+        if self.t_status.get(&tid) != Some(&ThreadStatus::STOPPED)
+            || self.t_revisions.get(&tid).copied().unwrap_or(1) != revision
+            || self.t_stop_claims.get(&tid) == Some(&revision)
+        {
+            return false;
+        }
+        self.t_stop_claims.insert(tid, revision);
+        true
     }
 
     #[inline]

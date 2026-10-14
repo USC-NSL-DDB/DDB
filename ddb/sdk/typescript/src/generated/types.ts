@@ -565,11 +565,18 @@ export interface ExecuteRequest {
   "jumpLocation"?: SourceLocation;
   "signalName"?: string;
   "preconditions"?: Preconditions;
+  "executionGuard"?: ExecutionGuard;
 }
 
 export interface ExecutionActionCapability {
   "action"?: ExecutionAction;
   "scopes"?: ExecutionScopeKind[];
+}
+
+export interface ExecutionGuard {
+  "serverInstanceId"?: string;
+  "executionStateId"?: string;
+  "revision"?: string;
 }
 
 export interface ExecutionState {
@@ -1153,6 +1160,7 @@ export interface PendingCommand {
 export interface Preconditions {
   "resourceVersion"?: ResourceVersion;
   "stateRevision"?: string;
+  "serverInstanceId"?: string;
 }
 
 export interface Process {

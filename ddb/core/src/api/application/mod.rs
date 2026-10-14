@@ -9,6 +9,7 @@ mod command_port;
 mod context;
 mod debugger_reads;
 mod error;
+mod execution_guard;
 mod ids;
 mod journal;
 mod mutations;

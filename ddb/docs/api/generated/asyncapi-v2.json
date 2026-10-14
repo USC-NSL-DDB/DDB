@@ -958,6 +958,9 @@
           "context": {
             "$ref": "#/components/schemas/RequestContext"
           },
+          "executionGuard": {
+            "$ref": "#/components/schemas/ExecutionGuard"
+          },
           "jumpLocation": {
             "$ref": "#/components/schemas/SourceLocation"
           },
@@ -1001,6 +1004,23 @@
               "$ref": "#/components/schemas/ExecutionScopeKind"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExecutionGuard": {
+        "additionalProperties": true,
+        "properties": {
+          "executionStateId": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "serverInstanceId": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2726,6 +2746,9 @@
         "properties": {
           "resourceVersion": {
             "$ref": "#/components/schemas/ResourceVersion"
+          },
+          "serverInstanceId": {
+            "type": "string"
           },
           "stateRevision": {
             "format": "uint64",

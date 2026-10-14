@@ -97,6 +97,7 @@ fn deletion_rule_ids(
 #[derive(Clone)]
 enum CompletionProjection {
     NoContent,
+    Execution(Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>),
     Selection,
     Evaluation {
         frame: Option<StopFrameKey>,
@@ -150,7 +151,10 @@ impl CompletionProjection {
     }
 
     fn requires_concrete_target_completions(&self) -> bool {
-        matches!(self, Self::NoContent | Self::RawCommand { .. })
+        matches!(
+            self,
+            Self::NoContent | Self::Execution(_) | Self::RawCommand { .. }
+        )
     }
 }
 
@@ -174,6 +178,24 @@ impl DdbApplicationService {
             .resolve(request.target.as_ref(), TargetPurpose::Command)
             .await?;
         validate_execution_target(request.action, &resolved.command)?;
+        if request.execution_guard.is_some()
+            && !matches!(
+                ExecutionAction::try_from(request.action),
+                Ok(ExecutionAction::Continue
+                    | ExecutionAction::Next
+                    | ExecutionAction::StepIn
+                    | ExecutionAction::StepOut
+                    | ExecutionAction::Jump)
+            )
+        {
+            return Err(ApplicationError::invalid(
+                "execution_guard",
+                "requires a thread resume action",
+            ));
+        }
+        let guard = self
+            .execution_guard(request.execution_guard.as_ref(), &resolved)
+            .await?;
         scope.ensure_active()?;
         self.admit_command(
             principal,
@@ -183,7 +205,7 @@ impl DdbApplicationService {
             OperationKind::Execute,
             resolved,
             command,
-            CompletionProjection::NoContent,
+            CompletionProjection::Execution(guard),
         )
     }
 
@@ -1055,9 +1077,13 @@ impl DdbApplicationService {
             }
             _ => None,
         };
+        let guard = match &projection {
+            CompletionProjection::Execution(guard) => guard.clone(),
+            _ => None,
+        };
         match self
             .command_port
-            .execute_tracked(&command, target, &operation_id, kind)
+            .execute_guarded(&command, target, &operation_id, kind, guard)
             .await
         {
             Ok(outcome) => {
@@ -1204,6 +1230,18 @@ impl DdbApplicationService {
         projection: &CompletionProjection,
         admitted_session_ids: &[u64],
     ) {
+        if error.is_stale_execution() {
+            self.fail_operation(
+                operation_id,
+                request_id,
+                ApplicationError::new(
+                    DdbErrorCode::FailedPrecondition,
+                    "execution stop was superseded or already consumed",
+                ),
+                admitted_session_ids,
+            );
+            return;
+        }
         let Some(report) = error.fanout_report() else {
             self.fail_operation(
                 operation_id,
@@ -1419,7 +1457,9 @@ impl DdbApplicationService {
         outcome: &CommandOutcome,
     ) -> Result<OperationResult, ApplicationError> {
         let value = match projection {
-            CompletionProjection::NoContent => operation_result::Value::NoContent(Empty {}),
+            CompletionProjection::NoContent | CompletionProjection::Execution(_) => {
+                operation_result::Value::NoContent(Empty {})
+            }
             CompletionProjection::Selection => {
                 let snapshot = self.queries.snapshot().await;
                 let selection = self.selection(
@@ -1770,6 +1810,16 @@ impl DdbApplicationService {
         let Some(preconditions) = preconditions else {
             return Ok(());
         };
+        if preconditions
+            .server_instance_id
+            .as_deref()
+            .is_some_and(|id| id != self.server_instance_id())
+        {
+            return Err(ApplicationError::new(
+                DdbErrorCode::FailedPrecondition,
+                "backend instance precondition does not match",
+            ));
+        }
         if let Some(expected) = preconditions.state_revision {
             let (_, current) = self.journal.checkpoint();
             if expected != current {
@@ -2302,7 +2352,9 @@ fn basic_retained_partial_result(
 ) -> Option<OperationResult> {
     let outcome = CommandOutcome::silent(report.completion().clone());
     let value = match projection {
-        CompletionProjection::NoContent => operation_result::Value::NoContent(Empty {}),
+        CompletionProjection::NoContent | CompletionProjection::Execution(_) => {
+            operation_result::Value::NoContent(Empty {})
+        }
         CompletionProjection::RawCommand { .. } => {
             operation_result::Value::RawCommand(raw_command_result(&outcome))
         }
@@ -2353,6 +2405,10 @@ fn command_target_error(
     projection: &CompletionProjection,
 ) -> ApplicationError {
     match kind {
+        SessionCommandFailureKind::StaleExecution => ApplicationError::new(
+            DdbErrorCode::FailedPrecondition,
+            "execution stop was superseded or already consumed",
+        ),
         SessionCommandFailureKind::AdmissionTimeout
         | SessionCommandFailureKind::ResponseTimeout => ApplicationError::new(
             DdbErrorCode::DeadlineExceeded,
