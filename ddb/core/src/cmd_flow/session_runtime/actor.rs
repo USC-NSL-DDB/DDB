@@ -128,6 +128,7 @@ async fn guard_against_shutdown<T>(
     work: impl Future<Output = T>,
 ) -> Guarded<T> {
     tokio::select! {
+        biased;
         control_request = control.recv() => {
             let acknowledgement =
                 control_request.map(|ControlRequest::Shutdown { stopped }| stopped);
@@ -267,27 +268,61 @@ pub(super) async fn run_session(
                                 &mut control,
                                 async {
                                     demux.fence().await?;
-                                    guard.check().await
+                                    guard.prepare().await
                                 },
                                 shutdown_ack,
                                 'runtime
                             );
-                            if let Err(error) = result {
-                                pending.fail(token, error);
-                                continue;
-                            }
+                            let mut permit = match result {
+                                Ok(permit) => permit,
+                                Err(error) => {
+                                    pending.fail(token, error);
+                                    continue;
+                                }
+                            };
                             // Validation may await model locks. The actor cannot
                             // decode new native events during that await, so any
-                            // newly queued event invalidates this dispatch. A
-                            // claimed stop stays consumed when we fail closed.
-                            if !events.is_empty() || events.is_disconnected() {
-                                pending.fail(token, crate::cmd_flow::input::StaleExecution.into());
-                                continue;
+                            // newly queued event invalidates this dispatch.
+                            // Native state stays locked until admission or veto.
+                            let mut admitted = None;
+                            let mut interrupted = false;
+                            let result = permit.dispatch(&mut || {
+                                match control.try_recv() {
+                                    Ok(ControlRequest::Shutdown { stopped }) => {
+                                        shutdown_ack = Some(stopped);
+                                        interrupted = true;
+                                        return Err(crate::cmd_flow::input::StaleExecution.into());
+                                    }
+                                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                                        interrupted = true;
+                                        return Err(crate::cmd_flow::input::StaleExecution.into());
+                                    }
+                                    Err(mpsc::error::TryRecvError::Empty) => {}
+                                }
+                                if !events.is_empty() || events.is_disconnected() {
+                                    return Err(crate::cmd_flow::input::StaleExecution.into());
+                                }
+                                Ok(())
+                            }, &mut || {
+                                admitted = Some(writer.try_start_write(wire.clone())?);
+                                Ok(())
+                            });
+                            if interrupted {
+                                break 'runtime;
                             }
+                            match result {
+                                Ok(()) => {
+                                    guard.dispatched();
+                                    write_completions.push(await_write(
+                                        WriteOwner::Command(token),
+                                        admitted.expect("dispatch admitted a write"),
+                                    ));
+                                }
+                                Err(error) => pending.fail(token, error),
+                            }
+                            continue;
                         }
-                        let acknowledgement = if command.metadata.dispatch_guard.is_some() {
-                            writer.try_start_write(wire)
-                        } else {
+                        let acknowledgement = {
                             guarded!(
                                 &mut control,
                                 writer.start_write(wire),
@@ -297,9 +332,6 @@ pub(super) async fn run_session(
                         };
                         match acknowledgement {
                             Ok(acknowledgement) => {
-                                if let Some(guard) = &command.metadata.dispatch_guard {
-                                    guard.dispatched();
-                                }
                                 write_completions.push(await_write(
                                     WriteOwner::Command(token),
                                     acknowledgement,
@@ -357,5 +389,21 @@ pub(super) async fn run_session(
     let _ = publisher_task.await;
     if let Some(stopped) = shutdown_ack {
         let _ = stopped.send(());
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queued_shutdown_wins_over_ready_guard_work() {
+        let (sender, mut control) = mpsc::unbounded_channel();
+        let (stopped, _) = oneshot::channel();
+        sender.send(ControlRequest::Shutdown { stopped }).unwrap();
+        assert!(matches!(
+            guard_against_shutdown(&mut control, std::future::ready(())).await,
+            Guarded::ShutdownRequested(Some(_))
+        ));
     }
 }

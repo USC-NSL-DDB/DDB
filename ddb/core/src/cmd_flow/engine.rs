@@ -189,7 +189,18 @@ impl CommandEngine {
                         | "-break-condition"
                 ))
         {
-            self.model.retire_stop_automation();
+            if matches!(
+                parsed.prefix.as_str(),
+                "-exec-interrupt" | "-exec-interrupt-if-running"
+            ) {
+                let sessions = self
+                    .dispatcher
+                    .resolve_session_ids(&parsed.target)
+                    .map_err(|source| CommandError::new(parsed.external_token, source))?;
+                self.model.retire_stop_automation_for_pauses(&sessions);
+            } else {
+                self.model.retire_stop_automation();
+            }
         }
         let external_token = parsed.external_token;
         let prefix = parsed.prefix.clone();

@@ -5,12 +5,33 @@ use anyhow::{anyhow, bail, Context, Result};
 #[async_trait::async_trait]
 pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
     async fn check(&self) -> Result<()>;
+    /// Retain validated native state until the synchronous write admission.
+    async fn prepare(&self) -> Result<Box<dyn DispatchPermit>> {
+        self.check().await?;
+        Ok(Box::new(UnlockedDispatch))
+    }
     /// Called synchronously after the session actor admits the transport write.
     fn dispatched(&self) {}
+    /// A native error response proves that an admitted command was rejected.
+    fn rejected(&self) {}
     fn is_automatic(&self) -> bool {
         false
     }
 }
+
+pub trait DispatchPermit: Send {
+    fn dispatch(
+        &mut self,
+        validate: &mut dyn FnMut() -> Result<()>,
+        action: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        validate()?;
+        action()
+    }
+}
+
+struct UnlockedDispatch;
+impl DispatchPermit for UnlockedDispatch {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("execution stop was superseded or already consumed")]

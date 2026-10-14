@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, OwnedMutexGuard};
+use tokio::sync::{broadcast, OwnedMutexGuard, OwnedRwLockReadGuard};
 
 use super::{
     bkpt_mgr::{BkptLoc, BkptMeta, BreakpointMgr, BreakpointStateChange, SubBkptSpec},
@@ -20,6 +20,28 @@ use super::{
 use super::bkpt_mgr::SubBkptType;
 
 const RUNTIME_CHANGE_QUEUE: usize = 4_096;
+
+/// Keeps the native state validated for dispatch stable until writer admission.
+pub(crate) struct ExecutionDispatchPermit {
+    sessions: Vec<OwnedRwLockReadGuard<SessionMeta>>,
+    claim: Option<(u64, u64, u64)>,
+}
+
+impl ExecutionDispatchPermit {
+    pub(crate) fn admit<T, E>(
+        &self,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Option<Result<T, E>> {
+        if let Some((sid, tid, revision)) = self.claim {
+            self.sessions
+                .iter()
+                .find(|session| session.sid() == sid)?
+                .admit_thread_stop(tid, revision, action)
+        } else {
+            Some(action())
+        }
+    }
+}
 
 /// Backend-neutral hints emitted only after client-visible runtime state has
 /// committed. Consumers must resample detached state; the domain layer never
@@ -163,7 +185,7 @@ pub struct RuntimeModel {
     proclets: ProcletMgr,
     group_operations: GroupOperationCoordinator,
     changes: broadcast::Sender<RuntimeChange>,
-    execution_control_epoch: Arc<std::sync::atomic::AtomicU64>,
+    execution_control_epoch: Arc<super::ExecutionControl>,
 }
 
 impl std::fmt::Debug for RuntimeModel {
@@ -184,7 +206,7 @@ impl RuntimeModel {
             proclets: ProcletMgr::new(),
             group_operations: GroupOperationCoordinator::new(),
             changes,
-            execution_control_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            execution_control_epoch: Arc::new(super::ExecutionControl::default()),
         })
     }
 
@@ -192,13 +214,16 @@ impl RuntimeModel {
         self.changes.subscribe()
     }
 
-    pub(crate) fn execution_control_epoch(&self) -> Arc<std::sync::atomic::AtomicU64> {
+    pub(crate) fn execution_control_epoch(&self) -> Arc<super::ExecutionControl> {
         self.execution_control_epoch.clone()
     }
 
     pub(crate) fn retire_stop_automation(&self) {
-        self.execution_control_epoch
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.retire_stop_automation_for_pauses(&[]);
+    }
+
+    pub(crate) fn retire_stop_automation_for_pauses(&self, sessions: &[u64]) {
+        self.execution_control_epoch.advance_for_pauses(sessions);
         self.notify_change(RuntimeChange::topology());
     }
 
@@ -271,14 +296,79 @@ impl RuntimeModel {
     /// Consume a specific observed stop while holding the session state lock.
     /// Two clients cannot dispatch guarded actions for the same stop twice.
     pub(crate) async fn claim_thread_stop(&self, thread: GlobalThreadId, revision: u64) -> bool {
-        let Some(LocalThreadId(sid, tid)) = self.local_thread_id(thread) else {
-            return false;
-        };
-        let Some(session) = self.state.session(sid) else {
-            return false;
-        };
-        let claimed = session.write().await.claim_thread_stop(tid, revision);
-        claimed
+        self.prepare_stop_for_dispatch(thread, revision)
+            .await
+            .and_then(|permit| permit.admit(|| Ok::<(), std::convert::Infallible>(())))
+            .is_some()
+    }
+
+    pub(crate) async fn prepare_stop_for_dispatch(
+        &self,
+        thread: GlobalThreadId,
+        revision: u64,
+    ) -> Option<ExecutionDispatchPermit> {
+        let LocalThreadId(sid, tid) = self.local_thread_id(thread)?;
+        let mut permit = self
+            .validate_stop_for_dispatch(thread, revision, None)
+            .await?;
+        permit.claim = Some((sid, tid, revision));
+        Some(permit)
+    }
+
+    /// Lock sessions in identity order, then validate their state together. This
+    /// avoids mixing an old initiating stop with a newly sampled peer state.
+    pub(crate) async fn validate_stop_for_dispatch(
+        &self,
+        thread: GlobalThreadId,
+        revision: u64,
+        peer: Option<(u64, &[(u64, u64)])>,
+    ) -> Option<ExecutionDispatchPermit> {
+        let LocalThreadId(sid, tid) = self.local_thread_id(thread)?;
+        let mut ids = vec![sid];
+        if let Some((peer, _)) = peer {
+            ids.push(peer);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        let mut sessions = Vec::new();
+        for id in ids {
+            sessions.push(self.state.session(id)?.read_owned().await);
+        }
+        let current = sessions
+            .iter()
+            .find(|session| session.sid() == sid)?
+            .thread_status_snapshot()
+            .1;
+        if !current.iter().any(|state| {
+            state.local_id == tid
+                && state.status == ThreadStatus::STOPPED
+                && state.stop_revision == revision
+        }) {
+            return None;
+        }
+        if let Some((peer, expected)) = peer {
+            let mut running = sessions
+                .iter()
+                .find(|session| session.sid() == peer)?
+                .thread_status_snapshot()
+                .1
+                .iter()
+                .filter(|state| state.status == ThreadStatus::RUNNING)
+                .filter_map(|state| {
+                    self.state
+                        .global_thread_id(peer, state.local_id)
+                        .map(|id| (id.value(), state.stop_revision))
+                })
+                .collect::<Vec<_>>();
+            running.sort_unstable();
+            if running != expected {
+                return None;
+            }
+        }
+        Some(ExecutionDispatchPermit {
+            sessions,
+            claim: None,
+        })
     }
 
     pub(crate) async fn session_snapshots(&self) -> Vec<SessionSnapshot> {
@@ -423,6 +513,7 @@ impl RuntimeModel {
             group_id.filter(|group_id| self.groups.group_by_id(*group_id).is_none());
         self.proclets.remove_owner_session(sid);
         self.state.remove_session(sid).await;
+        self.execution_control_epoch.forget_session(sid);
         let mut removed = vec![RuntimeResourceId::Session(sid)];
         removed.extend(
             removed_threads
@@ -961,6 +1052,57 @@ impl Drop for SessionRetirement {
 mod tests {
     use super::*;
     use crate::state::{GroupSubBkpt, SubBkptType};
+
+    #[tokio::test]
+    async fn peer_dispatch_validates_a_consistent_cause_while_waiting_for_peer_state() {
+        let model = RuntimeModel::new();
+        let mut cause = None;
+        for sid in [1, 2] {
+            model.register_session(sid, "worker", None).await;
+            model.register_thread_group(sid, "i1").await.unwrap();
+            let thread = model.register_thread(sid, 1, "i1").await.unwrap().thread_id;
+            model
+                .update_thread_statuses(
+                    sid,
+                    &[1],
+                    if sid == 1 {
+                        ThreadStatus::STOPPED
+                    } else {
+                        ThreadStatus::RUNNING
+                    },
+                )
+                .await
+                .unwrap();
+            if sid == 1 {
+                cause = Some(thread);
+            }
+        }
+        let cause = cause.unwrap();
+        let revision = model.thread_snapshots_for_sessions(&[1]).await[0].stop_revision;
+        let peer = model.thread_snapshots_for_sessions(&[2]).await[0].clone();
+        let expected = [(peer.global_id.value(), peer.stop_revision)];
+        let peer_session = model.state.session(2).unwrap();
+        let peer_busy = peer_session.write().await;
+        let mut validation =
+            Box::pin(model.validate_stop_for_dispatch(cause, revision, Some((2, &expected))));
+        assert!(futures::poll!(validation.as_mut()).is_pending());
+        let mut intervening_stop =
+            Box::pin(model.update_thread_statuses(1, &[1], ThreadStatus::STOPPED));
+        assert!(
+            futures::poll!(intervening_stop.as_mut()).is_pending(),
+            "the cause must remain locked while peer state is awaited"
+        );
+        drop(peer_busy);
+        let permit = validation
+            .await
+            .expect("the locked native generation is still current");
+        drop(permit);
+        intervening_stop.await.unwrap();
+        assert!(model
+            .validate_stop_for_dispatch(cause, revision, Some((2, &expected)))
+            .await
+            .is_none());
+    }
 
     #[tokio::test]
     async fn change_feed_reports_only_successful_committed_mutations() {

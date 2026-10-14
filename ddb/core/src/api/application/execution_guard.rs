@@ -3,9 +3,20 @@ use ddb_api_types::v2::{DdbErrorCode, ExecutionGuard};
 use std::sync::Arc;
 
 use crate::{
-    cmd_flow::input::{DispatchGuard, StaleExecution},
+    cmd_flow::input::{DispatchGuard, DispatchPermit, StaleExecution},
     state::{GlobalThreadId, RuntimeModel},
 };
+
+impl DispatchPermit for crate::state::ExecutionDispatchPermit {
+    fn dispatch(
+        &mut self,
+        validate: &mut dyn FnMut() -> anyhow::Result<()>,
+        action: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        validate()?;
+        self.admit(action).ok_or(StaleExecution)?
+    }
+}
 
 pub(super) struct StopDispatchGuard {
     pub model: Arc<RuntimeModel>,
@@ -24,6 +35,13 @@ impl std::fmt::Debug for StopDispatchGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for StopDispatchGuard {
+    async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        self.model
+            .prepare_stop_for_dispatch(self.thread, self.revision)
+            .await
+            .map(|permit| Box::new(permit) as Box<dyn DispatchPermit>)
+            .ok_or_else(|| StaleExecution.into())
+    }
     async fn check(&self) -> anyhow::Result<()> {
         if !self
             .model

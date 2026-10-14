@@ -1088,7 +1088,11 @@ impl DdbApplicationService {
             if kind == OperationKind::Execute
                 && !matches!(projection, CompletionProjection::AutomaticExecution(_))
             {
-                self.retire_stop_automation();
+                if command == "-exec-interrupt" {
+                    self.retire_stop_automation_for_pauses(&resolved.session_ids);
+                } else {
+                    self.retire_stop_automation();
+                }
             }
             if matches!(
                 kind,
@@ -1194,7 +1198,7 @@ impl DdbApplicationService {
         };
         match self
             .command_port
-            .execute_guarded(&command, target, &operation_id, kind, guard)
+            .execute_guarded(&command, target, &operation_id, kind, guard.clone())
             .await
         {
             Ok(outcome) => {
@@ -1257,13 +1261,20 @@ impl DdbApplicationService {
                     }
                 }
             }
-            Err(error) => self.fail_command_operation(
-                &operation_id,
-                &request_id,
-                error,
-                &projection,
-                &session_ids,
-            ),
+            Err(error) => {
+                if let (Some(guard), [session_id]) = (guard.as_ref(), session_ids.as_slice()) {
+                    if error.is_debugger_rejection_for(*session_id) {
+                        guard.rejected();
+                    }
+                }
+                self.fail_command_operation(
+                    &operation_id,
+                    &request_id,
+                    error,
+                    &projection,
+                    &session_ids,
+                );
+            }
         }
     }
 

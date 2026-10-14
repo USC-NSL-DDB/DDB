@@ -36,9 +36,20 @@ reports whether each target actually stopped. A failed pause stays visible and
 is not retried repeatedly against unchanged peer state. A new cause or a new
 running generation can trigger another attempt.
 
+A failed acknowledgment does not prove an interrupt was unsent. DDB retains
+provenance for a possible late pause after transport errors or timeouts, including
+after the initiating cause retires. A definite native rejection clears it, so a
+later manual pause can establish its own cause.
+A later explicit DDB interrupt owns the next stop for its target, including when
+an older automatic interrupt had an uncertain outcome. Continuing a target
+preserves provenance for a possible late automatic interrupt.
+
 Explicit execution retires pending automation. This includes v2 operations,
 legacy API commands, and stdin commands. Breakpoint updates, deletion, native
 console commands, and assignments also invalidate pending automatic work.
+Cancellation and final writer admission share a synchronization gate. Cancellation
+that wins this gate prevents both output and admission. Work already admitted can
+complete after cancellation.
 
 ## Guard execution across clients and restarts
 
@@ -64,8 +75,9 @@ For a thread resume action, copy the stopped `ExecutionState` into an
 ```
 
 Admission checks the public execution state. The session actor then applies
-preceding events and atomically claims the corresponding native stop before
-dispatch. A later native stop or a second claim fails with
+preceding events and retains the validated native state through writer admission.
+Successful admission atomically claims the corresponding stop. A later native
+stop or a second claim fails with
 `FAILED_PRECONDITION`, including before a running event arrives. DDB's own
 caller-context restoration does not create another native stop. Retrying the
 same idempotency key returns the original operation.
@@ -75,8 +87,9 @@ sibling threads. Clients cannot resume the same stop by naming different threads
 
 A guard requires one explicit thread and supports Continue, Next, StepIn,
 StepOut, and Jump. A busy transport writer or full queue fails the guarded command
-rather than delaying it after validation. Events arriving during validation also
-fail the dispatch. A claimed stop remains consumed if
+rather than delaying it after validation. Events or shutdown arriving during
+validation also fail the dispatch. Unadmitted work leaves the stop available for
+another guarded action. A claimed stop remains consumed if
 the debugger rejects the command. A client may issue a deliberate unguarded
 action or wait for a new native stop.
 

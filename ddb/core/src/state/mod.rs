@@ -1,5 +1,6 @@
 mod bkpt_mgr;
 mod bkpt_snapshot;
+mod execution_control;
 mod group_mgr;
 mod group_operation;
 mod ids;
@@ -16,9 +17,12 @@ pub(crate) use bkpt_mgr::{
     SubBkptType,
 };
 pub(crate) use bkpt_snapshot::{BreakpointSnapshot, SubBreakpointSnapshot};
+pub(crate) use execution_control::ExecutionControl;
 pub(crate) use group_mgr::GroupMeta;
 pub(crate) use ids::{GlobalThreadGroupId, GlobalThreadId, GroupId, ServiceIdentity};
-pub(crate) use runtime_model::{RuntimeChange, RuntimeModel, RuntimeResourceId, SessionSnapshot};
+pub(crate) use runtime_model::{
+    ExecutionDispatchPermit, RuntimeChange, RuntimeModel, RuntimeResourceId, SessionSnapshot,
+};
 pub(crate) use session_mgr::{
     SessionStatus, ThreadContext, ThreadLocation, ThreadStatus, ThreadStopKind, ThreadStopReason,
 };

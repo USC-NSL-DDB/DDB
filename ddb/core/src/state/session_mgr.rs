@@ -3,9 +3,9 @@ use papaya::HashMap as ShardMap;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{OwnedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::state::{GlobalThreadId, ServiceIdentity};
 
@@ -256,7 +256,7 @@ impl SessionThreadRegistry {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug)]
 pub struct SessionMeta {
     tag: String,
     sid: u64,
@@ -266,7 +266,7 @@ pub struct SessionMeta {
     // as frames and variables are valid only while this value is unchanged.
     t_revisions: HashMap<u64, u64>,
     t_stop_revisions: HashMap<u64, u64>,
-    t_stop_claims: HashMap<u64, u64>,
+    t_stop_claims: Mutex<HashMap<u64, u64>>,
     t_locations: HashMap<u64, ThreadLocation>,
     t_stop_reasons: HashMap<u64, ThreadStopReason>,
     curr_ctx: Option<ThreadContext>,
@@ -293,7 +293,7 @@ impl SessionMeta {
             t_status: HashMap::new(),
             t_revisions: HashMap::new(),
             t_stop_revisions: HashMap::new(),
-            t_stop_claims: HashMap::new(),
+            t_stop_claims: Mutex::new(HashMap::new()),
             t_locations: HashMap::new(),
             t_stop_reasons: HashMap::new(),
             curr_ctx: None,
@@ -329,7 +329,10 @@ impl SessionMeta {
         let removed = self.threads.remove_thread(tid, &mut self.t_status);
         if removed.is_some() {
             self.t_revisions.remove(&tid);
-            self.t_stop_claims.remove(&tid);
+            self.t_stop_claims
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&tid);
             self.t_stop_revisions.remove(&tid);
             self.t_locations.remove(&tid);
             self.t_stop_reasons.remove(&tid);
@@ -347,7 +350,10 @@ impl SessionMeta {
         let removed = self.threads.remove_thread_group(tgid, &mut self.t_status);
         for tid in &removed {
             self.t_revisions.remove(tid);
-            self.t_stop_claims.remove(tid);
+            self.t_stop_claims
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(tid);
             self.t_stop_revisions.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
@@ -365,7 +371,10 @@ impl SessionMeta {
         let removed = self.threads.exit_thread_group(tgid, &mut self.t_status);
         for tid in &removed {
             self.t_revisions.remove(tid);
-            self.t_stop_claims.remove(tid);
+            self.t_stop_claims
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(tid);
             self.t_stop_revisions.remove(tid);
             self.t_locations.remove(tid);
             self.t_stop_reasons.remove(tid);
@@ -525,25 +534,39 @@ impl SessionMeta {
         }
     }
 
-    pub(crate) fn claim_thread_stop(&mut self, tid: u64, revision: u64) -> bool {
+    /// Serialize process-wide claims while a dispatch permit holds native state
+    /// stable. Only successful synchronous write admission consumes the stop.
+    pub(crate) fn admit_thread_stop<T, E>(
+        &self,
+        tid: u64,
+        revision: u64,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Option<Result<T, E>> {
+        let mut claims = self
+            .t_stop_claims
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if self.t_status.get(&tid) != Some(&ThreadStatus::STOPPED)
             || self.t_stop_revisions.get(&tid).copied().unwrap_or(1) != revision
-            || self.t_stop_claims.get(&tid) == Some(&revision)
+            || claims.get(&tid) == Some(&revision)
         {
-            return false;
+            return None;
         }
+        let admitted = action();
         // Both native backends resume the process even when DDB's public
         // target names a thread. Consume its stopped siblings before Running
         // can arrive, so another client cannot resume the same process twice.
-        for (sibling, status) in &self.t_status {
-            if *status == ThreadStatus::STOPPED {
-                self.t_stop_claims.insert(
-                    *sibling,
-                    self.t_stop_revisions.get(sibling).copied().unwrap_or(1),
-                );
+        if admitted.is_ok() {
+            for (sibling, status) in &self.t_status {
+                if *status == ThreadStatus::STOPPED {
+                    claims.insert(
+                        *sibling,
+                        self.t_stop_revisions.get(sibling).copied().unwrap_or(1),
+                    );
+                }
             }
         }
-        true
+        Some(admitted)
     }
 
     #[inline]
@@ -595,10 +618,14 @@ pub type SessionWriteGuard<'a> = RwLockWriteGuard<'a, SessionMeta>;
 #[derive(Debug)]
 pub struct SessionWrapper {
     /// Session metadata protected by read-write lock
-    meta: RwLock<SessionMeta>,
+    meta: Arc<RwLock<SessionMeta>>,
 }
 
 impl SessionWrapper {
+    pub(super) async fn read_owned(&self) -> OwnedRwLockReadGuard<SessionMeta> {
+        self.meta.clone().read_owned().await
+    }
+
     #[inline]
     pub async fn read(&self) -> SessionReadGuard<'_> {
         self.meta.read().await
@@ -657,7 +684,11 @@ impl SessionStateMgr {
         sessions.insert(
             sid,
             Arc::new(SessionWrapper {
-                meta: RwLock::new(SessionMeta::new(sid, tag.to_string(), service_identity)),
+                meta: Arc::new(RwLock::new(SessionMeta::new(
+                    sid,
+                    tag.to_string(),
+                    service_identity,
+                ))),
             }),
         );
         self.tag_index.insert(tag.to_string(), sid);
@@ -750,6 +781,79 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn failed_write_admission_leaves_stopped_sibling_claims_available() {
+        let mut meta = SessionMeta::new(1, "svc-a".into(), None);
+        meta.add_thread_group("i1");
+        meta.create_thread(10, "i1");
+        meta.create_thread(11, "i1");
+        meta.update_thread_statuses(&[10, 11], ThreadStatus::STOPPED);
+        let revision = |meta: &SessionMeta, tid| {
+            meta.thread_status_snapshot()
+                .1
+                .iter()
+                .find(|thread| thread.local_id == tid)
+                .unwrap()
+                .stop_revision
+        };
+        let first = revision(&meta, 10);
+        let sibling = revision(&meta, 11);
+        assert_eq!(
+            meta.admit_thread_stop(10, first, || Err::<(), _>("writer unavailable")),
+            Some(Err("writer unavailable"))
+        );
+        assert_eq!(
+            meta.admit_thread_stop(11, sibling, || Ok::<(), ()>(())),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            meta.admit_thread_stop(10, first, || -> Result<(), ()> {
+                panic!("a consumed sibling must not reach write admission")
+            }),
+            None
+        );
+        meta.update_thread_statuses(&[10, 11], ThreadStatus::STOPPED);
+        assert_eq!(
+            meta.admit_thread_stop(10, revision(&meta, 10), || Ok::<(), ()>(())),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn concurrent_stopped_sibling_admissions_resume_the_process_once() {
+        let mut meta = SessionMeta::new(1, "svc-a".into(), None);
+        meta.add_thread_group("i1");
+        meta.create_thread(10, "i1");
+        meta.create_thread(11, "i1");
+        meta.update_thread_statuses(&[10, 11], ThreadStatus::STOPPED);
+        let observed = meta.thread_status_snapshot().1;
+        let ready = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let admissions = observed
+                .iter()
+                .map(|thread| {
+                    let meta = &meta;
+                    let ready = &ready;
+                    scope.spawn(move || {
+                        ready.wait();
+                        meta.admit_thread_stop(thread.local_id, thread.stop_revision, || {
+                            Ok::<(), ()>(())
+                        })
+                        .is_some()
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                admissions
+                    .into_iter()
+                    .map(|admission| admission.join().unwrap())
+                    .filter(|admitted| *admitted)
+                    .count(),
+                1
+            );
+        });
+    }
 
     #[test]
     fn running_session_requires_known_running_threads() {

@@ -266,3 +266,34 @@ async fn native_stop_guard_survives_backend_context_restoration_but_not_a_new_st
         .unwrap();
     assert!(guard.check().await.is_err());
 }
+
+#[tokio::test]
+async fn native_stop_cannot_change_between_validation_and_writer_admission() {
+    let (model, service, _, target) = guarded_fixture().await;
+    let request = guarded_request(&service, target.clone(), "held-native-stop").await;
+    let resolved = service
+        .target_resolver()
+        .resolve(Some(&target), super::super::TargetPurpose::Command)
+        .await
+        .unwrap();
+    let guard = service
+        .execution_guard(request.execution_guard.as_ref(), &resolved)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut permit = guard.prepare().await.unwrap();
+    let mut new_stop = Box::pin(model.update_thread_statuses(42, &[11], ThreadStatus::STOPPED));
+    assert!(futures::poll!(new_stop.as_mut()).is_pending());
+    let mut admitted = false;
+    permit
+        .dispatch(&mut || Ok(()), &mut || {
+            admitted = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(admitted);
+    guard.dispatched();
+    drop(permit);
+    new_stop.await.unwrap();
+    assert!(guard.prepare().await.is_err());
+}

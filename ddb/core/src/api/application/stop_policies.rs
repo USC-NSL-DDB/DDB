@@ -4,10 +4,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -26,12 +23,12 @@ use super::{
 use crate::{
     api::read_model::ThreadView,
     cmd_flow::{
-        input::{DispatchGuard, StaleExecution},
+        input::{DispatchGuard, DispatchPermit, StaleExecution},
         logpoint_template::{Part, Template, MAX_TEMPLATE_BYTES},
         output_hub::{DebuggerOutputStream, OutputHub},
         router::Target as CommandTarget,
     },
-    state::{GlobalThreadId, RuntimeModel, ThreadStopKind},
+    state::{ExecutionControl, GlobalThreadId, RuntimeModel, ThreadStopKind},
 };
 
 const MAX_AUTOMATIC_TASKS: usize = 16;
@@ -48,16 +45,17 @@ struct PolicyState {
     public: v2::StopPolicy,
     seen: HashMap<u64, u64>,
     logpoints_seen: HashMap<u64, u64>,
+    manual_stops: HashMap<u64, u64>,
     cause: Option<Stop>,
     attempts: BTreeMap<u64, Vec<(u64, u64)>>,
     next_attempt: u64,
-    // Native revision and attempt identify only interrupts actually dispatched.
-    automatic_pauses: HashMap<u64, (u64, u64)>,
+    // Native revision, attempt, and control epoch identify dispatched interrupts.
+    automatic_pauses: HashMap<u64, (u64, u64, u64)>,
 }
 
 pub(super) struct StopPolicies {
     state: Arc<Mutex<PolicyState>>,
-    epoch: Arc<AtomicU64>,
+    epoch: Arc<ExecutionControl>,
     wake: Arc<Notify>,
 }
 
@@ -67,7 +65,7 @@ impl StopPolicies {
         self.state().seen.get(&thread) == Some(&revision)
     }
 
-    pub fn new(epoch: Arc<AtomicU64>) -> Self {
+    pub fn new(epoch: Arc<ExecutionControl>) -> Self {
         Self {
             state: Arc::new(Mutex::new(PolicyState {
                 public: v2::StopPolicy {
@@ -77,6 +75,7 @@ impl StopPolicies {
                 },
                 seen: HashMap::new(),
                 logpoints_seen: HashMap::new(),
+                manual_stops: HashMap::new(),
                 cause: None,
                 attempts: BTreeMap::new(),
                 next_attempt: 0,
@@ -97,33 +96,111 @@ impl StopPolicies {
 #[derive(Debug)]
 struct ActiveGuard {
     inner: Arc<dyn DispatchGuard>,
-    active: Arc<AtomicBool>,
+    active: Arc<Mutex<bool>>,
 }
 
-struct AutomationLease(Arc<AtomicBool>);
+struct AutomationLease(Arc<Mutex<bool>>);
 impl Drop for AutomationLease {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = false;
     }
 }
 
 #[async_trait::async_trait]
 impl DispatchGuard for ActiveGuard {
+    async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        if !*self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            return Err(StaleExecution.into());
+        }
+        let inner = self.inner.prepare().await?;
+        Ok(Box::new(ActivePermit {
+            inner,
+            active: self.active.clone(),
+        }))
+    }
     fn is_automatic(&self) -> bool {
         true
     }
     fn dispatched(&self) {
         self.inner.dispatched();
     }
+    fn rejected(&self) {
+        self.inner.rejected();
+    }
     async fn check(&self) -> anyhow::Result<()> {
-        if !self.active.load(Ordering::SeqCst) {
+        if !*self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
             return Err(StaleExecution.into());
         }
         self.inner.check().await?;
-        if !self.active.load(Ordering::SeqCst) {
+        if !*self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
             return Err(StaleExecution.into());
         }
         Ok(())
+    }
+}
+
+struct ActivePermit {
+    inner: Box<dyn DispatchPermit>,
+    active: Arc<Mutex<bool>>,
+}
+
+impl DispatchPermit for ActivePermit {
+    fn dispatch(
+        &mut self,
+        validate: &mut dyn FnMut() -> anyhow::Result<()>,
+        action: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !*active {
+            return Err(StaleExecution.into());
+        }
+        self.inner.dispatch(validate, action)
+    }
+}
+
+struct PolicyPermit {
+    native: Box<dyn DispatchPermit>,
+    epoch: Arc<ExecutionControl>,
+    expected: u64,
+    output: Option<(Arc<OutputHub>, u64, u64, String)>,
+}
+
+impl DispatchPermit for PolicyPermit {
+    fn dispatch(
+        &mut self,
+        validate: &mut dyn FnMut() -> anyhow::Result<()>,
+        action: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        self.epoch
+            .admit(self.expected, || {
+                self.native.dispatch(validate, &mut || {
+                    if let Some((hub, session, thread, message)) = &self.output {
+                        hub.publish_for_thread(
+                            Some(*session),
+                            Some(*thread),
+                            DebuggerOutputStream::Console,
+                            message.clone(),
+                        )?;
+                    }
+                    action()
+                })
+            })
+            .ok_or(StaleExecution)?
     }
 }
 
@@ -131,7 +208,7 @@ impl DispatchGuard for ActiveGuard {
 // never consumes the cause because several peer sessions can require a pause.
 struct PeerPauseGuard {
     model: Arc<RuntimeModel>,
-    epoch: Arc<AtomicU64>,
+    epoch: Arc<ExecutionControl>,
     stop: Stop,
     peer: u64,
     running: Vec<(u64, u64)>,
@@ -149,31 +226,28 @@ impl std::fmt::Debug for PeerPauseGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for PeerPauseGuard {
-    async fn check(&self) -> anyhow::Result<()> {
-        let threads = self
+    async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        let native = self
             .model
-            .thread_snapshots_for_sessions(&[self.stop.thread.session_id, self.peer])
-            .await;
-        let current = threads.iter().any(|thread| {
-            thread.global_id.value() == self.stop.thread.global_id
-                && thread.status == crate::state::ThreadStatus::STOPPED
-                && thread.stop_revision == self.stop.thread.stop_revision
-        });
-        let running = threads
-            .iter()
-            .filter(|thread| {
-                thread.session_id == self.peer
-                    && thread.status == crate::state::ThreadStatus::RUNNING
-            })
-            .map(|thread| (thread.global_id.value(), thread.stop_revision))
-            .collect::<Vec<_>>();
-        if !current
-            || running != self.running
-            || self.epoch.load(Ordering::SeqCst) != self.stop.epoch
-        {
+            .validate_stop_for_dispatch(
+                GlobalThreadId::new(self.stop.thread.global_id),
+                self.stop.thread.stop_revision,
+                Some((self.peer, &self.running)),
+            )
+            .await
+            .ok_or(StaleExecution)?;
+        if self.epoch.current() != self.stop.epoch {
             return Err(StaleExecution.into());
         }
-        Ok(())
+        Ok(Box::new(PolicyPermit {
+            native: Box::new(native),
+            epoch: self.epoch.clone(),
+            expected: self.stop.epoch,
+            output: None,
+        }))
+    }
+    async fn check(&self) -> anyhow::Result<()> {
+        self.prepare().await.map(|_| ())
     }
     fn dispatched(&self) {
         let mut state = self
@@ -181,16 +255,27 @@ impl DispatchGuard for PeerPauseGuard {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         for (thread, revision) in &self.running {
-            state
-                .automatic_pauses
-                .insert(*thread, (revision.saturating_add(1), self.attempt));
+            state.automatic_pauses.insert(
+                *thread,
+                (revision.saturating_add(1), self.attempt, self.stop.epoch),
+            );
+        }
+    }
+    fn rejected(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        for (thread, revision) in &self.running {
+            if state.automatic_pauses.get(thread)
+                == Some(&(revision.saturating_add(1), self.attempt, self.stop.epoch))
+            {
+                state.automatic_pauses.remove(thread);
+            }
         }
     }
 }
 
 struct LogpointReadGuard {
     model: Arc<RuntimeModel>,
-    epoch: Arc<AtomicU64>,
+    epoch: Arc<ExecutionControl>,
     stop: Stop,
 }
 
@@ -204,27 +289,34 @@ impl std::fmt::Debug for LogpointReadGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for LogpointReadGuard {
-    async fn check(&self) -> anyhow::Result<()> {
-        let threads = self
+    async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        let native = self
             .model
-            .thread_snapshots_for_sessions(&[self.stop.thread.session_id])
-            .await;
-        if self.epoch.load(Ordering::SeqCst) != self.stop.epoch
-            || !threads.iter().any(|thread| {
-                thread.global_id.value() == self.stop.thread.global_id
-                    && thread.status == crate::state::ThreadStatus::STOPPED
-                    && thread.stop_revision == self.stop.thread.stop_revision
-            })
-        {
+            .validate_stop_for_dispatch(
+                GlobalThreadId::new(self.stop.thread.global_id),
+                self.stop.thread.stop_revision,
+                None,
+            )
+            .await
+            .ok_or(StaleExecution)?;
+        if self.epoch.current() != self.stop.epoch {
             return Err(StaleExecution.into());
         }
-        Ok(())
+        Ok(Box::new(PolicyPermit {
+            native: Box::new(native),
+            epoch: self.epoch.clone(),
+            expected: self.stop.epoch,
+            output: None,
+        }))
+    }
+    async fn check(&self) -> anyhow::Result<()> {
+        self.prepare().await.map(|_| ())
     }
 }
 
 struct LogpointGuard {
     stop: Arc<dyn DispatchGuard>,
-    epoch: Arc<AtomicU64>,
+    epoch: Arc<ExecutionControl>,
     expected: u64,
     output: Arc<OutputHub>,
     session: u64,
@@ -242,21 +334,28 @@ impl std::fmt::Debug for LogpointGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for LogpointGuard {
+    async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        if self.epoch.current() != self.expected {
+            return Err(StaleExecution.into());
+        }
+        let native = self.stop.prepare().await?;
+        if self.epoch.current() != self.expected {
+            return Err(StaleExecution.into());
+        }
+        Ok(Box::new(PolicyPermit {
+            native,
+            epoch: self.epoch.clone(),
+            expected: self.expected,
+            output: Some((
+                self.output.clone(),
+                self.session,
+                self.thread,
+                self.message.clone(),
+            )),
+        }))
+    }
     async fn check(&self) -> anyhow::Result<()> {
-        if self.epoch.load(Ordering::SeqCst) != self.expected {
-            return Err(StaleExecution.into());
-        }
-        self.stop.check().await?;
-        if self.epoch.load(Ordering::SeqCst) != self.expected {
-            return Err(StaleExecution.into());
-        }
-        self.output.publish_for_thread(
-            Some(self.session),
-            Some(self.thread),
-            DebuggerOutputStream::Console,
-            self.message.clone(),
-        )?;
-        Ok(())
+        self.prepare().await.map(|_| ())
     }
 }
 
@@ -291,8 +390,12 @@ impl DdbApplicationService {
     }
 
     pub(super) fn retire_stop_automation(&self) {
+        self.retire_stop_automation_for_pauses(&[]);
+    }
+
+    pub(super) fn retire_stop_automation_for_pauses(&self, sessions: &[u64]) {
         let mut state = self.stop_policies.state();
-        self.stop_policies.epoch.fetch_add(1, Ordering::SeqCst);
+        self.stop_policies.epoch.advance_for_pauses(sessions);
         state.cause = None;
         state.attempts.clear();
         state.public.generation += 1;
@@ -327,12 +430,13 @@ impl DdbApplicationService {
         if state.public.mode == mode as i32 && state.public.generation != 0 {
             return Ok(());
         }
-        self.stop_policies.epoch.fetch_add(1, Ordering::SeqCst);
+        self.stop_policies.epoch.advance();
         state.cause = None;
         let logpoints_seen = state.logpoints_seen.clone();
-        state
-            .seen
-            .retain(|id, revision| logpoints_seen.get(id) == Some(revision));
+        let manual_stops = state.manual_stops.clone();
+        state.seen.retain(|id, revision| {
+            logpoints_seen.get(id) == Some(revision) && manual_stops.get(id) != Some(revision)
+        });
         state.attempts.clear();
         state.public.mode = mode as i32;
         state.public.generation += 1;
@@ -373,13 +477,13 @@ impl DdbApplicationService {
         self: &Arc<Self>,
         tasks: &mut JoinSet<()>,
     ) -> Result<(), ApplicationError> {
-        let epoch = self.stop_policies.epoch.load(Ordering::SeqCst);
+        let epoch = self.stop_policies.epoch.current();
         let view = self.queries.snapshot().await;
         let mut logpoints = Vec::new();
         let mut pauses = Vec::new();
         {
             let mut state = self.stop_policies.state();
-            if self.stop_policies.epoch.load(Ordering::SeqCst) != epoch {
+            if self.stop_policies.epoch.current() != epoch {
                 return Ok(());
             }
             state
@@ -387,6 +491,9 @@ impl DdbApplicationService {
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
             state
                 .logpoints_seen
+                .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
+            state
+                .manual_stops
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
             state
                 .automatic_pauses
@@ -415,7 +522,11 @@ impl DdbApplicationService {
             }
             for thread in &view.threads {
                 if thread.status != "stopped"
-                    || state.seen.get(&thread.global_id) == Some(&thread.stop_revision)
+                    || (state.seen.get(&thread.global_id) == Some(&thread.stop_revision)
+                        && !self
+                            .stop_policies
+                            .epoch
+                            .has_explicit_pause(thread.session_id, epoch))
                 {
                     continue;
                 }
@@ -429,10 +540,23 @@ impl DdbApplicationService {
                     continue;
                 }
                 state.seen.insert(thread.global_id, thread.stop_revision);
+                let explicit_pause = self
+                    .stop_policies
+                    .epoch
+                    .take_explicit_pause(thread.session_id, epoch);
+                if explicit_pause.is_some() {
+                    state
+                        .manual_stops
+                        .insert(thread.global_id, thread.stop_revision);
+                }
                 let automatic_pause = state
                     .automatic_pauses
                     .remove(&thread.global_id)
-                    .is_some_and(|(revision, _)| revision == thread.stop_revision)
+                    .is_some_and(|(revision, _, automatic_epoch)| {
+                        revision == thread.stop_revision
+                            && explicit_pause
+                                .is_none_or(|manual_epoch| manual_epoch < automatic_epoch)
+                    })
                     && (reason.kind == ThreadStopKind::Pause
                         || reason
                             .signal_name
@@ -451,11 +575,10 @@ impl DdbApplicationService {
                     execution,
                     epoch,
                 };
-                if let Some(message) = reason
-                    .log_message
-                    .as_ref()
-                    .filter(|_| reason.kind == ThreadStopKind::Breakpoint)
-                {
+                if let Some(message) = reason.log_message.as_ref().filter(|_| {
+                    reason.kind == ThreadStopKind::Breakpoint
+                        && state.manual_stops.get(&thread.global_id) != Some(&thread.stop_revision)
+                }) {
                     state
                         .logpoints_seen
                         .insert(thread.global_id, thread.stop_revision);
@@ -570,13 +693,8 @@ impl DdbApplicationService {
                     )
                     .await;
                 let mut state = service.stop_policies.state();
-                if result.is_err() {
-                    for (thread, revision) in &running {
-                        if state.automatic_pauses.get(thread) == Some(&(revision.saturating_add(1), attempt)) {
-                            state.automatic_pauses.remove(thread);
-                        }
-                    }
-                }
+                // A failed or lost acknowledgment does not prove the interrupt
+                // was unsent. Only a native rejection clears dispatched provenance.
                 if state.cause.as_ref().is_none_or(|cause| {
                     cause.thread.global_id != stop.thread.global_id
                         || cause.thread.stop_revision != stop.thread.stop_revision
@@ -625,7 +743,7 @@ impl DdbApplicationService {
             CommandTarget::Session(id) => self.session_target(*id)?,
             _ => return Err(anyhow!("automatic commands require a concrete target")),
         };
-        let active = Arc::new(AtomicBool::new(true));
+        let active = Arc::new(Mutex::new(true));
         let _lease = AutomationLease(active.clone());
         let guard = Arc::new(ActiveGuard {
             inner: guard,
@@ -690,7 +808,7 @@ impl DdbApplicationService {
 
     async fn run_logpoint(self: &Arc<Self>, stop: &Stop, message: &str) -> anyhow::Result<()> {
         let template = Template::parse(message).map_err(anyhow::Error::msg)?;
-        let active = Arc::new(AtomicBool::new(true));
+        let active = Arc::new(Mutex::new(true));
         let _lease = AutomationLease(active.clone());
         let read_guard: Arc<dyn DispatchGuard> = Arc::new(ActiveGuard {
             inner: Arc::new(LogpointReadGuard {
@@ -819,7 +937,7 @@ impl DdbApplicationService {
 
     async fn logpoint_failed(&self, stop: Stop) {
         let current = self.queries.thread_by_id(stop.thread.global_id).await;
-        if self.stop_policies.epoch.load(Ordering::SeqCst) != stop.epoch
+        if self.stop_policies.epoch.current() != stop.epoch
             || current.as_ref().is_none_or(|thread| {
                 thread.status != "stopped" || thread.stop_revision != stop.thread.stop_revision
             })
@@ -832,7 +950,7 @@ impl DdbApplicationService {
             "Logpoint failed; left the initiating thread stopped\n",
         );
         let mut state = self.stop_policies.state();
-        if self.stop_policies.epoch.load(Ordering::SeqCst) != stop.epoch {
+        if self.stop_policies.epoch.current() != stop.epoch {
             return;
         }
         if state.cause.is_none() && state.public.mode != v2::StopMode::Independent as i32 {
@@ -843,5 +961,70 @@ impl DdbApplicationService {
             let _ = self.publish_stop_policy(&mut state);
         }
         self.stop_policies.wake.notify_one();
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_expired_lease_or_native_event_veto_cannot_publish_logpoint_output() {
+        for expired in [false, true] {
+            let model = RuntimeModel::new();
+            model.register_session(1, "logpoint", None).await;
+            model.register_thread_group(1, "i1").await.unwrap();
+            let thread = model.register_thread(1, 1, "i1").await.unwrap().thread_id;
+            model
+                .update_thread_statuses(1, &[1], crate::state::ThreadStatus::STOPPED)
+                .await
+                .unwrap();
+            let revision = model.thread_snapshots_for_sessions(&[1]).await[0].stop_revision;
+            let output = OutputHub::new(Default::default());
+            let mut subscriber = output.subscribe(None).unwrap();
+            let active = Arc::new(Mutex::new(true));
+            let lease = AutomationLease(active.clone());
+            let guard = ActiveGuard {
+                active,
+                inner: Arc::new(LogpointGuard {
+                    stop: Arc::new(super::super::execution_guard::StopDispatchGuard {
+                        model: model.clone(),
+                        thread,
+                        revision,
+                    }),
+                    epoch: model.execution_control_epoch(),
+                    expected: 0,
+                    output,
+                    session: 1,
+                    thread: thread.value(),
+                    message: "never emitted\n".into(),
+                }),
+            };
+            let mut permit = guard.prepare().await.unwrap();
+            if expired {
+                drop(lease);
+            }
+            let mut admitted = false;
+            let result = permit.dispatch(
+                &mut || {
+                    if expired {
+                        Ok(())
+                    } else {
+                        Err(StaleExecution.into())
+                    }
+                },
+                &mut || {
+                    admitted = true;
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert!(!admitted);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), subscriber.recv())
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

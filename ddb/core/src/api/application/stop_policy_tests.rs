@@ -2,6 +2,7 @@
 struct PolicyTestPort {
     calls: std::sync::Mutex<Vec<(String, CommandTarget)>>,
     fail_pause: AtomicBool,
+    reject_pause: AtomicBool,
     block_continue: AtomicBool,
     continue_queued: tokio::sync::Notify,
     release_continue: tokio::sync::Notify,
@@ -14,6 +15,9 @@ struct PolicyTestPort {
     block_evaluation: AtomicBool,
     evaluation_queued: tokio::sync::Notify,
     release_evaluation: tokio::sync::Notify,
+    block_admission: AtomicBool,
+    admission_ready: tokio::sync::Notify,
+    release_admission: tokio::sync::Notify,
 }
 
 #[async_trait]
@@ -38,6 +42,18 @@ impl ApplicationCommandPort for PolicyTestPort {
         };
         if command == "-exec-interrupt" && self.fail_pause.load(Ordering::SeqCst) {
             return Err(CommandPortError::test("peer unavailable"));
+        }
+        if command == "-exec-interrupt" && self.reject_pause.load(Ordering::SeqCst) {
+            return Err(CommandPortError::test_with_fanout(
+                CommandFanoutReport::new(
+                    None,
+                    vec![],
+                    vec![SessionCommandFailure::new(
+                        sid,
+                        SessionCommandFailureKind::DebuggerRejected,
+                    )],
+                ),
+            ));
         }
         let payload = command.starts_with("-stack-list-frames").then(|| {
             vec![(
@@ -80,11 +96,19 @@ impl ApplicationCommandPort for PolicyTestPort {
             self.evaluation_queued.notify_one();
             self.release_evaluation.notified().await;
         }
-        if let Some(guard) = guard {
-            guard
-                .check()
+        if let Some(guard) = &guard {
+            let mut permit = guard
+                .prepare()
                 .await
                 .map_err(|_| CommandPortError::test("stale stop"))?;
+            if command == "-record-time-and-continue" && self.block_admission.load(Ordering::SeqCst)
+            {
+                self.admission_ready.notify_one();
+                self.release_admission.notified().await;
+            }
+            permit
+                .dispatch(&mut || Ok(()), &mut || Ok(()))
+                .map_err(|_| CommandPortError::test("cancelled dispatch"))?;
             guard.dispatched();
         }
         self.execute(command, target).await
@@ -369,6 +393,235 @@ async fn logpoint_evaluation_cannot_execute_after_an_intervening_stop() {
             "an old logpoint must not evaluate or resume the newer stop"
         );
     }
+}
+
+#[tokio::test]
+async fn cancellation_after_validation_prevents_logpoint_output_and_admission() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_admission.store(true, Ordering::SeqCst);
+    let mut output = service.output.subscribe(None).unwrap();
+    policy_stop(&model, owner, Some("cancel before writer admission")).await;
+    tokio::time::timeout(Duration::from_secs(1), port.admission_ready.notified())
+        .await
+        .unwrap();
+    service.retire_stop_automation();
+    port.release_admission.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.operations.list_with_context().iter().any(|entry| {
+            entry.operation.kind == OperationKind::Execute as i32
+                && entry.operation.state == OperationState::Failed as i32
+        }) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(port.calls.lock().unwrap().is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), output.recv())
+            .await
+            .is_err(),
+        "cancellation must precede both output and write admission"
+    );
+    port.block_admission.store(false, Ordering::SeqCst);
+    let target = service_thread_target(&service, owner);
+    let request = guarded_request(&service, target, "manual-after-cancellation").await;
+    let operation = service
+        .execute(&PrincipalContext::new("second-client").unwrap(), request)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    assert_eq!(
+        terminal_operation(&service, &operation.operation_id)
+            .await
+            .state,
+        OperationState::Completed as i32,
+        "unadmitted automatic work must leave the stop available to the client"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_sent_pause_retains_provenance_but_a_native_rejection_does_not() {
+    for rejection in [false, true] {
+        let (model, service, port, owner) = policy_fixture().await;
+        port.reject_pause.store(rejection, Ordering::SeqCst);
+        port.fail_pause.store(!rejection, Ordering::SeqCst);
+        service
+            .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+            .unwrap();
+        policy_stop(&model, owner, None).await;
+        let failed = wait_policy(&service, |policy| {
+            policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| !outcome.succeeded)
+        })
+        .await;
+        assert!(failed.target_outcomes[0].error.is_some());
+        service.retire_stop_automation();
+        let peer = model.thread_snapshots_for_sessions(&[43]).await[0]
+            .global_id
+            .value();
+        model
+            .update_thread_statuses_with_details(
+                43,
+                &[11],
+                ThreadStatus::STOPPED,
+                None,
+                Some(crate::state::ThreadStopReason {
+                    kind: crate::state::ThreadStopKind::Pause,
+                    signal_name: None,
+                    breakpoint_id: None,
+                    thread_id: Some(peer),
+                    log_message: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let revision = model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !service.stop_policies.classified_stop(peer, revision) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let policy = service.stop_policy_snapshot().unwrap();
+        if rejection {
+            assert_eq!(
+                policy.initiating_stop.unwrap().target,
+                Some(service_thread_target(&service, peer)),
+                "a rejected interrupt must not suppress a later manual pause"
+            );
+        } else {
+            assert!(
+                policy.initiating_stop.is_none(),
+                "a late interrupt with lost acknowledgment must not become a new cause"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_client_pause_overrides_an_earlier_interrupt_with_lost_acknowledgment() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.fail_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    port.fail_pause.store(false, Ordering::SeqCst);
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    let request = execute_request(
+        "manual-peer-pause",
+        session_target(service.ids.encode(ResourceIdKind::Session, 43).unwrap()),
+        ExecutionAction::Interrupt,
+    );
+    let operation = service
+        .execute(&PrincipalContext::new("second-client").unwrap(), request)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    terminal_operation(&service, &operation.operation_id).await;
+    model
+        .update_thread_statuses_with_details(
+            43,
+            &[11],
+            ThreadStatus::STOPPED,
+            None,
+            Some(crate::state::ThreadStopReason {
+                kind: crate::state::ThreadStopKind::Pause,
+                signal_name: None,
+                breakpoint_id: None,
+                thread_id: Some(peer),
+                log_message: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let policy = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    assert_eq!(
+        policy.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, peer)),
+        "explicit pause intent must own the next stop despite uncertain older interrupts"
+    );
+}
+
+#[tokio::test]
+async fn explicit_pause_claims_an_already_stopped_logpoint_and_coordinates_peers() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_continue.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, Some("paused logpoint")).await;
+    tokio::time::timeout(Duration::from_secs(1), port.continue_queued.notified())
+        .await
+        .unwrap();
+    let request = execute_request(
+        "pause-current-logpoint",
+        session_target(service.ids.encode(ResourceIdKind::Session, 42).unwrap()),
+        ExecutionAction::Interrupt,
+    );
+    let operation = service
+        .execute(&PrincipalContext::new("second-client").unwrap(), request)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    terminal_operation(&service, &operation.operation_id).await;
+    let policy = wait_policy(&service, |policy| {
+        policy.initiating_stop.is_some() && !policy.target_outcomes.is_empty()
+    })
+    .await;
+    assert_eq!(
+        policy.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, owner))
+    );
+    port.release_continue.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.operations.list_with_context().iter().any(|entry| {
+            entry.operation.kind == OperationKind::Execute as i32
+                && entry.operation.state == OperationState::Failed as i32
+        }) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!port
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(command, _)| command == "-record-time-and-continue"));
+    assert!(port
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(command, target)| command == "-exec-interrupt"
+            && *target == CommandTarget::Session(43)));
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    let changed = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    assert_eq!(
+        changed.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, owner)),
+        "reconfiguring the mode must preserve the explicitly paused native stop"
+    );
+    assert!(!port
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(command, _)| command == "-record-time-and-continue"));
 }
 
 async fn wait_policy(

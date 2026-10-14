@@ -9,6 +9,7 @@ use super::{
     execution::ExecutionService,
     input::ParsedInputCmd,
     query::QueryService,
+    router::Target,
     CommandOutcome, Presentation,
 };
 
@@ -89,6 +90,10 @@ pub(crate) struct CommandDispatcher {
 }
 
 impl CommandDispatcher {
+    pub(crate) fn resolve_session_ids(&self, target: &Target) -> Result<Vec<u64>> {
+        self.executor.resolve_session_ids(target)
+    }
+
     pub(crate) fn new(
         breakpoints: Arc<BreakpointService>,
         execution: Arc<ExecutionService>,

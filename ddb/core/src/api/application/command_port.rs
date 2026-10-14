@@ -37,10 +37,16 @@ pub(crate) trait ApplicationCommandPort: Send + Sync {
         guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
     ) -> Result<CommandOutcome, CommandPortError> {
         if let Some(guard) = guard {
-            guard.check().await.map_err(|source| CommandPortError {
+            let mut permit = guard.prepare().await.map_err(|source| CommandPortError {
                 source,
                 fanout: None,
             })?;
+            permit
+                .dispatch(&mut || Ok(()), &mut || Ok(()))
+                .map_err(|source| CommandPortError {
+                    source,
+                    fanout: None,
+                })?;
             guard.dispatched();
         }
         self.execute_tracked(command, target, operation_id, operation_kind)
@@ -59,6 +65,19 @@ pub(crate) struct CommandPortError {
 }
 
 impl CommandPortError {
+    /// Only a native rejection for this concrete target proves an admitted
+    /// command did not take effect. Transport failures and timeouts do not.
+    pub(crate) fn is_debugger_rejection_for(&self, session_id: u64) -> bool {
+        self.fanout.as_ref().is_some_and(|report| {
+            report.completion().get_responses().is_empty()
+                && !report.failures().is_empty()
+                && report.failures().iter().all(|failure| {
+                    failure.sid() == session_id
+                        && failure.kind() == SessionCommandFailureKind::DebuggerRejected
+                })
+        })
+    }
+
     pub(crate) fn is_stale_execution(&self) -> bool {
         self.source
             .downcast_ref::<crate::cmd_flow::input::StaleExecution>()
@@ -264,5 +283,40 @@ mod tests {
         let response = classified.response_ref().unwrap();
         assert_eq!(response.get_external_token(), Some(42));
         assert_eq!(response.get_responses()[0].get_sid(), 9);
+    }
+
+    #[test]
+    fn only_native_rejection_for_the_concrete_target_proves_dispatch_failed() {
+        let rejection = |failures, responses| {
+            CommandPortError::from_fanout(CommandFanoutReport::new(None, responses, failures))
+        };
+        let rejected = SessionCommandFailure::new(7, SessionCommandFailureKind::DebuggerRejected);
+        assert!(rejection(vec![rejected.clone()], vec![]).is_debugger_rejection_for(7));
+        assert!(!rejection(vec![rejected.clone()], vec![]).is_debugger_rejection_for(8));
+        assert!(!rejection(vec![], vec![]).is_debugger_rejection_for(7));
+        assert!(!CommandPortError::test("transport closed").is_debugger_rejection_for(7));
+        assert!(!rejection(
+            vec![rejected.clone()],
+            vec![ParsedSessionResponse::new(8, "done".into(), None)],
+        )
+        .is_debugger_rejection_for(7));
+        for kind in [
+            SessionCommandFailureKind::AdmissionRejected,
+            SessionCommandFailureKind::AdmissionTimeout,
+            SessionCommandFailureKind::ResponseTimeout,
+            SessionCommandFailureKind::ResponseFailed,
+            SessionCommandFailureKind::ExecutionFailed,
+            SessionCommandFailureKind::StaleExecution,
+        ] {
+            assert!(
+                !rejection(vec![SessionCommandFailure::new(7, kind)], vec![],)
+                    .is_debugger_rejection_for(7)
+            );
+            assert!(!rejection(
+                vec![rejected.clone(), SessionCommandFailure::new(8, kind)],
+                vec![],
+            )
+            .is_debugger_rejection_for(7));
+        }
     }
 }
