@@ -150,6 +150,103 @@ fn historical_peer_pause_success_cannot_hide_a_later_independent_pause() {
     );
 }
 
+#[test]
+fn failed_or_retired_pending_peer_pause_cannot_hide_a_manual_pause() {
+    for failed in [false, true] {
+        let mut app = app(&[]);
+        let mut pending = snapshot(&["b"], 2);
+        pending.stop_policy = Some(v2::StopPolicy {
+            generation: 1,
+            revision: 2,
+            initiating_stop: Some(pending.execution_states[1].clone()),
+            pending_targets: vec![api::session_target("a")],
+            ..Default::default()
+        });
+        let (tx, _rx) = mpsc::channel(32);
+        apply_message(&mut app, UiMessage::Snapshot(pending.clone()), &tx);
+        let policy = pending.stop_policy.as_mut().unwrap();
+        policy.revision += 1;
+        policy.pending_targets.clear();
+        if failed {
+            policy.target_outcomes.push(v2::TargetOutcome {
+                target: Some(api::session_target("a")),
+                succeeded: false,
+                error: Some(v2::DdbError {
+                    message: "peer unavailable".into(),
+                    ..Default::default()
+                }),
+            });
+        } else {
+            policy.generation += 1;
+            policy.initiating_stop = None;
+        }
+        apply_message(&mut app, UiMessage::Snapshot(pending.clone()), &tx);
+        let mut manual = snapshot(&["a", "b"], 3);
+        manual.stop_policy = pending.stop_policy;
+        manual.execution_states[0].stop_reason = Some(v2::StopReason {
+            kind: v2::StopReasonKind::Pause as i32,
+            thread_id: Some("thread/a".into()),
+            ..Default::default()
+        });
+        apply_message(&mut app, UiMessage::Snapshot(manual), &tx);
+        assert!(
+            !app.is_automatic_pause("thread/a"),
+            "a failed or retired attempt must not label a later pause automatic"
+        );
+        assert!(app
+            .topology_stop_label(
+                app.threads
+                    .iter()
+                    .find(|thread| thread.id == "thread/a")
+                    .unwrap()
+            )
+            .is_some());
+    }
+}
+
+#[test]
+fn successful_pending_peer_pause_keeps_exact_stop_provenance_after_retirement() {
+    let mut app = app(&[]);
+    let mut pending = snapshot(&["b"], 2);
+    pending.stop_policy = Some(v2::StopPolicy {
+        generation: 1,
+        revision: 2,
+        initiating_stop: Some(pending.execution_states[1].clone()),
+        pending_targets: vec![api::session_target("a")],
+        ..Default::default()
+    });
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(pending.clone()), &tx);
+    let policy = pending.stop_policy.as_mut().unwrap();
+    policy.revision += 1;
+    policy.pending_targets.clear();
+    policy.target_outcomes.push(v2::TargetOutcome {
+        target: Some(api::session_target("a")),
+        succeeded: true,
+        error: None,
+    });
+    apply_message(&mut app, UiMessage::Snapshot(pending.clone()), &tx);
+    let mut stopped = snapshot(&["a", "b"], 3);
+    stopped.stop_policy = pending.stop_policy;
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+    let policy = stopped.stop_policy.as_mut().unwrap();
+    policy.revision += 1;
+    policy.generation += 1;
+    policy.initiating_stop = None;
+    policy.target_outcomes.clear();
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert!(
+        app.is_automatic_pause("thread/a"),
+        "an already observed automatic stop retains its exact revision"
+    );
+}
+
 fn snapshot(stopped: &[&str], revision: u64) -> v2::Snapshot {
     v2::Snapshot {
         server_instance_id: "backend/native-ux".into(),

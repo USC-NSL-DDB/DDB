@@ -43,6 +43,14 @@ impl App {
             })
             .collect::<std::collections::BTreeSet<_>>();
         self.peer_pauses = automatic.clone();
+        // Failed and retired attempts cannot explain a future stop. Keep an
+        // already observed pause until its exact execution revision expires.
+        self.automatic_pauses.retain(|id, provenance| {
+            matches!(provenance, AutomaticPause::Observed(_))
+                || threads
+                    .iter()
+                    .any(|thread| thread.thread_id == *id && automatic.contains(&thread.session_id))
+        });
         // Outcomes are historical acknowledgments. Only a new attempt may arm
         // provenance; a later independent stop must not inherit an old success.
         let new_attempts = policy
