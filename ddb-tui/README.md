@@ -402,14 +402,18 @@ Breakpoints, and press `L`. Enter a message such as `counter={counter}`.
 breakpoint, including its group/session members. Press `L` and submit an empty
 message to restore an ordinary stopping breakpoint.
 
-Logpoints write to Output and continue their originating thread only after
-successful evaluation and stop revalidation. Failures leave the thread paused.
-Explicit execution, evaluation, assignment, or logpoint configuration cancels
-older automatic logpoint work. Messages are limited to 64 KiB and 128
-expressions. Logpoint metadata belongs to this TUI process, is not persisted,
-and is discarded when the DDB server instance changes. Other frontends still
-see the underlying DDB breakpoint. Stop validation and Continue are separate
-API calls, not an atomic backend stop precondition.
+Logpoints run in DDB, including with no TUI connected. Every frontend sees the
+logical breakpoint's template and the same output, attributed to its session
+and thread. Successful evaluation continues only the originating native stop,
+with revalidation and stop consumption at backend dispatch. Failures leave it
+paused. Messages are limited to 64 KiB and 128 expressions. Templates belong
+to the backend process and reset on restart.
+
+DDB also coordinates peer pauses. The TUI selects all-stop for a fresh backend
+and respects an already configured shared policy. Explicit execution from any
+client retires pending automatic work. Pause failures appear in the shared
+policy state and the TUI timeline. See the [backend policy contract](../ddb/docs/api/stop-policies.md)
+for headless configuration, group-stop, and execution guards.
 
 In Variables, select a value and press `=` to assign it using the debugger's
 value syntax. Scope headings cannot be edited. The request uses the variable's

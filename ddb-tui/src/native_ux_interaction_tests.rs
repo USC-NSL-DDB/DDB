@@ -1,6 +1,89 @@
 use super::*;
 use crate::model::{Breakpoint, BreakpointLocation};
 
+#[test]
+fn backend_policy_projects_logpoints_pause_provenance_and_failures_without_peer_commands() {
+    let mut app = app(&[]);
+    let mut stopped = snapshot(&["a", "b"], 2);
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Signal as i32,
+        signal_name: Some("SIGINT".into()),
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    stopped.breakpoints[0].spec.as_mut().unwrap().log_message = Some("value={counter}".into());
+    stopped.stop_policy = Some(v2::StopPolicy {
+        stop_policy_id: "policy/shared".into(),
+        mode: v2::StopMode::AllStop as i32,
+        initiating_stop: Some(stopped.execution_states[1].clone()),
+        generation: 1,
+        revision: 2,
+        target_outcomes: vec![v2::TargetOutcome {
+            target: Some(api::session_target("a")),
+            succeeded: true,
+            error: None,
+        }],
+        ..Default::default()
+    });
+    let (tx, mut rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+    assert!(app.is_automatic_pause("thread/a"));
+    assert!(app.logpoint_ids.contains("breakpoint/shared"));
+    assert!(!std::iter::from_fn(|| rx.try_recv().ok())
+        .map(BackendRequest::untracked)
+        .any(|request| matches!(request, BackendRequest::Control(_, _))));
+    let mut failed = snapshot(&["b"], 3);
+    failed.stop_policy = Some(v2::StopPolicy {
+        stop_policy_id: "policy/shared".into(),
+        mode: v2::StopMode::AllStop as i32,
+        initiating_stop: Some(failed.execution_states[1].clone()),
+        generation: 2,
+        revision: 3,
+        target_outcomes: vec![v2::TargetOutcome {
+            target: Some(api::session_target("a")),
+            succeeded: false,
+            error: Some(v2::DdbError {
+                message: "peer unavailable".into(),
+                ..Default::default()
+            }),
+        }],
+        ..Default::default()
+    });
+    apply_message(&mut app, UiMessage::Snapshot(failed), &tx);
+    assert!(
+        app.timeline
+            .visible(160, 30, &mut app.timeline_scroll)
+            .iter()
+            .any(|line| line.contains("peer unavailable")),
+        "the shared failure must remain in the timeline while inspection loads"
+    );
+    assert!(!app.is_automatic_pause("thread/a"));
+    assert!(app.logpoint_ids.is_empty());
+}
+
+#[test]
+fn queued_resume_captures_the_backend_instance_and_observed_stop() {
+    let mut app = app(&["b"]);
+    let (tx, mut rx) = mpsc::channel(4);
+    queue_request(
+        &mut app,
+        &tx,
+        BackendRequest::Control(Control::Next, api::thread_target("thread/b")),
+    );
+    let BackendRequest::Tracked { guard, .. } = rx.try_recv().unwrap() else {
+        panic!("missing intent envelope")
+    };
+    assert_eq!(
+        guard.server_instance_id.as_deref(),
+        Some("backend/native-ux")
+    );
+    let stop = guard.execution_guard.unwrap();
+    assert_eq!(stop.execution_state_id, "execution/b");
+    assert_eq!(stop.revision, 1);
+    assert_eq!(stop.server_instance_id, "backend/native-ux");
+}
+
 fn snapshot(stopped: &[&str], revision: u64) -> v2::Snapshot {
     v2::Snapshot {
         server_instance_id: "backend/native-ux".into(),
@@ -251,7 +334,9 @@ fn stop_event_before_snapshot_selects_its_owner_before_an_automatic_peer() {
         .map(BackendRequest::untracked)
         .collect::<Vec<_>>();
     assert!(queued.iter().any(|request| matches!(request, BackendRequest::InspectThread { thread_id, .. } if thread_id == "thread/b")));
-    assert_eq!(queued.iter().filter(|request| matches!(request, BackendRequest::PausePeer { session_id, .. } if session_id == "a")).count(), 1);
+    assert!(!queued
+        .iter()
+        .any(|request| matches!(request, BackendRequest::Control(_, _))));
 }
 
 #[test]

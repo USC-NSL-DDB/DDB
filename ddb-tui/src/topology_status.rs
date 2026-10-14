@@ -1,6 +1,6 @@
 use super::*;
 
-/// Automatic interrupts are frontend policy. Retain provenance for the exact
+/// Project backend automatic interrupts. Retain provenance for the exact
 /// observed stop only, so a later independent stop is never hidden.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum AutomaticPause {
@@ -15,6 +15,66 @@ pub(super) fn is_interrupt(reason: &v2::StopReason) -> bool {
 }
 
 impl App {
+    pub(super) fn apply_backend_stop_policy(
+        &mut self,
+        policy: Option<v2::StopPolicy>,
+        threads: &[v2::Thread],
+    ) {
+        let Some(policy) = policy else { return };
+        let changed = self
+            .stop_policy
+            .as_ref()
+            .is_none_or(|previous| previous.revision != policy.revision);
+        self.all_stop_cause = policy
+            .initiating_stop
+            .as_ref()
+            .and_then(|state| state.stop_reason.as_ref())
+            .and_then(|reason| reason.thread_id.clone());
+        let automatic = policy
+            .pending_targets
+            .iter()
+            .chain(
+                policy
+                    .target_outcomes
+                    .iter()
+                    .filter(|outcome| outcome.succeeded)
+                    .filter_map(|outcome| outcome.target.as_ref()),
+            )
+            .filter_map(|target| match target.selector.as_ref() {
+                Some(v2::target::Selector::Session(session)) => Some(session.session_id.clone()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        self.peer_pauses = automatic.clone();
+        for thread in threads
+            .iter()
+            .filter(|thread| automatic.contains(&thread.session_id))
+        {
+            if let Some(state) = self.thread_execution(&thread.thread_id) {
+                let provenance = if state.running {
+                    Some(AutomaticPause::Pending(state.revision))
+                } else if state.stop_reason.as_ref().is_some_and(is_interrupt) {
+                    Some(AutomaticPause::Observed(state.revision))
+                } else {
+                    None
+                };
+                if let Some(provenance) = provenance {
+                    self.automatic_pauses
+                        .insert(thread.thread_id.clone(), provenance);
+                }
+            }
+        }
+        if changed {
+            for outcome in &policy.target_outcomes {
+                if let Some(error) = &outcome.error {
+                    let text = format!("DDB peer pause failed: {}", error.message);
+                    self.error(text);
+                }
+            }
+        }
+        self.stop_policy = Some(policy);
+    }
+
     /// A process-wide stop also stops peers, but only its reported thread owns
     /// the cause. This evidence supersedes an older focus even without Running.
     pub fn is_secondary_stop(&self, thread: &str) -> bool {
@@ -41,6 +101,7 @@ impl App {
         })
     }
 
+    #[cfg(test)]
     pub fn note_automatic_pause(&mut self, session: &str) {
         for thread in self
             .threads

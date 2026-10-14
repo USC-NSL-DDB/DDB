@@ -555,6 +555,7 @@ pub struct App {
     pub value_edit: Option<ValueEdit>,
     pub logpoint_edit: Option<String>,
     pub logpoint_ids: std::collections::BTreeSet<String>,
+    pub stop_policy: Option<v2::StopPolicy>,
     input_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
@@ -675,6 +676,7 @@ impl App {
             value_edit: None,
             logpoint_edit: None,
             logpoint_ids: Default::default(),
+            stop_policy: None,
             input_history: VecDeque::with_capacity(100),
             history_index: None,
             history_draft: String::new(),
@@ -932,6 +934,18 @@ impl App {
             self.source_explorer
                 .set_server_instance(snapshot.server_instance_id.clone());
         }
+        self.logpoint_ids = snapshot
+            .breakpoints
+            .iter()
+            .filter(|breakpoint| {
+                breakpoint
+                    .spec
+                    .as_ref()
+                    .is_some_and(|spec| spec.log_message.is_some())
+            })
+            .map(|breakpoint| breakpoint.breakpoint_id.clone())
+            .collect();
+
         let selected_thread_id = self.current_thread().map(|thread| thread.id.clone());
         if let Some(capabilities) = snapshot.capabilities.clone() {
             self.apply_capabilities(capabilities);
@@ -946,6 +960,7 @@ impl App {
         });
         self.groups = snapshot.groups;
         self.execution_states = snapshot.execution_states;
+        self.apply_backend_stop_policy(snapshot.stop_policy, &snapshot.threads);
         self.reconcile_automatic_pauses();
         let mut breakpoints = snapshot
             .breakpoints
@@ -2864,35 +2879,39 @@ impl App {
         self.source_server_instance.clone()
     }
 
-    pub fn logpoint_stop(&self, thread_id: &str) -> Option<crate::logpoints::Stop> {
+    pub fn execution_guard_for_request(
+        &self,
+        request: &BackendRequest,
+    ) -> Option<v2::ExecutionGuard> {
+        let target = match request {
+            BackendRequest::Control(control, target)
+                if matches!(
+                    control.execution_action(),
+                    Some(
+                        v2::ExecutionAction::Continue
+                            | v2::ExecutionAction::Next
+                            | v2::ExecutionAction::StepIn
+                            | v2::ExecutionAction::StepOut
+                    )
+                ) =>
+            {
+                target
+            }
+            BackendRequest::Jump { target, .. } => target,
+            _ => return None,
+        };
         let state = self
             .execution_states
             .iter()
-            .find(|state| {
-                !state.running
-                    && matches!(
-                        state.target.as_ref().and_then(|target| target.selector.as_ref()),
-                        Some(target::Selector::Thread(thread)) if thread.thread_id == thread_id
-                    )
-            })?
-            .clone();
-        Some(crate::logpoints::Stop {
-            state,
-            server_instance: self.logpoint_instance()?,
-            control_epoch: self.control_epoch.load(std::sync::atomic::Ordering::SeqCst),
-            current_epoch: self.control_epoch.clone(),
+            .find(|state| !state.running && state.target.as_ref() == Some(target))?;
+        if !matches!(target.selector, Some(v2::target::Selector::Thread(_))) {
+            return None;
+        }
+        Some(v2::ExecutionGuard {
+            server_instance_id: self.logpoint_instance()?,
+            execution_state_id: state.execution_state_id.clone(),
+            revision: state.revision,
         })
-    }
-
-    pub fn logpoint_stop_is_current(&self, stop: &crate::logpoints::Stop) -> bool {
-        self.api_connected
-            && self.source_server_instance.as_deref() == Some(&stop.server_instance)
-            && self.control_epoch.load(std::sync::atomic::Ordering::SeqCst) == stop.control_epoch
-            && self.execution_states.iter().any(|state| {
-                !state.running
-                    && state.execution_state_id == stop.state.execution_state_id
-                    && state.revision == stop.state.revision
-            })
     }
 }
 
@@ -3322,10 +3341,9 @@ pub enum BackendRequest {
     ExportDetails(DetailsExport),
     ConfigureLogpoint {
         id: String,
-        template: Option<crate::logpoints::Template>,
+        template: Option<String>,
         instance: String,
     },
-    ClassifyStop(crate::logpoints::Stop),
     ConfigureSession {
         session_id: String,
         setup: crate::debugger_setup::Setup,
@@ -3354,11 +3372,6 @@ pub enum BackendRequest {
     ExploreSources(crate::source_explorer::Request),
     CancelSourceDiscovery,
     Control(Control, v2::Target),
-    PausePeer {
-        session_id: String,
-        epoch: u64,
-        current_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    },
     Jump {
         location: String,
         target: v2::Target,
@@ -3448,15 +3461,6 @@ pub enum UiMessage {
         request: ExpressionInspection,
         result: Result<v2::EvaluationResult, String>,
     },
-    LogpointsConfigured {
-        instance: String,
-        ids: Vec<String>,
-    },
-    LogpointOutput(String),
-    ClassifiedStop {
-        stop: crate::logpoints::Stop,
-        error: Option<String>,
-    },
     WatchEvaluated {
         request: WatchEvaluation,
         result: Result<v2::EvaluationResult, String>,
@@ -3464,11 +3468,6 @@ pub enum UiMessage {
     ValueAssigned {
         edit: ValueEdit,
         result: Result<v2::Operation, String>,
-    },
-    PeerPauseFailed {
-        session_id: String,
-        epoch: u64,
-        error: String,
     },
     Capabilities(v2::Capabilities),
     Snapshot(v2::Snapshot),

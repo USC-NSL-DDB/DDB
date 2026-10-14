@@ -44,9 +44,7 @@ pub async fn run(
     let mut source_searches = JoinSet::new();
     let mut discoveries = JoinSet::new();
     let mut breakpoint_discoveries = JoinSet::new();
-    let mut logpoint_tasks = JoinSet::new();
     let mut exports = JoinSet::new();
-    let mut logpoints = crate::logpoints::Registry::default();
     let mut deferred = VecDeque::new();
     let mut pending_inspections = VecDeque::new();
     let mut inspection_generation = None;
@@ -58,9 +56,6 @@ pub async fn run(
             report_export(result, &messages).await;
         }
         while let Some(result) = inspections.try_join_next() {
-            report_inspection_failure(result, &messages).await;
-        }
-        while let Some(result) = logpoint_tasks.try_join_next() {
             report_inspection_failure(result, &messages).await;
         }
         let ready = deferred.pop_front().or_else(|| {
@@ -83,10 +78,6 @@ pub async fn run(
                     if let Some(result) = result { report_export(result, &messages).await; }
                     continue;
                 }
-                result = logpoint_tasks.join_next(), if !logpoint_tasks.is_empty() => {
-                    if let Some(result) = result { report_inspection_failure(result, &messages).await; }
-                    continue;
-                }
                 result = inspections.join_next(), if !inspections.is_empty() => {
                     if let Some(result) = result {
                         report_inspection_failure(result, &messages).await;
@@ -99,7 +90,7 @@ pub async fn run(
                 },
             },
         };
-        let (request, ticket) = match request {
+        let (request, ticket, intent_guard) = match request {
             BackendRequest::Tracked {
                 ticket,
                 guard,
@@ -124,10 +115,18 @@ pub async fn run(
                         .await;
                     continue;
                 }
-                (*request, Some(ticket))
+                (*request, Some(ticket), Some(guard))
             }
-            request => (request, None),
+            request => (request, None, None),
         };
+        let client = intent_guard
+            .as_ref()
+            .and_then(|guard| guard.server_instance_id.as_ref())
+            .map_or_else(
+                || client.clone(),
+                |instance| client.for_server_instance(instance.clone()),
+            );
+        let execution_guard = intent_guard.and_then(|guard| guard.execution_guard);
         let request = match request {
             BackendRequest::ExportDetails(export) => {
                 if exports.len() >= 2 {
@@ -139,78 +138,6 @@ pub async fn run(
                         .await;
                 } else {
                     exports.spawn_blocking(move || export.write());
-                }
-                continue;
-            }
-            BackendRequest::ConfigureLogpoint {
-                id,
-                template,
-                instance,
-            } => {
-                let result =
-                    configure_logpoint(&client, &mut logpoints, id, template, &instance).await;
-                if let Some(ticket) = ticket {
-                    let update = match &result {
-                        Ok(_) => crate::operation_feedback::Update::LocalCompleted,
-                        Err(error) => {
-                            crate::operation_feedback::Update::Error(format!("{error:#}"))
-                        }
-                    };
-                    let _ = messages
-                        .send(UiMessage::OperationFeedback { ticket, update })
-                        .await;
-                }
-                let update = match result {
-                    Ok(ids) => UiMessage::LogpointsConfigured { instance, ids },
-                    Err(error) => {
-                        UiMessage::Error(format!("Logpoint configuration failed: {error:#}"))
-                    }
-                };
-                let _ = messages.send(update).await;
-                continue;
-            }
-            BackendRequest::ClassifyStop(stop) => {
-                if let Some((stop, template)) = logpoints.claim(stop) {
-                    if let Some(template) = template {
-                        if logpoint_tasks.len() >= 16 {
-                            let _ = messages
-                                .send(UiMessage::ClassifiedStop {
-                                    stop,
-                                    error: Some(
-                                        "Too many pending logpoints; left thread paused".into(),
-                                    ),
-                                })
-                                .await;
-                        } else {
-                            let client = client.clone();
-                            let messages = messages.clone();
-                            logpoint_tasks.spawn(async move {
-                                let output = messages.clone();
-                                let result = crate::logpoints::run(
-                                    &client,
-                                    &template,
-                                    &stop,
-                                    |text| async move {
-                                        output.send(UiMessage::LogpointOutput(text)).await?;
-                                        Ok(())
-                                    },
-                                )
-                                .await;
-                                if !matches!(result, Ok(true)) {
-                                    let error = result.err().map(|error| {
-                                        format!("Logpoint failed; left thread paused: {error:#}")
-                                    });
-                                    let _ = messages
-                                        .send(UiMessage::ClassifiedStop { stop, error })
-                                        .await;
-                                }
-                            });
-                        }
-                    } else {
-                        let _ = messages
-                            .send(UiMessage::ClassifiedStop { stop, error: None })
-                            .await;
-                    }
                 }
                 continue;
             }
@@ -332,7 +259,9 @@ pub async fn run(
             });
         } else {
             let connection_probe = is_recovery(&request);
-            if let Err(error) = handle_with_feedback(&client, &messages, request, ticket).await {
+            if let Err(error) =
+                handle_with_feedback(&client, &messages, request, ticket, execution_guard).await
+            {
                 let message = format!("{error:#}");
                 if let Some(ticket) = ticket {
                     let _ = messages
@@ -354,7 +283,6 @@ pub async fn run(
     inspections.shutdown().await;
     sources.shutdown().await;
     discoveries.shutdown().await;
-    logpoint_tasks.shutdown().await;
     exports.shutdown().await;
 }
 
@@ -368,43 +296,6 @@ async fn report_export(
         Err(error) => UiMessage::Error(format!("Details export task failed: {error}")),
     };
     let _ = messages.send(message).await;
-}
-
-async fn configure_logpoint(
-    client: &ApiClient,
-    registry: &mut crate::logpoints::Registry,
-    id: String,
-    template: Option<crate::logpoints::Template>,
-    instance: &str,
-) -> anyhow::Result<Vec<String>> {
-    let snapshot = client
-        .get_snapshot(v2::GetSnapshotRequest {
-            sections: vec![v2::SnapshotSection::Breakpoints as i32],
-            ..Default::default()
-        })
-        .await?
-        .snapshot
-        .context("DDB omitted breakpoint snapshot")?;
-    anyhow::ensure!(
-        snapshot.server_instance_id == instance,
-        "DDB instance changed during logpoint configuration"
-    );
-    anyhow::ensure!(
-        snapshot.breakpoints.iter().any(|bp| bp.breakpoint_id == id),
-        "Breakpoint no longer exists"
-    );
-    registry.reset(instance);
-    registry.retain_active(
-        &snapshot
-            .breakpoints
-            .iter()
-            .map(|bp| bp.breakpoint_id.clone())
-            .collect(),
-    );
-    registry
-        .configure(instance, id, template)
-        .map_err(anyhow::Error::msg)?;
-    Ok(registry.ids())
 }
 
 async fn reject_inspection(
@@ -522,7 +413,7 @@ async fn handle(
     messages: &mpsc::Sender<UiMessage>,
     request: BackendRequest,
 ) -> anyhow::Result<()> {
-    handle_with_feedback(client, messages, request, None).await
+    handle_with_feedback(client, messages, request, None, None).await
 }
 
 async fn handle_with_feedback(
@@ -530,6 +421,7 @@ async fn handle_with_feedback(
     messages: &mpsc::Sender<UiMessage>,
     request: BackendRequest,
     ticket: Option<u64>,
+    execution_guard: Option<v2::ExecutionGuard>,
 ) -> anyhow::Result<()> {
     match request {
         BackendRequest::Tracked { .. } => {
@@ -538,8 +430,60 @@ async fn handle_with_feedback(
         BackendRequest::ExportDetails(_) => {
             bail!("details exports require the local export worker")
         }
-        BackendRequest::ConfigureLogpoint { .. } | BackendRequest::ClassifyStop(_) => {
-            bail!("logpoint requests require the serialized worker registry");
+        BackendRequest::ConfigureLogpoint {
+            id,
+            template,
+            instance,
+        } => {
+            let snapshot = client
+                .get_snapshot(v2::GetSnapshotRequest {
+                    sections: vec![v2::SnapshotSection::Breakpoints as i32],
+                    ..Default::default()
+                })
+                .await?
+                .snapshot
+                .context("DDB omitted breakpoints")?;
+            anyhow::ensure!(
+                snapshot.server_instance_id == instance,
+                "DDB instance changed"
+            );
+            let breakpoint = snapshot
+                .breakpoints
+                .into_iter()
+                .find(|breakpoint| breakpoint.breakpoint_id == id)
+                .context("Breakpoint no longer exists")?;
+            let receipt = finish_operation(
+                client,
+                messages,
+                ticket,
+                client
+                    .update_breakpoint(v2::UpdateBreakpointRequest {
+                        breakpoint_id: id.clone(),
+                        target: breakpoint.target,
+                        breakpoint: Some(v2::BreakpointSpec {
+                            log_message: template,
+                            ..Default::default()
+                        }),
+                        update_mask: Some(ddb_api_client::wkt::FieldMask {
+                            paths: vec!["log_message".into()],
+                        }),
+                        preconditions: Some(v2::Preconditions {
+                            server_instance_id: Some(instance),
+                            resource_version: Some(v2::ResourceVersion {
+                                resource_id: id,
+                                revision: breakpoint.revision,
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .await?,
+            )
+            .await?;
+            messages
+                .send(UiMessage::Receipt("configure logpoint".into(), receipt))
+                .await?;
+            refresh(client, messages).await?;
         }
         BackendRequest::ConfigureSession { session_id, setup } => {
             setup.run(client, messages, &session_id).await?;
@@ -662,54 +606,6 @@ async fn handle_with_feedback(
                 .await?;
         }
 
-        BackendRequest::PausePeer {
-            session_id,
-            epoch,
-            current_epoch,
-        } => {
-            if current_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
-                return Ok(());
-            }
-            let result = async {
-                let admission = client
-                    .execute(v2::ExecuteRequest {
-                        target: Some(crate::api::session_target(&session_id)),
-                        action: v2::ExecutionAction::Interrupt as i32,
-                        ..Default::default()
-                    })
-                    .await?;
-                complete_operation(client, admission).await
-            }
-            .await;
-            match result {
-                Ok(receipt) => {
-                    if receipt.state != v2::OperationState::Completed as i32 {
-                        messages
-                            .send(UiMessage::PeerPauseFailed {
-                                session_id: session_id.clone(),
-                                epoch,
-                                error: format!(
-                                    "interrupt operation {} did not complete successfully",
-                                    receipt.operation_id
-                                ),
-                            })
-                            .await?;
-                    }
-                    messages
-                        .send(UiMessage::Receipt("all-stop pause".into(), receipt))
-                        .await?;
-                }
-                Err(error) => {
-                    messages
-                        .send(UiMessage::PeerPauseFailed {
-                            session_id,
-                            epoch,
-                            error: format!("{error:#}"),
-                        })
-                        .await?;
-                }
-            }
-        }
         BackendRequest::Control(control, target) => {
             let action = control
                 .execution_action()
@@ -727,6 +623,7 @@ async fn handle_with_feedback(
                         context: None,
                         target: Some(target),
                         action: action as i32,
+                        execution_guard,
                         jump_location: None,
                         signal_name: None,
                         preconditions: None,
@@ -747,6 +644,7 @@ async fn handle_with_feedback(
                         context: None,
                         target: Some(target),
                         action: v2::ExecutionAction::Jump as i32,
+                        execution_guard,
                         jump_location: Some(jump_location),
                         signal_name: None,
                         preconditions: None,
@@ -770,6 +668,7 @@ async fn handle_with_feedback(
                         action: v2::ExecutionAction::Signal as i32,
                         jump_location: None,
                         signal_name: Some(signal.clone()),
+                        execution_guard: None,
                         preconditions: None,
                     })
                     .await?,
@@ -799,10 +698,12 @@ async fn handle_with_feedback(
                     .execute(v2::ExecuteRequest {
                         context: None,
                         target: Some(crate::api::session_target(request.session.session_id)),
+                        execution_guard: None,
                         action: v2::ExecutionAction::Signal as i32,
                         jump_location: None,
                         signal_name: Some("SIGKILL".into()),
                         preconditions: Some(v2::Preconditions {
+                            server_instance_id: None,
                             state_revision: Some(snapshot.base_state_revision),
                             resource_version: None,
                         }),
@@ -841,6 +742,7 @@ async fn handle_with_feedback(
                             ignore_count: options.ignore_count,
                             temporary: options.temporary,
                             hardware: options.hardware,
+                            log_message: None,
                         }),
                         preconditions: None,
                     })
@@ -1060,6 +962,54 @@ async fn handle_with_feedback(
     Ok(())
 }
 
+async fn initialize_stop_policy(client: &ApiClient, snapshot: &v2::Snapshot) -> anyhow::Result<()> {
+    let Some(policy) = snapshot
+        .stop_policy
+        .as_ref()
+        .filter(|policy| policy.generation == 0)
+    else {
+        return Ok(());
+    };
+    let receipt = client
+        .configure_debugger(v2::ConfigureDebuggerRequest {
+            target: Some(v2::Target {
+                selector: Some(v2::target::Selector::Broadcast(v2::BroadcastTarget {})),
+            }),
+            setting: Some(v2::configure_debugger_request::Setting::StopPolicy(
+                v2::StopPolicyConfig {
+                    mode: v2::StopMode::AllStop as i32,
+                },
+            )),
+            preconditions: Some(v2::Preconditions {
+                server_instance_id: Some(snapshot.server_instance_id.clone()),
+                resource_version: Some(v2::ResourceVersion {
+                    resource_id: policy.stop_policy_id.clone(),
+                    revision: policy.revision,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+    match receipt {
+        Ok(admission) => {
+            let operation = complete_operation(client, admission).await?;
+            if operation.state != v2::OperationState::Completed as i32
+                && operation
+                    .error
+                    .as_ref()
+                    .is_none_or(|error| error.code != v2::DdbErrorCode::FailedPrecondition as i32)
+            {
+                bail!("stop policy configuration did not complete");
+            }
+        }
+        Err(ddb_api_client::ClientError::Api { error, .. })
+            if error.code == v2::DdbErrorCode::FailedPrecondition as i32 => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
 fn ui_state_sync_options() -> StateSyncOptions {
     StateSyncOptions {
         // Execution is deliberately not part of DDB's default snapshot.
@@ -1072,6 +1022,7 @@ fn ui_state_sync_options() -> StateSyncOptions {
             v2::SnapshotSection::PendingOperations,
             v2::SnapshotSection::Extensions,
             v2::SnapshotSection::Capabilities,
+            v2::SnapshotSection::StopPolicy,
         ]
         .into_iter()
         .map(|section| section as i32)
@@ -1413,6 +1364,13 @@ pub async fn watch_events(client: ApiClient, messages: mpsc::Sender<UiMessage>) 
                         .await;
                     return;
                 };
+                if let Err(error) = initialize_stop_policy(&client, &snapshot).await {
+                    let _ = messages
+                        .send(UiMessage::Error(format!(
+                            "DDB stop policy setup failed: {error:#}"
+                        )))
+                        .await;
+                }
                 if messages
                     .send(UiMessage::EventStream(EventStreamStatus::Connected))
                     .await
@@ -1962,25 +1920,6 @@ mod tests {
         });
         assert!(summary.contains("output gap: replay evicted"));
         assert!(summary.contains("surviving output"));
-    }
-
-    #[tokio::test]
-    async fn superseded_peer_pause_never_contacts_backend() {
-        let client = ApiClient::new(crate::api::ClientConfig::new("http://127.0.0.1:1")).unwrap();
-        let (tx, mut rx) = mpsc::channel(4);
-        let current_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(2));
-        handle(
-            &client,
-            &tx,
-            BackendRequest::PausePeer {
-                session_id: "server".into(),
-                epoch: 1,
-                current_epoch,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

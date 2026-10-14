@@ -74,7 +74,6 @@ pub enum Update {
     Started,
     Admitted(v2::Operation),
     Finished(v2::Operation),
-    LocalCompleted,
     Error(String),
 }
 
@@ -137,11 +136,25 @@ impl Entry {
 /// The UI and worker share one retirement decision for a queued intent.
 /// A connection loss alone does not retire it; an observed replacement does.
 #[derive(Clone, Debug, Default)]
-pub struct IntentGuard(Arc<AtomicBool>);
+pub struct IntentGuard {
+    retired: Arc<AtomicBool>,
+    pub server_instance_id: Option<String>,
+    pub execution_guard: Option<v2::ExecutionGuard>,
+}
 
 impl IntentGuard {
     pub fn is_retired(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.retired.load(Ordering::SeqCst)
+    }
+
+    pub fn with_execution_context(
+        mut self,
+        instance: Option<String>,
+        stop: Option<v2::ExecutionGuard>,
+    ) -> Self {
+        self.server_instance_id = instance;
+        self.execution_guard = stop;
+        self
     }
 }
 
@@ -271,7 +284,6 @@ impl Feedback {
                     }
                 }
             }
-            Update::LocalCompleted => entry.state = State::Completed,
             Update::Error(error) => {
                 entry.state = if entry.operation_id.is_some() {
                     State::Unconfirmed
@@ -295,7 +307,7 @@ impl Feedback {
         if replaced {
             // Worker requests can outlive the bounded display history. Retire
             // the generation, not just the entries still retained for display.
-            self.backend_guard.0.store(true, Ordering::SeqCst);
+            self.backend_guard.retired.store(true, Ordering::SeqCst);
             self.backend_guard = IntentGuard::default();
         }
         self.entries
@@ -442,7 +454,14 @@ mod tests {
     fn confirmed_feedback_expires_but_pending_and_unconfirmed_outcomes_do_not() {
         let mut feedback = Feedback::default();
         let (completed, _) = feedback.queue("continue".into()).unwrap();
-        feedback.update(completed, Update::LocalCompleted);
+        feedback.update(
+            completed,
+            Update::Finished(v2::Operation {
+                operation_id: "local-test".into(),
+                state: v2::OperationState::Completed as i32,
+                ..Default::default()
+            }),
+        );
         assert!(feedback.display().unwrap().contains("completed"));
         assert!(feedback.has_expiring_feedback());
         feedback.entries.back_mut().unwrap().settled_at =
@@ -485,7 +504,14 @@ mod tests {
         assert!(feedback.control_pending(Control::Continue, &target));
         assert!(!feedback.control_pending(Control::Interrupt, &target));
         assert!(!feedback.control_pending(Control::Continue, &crate::api::session_target("b")));
-        feedback.update(ticket, Update::LocalCompleted);
+        feedback.update(
+            ticket,
+            Update::Finished(v2::Operation {
+                operation_id: "local-test".into(),
+                state: v2::OperationState::Completed as i32,
+                ..Default::default()
+            }),
+        );
         assert!(!feedback.control_pending(Control::Continue, &target));
     }
 

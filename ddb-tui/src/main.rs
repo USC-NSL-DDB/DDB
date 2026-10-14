@@ -7,7 +7,6 @@ mod frame_source_interaction_tests;
 mod help;
 #[cfg(test)]
 mod live_hits_interaction_tests;
-mod logpoints;
 mod model;
 #[cfg(test)]
 mod native_ux_interaction_tests;
@@ -1095,17 +1094,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, requests: &mpsc::Sender<Backe
                         Err(error) => app.error(error),
                     },
                     InputMode::Logpoint => {
-                        let template = if input.is_empty() {
-                            None
-                        } else {
-                            match logpoints::Template::parse(&input) {
-                                Ok(template) => Some(template),
-                                Err(error) => {
-                                    app.error(error);
-                                    return;
-                                }
-                            }
-                        };
+                        let template = (!input.is_empty()).then_some(input);
                         if let (Some(id), Some(instance)) =
                             (app.logpoint_edit.take(), app.logpoint_instance())
                         {
@@ -2721,31 +2710,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
         UiMessage::BreakpointTargets { lookup, result } => {
             app.finish_source_targets(lookup, result)
         }
-        UiMessage::LogpointsConfigured { instance, ids } => {
-            if app.logpoint_instance().as_deref() == Some(&instance) {
-                app.logpoint_ids = ids.into_iter().collect();
-                app.status = "Logpoint configuration applied".into();
-            }
-        }
-        UiMessage::LogpointOutput(message) => {
-            app.output.push(&message);
-            app.show_output = true;
-        }
-        UiMessage::ClassifiedStop { stop, error } => {
-            if app.logpoint_stop_is_current(&stop) {
-                if let Some(v2::target::Selector::Thread(thread)) = stop
-                    .state
-                    .target
-                    .as_ref()
-                    .and_then(|target| target.selector.as_ref())
-                {
-                    ordinary_stop(app, requests, thread.thread_id.clone());
-                }
-                if let Some(error) = error {
-                    app.error(error);
-                }
-            }
-        }
         UiMessage::WatchEvaluated { request, result } => app.finish_watch(request, result),
         UiMessage::ExpressionInspected { request, result } => {
             app.finish_expression_inspection(request, result)
@@ -2777,17 +2741,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                 Err(error) => app.error(error),
             }
         }
-        UiMessage::PeerPauseFailed {
-            session_id,
-            epoch,
-            error,
-        } => {
-            if app.control_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
-                app.peer_pauses.remove(&session_id);
-                app.cancel_pending_automatic_pauses(Some(&session_id));
-                app.error(format!("Could not pause DDB session {session_id}: {error}"));
-            }
-        }
         UiMessage::Capabilities(capabilities) => {
             app.apply_capabilities(capabilities);
             configure_sessions(app, requests);
@@ -2806,7 +2759,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             // Snapshots can overtake running events. Reconcile only observed
             // transitions, not every refresh, so pending interrupts stay deduped.
             let mut resumed_sessions = std::collections::BTreeSet::new();
-            let mut new_running_thread = false;
             for next in snapshot
                 .threads
                 .iter()
@@ -2820,11 +2772,9 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                     Some(previous) if previous.state == "stopped" => {
                         resumed_sessions.insert(next.session_id.clone());
                     }
-                    None => new_running_thread = true,
                     _ => {}
                 }
             }
-            let reconcile_peers = !resumed_sessions.is_empty() || new_running_thread;
             let previous = app.current_thread().map(|thread| thread.id.clone());
             let thread_membership_changed = app.threads.len() != snapshot.threads.len()
                 || app.threads.iter().any(|current| {
@@ -2872,11 +2822,6 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             }
             for thread in stopped_threads {
                 handle_stopped_thread(app, requests, thread);
-            }
-            if reconcile_peers {
-                if let Some(cause) = app.all_stop_cause.clone() {
-                    pause_running_peers(app, requests, &cause);
-                }
             }
         }
         UiMessage::Signals { target, signals } => {
@@ -3015,16 +2960,8 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
                         app.peer_pauses.remove(&thread.session_id);
                     }
                     app.mark_running(Some(&thread_id));
-                    if let Some(cause) = app.all_stop_cause.clone() {
-                        if app
-                            .threads
-                            .iter()
-                            .any(|t| t.id == cause && t.state == "stopped")
-                        {
-                            pause_running_peers(app, requests, &cause);
-                        } else {
-                            app.all_stop_cause = None;
-                        }
+                    if app.all_stop_cause.as_deref() == Some(&thread_id) {
+                        app.all_stop_cause = None;
                     }
                 }
                 DebuggerActivity::Stopped(Some(thread_id)) => {
@@ -3095,12 +3032,6 @@ fn handle_stopped_thread(
     requests: &mpsc::Sender<BackendRequest>,
     thread_id: String,
 ) {
-    if !app.logpoint_ids.is_empty() {
-        if let Some(stop) = app.logpoint_stop(&thread_id) {
-            queue_request(app, requests, BackendRequest::ClassifyStop(stop));
-            return;
-        }
-    }
     ordinary_stop(app, requests, thread_id);
 }
 
@@ -3117,7 +3048,11 @@ fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_
     }
     // The event can precede its snapshot. Reconcile its stopped state before
     // selecting the pause owner, or a later interrupted peer can steal focus.
-    pause_running_peers(app, requests, &thread_id);
+    for thread in &mut app.threads {
+        if thread.id == thread_id {
+            thread.state = "stopped".into();
+        }
+    }
     app.select_pause_thread(&thread_id);
     let should_inspect = match app.current_thread().map(|thread| thread.id.as_str()) {
         None => true,
@@ -3126,65 +3061,6 @@ fn ordinary_stop(app: &mut App, requests: &mpsc::Sender<BackendRequest>, thread_
     };
     if should_inspect {
         inspect_thread(app, requests, thread_id);
-    }
-}
-
-fn pause_running_peers(
-    app: &mut App,
-    requests: &mpsc::Sender<BackendRequest>,
-    stopped_thread: &str,
-) {
-    let Some(owner) = app
-        .threads
-        .iter()
-        .find(|t| t.id == stopped_thread)
-        .map(|t| t.session_id.clone())
-    else {
-        return;
-    };
-    // Update the cause before considering peer stops so a later peer event
-    // cannot send an interrupt back to the original stopped process.
-    for thread in &mut app.threads {
-        if thread.id == stopped_thread {
-            thread.state = "stopped".into();
-        }
-    }
-    app.peer_pauses.insert(owner.clone());
-    let peers = app
-        .threads
-        .iter()
-        .filter(|t| t.state == "running" && t.session_id != owner)
-        .map(|t| t.session_id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    for session_id in peers {
-        if app.peer_pauses.contains(&session_id) {
-            continue;
-        }
-        let target = crate::api::session_target(&session_id);
-        if !app
-            .capabilities
-            .supports_execution_target(v2::ExecutionAction::Interrupt, &target)
-        {
-            app.error(format!(
-                "Cannot enforce all-stop for {session_id}: session interrupt is unsupported"
-            ));
-            continue;
-        }
-        let epoch = app.control_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        let request = BackendRequest::PausePeer {
-            session_id: session_id.clone(),
-            epoch,
-            current_epoch: app.control_epoch.clone(),
-        };
-        match requests.try_send(request) {
-            Ok(()) => {
-                app.note_automatic_pause(&session_id);
-                app.peer_pauses.insert(session_id);
-            }
-            Err(error) => app.error(format!(
-                "Could not queue all-stop pause for {session_id}: {error}"
-            )),
-        }
     }
 }
 
@@ -3282,7 +3158,10 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
     let request = match ticket {
         Some(ticket) => BackendRequest::Tracked {
             ticket,
-            guard: app.operations.intent_guard(ticket),
+            guard: app.operations.intent_guard(ticket).with_execution_context(
+                app.logpoint_instance(),
+                app.execution_guard_for_request(&request),
+            ),
             request: Box::new(request),
         },
         None => request,
@@ -3311,7 +3190,7 @@ fn queue_request(app: &mut App, requests: &mpsc::Sender<BackendRequest>, request
 /// caller decides whether the connection remains usable.
 fn reject_queued_request(
     app: &mut App,
-    requests: &mpsc::Sender<BackendRequest>,
+    _requests: &mpsc::Sender<BackendRequest>,
     request: BackendRequest,
     reason: &str,
 ) {
@@ -3341,16 +3220,6 @@ fn reject_queued_request(
             ..
         } => {
             app.release_failed_inspection(generation, &thread_id);
-        }
-        BackendRequest::ClassifyStop(stop) => {
-            if let Some(v2::target::Selector::Thread(thread)) = stop
-                .state
-                .target
-                .as_ref()
-                .and_then(|target| target.selector.as_ref())
-            {
-                ordinary_stop(app, requests, thread.thread_id.clone());
-            }
         }
         BackendRequest::ExploreSources(request) => {
             app.source_explorer.fail(
@@ -3850,112 +3719,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_running_peer_reopens_all_stop_without_a_new_cause_stop() {
-        let mut app = App::new("http://localhost".into());
-        app.capabilities = v2::Capabilities {
-            execution_actions: vec![v2::ExecutionAction::Interrupt as i32],
-            execution_action_capabilities: vec![v2::ExecutionActionCapability {
-                action: v2::ExecutionAction::Interrupt as i32,
-                scopes: vec![v2::ExecutionScopeKind::Session as i32],
-            }],
-            ..Default::default()
-        };
-        let snapshot = |running: bool| {
-            let mut snapshot = topology_snapshot(vec![
-                v2::Thread {
-                    thread_id: "thread/server".into(),
-                    session_id: "session/server".into(),
-                    state: v2::ThreadState::Stopped as i32,
-                    ..Default::default()
-                },
-                v2::Thread {
-                    thread_id: "thread/client".into(),
-                    session_id: "session/client".into(),
-                    state: if running {
-                        v2::ThreadState::Running
-                    } else {
-                        v2::ThreadState::Stopped
-                    } as i32,
-                    ..Default::default()
-                },
-            ]);
-            snapshot.server_instance_id = "backend/one".into();
-            snapshot.base_state_revision = if running { 31 } else { 30 };
-            snapshot.state_event_cursor = Some(v2::Cursor {
-                server_instance_id: "backend/one".into(),
-                sequence: snapshot.base_state_revision,
-            });
-            snapshot.execution_states = vec![
-                v2::ExecutionState {
-                    execution_state_id: "execution/server".into(),
-                    target: Some(thread_target("thread/server")),
-                    revision: 5,
-                    stop_reason: Some(v2::StopReason {
-                        kind: v2::StopReasonKind::Breakpoint as i32,
-                        thread_id: Some("thread/server".into()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                v2::ExecutionState {
-                    execution_state_id: "execution/client".into(),
-                    target: Some(thread_target("thread/client")),
-                    revision: if running { 6 } else { 5 },
-                    running,
-                    ..Default::default()
-                },
-            ];
-            snapshot
-        };
-        let (tx, mut rx) = mpsc::channel(16);
-        apply_message(&mut app, UiMessage::Snapshot(snapshot(false)), &tx);
-        while rx.try_recv().is_ok() {}
-        assert_eq!(app.all_stop_cause.as_deref(), Some("thread/server"));
-        for _ in 0..2 {
-            apply_message(&mut app, UiMessage::Snapshot(snapshot(true)), &tx);
-        }
-        let mut peers = Vec::new();
-        while let Ok(request) = rx.try_recv() {
-            if let BackendRequest::PausePeer { session_id, .. } = request {
-                peers.push(session_id);
-            }
-        }
-        assert_eq!(
-            peers,
-            ["session/client"],
-            "a newer snapshot must enforce the existing stop even if running events were overtaken"
-        );
-        let mut joined = snapshot(true);
-        joined.base_state_revision = 32;
-        joined.state_event_cursor.as_mut().unwrap().sequence = 32;
-        joined.threads.push(v2::Thread {
-            thread_id: "thread/client-worker".into(),
-            session_id: "session/client".into(),
-            state: v2::ThreadState::Running as i32,
-            ..Default::default()
-        });
-        apply_message(&mut app, UiMessage::Snapshot(joined.clone()), &tx);
-        assert!(
-            !std::iter::from_fn(|| rx.try_recv().ok())
-                .any(|request| matches!(request, BackendRequest::PausePeer { .. })),
-            "a new running thread must not duplicate its session's pending pause"
-        );
-
-        joined.base_state_revision = 33;
-        joined.state_event_cursor.as_mut().unwrap().sequence = 33;
-        joined.threads[0].state = v2::ThreadState::Running as i32;
-        joined.execution_states[0].running = true;
-        joined.execution_states[0].revision += 1;
-        apply_message(&mut app, UiMessage::Snapshot(joined), &tx);
-        assert!(
-            app.all_stop_cause.is_none(),
-            "a resumed cause must retire the old all-stop policy"
-        );
-        assert!(!std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|request| matches!(request, BackendRequest::PausePeer { .. })));
-    }
-
-    #[test]
     fn refresh_stop_enforces_all_stop_and_rejects_an_older_resume_event() {
         let mut app = App::new("http://localhost".into());
         app.capabilities = v2::Capabilities {
@@ -3999,13 +3762,15 @@ mod tests {
         }];
         let (tx, mut rx) = mpsc::channel(8);
         apply_message(&mut app, UiMessage::Snapshot(snapshot.clone()), &tx);
-        let mut peers = Vec::new();
-        while let Ok(request) = rx.try_recv() {
-            if let BackendRequest::PausePeer { session_id, .. } = request {
-                peers.push(session_id);
-            }
-        }
-        assert_eq!(peers, ["session/client"]);
+        let queued = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(BackendRequest::untracked)
+            .collect::<Vec<_>>();
+        assert!(
+            !queued
+                .iter()
+                .any(|request| matches!(request, BackendRequest::Control(_, _))),
+            "stop observations must never dispatch frontend peer controls"
+        );
         apply_message(&mut app, UiMessage::Snapshot(snapshot), &tx);
         assert!(
             rx.try_recv().is_err(),
@@ -5453,92 +5218,6 @@ mod tests {
         assert!(!app.should_quit);
     }
 
-    #[test]
-    fn stopped_client_requests_one_pause_for_running_server() {
-        let mut app = distributed_caller_app();
-        app.threads.push(ThreadItem {
-            id: "thread/server".into(),
-            session_id: "session/server".into(),
-            name: "server".into(),
-            state: "running".into(),
-            function: String::new(),
-            file: None,
-            line: None,
-        });
-        app.capabilities = v2::Capabilities {
-            execution_actions: vec![v2::ExecutionAction::Interrupt as i32],
-            execution_action_capabilities: vec![v2::ExecutionActionCapability {
-                action: v2::ExecutionAction::Interrupt as i32,
-                scopes: vec![v2::ExecutionScopeKind::Session as i32],
-            }],
-            ..Default::default()
-        };
-        let (tx, mut rx) = mpsc::channel(8);
-        for _ in 0..2 {
-            apply_message(
-                &mut app,
-                UiMessage::DebuggerEvent(DebuggerEvent {
-                    summary: "breakpoint".into(),
-                    refresh: false,
-                    server_instance_id: String::new(),
-                    state_revision: 0,
-                    state_event_sequence: 0,
-                    activity: DebuggerActivity::Stopped(Some("thread/child".into())),
-                }),
-                &tx,
-            );
-        }
-        let mut controls = Vec::new();
-        while let Ok(request) = rx.try_recv() {
-            if !matches!(
-                request,
-                BackendRequest::InspectThread { .. } | BackendRequest::Refresh
-            ) {
-                controls.push(request);
-            }
-        }
-        assert_eq!(
-            controls.len(),
-            1,
-            "a client breakpoint must pause the running server exactly once"
-        );
-        assert!(
-            matches!(&controls[0], BackendRequest::PausePeer { session_id, .. } if session_id == "session/server")
-        );
-        let epoch = app.control_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        apply_message(
-            &mut app,
-            UiMessage::PeerPauseFailed {
-                session_id: "session/server".into(),
-                epoch,
-                error: "denied".into(),
-            },
-            &tx,
-        );
-        assert!(!app.peer_pauses.contains("session/server"));
-        assert!(app.status.contains("denied"));
-        app.threads
-            .iter_mut()
-            .find(|t| t.id == "thread/server")
-            .unwrap()
-            .state = "stopped".into();
-        apply_message(
-            &mut app,
-            UiMessage::DebuggerEvent(DebuggerEvent {
-                summary: "late peer resume".into(),
-                refresh: false,
-                server_instance_id: String::new(),
-                state_revision: 0,
-                state_event_sequence: 0,
-                activity: DebuggerActivity::Running("thread/server".into()),
-            }),
-            &tx,
-        );
-        assert!(
-            matches!(rx.try_recv().unwrap(), BackendRequest::PausePeer { session_id, .. } if session_id == "session/server")
-        );
-    }
-
     fn distributed_caller_app() -> App {
         let mut app = App::new("http://127.0.0.1:5000".into());
         app.threads.push(ThreadItem {
@@ -6110,7 +5789,7 @@ mod tests {
     }
 
     #[test]
-    fn logpoint_prompt_validates_and_captures_the_selected_logical_breakpoint() {
+    fn logpoint_prompt_sends_the_template_for_backend_validation() {
         let mut app = App::new("http://localhost".into());
         app.apply_snapshot(v2::Snapshot {
             server_instance_id: "instance".into(),
@@ -6138,7 +5817,7 @@ mod tests {
             .push(v2::ExecutionAction::Continue as i32);
         app.focus = Focus::Breakpoints;
         let (tx, mut rx) = mpsc::channel(8);
-        for (input, valid) in [("value {counter}", true), ("", true), ("bad {", false)] {
+        for input in ["value {counter}", "", "bad {"] {
             handle_key(
                 &mut app,
                 KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
@@ -6151,14 +5830,10 @@ mod tests {
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                 &tx,
             );
-            if valid {
-                assert!(
-                    matches!(rx.try_recv().unwrap().untracked(), BackendRequest::ConfigureLogpoint { id, instance, template }
-                    if id == "breakpoint/log" && instance == "instance" && template.is_some() != input.is_empty())
-                );
-            } else {
-                assert!(rx.try_recv().is_err());
-            }
+            assert!(
+                matches!(rx.try_recv().unwrap().untracked(), BackendRequest::ConfigureLogpoint { id, instance, template }
+                    if id == "breakpoint/log" && instance == "instance" && template.as_deref() == (!input.is_empty()).then_some(input))
+            );
         }
     }
 
