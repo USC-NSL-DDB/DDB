@@ -5,6 +5,8 @@ use anyhow::{anyhow, bail, Context, Result};
 #[async_trait::async_trait]
 pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
     async fn check(&self) -> Result<()>;
+    /// Called synchronously after the session actor admits the transport write.
+    fn dispatched(&self) {}
     fn is_automatic(&self) -> bool {
         false
     }

@@ -31,6 +31,212 @@ impl crate::cmd_flow::input::DispatchGuard for RejectStop {
     }
 }
 
+struct StopClaimGuard {
+    model: Arc<RuntimeModel>,
+    thread: crate::state::GlobalThreadId,
+    revision: u64,
+}
+
+impl std::fmt::Debug for StopClaimGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StopClaimGuard").finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::cmd_flow::input::DispatchGuard for StopClaimGuard {
+    async fn check(&self) -> Result<()> {
+        if !self
+            .model
+            .claim_thread_stop(self.thread, self.revision)
+            .await
+        {
+            return Err(crate::cmd_flow::input::StaleExecution.into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct BlockingGuard {
+    inner: Arc<dyn crate::cmd_flow::input::DispatchGuard>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl crate::cmd_flow::input::DispatchGuard for BlockingGuard {
+    async fn check(&self) -> Result<()> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        self.inner.check().await
+    }
+}
+
+#[derive(Debug, Default)]
+struct CountingGuard(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::cmd_flow::input::DispatchGuard for CountingGuard {
+    async fn check(&self) -> Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+const NEW_STOP: &[u8] =
+    b"*stopped,reason=\"end-stepping-range\",thread-id=\"1\",stopped-threads=\"all\"\n";
+
+#[derive(Debug)]
+struct StopDuringEncoding {
+    protocol: GdbMiProtocol,
+    events: flume::Sender<TransportEvent>,
+}
+
+impl crate::debugger::protocol::DebuggerProtocol for StopDuringEncoding {
+    fn encode_command(
+        &self,
+        command: crate::debugger::protocol::ProtocolCommand<'_>,
+    ) -> Result<Bytes> {
+        self.events
+            .try_send(TransportEvent::Stdout(Bytes::from_static(NEW_STOP)))?;
+        self.protocol.encode_command(command)
+    }
+
+    fn push_stdout(
+        &mut self,
+        bytes: Bytes,
+    ) -> Result<Vec<crate::debugger::protocol::ProtocolRecord>> {
+        self.protocol.push_stdout(bytes)
+    }
+}
+
+async fn stopped_guard_fixture(sid: u64) -> (Arc<StopClaimGuard>, Arc<DebuggerEventReducer>) {
+    let model = RuntimeModel::new();
+    model.register_session(sid, "fixture", None).await;
+    model.register_thread_group(sid, "i1").await.unwrap();
+    let thread = model.register_thread(sid, 1, "i1").await.unwrap().thread_id;
+    model
+        .update_thread_statuses(sid, &[1], crate::state::ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    let revision = model.thread_snapshots_for_sessions(&[sid]).await[0].stop_revision;
+    let reducer = DebuggerEventReducer::new(
+        model.clone(),
+        BreakpointEventPublisher::new(
+            Arc::new(NotificationManager::new()),
+            crate::cmd_flow::event_publisher::EventPublisher::spawn().0,
+            crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
+        ),
+    );
+    (
+        Arc::new(StopClaimGuard {
+            model,
+            thread,
+            revision,
+        }),
+        reducer,
+    )
+}
+
+#[tokio::test]
+async fn guarded_dispatch_applies_queued_native_stop_before_claiming() {
+    let sid = 54;
+    let (guard, reducer) = stopped_guard_fixture(sid).await;
+    let (transport, requests, events) = test_transport(8);
+    let (lifecycle, _terminations) = lifecycle::channel();
+    let (handle, task) = SessionHandle::spawn(
+        sid,
+        transport,
+        Box::new(StopDuringEncoding {
+            protocol: GdbMiProtocol::default(),
+            events,
+        }),
+        lifecycle.bind(sid),
+        reducer,
+    );
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard);
+    let ticket = handle.submit(guarded).await.unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.is::<crate::cmd_flow::input::StaleExecution>());
+    assert!(
+        requests.is_empty(),
+        "a queued newer stop must prevent dispatch"
+    );
+    stop(&handle, task).await;
+}
+
+#[tokio::test]
+async fn guarded_dispatch_rejects_native_events_arriving_during_validation() {
+    let sid = 55;
+    let (inner, reducer) = stopped_guard_fixture(sid).await;
+    let guard = Arc::new(BlockingGuard {
+        inner,
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let (transport, requests, events) = test_transport(8);
+    let (handle, task, _terminations) = spawn_runtime_with_reducer(sid, transport, reducer);
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded).await.unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, guard.entered.notified())
+        .await
+        .unwrap();
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from_static(NEW_STOP)))
+        .await
+        .unwrap();
+    guard.release.notify_one();
+    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.is::<crate::cmd_flow::input::StaleExecution>());
+    assert!(
+        requests.is_empty(),
+        "an awaited guard must not hide a newer stop"
+    );
+    stop(&handle, task).await;
+}
+
+#[tokio::test]
+async fn guarded_dispatch_does_not_queue_behind_an_unacknowledged_write() {
+    let (transport, requests, _events) = test_transport(8);
+    let (handle, task, _terminations) = spawn_runtime(56, transport);
+    let first = handle.submit(command()).await.unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while requests.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let guard = Arc::new(CountingGuard::default());
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded).await.unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("transport write is still pending"));
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        requests.len(),
+        1,
+        "spare queue capacity must not delay a validated stop"
+    );
+    stop(&handle, task).await;
+    assert!(first.complete().await.is_err());
+}
+
 #[tokio::test]
 async fn stale_execution_guard_never_reaches_the_transport() {
     let (transport, requests, _events) = test_transport(8);

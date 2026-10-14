@@ -532,7 +532,17 @@ impl SessionMeta {
         {
             return false;
         }
-        self.t_stop_claims.insert(tid, revision);
+        // Both native backends resume the process even when DDB's public
+        // target names a thread. Consume its stopped siblings before Running
+        // can arrive, so another client cannot resume the same process twice.
+        for (sibling, status) in &self.t_status {
+            if *status == ThreadStatus::STOPPED {
+                self.t_stop_claims.insert(
+                    *sibling,
+                    self.t_stop_revisions.get(sibling).copied().unwrap_or(1),
+                );
+            }
+        }
         true
     }
 

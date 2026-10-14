@@ -102,6 +102,64 @@ async fn execution_guards_allow_only_one_client_to_consume_a_stop() {
 }
 
 #[tokio::test]
+async fn sibling_thread_guards_cannot_resume_the_same_native_process_twice() {
+    let (model, service, port, first_target) = guarded_fixture().await;
+    let sibling = model.register_thread(42, 12, "i1").await.unwrap().thread_id;
+    model
+        .update_thread_statuses(42, &[12], ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    let second_target = PublicTarget {
+        selector: Some(target::Selector::Thread(ddb_api_types::v2::ThreadTarget {
+            thread_id: service.ids.encode(ResourceIdKind::Thread, sibling).unwrap(),
+        })),
+    };
+    let a = guarded_request(&service, first_target, "first-thread").await;
+    let b = guarded_request(&service, second_target.clone(), "second-thread").await;
+    let first = service
+        .execute(&PrincipalContext::new("client-a").unwrap(), a)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    assert_eq!(
+        terminal_operation(&service, &first.operation_id)
+            .await
+            .state,
+        OperationState::Completed as i32
+    );
+    // No native Running event has arrived yet, including for the sibling.
+    let second = service
+        .execute(&PrincipalContext::new("client-b").unwrap(), b)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    let failed = terminal_operation(&service, &second.operation_id).await;
+    assert_eq!(
+        failed.error.unwrap().code,
+        DdbErrorCode::FailedPrecondition as i32
+    );
+    assert_eq!(port.calls.load(Ordering::SeqCst), 1);
+    model
+        .update_thread_statuses(42, &[11, 12], ThreadStatus::STOPPED)
+        .await
+        .unwrap();
+    let next = guarded_request(&service, second_target, "new-process-stop").await;
+    let next = service
+        .execute(&PrincipalContext::new("client-b").unwrap(), next)
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    assert_eq!(
+        terminal_operation(&service, &next.operation_id).await.state,
+        OperationState::Completed as i32
+    );
+    assert_eq!(port.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn execution_guards_reject_intervening_stops_and_backend_restarts() {
     let (model, service, port, target) = guarded_fixture().await;
     let principal = PrincipalContext::new("controller").unwrap();

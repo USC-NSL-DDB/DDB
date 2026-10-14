@@ -41,6 +41,7 @@ pub(crate) trait ApplicationCommandPort: Send + Sync {
                 source,
                 fanout: None,
             })?;
+            guard.dispatched();
         }
         self.execute_tracked(command, target, operation_id, operation_kind)
             .await

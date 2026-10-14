@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, warn};
 
@@ -61,6 +61,59 @@ fn await_write(
             .and_then(|result| result);
         (owner, result)
     })
+}
+
+fn finish_write(owner: WriteOwner, result: Result<()>, pending: &mut PendingCommands) {
+    match owner {
+        WriteOwner::Command(token) => {
+            if let Err(error) = result {
+                pending.fail(token, error);
+            }
+        }
+        WriteOwner::Raw(written) => {
+            let _ = written.send(result);
+        }
+    }
+}
+
+async fn process_transport_event(
+    sid: u64,
+    event: Option<TransportEvent>,
+    demux: &mut OutputDemux,
+    pending: &mut PendingCommands,
+    protocol: &mut dyn DebuggerProtocol,
+) -> std::result::Result<(), SessionTerminationCause> {
+    match event {
+        Some(TransportEvent::Stdout(bytes)) => {
+            if let Err(error) = demux.process(bytes, pending, protocol).await {
+                warn!(sid, ?error, "failed to process debugger output");
+                pending.fail_all(&error.to_string());
+                return Err(SessionTerminationCause::ProtocolFault {
+                    message: error.to_string(),
+                });
+            }
+        }
+        Some(TransportEvent::Stderr(bytes)) => {
+            let message = String::from_utf8_lossy(&bytes).into_owned();
+            debug!(sid, stderr = %message, "debugger stderr");
+            if let Err(error) = demux.forward_stream(StreamKind::Log, message).await {
+                warn!(sid, ?error, "failed to publish debugger stderr");
+            }
+        }
+        Some(TransportEvent::Exited(status)) => {
+            pending.fail_all(&format!("transport exited with status {:?}", status));
+            return Err(SessionTerminationCause::TransportExited { status });
+        }
+        Some(TransportEvent::Fault(error)) => {
+            pending.fail_all(&error);
+            return Err(SessionTerminationCause::TransportFault { message: error });
+        }
+        None => {
+            pending.fail_all("transport event stream closed");
+            return Err(SessionTerminationCause::EventStreamClosed);
+        }
+    }
+    Ok(())
 }
 
 enum Guarded<T> {
@@ -180,6 +233,36 @@ pub(super) async fn run_session(
                             }
                         };
                         if let Some(guard) = &command.metadata.dispatch_guard {
+                            // The select loop may choose a request while native
+                            // events are already queued. Fence those events, not
+                            // just the records previously decoded by the actor.
+                            for _ in 0..events.len() {
+                                let event = match events.try_recv() {
+                                    Ok(event) => Some(event),
+                                    Err(flume::TryRecvError::Empty) => break,
+                                    Err(flume::TryRecvError::Disconnected) => None,
+                                };
+                                let result = guarded!(
+                                    &mut control,
+                                    process_transport_event(sid, event, &mut demux, &mut pending, protocol.as_mut()),
+                                    shutdown_ack,
+                                    'runtime
+                                );
+                                if let Err(cause) = result {
+                                    termination.terminate(cause);
+                                    break 'runtime;
+                                }
+                            }
+                            // Spare queue capacity does not imply an idle writer.
+                            // Do not validate a stop while an earlier write can
+                            // still delay this command after its guard succeeds.
+                            while let Some(Some((owner, result))) = write_completions.next().now_or_never() {
+                                finish_write(owner, result, &mut pending);
+                            }
+                            if !write_completions.is_empty() {
+                                pending.fail(token, anyhow!("guarded transport write is still pending"));
+                                continue;
+                            }
                             let result = guarded!(
                                 &mut control,
                                 async {
@@ -191,6 +274,14 @@ pub(super) async fn run_session(
                             );
                             if let Err(error) = result {
                                 pending.fail(token, error);
+                                continue;
+                            }
+                            // Validation may await model locks. The actor cannot
+                            // decode new native events during that await, so any
+                            // newly queued event invalidates this dispatch. A
+                            // claimed stop stays consumed when we fail closed.
+                            if !events.is_empty() || events.is_disconnected() {
+                                pending.fail(token, crate::cmd_flow::input::StaleExecution.into());
                                 continue;
                             }
                         }
@@ -205,10 +296,15 @@ pub(super) async fn run_session(
                             )
                         };
                         match acknowledgement {
-                            Ok(acknowledgement) => write_completions.push(await_write(
-                                WriteOwner::Command(token),
-                                acknowledgement,
-                            )),
+                            Ok(acknowledgement) => {
+                                if let Some(guard) = &command.metadata.dispatch_guard {
+                                    guard.dispatched();
+                                }
+                                write_completions.push(await_write(
+                                    WriteOwner::Command(token),
+                                    acknowledgement,
+                                ));
+                            }
                             Err(error) => pending.fail(token, error),
                         }
                     }
@@ -231,65 +327,18 @@ pub(super) async fn run_session(
                 }
             }
             Some((owner, result)) = write_completions.next(), if !write_completions.is_empty() => {
-                match owner {
-                    WriteOwner::Command(token) => {
-                        if let Err(error) = result {
-                            pending.fail(token, error);
-                        }
-                    }
-                    WriteOwner::Raw(written) => {
-                        let _ = written.send(result);
-                    }
-                }
+                finish_write(owner, result, &mut pending);
             }
             event = events.recv_async() => {
-                match event {
-                    Ok(TransportEvent::Stdout(bytes)) => {
-                        let result = guarded!(
-                            &mut control,
-                            demux.process(bytes, &mut pending, protocol.as_mut()),
-                            shutdown_ack,
-                            'runtime
-                        );
-                        if let Err(error) = result {
-                            warn!(sid, ?error, "failed to process debugger output");
-                            pending.fail_all(&error.to_string());
-                            termination.terminate(SessionTerminationCause::ProtocolFault {
-                                message: error.to_string(),
-                            });
-                            break;
-                        }
-                    }
-                    Ok(TransportEvent::Stderr(bytes)) => {
-                        let message = String::from_utf8_lossy(&bytes).into_owned();
-                        debug!(sid, stderr = %message, "debugger stderr");
-                        let result = guarded!(
-                            &mut control,
-                            demux.forward_stream(StreamKind::Log, message),
-                            shutdown_ack,
-                            'runtime
-                        );
-                        if let Err(error) = result {
-                            warn!(sid, ?error, "failed to publish debugger stderr");
-                        }
-                    }
-                    Ok(TransportEvent::Exited(status)) => {
-                        pending.fail_all(&format!("transport exited with status {:?}", status));
-                        termination.terminate(SessionTerminationCause::TransportExited { status });
-                        break;
-                    }
-                    Ok(TransportEvent::Fault(error)) => {
-                        pending.fail_all(&error);
-                        termination.terminate(SessionTerminationCause::TransportFault {
-                            message: error,
-                        });
-                        break;
-                    }
-                    Err(_) => {
-                        pending.fail_all("transport event stream closed");
-                        termination.terminate(SessionTerminationCause::EventStreamClosed);
-                        break;
-                    }
+                let result = guarded!(
+                    &mut control,
+                    process_transport_event(sid, event.ok(), &mut demux, &mut pending, protocol.as_mut()),
+                    shutdown_ack,
+                    'runtime
+                );
+                if let Err(cause) = result {
+                    termination.terminate(cause);
+                    break;
                 }
             }
             _ = sweeper.tick() => {
