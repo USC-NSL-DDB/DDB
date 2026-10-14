@@ -84,6 +84,72 @@ fn queued_resume_captures_the_backend_instance_and_observed_stop() {
     assert_eq!(stop.server_instance_id, "backend/native-ux");
 }
 
+#[test]
+fn historical_peer_pause_success_cannot_hide_a_later_independent_pause() {
+    let mut app = app(&[]);
+    let mut stopped = snapshot(&["a", "b"], 2);
+    stopped.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    stopped.stop_policy = Some(v2::StopPolicy {
+        generation: 1,
+        revision: 2,
+        initiating_stop: Some(stopped.execution_states[1].clone()),
+        target_outcomes: vec![v2::TargetOutcome {
+            target: Some(api::session_target("a")),
+            succeeded: true,
+            error: None,
+        }],
+        ..Default::default()
+    });
+    let (tx, mut rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+    while rx.try_recv().is_ok() {}
+    let mut running = snapshot(&["b"], 3);
+    running.stop_policy = stopped.stop_policy.clone();
+    apply_message(&mut app, UiMessage::Snapshot(running), &tx);
+    assert!(!app.is_automatic_pause("thread/a"));
+    stopped.execution_states[0].revision = 4;
+    // Another peer's completion can change the policy revision without creating
+    // another attempt for a. Historical success must not be rearmed either way.
+    for policy_revision in [2, 3] {
+        stopped.stop_policy.as_mut().unwrap().revision = policy_revision;
+        apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+        assert!(!app.is_automatic_pause("thread/a"));
+        assert!(app
+            .topology_stop_label(
+                app.threads
+                    .iter()
+                    .find(|thread| thread.id == "thread/a")
+                    .unwrap()
+            )
+            .is_some());
+    }
+    let mut retry = snapshot(&["b"], 5);
+    retry.stop_policy = stopped.stop_policy;
+    let policy = retry.stop_policy.as_mut().unwrap();
+    policy.revision = 4;
+    policy.target_outcomes.clear();
+    policy.pending_targets.push(api::session_target("a"));
+    apply_message(&mut app, UiMessage::Snapshot(retry.clone()), &tx);
+    retry.execution_states[0].running = false;
+    retry.execution_states[0].revision = 6;
+    retry.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    retry.threads[0].state = v2::ThreadState::Stopped as i32;
+    apply_message(&mut app, UiMessage::Snapshot(retry), &tx);
+    assert!(
+        app.is_automatic_pause("thread/a"),
+        "a new pending attempt must still be projected"
+    );
+}
+
 fn snapshot(stopped: &[&str], revision: u64) -> v2::Snapshot {
     v2::Snapshot {
         server_instance_id: "backend/native-ux".into(),

@@ -21,10 +21,7 @@ impl App {
         threads: &[v2::Thread],
     ) {
         let Some(policy) = policy else { return };
-        let changed = self
-            .stop_policy
-            .as_ref()
-            .is_none_or(|previous| previous.revision != policy.revision);
+        let previous = self.stop_policy.as_ref();
         self.all_stop_cause = policy
             .initiating_stop
             .as_ref()
@@ -46,12 +43,41 @@ impl App {
             })
             .collect::<std::collections::BTreeSet<_>>();
         self.peer_pauses = automatic.clone();
+        // Outcomes are historical acknowledgments. Only a new attempt may arm
+        // provenance; a later independent stop must not inherit an old success.
+        let new_attempts = policy
+            .pending_targets
+            .iter()
+            .chain(
+                policy
+                    .target_outcomes
+                    .iter()
+                    .filter(|outcome| outcome.succeeded)
+                    .filter_map(|outcome| outcome.target.as_ref()),
+            )
+            .filter(|target| {
+                previous.is_none_or(|previous| {
+                    previous.generation != policy.generation
+                        || (!previous.pending_targets.contains(target)
+                            && (policy.pending_targets.contains(target)
+                                || !previous.target_outcomes.iter().any(|outcome| {
+                                    outcome.succeeded && outcome.target.as_ref() == Some(target)
+                                })))
+                })
+            })
+            .filter_map(|target| match target.selector.as_ref() {
+                Some(v2::target::Selector::Session(session)) => Some(session.session_id.clone()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         for thread in threads
             .iter()
-            .filter(|thread| automatic.contains(&thread.session_id))
+            .filter(|thread| new_attempts.contains(&thread.session_id))
         {
             if let Some(state) = self.thread_execution(&thread.thread_id) {
-                let provenance = if state.running {
+                let pending = policy.pending_targets.iter().any(|target| matches!(target.selector.as_ref(),
+                    Some(v2::target::Selector::Session(session)) if session.session_id == thread.session_id));
+                let provenance = if state.running && pending {
                     Some(AutomaticPause::Pending(state.revision))
                 } else if state.stop_reason.as_ref().is_some_and(is_interrupt) {
                     Some(AutomaticPause::Observed(state.revision))
@@ -64,13 +90,21 @@ impl App {
                 }
             }
         }
-        if changed {
-            for outcome in &policy.target_outcomes {
-                if let Some(error) = &outcome.error {
-                    let text = format!("DDB peer pause failed: {}", error.message);
-                    self.error(text);
-                }
-            }
+        let new_failures = policy
+            .target_outcomes
+            .iter()
+            .filter(|outcome| {
+                previous.is_none_or(|previous| {
+                    previous.generation != policy.generation
+                        || !previous.target_outcomes.contains(outcome)
+                })
+            })
+            .filter_map(|outcome| outcome.error.as_ref())
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>();
+        for message in new_failures {
+            let text = format!("DDB peer pause failed: {message}");
+            self.error(text);
         }
         self.stop_policy = Some(policy);
     }
