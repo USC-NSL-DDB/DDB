@@ -357,6 +357,7 @@ class ProcessMonitor(object):
         self._stack_prewarmed = False
         self.pause_started_ns = None
         self.entry_breakpoint_id = None
+        self.temporary_breakpoints = set()
         self.entry_instruction = False
         self._lock = threading.Lock()
 
@@ -377,6 +378,7 @@ class ProcessMonitor(object):
             self._stack_prewarmed = False
             self.pause_started_ns = None
             self.entry_breakpoint_id = None
+            self.temporary_breakpoints.clear()
             self.entry_instruction = False
 
     def snapshot(self, process=None):
@@ -489,7 +491,17 @@ class ProcessMonitor(object):
                 thread = thread or process.GetSelectedThread()
                 if not thread or not thread.IsValid():
                     thread = process.GetThreadAtIndex(0)
-                self.emitter.event("stopped", self._stop_payload(process, thread, state))
+                payload = self._stop_payload(process, thread, state)
+                self.emitter.event("stopped", payload)
+                breakpoint_id = payload.get("bkptno")
+                if breakpoint_id is not None and int(breakpoint_id) in self.temporary_breakpoints:
+                    # Native one-shot breakpoints discard the ID before LLDB
+                    # exposes the stop. Keep it until DDB has captured the hit
+                    # and its logical behavior, then publish the deletion.
+                    breakpoint_id = int(breakpoint_id)
+                    if process.GetTarget().BreakpointDelete(breakpoint_id):
+                        self.temporary_breakpoints.discard(breakpoint_id)
+                        self.emitter.event("breakpoint-deleted", {"id": _text(breakpoint_id)})
                 self._prewarm_stack_once(thread)
             elif state in (lldb.eStateExited, lldb.eStateDetached):
                 reason = "exited-normally" if process.GetExitStatus() == 0 else "exited"
@@ -1651,9 +1663,7 @@ class Bridge(object):
                 if breakpoint.GetCondition() != condition:
                     raise RuntimeError("LLDB did not retain the breakpoint condition")
             if temporary:
-                breakpoint.SetOneShot(True)
-                if not breakpoint.IsOneShot():
-                    raise RuntimeError("LLDB did not retain the temporary breakpoint flag")
+                self.monitor.temporary_breakpoints.add(breakpoint.GetID())
         except Exception:
             target.BreakpointDelete(breakpoint.GetID())
             raise
@@ -1661,7 +1671,7 @@ class Bridge(object):
             "bkpt": {
                 "number": _text(breakpoint.GetID()),
                 "type": "breakpoint",
-                "disp": "del" if breakpoint.IsOneShot() else "keep",
+                "disp": "del" if temporary else "keep",
                 "enabled": "y" if breakpoint.IsEnabled() else "n",
                 "times": _text(breakpoint.GetHitCount()),
                 "original-location": location,
@@ -1679,7 +1689,7 @@ class Bridge(object):
             details = {
                 "number": _text(breakpoint.GetID()),
                 "type": "breakpoint",
-                "disp": "del" if breakpoint.IsOneShot() else "keep",
+                "disp": "del" if breakpoint.IsOneShot() or breakpoint.GetID() in self.monitor.temporary_breakpoints else "keep",
                 "enabled": "y" if breakpoint.IsEnabled() else "n",
                 "times": _text(breakpoint.GetHitCount()),
             }
@@ -1719,6 +1729,7 @@ class Bridge(object):
         for breakpoint_id in arguments:
             if not target.BreakpointDelete(int(breakpoint_id)):
                 raise ValueError("unknown LLDB breakpoint {}".format(breakpoint_id))
+            self.monitor.temporary_breakpoints.discard(int(breakpoint_id))
         return "done", {}
 
     def _breakpoint(self, breakpoint_id):

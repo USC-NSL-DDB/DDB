@@ -186,6 +186,24 @@ class ProcessMonitorTest(unittest.TestCase):
         self.emitter.event.assert_not_called()
         self.assertIsNone(self.monitor.pause_started_ns)
 
+    def test_temporary_breakpoint_deletion_follows_the_identified_stop(self):
+        self.thread.IsValid.return_value = True
+        self.monitor.temporary_breakpoints = {7}
+        self.monitor._stop_payload.return_value = {
+            "reason": "breakpoint-hit", "bkptno": "7", "thread-id": "1"
+        }
+        target = self.process.GetTarget.return_value
+        def emitted(kind, payload):
+            if kind == "stopped":
+                target.BreakpointDelete.assert_not_called()
+                self.assertEqual(payload["bkptno"], "7")
+        self.emitter.event.side_effect = emitted
+        self.monitor.snapshot(self.process)
+        self.assertEqual(self.emitter.event.call_args_list[-1],
+            unittest.mock.call("breakpoint-deleted", {"id": "7"}))
+        target.BreakpointDelete.assert_called_once_with(7)
+        self.assertEqual(self.monitor.temporary_breakpoints, set())
+
     def test_automatically_restarted_event_is_not_a_user_stop(self):
         api = bridge_module.lldb.SBProcess
         api.EventIsProcessEvent.return_value = True
@@ -244,6 +262,13 @@ class BreakpointOptionsTest(unittest.TestCase):
         self.target.BreakpointCreateByLocation.return_value = self.breakpoint
         self.bridge = object.__new__(bridge_module.Bridge)
         self.bridge._target = lambda: self.target
+        self.bridge.monitor = types.SimpleNamespace(temporary_breakpoints=set())
+
+    def test_temporary_breakpoint_keeps_its_native_identity_until_projection(self):
+        _, payload = self.bridge._break_insert(["-t", "--function", "tick"])
+        self.breakpoint.SetOneShot.assert_not_called()
+        self.assertEqual(self.bridge.monitor.temporary_breakpoints, {7})
+        self.assertEqual(payload["bkpt"]["disp"], "del")
 
     def test_explicit_function_keeps_the_name_and_condition(self):
         name = "worker::tick(int, int)"
