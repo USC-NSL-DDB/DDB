@@ -753,26 +753,38 @@ message BreakpointSpec {
 
 // StopMode controls which peers DDB pauses after an ordinary stop.
 enum StopMode {
+  // No mode selected; rejected when configuring the policy.
   STOP_MODE_UNSPECIFIED = 0;
+  // Leave peer sessions running when a thread stops.
   STOP_MODE_INDEPENDENT = 1;
+  // Pause running peer sessions across all logical groups.
   STOP_MODE_ALL_STOP = 2;
+  // Pause running peers in the initiating stop's logical group.
   STOP_MODE_GROUP_STOP = 3;
 }
 
 // StopPolicyConfig changes shared backend behavior for every connected client.
 message StopPolicyConfig {
+  // Coordination mode to apply to the backend's shared singleton policy.
   StopMode mode = 1;
 }
 
 // StopPolicy is the replayable singleton state of distributed stop coordination.
 // Successful pause commands are acknowledgments, not proof of a simultaneous stop.
 message StopPolicy {
+  // Opaque identity of the backend instance's singleton stop policy.
   string stop_policy_id = 1;
+  // Currently configured peer-stop coordination mode.
   StopMode mode = 2;
+  // Coordination generation; advances for new causes, explicit control, or mode changes.
   uint64 generation = 3;
+  // Current ordinary stop initiating peer coordination, absent when no cause is active.
   optional ExecutionState initiating_stop = 4;
+  // Peer targets whose pause attempts have not completed in this generation.
   repeated Target pending_targets = 5;
+  // Completed peer-pause command outcomes; success does not prove an observed stop.
   repeated TargetOutcome target_outcomes = 6;
+  // Monotonic resource revision used for replay and optimistic policy updates.
   uint64 revision = 7;
   // Exact current stops classified by DDB as automatic peer pauses. Command
   // acknowledgments and pending targets do not establish this provenance.
@@ -1030,6 +1042,7 @@ message Snapshot {
   repeated ExtensionState extension_states = 14;
   // Current dynamic capability document.
   optional Capabilities capabilities = 15;
+  // Shared backend stop coordination state when its snapshot section is included.
   optional StopPolicy stop_policy = 16;
 }
 

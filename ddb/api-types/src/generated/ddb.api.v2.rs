@@ -1564,6 +1564,7 @@ pub mod breakpoint_spec {
 /// StopPolicyConfig changes shared backend behavior for every connected client.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StopPolicyConfig {
+    /// Coordination mode to apply to the backend's shared singleton policy.
     #[prost(enumeration = "StopMode", tag = "1")]
     pub mode: i32,
 }
@@ -1571,18 +1572,25 @@ pub struct StopPolicyConfig {
 /// Successful pause commands are acknowledgments, not proof of a simultaneous stop.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StopPolicy {
+    /// Opaque identity of the backend instance's singleton stop policy.
     #[prost(string, tag = "1")]
     pub stop_policy_id: ::prost::alloc::string::String,
+    /// Currently configured peer-stop coordination mode.
     #[prost(enumeration = "StopMode", tag = "2")]
     pub mode: i32,
+    /// Coordination generation; advances for new causes, explicit control, or mode changes.
     #[prost(uint64, tag = "3")]
     pub generation: u64,
+    /// Current ordinary stop initiating peer coordination, absent when no cause is active.
     #[prost(message, optional, tag = "4")]
     pub initiating_stop: ::core::option::Option<ExecutionState>,
+    /// Peer targets whose pause attempts have not completed in this generation.
     #[prost(message, repeated, tag = "5")]
     pub pending_targets: ::prost::alloc::vec::Vec<Target>,
+    /// Completed peer-pause command outcomes; success does not prove an observed stop.
     #[prost(message, repeated, tag = "6")]
     pub target_outcomes: ::prost::alloc::vec::Vec<TargetOutcome>,
+    /// Monotonic resource revision used for replay and optimistic policy updates.
     #[prost(uint64, tag = "7")]
     pub revision: u64,
     /// Exact current stops classified by DDB as automatic peer pauses. Command
@@ -1928,6 +1936,7 @@ pub struct Snapshot {
     /// Current dynamic capability document.
     #[prost(message, optional, tag = "15")]
     pub capabilities: ::core::option::Option<Capabilities>,
+    /// Shared backend stop coordination state when its snapshot section is included.
     #[prost(message, optional, tag = "16")]
     pub stop_policy: ::core::option::Option<StopPolicy>,
 }
@@ -2741,9 +2750,13 @@ impl SourceEntryKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum StopMode {
+    /// No mode selected; rejected when configuring the policy.
     Unspecified = 0,
+    /// Leave peer sessions running when a thread stops.
     Independent = 1,
+    /// Pause running peer sessions across all logical groups.
     AllStop = 2,
+    /// Pause running peers in the initiating stop's logical group.
     GroupStop = 3,
 }
 impl StopMode {
@@ -3735,10 +3748,13 @@ pub struct ExecuteRequest {
 /// ExecutionGuard binds an action to a stopped thread in one backend instance.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExecutionGuard {
+    /// Backend instance that owns the observed stop; changes after a backend restart.
     #[prost(string, tag = "1")]
     pub server_instance_id: ::prost::alloc::string::String,
+    /// ExecutionState identity of the explicitly targeted stopped thread.
     #[prost(string, tag = "2")]
     pub execution_state_id: ::prost::alloc::string::String,
+    /// Observed ExecutionState revision that must still be current at admission.
     #[prost(uint64, tag = "3")]
     pub revision: u64,
 }
@@ -4188,6 +4204,7 @@ pub mod resource_upsert {
         ExtensionState(super::ExtensionState),
         #[prost(message, tag = "11")]
         PendingCommand(super::PendingCommand),
+        /// Current shared stop policy, including observed automatic-pause provenance.
         #[prost(message, tag = "12")]
         StopPolicy(super::StopPolicy),
     }

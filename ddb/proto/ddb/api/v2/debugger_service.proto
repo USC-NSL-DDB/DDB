@@ -752,8 +752,11 @@ message ExecuteRequest {
 
 // ExecutionGuard binds an action to a stopped thread in one backend instance.
 message ExecutionGuard {
+  // Backend instance that owns the observed stop; changes after a backend restart.
   string server_instance_id = 1;
+  // ExecutionState identity of the explicitly targeted stopped thread.
   string execution_state_id = 2;
+  // Observed ExecutionState revision that must still be current at admission.
   uint64 revision = 3;
 }
 
