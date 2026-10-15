@@ -2957,12 +2957,19 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             app.push_timeline(format!("◆ {}", event.summary));
             match event.activity {
                 DebuggerActivity::Running(thread_id) => {
-                    if let Some(thread) = app.threads.iter().find(|t| t.id == thread_id) {
+                    // The SDK snapshot precedes this notification. A refresh
+                    // can already contain a newer stop at the same cursor, so
+                    // only reconcile a thread still observed as running.
+                    if let Some(thread) = app
+                        .threads
+                        .iter()
+                        .find(|thread| thread.id == thread_id && thread.state == "running")
+                    {
                         app.peer_pauses.remove(&thread.session_id);
-                    }
-                    app.mark_running(Some(&thread_id));
-                    if app.all_stop_cause.as_deref() == Some(&thread_id) {
-                        app.all_stop_cause = None;
+                        app.mark_running(Some(&thread_id));
+                        if app.all_stop_cause.as_deref() == Some(&thread_id) {
+                            app.all_stop_cause = None;
+                        }
                     }
                 }
                 DebuggerActivity::Stopped(Some(thread_id)) => {
@@ -3777,27 +3784,33 @@ mod tests {
             rx.try_recv().is_err(),
             "duplicate snapshots must not repeat control or inspection"
         );
-        apply_message(
-            &mut app,
-            UiMessage::DebuggerEvent(DebuggerEvent {
-                server_instance_id: "backend/one".into(),
-                state_revision: 20,
-                state_event_sequence: 19,
-                summary: "old running transition".into(),
-                activity: DebuggerActivity::Running("thread/server".into()),
-                refresh: false,
-            }),
-            &tx,
-        );
-        assert_eq!(
-            app.threads
+        // A refresh can observe a newer native stop before its journal event
+        // is published. Even the current cursor can describe an older resume.
+        for sequence in [19, 20] {
+            apply_message(
+                &mut app,
+                UiMessage::DebuggerEvent(DebuggerEvent {
+                    server_instance_id: "backend/one".into(),
+                    state_revision: 20,
+                    state_event_sequence: sequence,
+                    summary: "old running transition".into(),
+                    activity: DebuggerActivity::Running("thread/server".into()),
+                    refresh: false,
+                }),
+                &tx,
+            );
+            let thread = app
+                .threads
                 .iter()
                 .find(|thread| thread.id == "thread/server")
-                .unwrap()
-                .state,
-            "stopped"
-        );
-        assert_eq!(app.all_stop_cause.as_deref(), Some("thread/server"));
+                .unwrap();
+            assert_eq!(thread.state, "stopped");
+            assert_eq!(
+                app.topology_stop_label(thread).as_deref(),
+                Some("trigger · breakpoint hit")
+            );
+            assert_eq!(app.all_stop_cause.as_deref(), Some("thread/server"));
+        }
         assert!(rx.try_recv().is_err());
     }
 
