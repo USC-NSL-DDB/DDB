@@ -75,6 +75,7 @@ tonic-reflection = { version = "=0.14.3", optional = true }
 quanta = "0.12.6"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 ddb-api-conformance = { path = "../api-conformance" }
 ddb-api-client = { path = "../api-client" }
 ddb-sample-extension = { path = "../examples/extensions/sample-extension" }

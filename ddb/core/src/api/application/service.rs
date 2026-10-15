@@ -889,6 +889,14 @@ impl DdbApplicationService {
         &self,
         request: ListFramesRequest,
     ) -> Result<ListFramesResponse, ApplicationError> {
+        self.list_frames_guarded(request, None).await
+    }
+
+    pub(super) async fn list_frames_guarded(
+        &self,
+        request: ListFramesRequest,
+        guard: Option<Arc<dyn crate::cmd_flow::input::DispatchGuard>>,
+    ) -> Result<ListFramesResponse, ApplicationError> {
         let scope = RequestScope::begin(request.context.as_ref())?;
         let global_thread_id = self
             .ids
@@ -922,11 +930,20 @@ impl DdbApplicationService {
         let high = u32::try_from(window.offset.saturating_add(window.size)).map_err(|_| {
             ApplicationError::new(DdbErrorCode::Expired, "frame page range is no longer valid")
         })?;
+        let command = format!("-stack-list-frames {low} {high}");
+        let target = CommandTarget::Thread(crate::state::GlobalThreadId::new(global_thread_id));
+        let query = async {
+            match guard {
+                Some(guard) => {
+                    self.command_port
+                        .execute_guarded_read(&command, target, guard)
+                        .await
+                }
+                None => self.command_port.execute(&command, target).await,
+            }
+        };
         let outcome = scope
-            .wait(self.command_port.execute(
-                &format!("-stack-list-frames {low} {high}"),
-                CommandTarget::Thread(crate::state::GlobalThreadId::new(global_thread_id)),
-            ))
+            .wait(query)
             .await?
             .map_err(|_| ApplicationError::backend("debugger stack query failed"))?;
         let after = self

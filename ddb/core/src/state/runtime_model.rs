@@ -341,6 +341,32 @@ impl RuntimeModel {
             .await
     }
 
+    /// Inspection reads bind to both the native stop and register context.
+    /// The prerequisite permit retains the same state through writer admission.
+    pub(crate) async fn prepare_stop_read(
+        &self,
+        thread: GlobalThreadId,
+        native_revision: u64,
+        inspection_revision: u64,
+    ) -> Option<ExecutionDispatchPermit> {
+        let permit = self
+            .prepare_stop_prerequisite(thread, native_revision)
+            .await?;
+        let claim = permit.claim.as_ref()?;
+        let current = permit
+            .sessions
+            .iter()
+            .find(|session| session.sid() == claim.session)?
+            .thread_status_snapshot()
+            .1;
+        if !current.iter().any(|state| {
+            state.local_id == claim.thread && state.execution_revision == inspection_revision
+        }) {
+            return None;
+        }
+        Some(permit)
+    }
+
     async fn prepare_stop_claim(
         &self,
         thread: GlobalThreadId,
@@ -603,7 +629,16 @@ impl RuntimeModel {
     pub(crate) async fn enter_custom_context(&self, sid: u64, context: ThreadContext) -> bool {
         let changed = self
             .state
-            .with_session_mut(sid, |session| session.enter_custom_context(context))
+            .with_session_mut(sid, |session| {
+                if let Some(owner) = self
+                    .state
+                    .local_thread_id(context.tid)
+                    .filter(|owner| owner.session_id() == sid)
+                {
+                    session.invalidate_thread_context(owner.thread_id());
+                }
+                session.enter_custom_context(context);
+            })
             .await
             .is_some();
         if changed {
@@ -1489,6 +1524,85 @@ mod tests {
 
         model.finish_context_restore(1, true).await;
         assert_eq!(model.thread_snapshots_for_sessions(&[1]).await, after);
+    }
+
+    #[tokio::test]
+    async fn context_entry_expires_only_its_owners_reads_and_preserves_native_claims() {
+        let model = RuntimeModel::new();
+        model.register_session(1, "caller", None).await;
+        model.complete_session_activation(1, None).await;
+        model.register_thread_group(1, "i1").await.unwrap();
+        let owner = model.register_thread(1, 10, "i1").await.unwrap().thread_id;
+        let peer = model.register_thread(1, 20, "i1").await.unwrap().thread_id;
+        model
+            .update_thread_statuses(1, &[10, 20], ThreadStatus::STOPPED)
+            .await
+            .unwrap();
+        let before = model.thread_snapshots_for_sessions(&[1]).await;
+        let owner_before = before
+            .iter()
+            .find(|thread| thread.global_id == owner)
+            .unwrap();
+        let peer_before = before
+            .iter()
+            .find(|thread| thread.global_id == peer)
+            .unwrap();
+        assert!(model
+            .prepare_stop_read(
+                owner,
+                owner_before.stop_revision,
+                owner_before.execution_revision
+            )
+            .await
+            .is_some());
+
+        assert!(
+            model
+                .enter_custom_context(
+                    1,
+                    ThreadContext {
+                        tid: owner,
+                        ctx: std::collections::HashMap::from([("pc".into(), 42)]),
+                    }
+                )
+                .await
+        );
+        let after = model.thread_snapshots_for_sessions(&[1]).await;
+        let owner_after = after
+            .iter()
+            .find(|thread| thread.global_id == owner)
+            .unwrap();
+        let peer_after = after
+            .iter()
+            .find(|thread| thread.global_id == peer)
+            .unwrap();
+        assert!(owner_after.execution_revision > owner_before.execution_revision);
+        assert_eq!(owner_after.stop_revision, owner_before.stop_revision);
+        assert_eq!(owner_after.status, ThreadStatus::STOPPED);
+        assert_eq!(peer_after, peer_before);
+        assert!(model
+            .prepare_stop_read(
+                owner,
+                owner_before.stop_revision,
+                owner_before.execution_revision
+            )
+            .await
+            .is_none());
+        assert!(model
+            .prepare_stop_read(
+                owner,
+                owner_after.stop_revision,
+                owner_after.execution_revision
+            )
+            .await
+            .unwrap()
+            .admit(|| Ok::<_, std::convert::Infallible>(()))
+            .is_some());
+        assert!(
+            model
+                .claim_thread_stop(owner, owner_before.stop_revision)
+                .await
+        );
     }
 
     #[tokio::test]

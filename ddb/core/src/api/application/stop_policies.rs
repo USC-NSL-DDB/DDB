@@ -410,10 +410,10 @@ impl DispatchGuard for LogpointReadGuard {
     async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
         let native = self
             .model
-            .validate_stop_for_dispatch(
+            .prepare_stop_read(
                 GlobalThreadId::new(self.stop.thread.global_id),
                 self.stop.thread.stop_revision,
-                None,
+                self.stop.thread.execution_revision,
             )
             .await
             .ok_or(StaleExecution)?;
@@ -1079,16 +1079,19 @@ impl DdbApplicationService {
             .any(|part| matches!(part, Part::Expression(_)))
         {
             Some(
-                self.list_frames(v2::ListFramesRequest {
-                    thread_id: self
-                        .ids
-                        .encode(ResourceIdKind::Thread, stop.thread.global_id)?,
-                    page: Some(v2::PageRequest {
-                        page_size: 1,
-                        page_token: None,
-                    }),
-                    ..Default::default()
-                })
+                self.list_frames_guarded(
+                    v2::ListFramesRequest {
+                        thread_id: self
+                            .ids
+                            .encode(ResourceIdKind::Thread, stop.thread.global_id)?,
+                        page: Some(v2::PageRequest {
+                            page_size: 1,
+                            page_token: None,
+                        }),
+                        ..Default::default()
+                    },
+                    Some(read_guard.clone()),
+                )
                 .await?
                 .frames
                 .first()

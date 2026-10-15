@@ -28,6 +28,26 @@ pub(crate) trait ApplicationCommandPort: Send + Sync {
         self.execute(command, target).await
     }
 
+    async fn execute_guarded_read(
+        &self,
+        command: &str,
+        target: Target,
+        guard: Arc<dyn crate::cmd_flow::input::DispatchGuard>,
+    ) -> Result<CommandOutcome, CommandPortError> {
+        let mut permit = guard.prepare().await.map_err(|source| CommandPortError {
+            source,
+            fanout: None,
+        })?;
+        permit
+            .dispatch(&mut || Ok(()), &mut || Ok(()))
+            .map_err(|source| CommandPortError {
+                source,
+                fanout: None,
+            })?;
+        guard.dispatched();
+        self.execute(command, target).await
+    }
+
     async fn execute_guarded(
         &self,
         command: &str,
@@ -182,6 +202,26 @@ impl ApplicationCommandPort for CommandEngine {
                 crate::cmd_flow::input::CommandMetadata {
                     operation_id: Some(operation_id.to_string()),
                     operation_kind: Some(operation_kind as u32),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(CommandPortError::from_command_error)?;
+        CommandPortError::classify_debugger_responses(outcome)
+    }
+
+    async fn execute_guarded_read(
+        &self,
+        command: &str,
+        target: Target,
+        guard: Arc<dyn crate::cmd_flow::input::DispatchGuard>,
+    ) -> Result<CommandOutcome, CommandPortError> {
+        let outcome = self
+            .execute_api_with_metadata(
+                command,
+                Some(target),
+                crate::cmd_flow::input::CommandMetadata {
+                    dispatch_guard: Some(guard),
                     ..Default::default()
                 },
             )

@@ -67,10 +67,16 @@ async fn terminal_operation(service: &DdbApplicationService, id: &str) -> Operat
 #[tokio::test]
 async fn invalidating_commands_cancel_queued_logpoints_before_admission_returns() {
     for (kind, command) in [
-        (OperationKind::Evaluate, "-data-evaluate-expression counter=7"),
+        (
+            OperationKind::Evaluate,
+            "-data-evaluate-expression counter=7",
+        ),
         (OperationKind::SetVariable, "-var-assign watched-counter 7"),
         (OperationKind::Execute, "-exec-next"),
-        (OperationKind::RawCommand, "-interpreter-exec console continue"),
+        (
+            OperationKind::RawCommand,
+            "-interpreter-exec console continue",
+        ),
         (OperationKind::UpdateBreakpoint, "-break-disable 1"),
         (OperationKind::DeleteBreakpoint, "-break-delete 1"),
     ] {
@@ -78,7 +84,8 @@ async fn invalidating_commands_cancel_queued_logpoints_before_admission_returns(
         port.block_continue.store(true, Ordering::SeqCst);
         policy_stop(&model, owner, Some("queued automatic output")).await;
         tokio::time::timeout(Duration::from_secs(1), port.continue_queued.notified())
-            .await.unwrap();
+            .await
+            .unwrap();
         let epoch = model.execution_control_epoch().current();
         let context = RequestContext {
             idempotency_key: Some("explicit-intent".into()),
@@ -86,24 +93,39 @@ async fn invalidating_commands_cancel_queued_logpoints_before_admission_returns(
         };
         let scope = RequestScope::begin(Some(&context)).unwrap();
         let principal = PrincipalContext::new("explicit-client").unwrap();
-        let admit = || service.admit_command(
-            &principal, &scope, Some(&context), command.as_bytes(), kind,
-            ResolvedTarget {
-                public: service_thread_target(&service, owner),
-                command: CommandTarget::Thread(crate::state::GlobalThreadId::new(owner)),
-                session_ids: vec![42],
-                resolved_target_count: 1,
-            },
-            command.into(),
-            super::super::mutations::CompletionProjection::NoContent,
-        ).unwrap().operation.unwrap();
+        let admit = || {
+            service
+                .admit_command(
+                    &principal,
+                    &scope,
+                    Some(&context),
+                    command.as_bytes(),
+                    kind,
+                    ResolvedTarget {
+                        public: service_thread_target(&service, owner),
+                        command: CommandTarget::Thread(crate::state::GlobalThreadId::new(owner)),
+                        session_ids: vec![42],
+                        resolved_target_count: 1,
+                    },
+                    command.into(),
+                    super::super::mutations::CompletionProjection::NoContent,
+                )
+                .unwrap()
+                .operation
+                .unwrap()
+        };
         let first = admit();
-        assert!(model.execution_control_epoch().current() > epoch,
-            "{kind:?} must retire automation before the accepted operation is visible");
+        assert!(
+            model.execution_control_epoch().current() > epoch,
+            "{kind:?} must retire automation before the accepted operation is visible"
+        );
         let retired = model.execution_control_epoch().current();
         assert_eq!(admit().operation_id, first.operation_id);
-        assert_eq!(model.execution_control_epoch().current(), retired,
-            "idempotent replay must not cancel again");
+        assert_eq!(
+            model.execution_control_epoch().current(),
+            retired,
+            "idempotent replay must not cancel again"
+        );
         port.release_continue.notify_one();
         terminal_operation(&service, &first.operation_id).await;
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -113,8 +135,14 @@ async fn invalidating_commands_cancel_queued_logpoints_before_admission_returns(
             }) {
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
-        assert!(!port.calls.lock().unwrap().iter()
+        })
+        .await
+        .unwrap();
+        assert!(!port
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
             .any(|(call, _)| call == "-record-time-and-continue"));
     }
 }
@@ -125,20 +153,29 @@ async fn public_repl_evaluation_retires_automation_at_admission() {
     port.block_continue.store(true, Ordering::SeqCst);
     policy_stop(&model, owner, Some("queued automatic output")).await;
     tokio::time::timeout(Duration::from_secs(1), port.continue_queued.notified())
-        .await.unwrap();
+        .await
+        .unwrap();
     let epoch = model.execution_control_epoch().current();
-    service.evaluate(
-        &PrincipalContext::new("repl-client").unwrap(),
-        ddb_api_types::v2::EvaluateRequest {
-            context: Some(RequestContext { idempotency_key: Some("repl-mutation".into()), ..Default::default() }),
-            target: Some(service_thread_target(&service, owner)),
-            expression: "counter=7".into(),
-            evaluation_context: ddb_api_types::v2::EvaluationContext::Repl as i32,
-            ..Default::default()
-        },
-    ).await.unwrap();
-    assert!(model.execution_control_epoch().current() > epoch,
-        "accepted REPL work must not leave queued logpoint continuation admissible");
+    service
+        .evaluate(
+            &PrincipalContext::new("repl-client").unwrap(),
+            ddb_api_types::v2::EvaluateRequest {
+                context: Some(RequestContext {
+                    idempotency_key: Some("repl-mutation".into()),
+                    ..Default::default()
+                }),
+                target: Some(service_thread_target(&service, owner)),
+                expression: "counter=7".into(),
+                evaluation_context: ddb_api_types::v2::EvaluationContext::Repl as i32,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        model.execution_control_epoch().current() > epoch,
+        "accepted REPL work must not leave queued logpoint continuation admissible"
+    );
     port.release_continue.notify_one();
 }
 
