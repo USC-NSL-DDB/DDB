@@ -334,6 +334,19 @@ impl RuntimeModel {
         for id in ids {
             sessions.push(self.state.session(id)?.read_owned().await);
         }
+        // Retirement marks OFF under the same exclusive lock before removing
+        // indexes. A newly prepared permit must reject that retirement window.
+        if sessions
+            .iter()
+            .any(|session| session.status() != SessionStatus::ON)
+        {
+            return None;
+        }
+        // The local debugger ID may have been removed and reused while these
+        // locks were awaited. Native revisions alone do not identify that thread.
+        if self.state.global_thread_id(sid, tid) != Some(thread) {
+            return None;
+        }
         let current = sessions
             .iter()
             .find(|session| session.sid() == sid)?
@@ -1059,6 +1072,7 @@ mod tests {
         let mut cause = None;
         for sid in [1, 2] {
             model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
             model.register_thread_group(sid, "i1").await.unwrap();
             let thread = model.register_thread(sid, 1, "i1").await.unwrap().thread_id;
             model
@@ -1102,6 +1116,106 @@ mod tests {
             .validate_stop_for_dispatch(cause, revision, Some((2, &expected)))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_a_reused_local_thread_id_after_waiting_for_peer_state() {
+        let model = RuntimeModel::new();
+        for sid in [1, 2] {
+            model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
+            model.register_thread_group(sid, "i1").await.unwrap();
+            model.register_thread(sid, 1, "i1").await.unwrap();
+            model
+                .update_thread_statuses(
+                    sid,
+                    &[1],
+                    if sid == 1 {
+                        ThreadStatus::RUNNING
+                    } else {
+                        ThreadStatus::STOPPED
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let old = model.thread_snapshots_for_sessions(&[2]).await.remove(0);
+        let peer = model.thread_snapshots_for_sessions(&[1]).await.remove(0);
+        let running = [(peer.global_id.value(), peer.stop_revision)];
+        let peer_session = model.state.session(1).unwrap();
+        let peer_busy = peer_session.write().await;
+        let mut validation = Box::pin(model.validate_stop_for_dispatch(
+            old.global_id,
+            old.stop_revision,
+            Some((1, &running)),
+        ));
+        assert!(futures::poll!(validation.as_mut()).is_pending());
+        model.remove_thread(2, 1, "i1").await.unwrap();
+        let replacement = model.register_thread(2, 1, "i1").await.unwrap().thread_id;
+        model
+            .update_thread_statuses(2, &[1], ThreadStatus::STOPPED)
+            .await
+            .unwrap();
+        let new = model.thread_snapshots_for_sessions(&[2]).await.remove(0);
+        assert_ne!(replacement, old.global_id);
+        assert_eq!(new.stop_revision, old.stop_revision);
+        drop(peer_busy);
+        assert!(
+            validation.await.is_none(),
+            "a recycled local ID is a different thread"
+        );
+        assert!(model
+            .prepare_stop_for_dispatch(new.global_id, new.stop_revision)
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_an_inactive_cause_or_peer_before_indexes_are_removed() {
+        let model = RuntimeModel::new();
+        for sid in [1, 2] {
+            model.register_session(sid, "worker", None).await;
+            model.complete_session_activation(sid, None).await;
+            model.register_thread_group(sid, "i1").await.unwrap();
+            model.register_thread(sid, 1, "i1").await.unwrap();
+            model
+                .update_thread_statuses(
+                    sid,
+                    &[1],
+                    if sid == 1 {
+                        ThreadStatus::STOPPED
+                    } else {
+                        ThreadStatus::RUNNING
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let cause = model.thread_snapshots_for_sessions(&[1]).await.remove(0);
+        let peer = model.thread_snapshots_for_sessions(&[2]).await.remove(0);
+        let running = [(peer.global_id.value(), peer.stop_revision)];
+        for inactive in [1, 2] {
+            model.state.update_session_status_off(inactive).await;
+            assert!(model
+                .validate_stop_for_dispatch(
+                    cause.global_id,
+                    cause.stop_revision,
+                    Some((2, &running))
+                )
+                .await
+                .is_none());
+            if inactive == 1 {
+                assert!(model
+                    .prepare_stop_for_dispatch(cause.global_id, cause.stop_revision)
+                    .await
+                    .is_none());
+            }
+            model.state.update_session_status_on(inactive).await;
+        }
+        assert!(model
+            .prepare_stop_for_dispatch(cause.global_id, cause.stop_revision)
+            .await
+            .is_some());
     }
 
     #[tokio::test]

@@ -973,6 +973,7 @@ mod dispatch_tests {
         for expired in [false, true] {
             let model = RuntimeModel::new();
             model.register_session(1, "logpoint", None).await;
+            model.complete_session_activation(1, None).await;
             model.register_thread_group(1, "i1").await.unwrap();
             let thread = model.register_thread(1, 1, "i1").await.unwrap().thread_id;
             model

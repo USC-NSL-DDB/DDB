@@ -164,6 +164,40 @@ impl OperationStore {
         cancellable: bool,
         request_fingerprint: &[u8],
     ) -> Result<OperationAdmission, ApplicationError> {
+        self.admit_with(
+            context,
+            principal_scope,
+            retained_principal,
+            request_id,
+            kind,
+            target,
+            resolved_target_count,
+            resolved_session_ids,
+            resolved_group_ids,
+            cancellable,
+            request_fingerprint,
+            || Ok(()),
+        )
+    }
+
+    /// Run admission effects exactly once, before the operation becomes visible
+    /// to readers or idempotent retries. The callback must not reenter this store.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_with(
+        &self,
+        context: Option<&RequestContext>,
+        principal_scope: &str,
+        retained_principal: Option<&str>,
+        request_id: &str,
+        kind: OperationKind,
+        target: Target,
+        resolved_target_count: u32,
+        resolved_session_ids: &[u64],
+        resolved_group_ids: &[u64],
+        cancellable: bool,
+        request_fingerprint: &[u8],
+        on_admission: impl FnOnce() -> Result<(), ApplicationError>,
+    ) -> Result<OperationAdmission, ApplicationError> {
         let idempotency_key =
             required_idempotency_key(context, self.config.max_idempotency_key_bytes)?;
         if principal_scope.is_empty() {
@@ -231,6 +265,7 @@ impl OperationStore {
             expires_at: Some(timestamp_after(self.config.retention)),
         };
         self.ensure_record_bound(&operation)?;
+        on_admission()?;
 
         state.idempotency.insert(
             scope.clone(),
@@ -618,6 +653,129 @@ mod tests {
         admit(&store, "one", b"one").unwrap();
         assert_eq!(
             admit(&store, "two", b"two").unwrap_err().code(),
+            DdbErrorCode::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn idempotent_read_cannot_observe_admission_before_cancellation_finishes() {
+        use std::sync::{mpsc, Arc};
+
+        let store = Arc::new(OperationStore::new("instance", config(2)));
+        let control = Arc::new(crate::state::ExecutionControl::default());
+        let (entered, ready) = mpsc::channel();
+        let (release, proceed) = mpsc::channel();
+        let (read_started, reading) = mpsc::channel();
+        let (read_done, result) = mpsc::channel();
+        let writer_store = store.clone();
+        let writer_control = control.clone();
+        let writer = std::thread::spawn(move || {
+            writer_store
+                .admit_with(
+                    Some(&context("key")),
+                    "principal-a",
+                    None,
+                    "request",
+                    OperationKind::Execute,
+                    target(),
+                    1,
+                    &[],
+                    &[],
+                    false,
+                    b"same",
+                    || {
+                        entered.send(()).unwrap();
+                        proceed.recv_timeout(Duration::from_secs(2)).unwrap();
+                        writer_control.advance();
+                        Ok(())
+                    },
+                )
+                .unwrap()
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let reader_store = store.clone();
+        let reader_control = control.clone();
+        let reader = std::thread::spawn(move || {
+            read_started.send(()).unwrap();
+            let operation = reader_store
+                .lookup_idempotent(Some(&context("key")), "principal-a", b"same")
+                .unwrap()
+                .unwrap();
+            read_done
+                .send((operation.operation_id, reader_control.current()))
+                .unwrap();
+        });
+        reading.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(result.recv_timeout(Duration::from_millis(20)).is_err());
+        release.send(()).unwrap();
+        let admission = writer.join().unwrap();
+        reader.join().unwrap();
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(2)).unwrap(),
+            (admission.operation.operation_id, 1)
+        );
+        let replay = store
+            .admit_with(
+                Some(&context("key")),
+                "principal-a",
+                None,
+                "retry",
+                OperationKind::Execute,
+                target(),
+                1,
+                &[],
+                &[],
+                false,
+                b"same",
+                || {
+                    control.advance();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(!replay.newly_admitted);
+        assert_eq!(control.current(), 1, "replays must not cancel again");
+    }
+
+    #[test]
+    fn rejected_admission_does_not_run_effects_or_retain_an_operation() {
+        let store = OperationStore::new("instance", config(1));
+        let admit_with = |key: &str, effect| {
+            store.admit_with(
+                Some(&context(key)),
+                "principal-a",
+                None,
+                "request",
+                OperationKind::Execute,
+                target(),
+                1,
+                &[],
+                &[],
+                false,
+                b"request",
+                effect,
+            )
+        };
+        fn expired() -> Result<(), ApplicationError> {
+            Err(ApplicationError::new(
+                DdbErrorCode::DeadlineExceeded,
+                "expired",
+            ))
+        }
+        assert_eq!(
+            admit_with("expired", expired as fn() -> _)
+                .unwrap_err()
+                .code(),
+            DdbErrorCode::DeadlineExceeded
+        );
+        assert!(store.list().is_empty());
+        admit(&store, "full", b"full").unwrap();
+        assert_eq!(
+            admit_with("next", || panic!(
+                "rejected requests cannot cancel automation"
+            ))
+            .unwrap_err()
+            .code(),
             DdbErrorCode::ResourceExhausted
         );
     }

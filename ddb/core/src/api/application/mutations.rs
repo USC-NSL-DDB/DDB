@@ -1071,7 +1071,7 @@ impl DdbApplicationService {
         projection: CompletionProjection,
     ) -> Result<OperationAdmissionResponse, ApplicationError> {
         let resolved_group_ids = public_target_group_ids(&resolved.public, &self.ids)?;
-        let admission = self.operations.admit(
+        let admission = self.operations.admit_with(
             context,
             principal.id(),
             None,
@@ -1083,25 +1083,32 @@ impl DdbApplicationService {
             &resolved_group_ids,
             false,
             fingerprint,
-        )?;
-        if admission.newly_admitted {
-            if kind == OperationKind::Execute
-                && !matches!(projection, CompletionProjection::AutomaticExecution(_))
-            {
-                if command == "-exec-interrupt" {
-                    self.retire_stop_automation_for_pauses(&resolved.session_ids);
-                } else {
+            || {
+                scope.ensure_active()?;
+                // Store -> policy -> execution admission. Dispatch releases the
+                // execution gate before its callback acquires policy state, and
+                // policy reconciliation never calls the store while locked.
+                if kind == OperationKind::Execute
+                    && !matches!(projection, CompletionProjection::AutomaticExecution(_))
+                {
+                    if command == "-exec-interrupt" {
+                        self.retire_stop_automation_for_pauses(&resolved.session_ids);
+                    } else {
+                        self.retire_stop_automation();
+                    }
+                }
+                if matches!(
+                    kind,
+                    OperationKind::UpdateBreakpoint
+                        | OperationKind::DeleteBreakpoint
+                        | OperationKind::RawCommand
+                ) {
                     self.retire_stop_automation();
                 }
-            }
-            if matches!(
-                kind,
-                OperationKind::UpdateBreakpoint
-                    | OperationKind::DeleteBreakpoint
-                    | OperationKind::RawCommand
-            ) {
-                self.retire_stop_automation();
-            }
+                Ok(())
+            },
+        )?;
+        if admission.newly_admitted {
             if let Err(error) = self.publish_operation(&admission.operation) {
                 let error = error.with_operation_id(&admission.operation.operation_id);
                 let _ = self.operations.fail(
