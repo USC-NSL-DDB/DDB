@@ -2270,8 +2270,17 @@ fn real_debugger_settings_terminal_workflow() {
             snapshot
                 .operations
                 .iter()
-                .filter(|op| op.kind == v2::OperationKind::ConfigureDebugger as i32
-                    && op.state == v2::OperationState::Completed as i32)
+                .filter(|op| {
+                    op.kind == v2::OperationKind::ConfigureDebugger as i32
+                        && op.state == v2::OperationState::Completed as i32
+                        && matches!(
+                            op.target
+                                .as_ref()
+                                .and_then(|summary| summary.target.as_ref())
+                                .and_then(|target| target.selector.as_ref()),
+                            Some(v2::target::Selector::Session(_))
+                        )
+                })
                 .count(),
             if backend == "gdb" { 2 } else { 1 }
         );
@@ -2789,18 +2798,35 @@ fn real_debugger_workflow(backend: &str) {
     // The breakpoint and execution checks below need a projected thread.
     tui.wait_for("Scope: Auto");
 
-    // Persistent setup is DDB-owned. Connecting a default frontend must not
-    // reconfigure either debugger; only explicit API profiles may do that.
+    // A default frontend initializes the shared stop policy once. Persistent
+    // session setup still requires an explicit API profile.
     let snapshot = ddb.wait_for_snapshot(|snapshot| {
         snapshot.operations.iter().any(|operation| {
             operation.kind == v2::OperationKind::DistributedBacktrace as i32
                 && operation.state == v2::OperationState::Completed as i32
         })
     });
-    assert!(!snapshot
+    let configurations = snapshot
         .operations
         .iter()
-        .any(|operation| operation.kind == v2::OperationKind::ConfigureDebugger as i32));
+        .filter(|operation| operation.kind == v2::OperationKind::ConfigureDebugger as i32)
+        .collect::<Vec<_>>();
+    assert_eq!(configurations.len(), 1);
+    assert_eq!(
+        configurations[0].state,
+        v2::OperationState::Completed as i32
+    );
+    assert!(matches!(
+        configurations[0]
+            .target
+            .as_ref()
+            .and_then(|summary| summary.target.as_ref())
+            .and_then(|target| target.selector.as_ref()),
+        Some(v2::target::Selector::Broadcast(_))
+    ));
+    let policy = snapshot.stop_policy.as_ref().unwrap();
+    assert_eq!(policy.mode, v2::StopMode::AllStop as i32);
+    assert!(policy.generation > 0);
 
     // Edit a scratch register through the TUI, observe the real backend and
     // refreshed pane, then restore it before allowing the fixture to execute.
@@ -3586,6 +3612,9 @@ impl Tui {
 
     fn spawn_shell(command: &str) -> Self {
         let mut child = Command::new("script")
+            // Managed backends inherit this environment too. Fixtures include
+            // their symbols and must not fetch debug info from external servers.
+            .env("DEBUGINFOD_URLS", "")
             .args(["-qefc", command, "/dev/null"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
