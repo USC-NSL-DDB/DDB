@@ -154,16 +154,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_diagnostic_session_resume_retires_pending_automation() {
+    async fn unrouted_diagnostic_session_resume_preserves_pending_automation() {
+        let model = RuntimeModel::new();
+        model.register_session(1, "diagnostic-target", None).await;
+        model.complete_session_activation(1, None).await;
+        let console = console(&model).await;
+        console
+            .execute("s-cmd 1 -exec-continue", CommandMetadata::default())
+            .await
+            .unwrap();
+        // A model identity without a runtime route does not resolve an accepted
+        // legacy target and must not retire automatic work.
+        assert_eq!(model.execution_control_epoch().current(), 0);
+    }
+
+    #[tokio::test]
+    async fn nonexistent_diagnostic_resume_does_not_retire_automation() {
         let model = RuntimeModel::new();
         let console = console(&model).await;
         console
             .execute("s-cmd 1 -exec-continue", CommandMetadata::default())
             .await
             .unwrap();
-        // Native routing fails because the session is absent, but the explicit
-        // intent must already fence pending automatic work.
-        assert_eq!(model.execution_control_epoch().current(), 1);
+        assert_eq!(model.execution_control_epoch().current(), 0);
     }
 
     #[tokio::test]

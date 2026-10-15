@@ -23,6 +23,8 @@ pub(crate) struct ThreadLocation {
 /// Stop details belong to one stopped execution generation and are cleared on resume.
 #[derive(Debug, Eq, PartialEq, Clone, serde::Serialize)]
 pub(crate) struct ThreadStopReason {
+    #[serde(skip)]
+    pub(crate) observed_control_epoch: u64,
     pub(crate) kind: ThreadStopKind,
     pub(crate) signal_name: Option<String>,
     pub(crate) breakpoint_id: Option<u64>,

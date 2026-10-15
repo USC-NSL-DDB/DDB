@@ -1106,8 +1106,10 @@ impl DdbApplicationService {
                 ) || (kind == OperationKind::Evaluate
                     && command.starts_with("-data-evaluate-expression"));
                 if invalidates_automation && !automatic {
-                    if command == "-exec-interrupt" {
+                    if kind == OperationKind::Execute && command == "-exec-interrupt" {
                         self.retire_stop_automation_for_pauses(&resolved.session_ids);
+                    } else if matches!(kind, OperationKind::Execute | OperationKind::RawCommand) {
+                        self.retire_stop_automation_for_resumes(&resolved.session_ids);
                     } else {
                         self.retire_stop_automation();
                     }

@@ -196,6 +196,7 @@ impl DebuggerEventReducer {
                         ThreadStatus::STOPPED,
                         principal.zip(location.clone()),
                         Some(ThreadStopReason {
+                            observed_control_epoch: 0,
                             kind: stop_kind(reasons),
                             signal_name: (stop_kind(reasons) == ThreadStopKind::Signal)
                                 .then(|| signal_name.clone())

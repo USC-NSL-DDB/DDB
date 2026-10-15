@@ -237,6 +237,11 @@ pub(super) fn retire_legacy_stop_automation(
             "-exec-interrupt" | "-exec-interrupt-if-running"
         ) {
             model.retire_stop_automation_for_pauses(&resolve_sessions(&parsed.target)?);
+        } else if parsed.prefix.starts_with("-exec-")
+            || parsed.prefix.starts_with("-record-time-and-")
+            || matches!(parsed.prefix.as_str(), "-send-signal" | "-interpreter-exec")
+        {
+            model.retire_stop_automation_for_resumes(&resolve_sessions(&parsed.target)?);
         } else {
             model.retire_stop_automation();
         }
@@ -414,5 +419,71 @@ mod tests {
                 assert_eq!(model.execution_control_epoch().current(), 0, "{command}");
             }
         }
+    }
+
+    #[test]
+    fn legacy_resume_supersedes_only_resolved_targets_pending_pause() {
+        for command in [
+            "-exec-continue",
+            "-exec-next",
+            "-exec-step",
+            "-exec-finish",
+            "-exec-jump",
+            "-record-time-and-continue",
+            "-send-signal",
+            "-interpreter-exec",
+        ] {
+            let model = RuntimeModel::new();
+            model.retire_stop_automation_for_pauses(&[42, 43]);
+            let parsed = CommandEngine::prepare(command, None, Target::Session(42)).unwrap();
+            retire_legacy_stop_automation(&model, &parsed, |target| {
+                assert_eq!(target, &Target::Session(42));
+                Ok(vec![42])
+            })
+            .unwrap();
+            let control = model.execution_control_epoch();
+            assert!(
+                !control.has_explicit_pause(42, control.current()),
+                "{command}"
+            );
+            assert!(
+                control.has_explicit_pause(43, control.current()),
+                "{command}"
+            );
+        }
+        for command in [
+            "-data-evaluate-expression",
+            "-var-assign",
+            "-break-update",
+            "-break-delete",
+        ] {
+            let model = RuntimeModel::new();
+            model.retire_stop_automation_for_pauses(&[42]);
+            let parsed = CommandEngine::prepare(command, None, Target::Session(42)).unwrap();
+            retire_legacy_stop_automation(&model, &parsed, |_| {
+                panic!("plain invalidation preserves pending pause targets")
+            })
+            .unwrap();
+            let control = model.execution_control_epoch();
+            assert!(
+                control.has_explicit_pause(42, control.current()),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_legacy_resume_does_not_retire_automation_or_pending_pause() {
+        let model = RuntimeModel::new();
+        model.retire_stop_automation_for_pauses(&[42]);
+        let control = model.execution_control_epoch();
+        let epoch = control.current();
+        let parsed = CommandEngine::prepare("-exec-continue", None, Target::Session(9)).unwrap();
+        assert!(
+            retire_legacy_stop_automation(&model, &parsed, |_| anyhow::bail!("unknown session"))
+                .is_err()
+        );
+        assert_eq!(control.current(), epoch);
+        assert!(control.has_explicit_pause(42, epoch));
     }
 }

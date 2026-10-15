@@ -248,6 +248,11 @@ impl RuntimeModel {
         self.notify_change(RuntimeChange::topology());
     }
 
+    pub(crate) fn retire_stop_automation_for_resumes(&self, sessions: &[u64]) {
+        self.execution_control_epoch.advance_for_resumes(sessions);
+        self.notify_change(RuntimeChange::topology());
+    }
+
     fn notify_change(&self, change: RuntimeChange) {
         // No receiver is a normal startup/shutdown state. Once subscribed, a
         // lagging consumer is explicitly detectable through broadcast::RecvError.
@@ -353,12 +358,18 @@ impl RuntimeModel {
             .prepare_stop_prerequisite(thread, native_revision)
             .await?;
         let claim = permit.claim.as_ref()?;
-        let current = permit
+        let session = permit
             .sessions
             .iter()
-            .find(|session| session.sid() == claim.session)?
-            .thread_status_snapshot()
-            .1;
+            .find(|session| session.sid() == claim.session)?;
+        if session.is_in_custom_context()
+            && session
+                .current_context()
+                .is_some_and(|context| context.tid == thread)
+        {
+            return None;
+        }
+        let current = session.thread_status_snapshot().1;
         if !current.iter().any(|state| {
             state.local_id == claim.thread && state.execution_revision == inspection_revision
         }) {
@@ -834,8 +845,13 @@ impl RuntimeModel {
         local_thread_ids: &[u64],
         status: ThreadStatus,
         location: Option<(u64, ThreadLocation)>,
-        stop_reason: Option<ThreadStopReason>,
+        mut stop_reason: Option<ThreadStopReason>,
     ) -> StateTransitionResult<()> {
+        // Record observation before awaiting state ownership. A later explicit
+        // intent also retires native stops still waiting to be classified.
+        if let Some(reason) = stop_reason.as_mut() {
+            reason.observed_control_epoch = self.execution_control_epoch.current();
+        }
         let result = self
             .state
             .update_thread_statuses_with_details(
@@ -1595,8 +1611,35 @@ mod tests {
                 owner_after.execution_revision
             )
             .await
+            .is_none());
+        assert!(model
+            .prepare_stop_prerequisite(owner, owner_after.stop_revision)
+            .await
             .unwrap()
             .admit(|| Ok::<_, std::convert::Infallible>(()))
+            .is_some());
+        assert!(model
+            .prepare_stop_read(
+                peer,
+                peer_before.stop_revision,
+                peer_before.execution_revision
+            )
+            .await
+            .is_some());
+        assert!(model.finish_context_restore(1, true).await);
+        let restored = model.thread_snapshots_for_sessions(&[1]).await;
+        let owner_restored = restored
+            .iter()
+            .find(|thread| thread.global_id == owner)
+            .unwrap();
+        assert_eq!(owner_restored.stop_revision, owner_before.stop_revision);
+        assert!(model
+            .prepare_stop_read(
+                owner,
+                owner_restored.stop_revision,
+                owner_restored.execution_revision
+            )
+            .await
             .is_some());
         assert!(
             model
@@ -1621,5 +1664,50 @@ mod tests {
 
         assert!(model.finish_context_restore(1, true).await);
         assert!(!model.session_snapshot(1).await.unwrap().in_custom_context);
+    }
+
+    #[tokio::test]
+    async fn native_stop_observation_keeps_its_epoch_while_waiting_for_state_ownership() {
+        let model = RuntimeModel::new();
+        model.register_session(1, "native-stop", None).await;
+        model.complete_session_activation(1, None).await;
+        model.register_thread_group(1, "i1").await.unwrap();
+        let owner = model.register_thread(1, 10, "i1").await.unwrap().thread_id;
+        model
+            .update_thread_statuses(1, &[10], ThreadStatus::STOPPED)
+            .await
+            .unwrap();
+        let before = model.thread_snapshots_for_sessions(&[1]).await[0].clone();
+        let permit = model
+            .validate_stop_for_dispatch(owner, before.stop_revision, None)
+            .await
+            .unwrap();
+        let epoch = model.execution_control_epoch().current();
+        let mut observation = Box::pin(model.update_thread_statuses_with_details(
+            1,
+            &[10],
+            ThreadStatus::STOPPED,
+            None,
+            Some(ThreadStopReason {
+                observed_control_epoch: u64::MAX,
+                kind: crate::state::ThreadStopKind::Pause,
+                signal_name: None,
+                breakpoint_id: None,
+                thread_id: Some(owner.value()),
+                log_message: None,
+            }),
+        ));
+        assert!(futures::poll!(observation.as_mut()).is_pending());
+        model.retire_stop_automation();
+        assert!(model.execution_control_epoch().retirement_floor() > epoch);
+        drop(permit);
+        observation.await.unwrap();
+        let after = model.thread_snapshots_for_sessions(&[1]).await[0].clone();
+        let reason = after.stop_reason.unwrap();
+        assert_eq!(reason.observed_control_epoch, epoch);
+        assert!(!serde_json::to_string(&reason)
+            .unwrap()
+            .contains("observed_control_epoch"));
+        assert!(after.stop_revision > before.stop_revision);
     }
 }

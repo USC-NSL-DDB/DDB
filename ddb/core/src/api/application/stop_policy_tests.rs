@@ -236,6 +236,7 @@ async fn policy_stop_in_session(
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Breakpoint,
                 signal_name: None,
                 breakpoint_id: Some(1),
@@ -255,6 +256,7 @@ async fn policy_pause_in_session(model: &RuntimeModel, session: u64, thread: u64
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Pause,
                 signal_name: None,
                 breakpoint_id: None,
@@ -392,6 +394,7 @@ async fn an_undispatched_peer_pause_does_not_hide_a_manual_pause() {
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Pause,
                 signal_name: None,
                 breakpoint_id: None,
@@ -562,6 +565,7 @@ async fn a_failed_sent_pause_retains_provenance_but_a_native_rejection_does_not(
                 ThreadStatus::STOPPED,
                 None,
                 Some(crate::state::ThreadStopReason {
+                    observed_control_epoch: 0,
                     kind: crate::state::ThreadStopKind::Pause,
                     signal_name: None,
                     breakpoint_id: None,
@@ -653,34 +657,86 @@ async fn a_rejected_new_attempt_keeps_older_uncertain_pause_provenance() {
 
 #[tokio::test]
 async fn a_late_native_rejection_corrects_an_already_observed_automatic_pause() {
-    let (model, service, port, owner) = policy_fixture().await;
-    port.reject_pause.store(true, Ordering::SeqCst);
-    port.block_pause_result.store(true, Ordering::SeqCst);
-    service
-        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
-        .unwrap();
-    policy_stop(&model, owner, None).await;
-    tokio::time::timeout(Duration::from_secs(1), port.pause_dispatched.notified())
-        .await
-        .unwrap();
-    let peer = model.thread_snapshots_for_sessions(&[43]).await[0].global_id;
-    policy_pause_in_session(&model, 43, peer.value()).await;
-    let observed = wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
-    assert_eq!(
-        observed.automatic_stops[0].target,
-        Some(service_thread_target(&service, peer.value()))
-    );
-    service.retire_stop_automation();
-    port.release_pause_result.notify_one();
-    let corrected = wait_policy(&service, |policy| {
-        policy.automatic_stops.is_empty() && policy.initiating_stop.is_some()
-    })
-    .await;
-    assert_eq!(
-        corrected.initiating_stop.unwrap().target,
-        Some(service_thread_target(&service, peer.value())),
-        "a definitive rejection must restore the independently observed stop"
-    );
+    for explicit_retirement in [false, true] {
+        let (model, service, port, owner) = policy_fixture().await;
+        port.reject_pause.store(true, Ordering::SeqCst);
+        port.block_pause_result.store(true, Ordering::SeqCst);
+        service
+            .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+            .unwrap();
+        policy_stop(&model, owner, None).await;
+        tokio::time::timeout(Duration::from_secs(1), port.pause_dispatched.notified())
+            .await
+            .unwrap();
+        let peer = model.thread_snapshots_for_sessions(&[43]).await[0].global_id;
+        policy_pause_in_session(&model, 43, peer.value()).await;
+        let observed = wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+        let expected = service_thread_target(&service, peer.value());
+        assert_eq!(observed.automatic_stops[0].target, Some(expected.clone()));
+        let peer_revision = model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision;
+        let control = model.execution_control_epoch();
+        let epoch = control.current();
+        let floor = control.retirement_floor();
+
+        if explicit_retirement {
+            service.retire_stop_automation();
+            assert!(control.retirement_floor() > epoch);
+        } else {
+            model
+                .update_thread_statuses(42, &[11], ThreadStatus::RUNNING)
+                .await
+                .unwrap();
+            assert_eq!(control.current(), epoch);
+            assert_eq!(control.retirement_floor(), floor);
+        }
+        port.block_pause_result.store(false, Ordering::SeqCst);
+        port.release_pause_result.notify_one();
+        let corrected = wait_policy(&service, |policy| {
+            policy.automatic_stops.is_empty()
+                && if explicit_retirement {
+                    policy.initiating_stop.is_none()
+                } else {
+                    policy
+                        .initiating_stop
+                        .as_ref()
+                        .and_then(|stop| stop.target.as_ref())
+                        == Some(&expected)
+                }
+        })
+        .await;
+        assert!(corrected.automatic_stops.is_empty());
+        assert_eq!(
+            model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision,
+            peer_revision
+        );
+        if explicit_retirement {
+            assert!(
+                corrected.initiating_stop.is_none(),
+                "provenance correction cannot rearm a retired native stop"
+            );
+            assert_eq!(port.calls.lock().unwrap().len(), 1);
+            // Retirement suppresses the old observation, but a genuinely newer
+            // independent stop can coordinate the now-running former source.
+            model
+                .update_thread_statuses(42, &[11], ThreadStatus::RUNNING)
+                .await
+                .unwrap();
+            policy_pause_in_session(&model, 43, peer.value()).await;
+            let fresh = wait_policy(&service, |policy| {
+                policy
+                    .initiating_stop
+                    .as_ref()
+                    .and_then(|stop| stop.target.as_ref())
+                    == Some(&expected)
+                    && !policy.target_outcomes.is_empty()
+            })
+            .await;
+            assert!(fresh.automatic_stops.is_empty());
+            assert_eq!(port.calls.lock().unwrap().len(), 2);
+        } else {
+            assert_eq!(corrected.initiating_stop.unwrap().target, Some(expected), "a definitive rejection must restore the independently observed stop after natural turnover");
+        }
+    }
 }
 
 #[tokio::test]
@@ -768,6 +824,7 @@ async fn explicit_client_pause_overrides_an_earlier_interrupt_with_lost_acknowle
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Pause,
                 signal_name: None,
                 breakpoint_id: None,
@@ -1152,6 +1209,7 @@ async fn changing_stop_mode_preserves_observed_automatic_pause_provenance() {
                 ThreadStatus::STOPPED,
                 None,
                 Some(crate::state::ThreadStopReason {
+                    observed_control_epoch: 0,
                     kind: crate::state::ThreadStopKind::Pause,
                     signal_name: None,
                     breakpoint_id: None,
@@ -1264,6 +1322,7 @@ async fn explicit_pause_takes_ownership_of_an_observed_automatic_stop() {
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Pause,
                 signal_name: None,
                 breakpoint_id: None,
@@ -1379,6 +1438,7 @@ async fn explicit_pause_is_a_cause_but_a_late_automatic_pause_is_not() {
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Signal,
                 signal_name: Some("SIGINT".into()),
                 breakpoint_id: None,
@@ -1402,6 +1462,7 @@ async fn explicit_pause_is_a_cause_but_a_late_automatic_pause_is_not() {
             ThreadStatus::STOPPED,
             None,
             Some(crate::state::ThreadStopReason {
+                observed_control_epoch: 0,
                 kind: crate::state::ThreadStopKind::Signal,
                 signal_name: Some("SIGINT".into()),
                 breakpoint_id: None,
@@ -2086,4 +2147,377 @@ async fn queued_logpoint_evaluation_rejects_an_intervening_inspection_context() 
             .claim_thread_stop(current.global_id, current.stop_revision)
             .await
     );
+}
+
+#[tokio::test]
+async fn explicit_intent_retires_a_logpoint_before_worker_classification() {
+    let (model, service, port, owner) = policy_fixture().await;
+    let mut output = service.output.subscribe(None).unwrap();
+    policy_stop(&model, owner, Some("pre-intent logpoint")).await;
+    let native = model.thread_snapshots_for_sessions(&[42]).await[0].clone();
+    assert!(!service
+        .stop_policies
+        .classified_stop(owner, native.stop_revision));
+    let epoch = model.execution_control_epoch().current();
+
+    // These uncontended model reads and admission complete without yielding on
+    // this current-thread runtime. The worker observes this stop only afterward.
+    let operation = service
+        .execute(
+            &PrincipalContext::new("explicit-controller").unwrap(),
+            execute_request(
+                "next-before-classification",
+                service_thread_target(&service, owner),
+                ExecutionAction::Next,
+            ),
+        )
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    assert!(model.execution_control_epoch().current() > epoch);
+    assert!(!service
+        .stop_policies
+        .classified_stop(owner, native.stop_revision));
+    terminal_operation(&service, &operation.operation_id).await;
+    no_policy_output(&mut output).await;
+    assert!(!port
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(command, _)| command == "-record-time-and-continue"));
+    assert!(!service
+        .stop_policies
+        .continued_logpoint(owner, native.stop_revision));
+    let current = &model.thread_snapshots_for_sessions(&[42]).await[0];
+    assert_eq!(current.status, ThreadStatus::STOPPED);
+    assert_eq!(current.stop_revision, native.stop_revision);
+    assert!(
+        model
+            .claim_thread_stop(current.global_id, current.stop_revision)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn inspection_context_entered_before_classification_prevents_logpoint_evaluation() {
+    let (model, service, port, owner) = policy_fixture().await;
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, Some("side effect={counter++}")).await;
+    let native = model.thread_snapshots_for_sessions(&[42]).await[0].clone();
+    assert!(!service
+        .stop_policies
+        .classified_stop(owner, native.stop_revision));
+    let epoch = model.execution_control_epoch().current();
+    assert!(
+        model
+            .enter_custom_context(
+                42,
+                crate::state::ThreadContext {
+                    tid: native.global_id,
+                    ctx: std::collections::HashMap::from([("pc".into(), 0x1234)]),
+                }
+            )
+            .await
+    );
+    assert!(!service
+        .stop_policies
+        .classified_stop(owner, native.stop_revision));
+    assert_eq!(model.execution_control_epoch().current(), epoch);
+
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    assert!(
+        !port.calls.lock().unwrap().iter().any(|(command, _)| {
+            command.starts_with("-ddb-var-create") || command == "-record-time-and-continue"
+        }),
+        "classification must retain the native stop's original inspection context"
+    );
+    let current = &model.thread_snapshots_for_sessions(&[42]).await[0];
+    assert_eq!(current.status, ThreadStatus::STOPPED);
+    assert_eq!(current.stop_revision, native.stop_revision);
+    assert!(
+        model
+            .claim_thread_stop(current.global_id, current.stop_revision)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn explicit_intent_retires_unclassified_stops_but_new_native_stops_still_run_policy() {
+    for logpoint in [false, true] {
+        let (model, service, port, owner) = policy_fixture().await;
+        service
+            .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+            .unwrap();
+        let mut output = service.output.subscribe(None).unwrap();
+        policy_stop(&model, owner, None).await;
+        let before = model.thread_snapshots_for_sessions(&[42]).await[0].clone();
+        assert!(!service
+            .stop_policies
+            .classified_stop(owner, before.stop_revision));
+        let operation = service
+            .execute(
+                &PrincipalContext::new("explicit-controller").unwrap(),
+                execute_request(
+                    "next-before-ordinary-classification",
+                    service_thread_target(&service, owner),
+                    ExecutionAction::Next,
+                ),
+            )
+            .await
+            .unwrap()
+            .operation
+            .unwrap();
+        terminal_operation(&service, &operation.operation_id).await;
+        no_policy_output(&mut output).await;
+        assert!(service
+            .stop_policy_snapshot()
+            .unwrap()
+            .initiating_stop
+            .is_none());
+        assert!(!port
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(command, _)| command == "-exec-interrupt"));
+
+        policy_stop(&model, owner, logpoint.then_some("new native logpoint")).await;
+        let after = model.thread_snapshots_for_sessions(&[42]).await[0].clone();
+        assert!(after.stop_revision > before.stop_revision);
+        if logpoint {
+            let crate::cmd_flow::output_hub::OutputDelivery::Record(record) =
+                tokio::time::timeout(Duration::from_secs(1), output.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+            else {
+                panic!("missing logpoint output")
+            };
+            assert_eq!(record.text, "new native logpoint\n");
+            assert_eq!(
+                port.calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(command, _)| command == "-record-time-and-continue")
+                    .count(),
+                1
+            );
+        } else {
+            wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+            assert_eq!(
+                port.calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(command, _)| command == "-exec-interrupt")
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mode_change_keeps_unclassified_stops_eligible_and_manual_pause_overrides_retirement() {
+    for manual in [false, true] {
+        let (model, service, port, owner) = policy_fixture().await;
+        policy_stop(&model, owner, manual.then_some("claimed manually")).await;
+        let native = model.thread_snapshots_for_sessions(&[42]).await[0].clone();
+        assert!(!service
+            .stop_policies
+            .classified_stop(owner, native.stop_revision));
+        if manual {
+            let operation = service
+                .execute(
+                    &PrincipalContext::new("manual-controller").unwrap(),
+                    execute_request(
+                        "pause-before-classification",
+                        service_thread_target(&service, owner),
+                        ExecutionAction::Interrupt,
+                    ),
+                )
+                .await
+                .unwrap()
+                .operation
+                .unwrap();
+            service
+                .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+                .unwrap();
+            terminal_operation(&service, &operation.operation_id).await;
+        } else {
+            service
+                .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+                .unwrap();
+        }
+        let policy = wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+        assert_eq!(
+            policy.initiating_stop.unwrap().target,
+            Some(service_thread_target(&service, owner))
+        );
+        assert!(!port
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(command, _)| command == "-record-time-and-continue"));
+    }
+}
+
+#[tokio::test]
+async fn unclassified_automatic_pause_preserves_provenance_after_explicit_retirement() {
+    let (model, service, port, owner) = policy_fixture().await;
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    policy_pause_in_session(&model, 43, peer).await;
+    let native = model.thread_snapshots_for_sessions(&[43]).await[0].clone();
+    assert!(!service
+        .stop_policies
+        .classified_stop(peer, native.stop_revision));
+    service.retire_stop_automation();
+    let policy = wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+    assert_eq!(
+        policy.automatic_stops[0].target,
+        Some(service_thread_target(&service, peer))
+    );
+    assert!(policy.initiating_stop.is_none());
+    assert_eq!(port.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn explicit_resume_retires_an_older_manual_stop_across_reconfiguration() {
+    let (model, service, port, owner) = policy_fixture().await;
+    policy_pause_in_session(&model, 42, owner).await;
+    service.retire_stop_automation_for_pauses(&[42]);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    service.retire_stop_automation();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(service
+        .stop_policy_snapshot()
+        .unwrap()
+        .initiating_stop
+        .is_none());
+    assert_eq!(port.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn accepted_resume_and_raw_intent_supersede_only_their_targets_pending_pause() {
+    for kind in [OperationKind::Execute, OperationKind::RawCommand] {
+        for same_target in [false, true] {
+            let (model, service, port, owner) = policy_fixture().await;
+            let principal = PrincipalContext::new("scoped-controller").unwrap();
+            let pause = service
+                .execute(
+                    &principal,
+                    execute_request(
+                        "pause-source",
+                        service_thread_target(&service, owner),
+                        ExecutionAction::Interrupt,
+                    ),
+                )
+                .await
+                .unwrap()
+                .operation
+                .unwrap();
+            terminal_operation(&service, &pause.operation_id).await;
+            let control = model.execution_control_epoch();
+            assert!(control.has_explicit_pause(42, control.current()));
+            let resumed = if same_target { 42 } else { 43 };
+            let context = RequestContext {
+                idempotency_key: Some("scoped-resume".into()),
+                ..Default::default()
+            };
+            let scope = RequestScope::begin(Some(&context)).unwrap();
+            let command = if kind == OperationKind::RawCommand {
+                "-interpreter-exec console continue"
+            } else {
+                "-exec-continue"
+            };
+            let operation = service
+                .admit_command(
+                    &principal,
+                    &scope,
+                    Some(&context),
+                    command.as_bytes(),
+                    kind,
+                    ResolvedTarget {
+                        public: session_target(
+                            service
+                                .ids
+                                .encode(ResourceIdKind::Session, resumed)
+                                .unwrap(),
+                        ),
+                        command: CommandTarget::Session(resumed),
+                        session_ids: vec![resumed],
+                        resolved_target_count: 1,
+                    },
+                    command.into(),
+                    super::super::mutations::CompletionProjection::NoContent,
+                )
+                .unwrap()
+                .operation
+                .unwrap();
+            assert_eq!(
+                control.has_explicit_pause(42, control.current()),
+                !same_target,
+                "{kind:?}"
+            );
+            terminal_operation(&service, &operation.operation_id).await;
+            service
+                .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+                .unwrap();
+            let mut output = service.output.subscribe(None).unwrap();
+            policy_stop(&model, owner, Some("fresh native logpoint")).await;
+            if same_target {
+                let crate::cmd_flow::output_hub::OutputDelivery::Record(record) =
+                    tokio::time::timeout(Duration::from_secs(1), output.recv())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                else {
+                    panic!("missing logpoint output")
+                };
+                assert_eq!(record.text, "fresh native logpoint\n");
+                assert_eq!(
+                    port.calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(command, _)| command == "-record-time-and-continue")
+                        .count(),
+                    1
+                );
+            } else {
+                let policy =
+                    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+                assert_eq!(
+                    policy.initiating_stop.unwrap().target,
+                    Some(service_thread_target(&service, owner))
+                );
+                assert!(!port
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(command, _)| command == "-record-time-and-continue"));
+                no_policy_output(&mut output).await;
+            }
+        }
+    }
 }

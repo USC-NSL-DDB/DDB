@@ -528,8 +528,16 @@ impl DdbApplicationService {
     }
 
     pub(super) fn retire_stop_automation_for_pauses(&self, sessions: &[u64]) {
+        self.retire_stop_automation_with(|| self.stop_policies.epoch.advance_for_pauses(sessions));
+    }
+
+    pub(super) fn retire_stop_automation_for_resumes(&self, sessions: &[u64]) {
+        self.retire_stop_automation_with(|| self.stop_policies.epoch.advance_for_resumes(sessions));
+    }
+
+    fn retire_stop_automation_with(&self, advance: impl FnOnce()) {
         let mut state = self.stop_policies.state();
-        self.stop_policies.epoch.advance_for_pauses(sessions);
+        advance();
         state.cause = None;
         state.ordinary_stops.clear();
         state.attempts.clear();
@@ -565,7 +573,7 @@ impl DdbApplicationService {
         if state.public.mode == mode as i32 && state.public.generation != 0 {
             return Ok(());
         }
-        self.stop_policies.epoch.advance();
+        self.stop_policies.epoch.reconfigure();
         state.cause = None;
         state.ordinary_stops.clear();
         for logpoint in state.logpoints.values_mut() {
@@ -744,6 +752,15 @@ impl DdbApplicationService {
                         .insert(thread.global_id, thread.stop_revision);
                 } else {
                     state.automatic_stops.remove(&thread.global_id);
+                }
+
+                // Receipts and manual ownership remain observable after
+                // retirement, but an old unseen stop must not start new work.
+                let floor = self.stop_policies.epoch.retirement_floor();
+                if reason.observed_control_epoch < floor
+                    && manual_epoch.is_none_or(|manual_epoch| manual_epoch < floor)
+                {
+                    continue;
                 }
 
                 let target = self.policy_thread_target(thread.global_id)?;
