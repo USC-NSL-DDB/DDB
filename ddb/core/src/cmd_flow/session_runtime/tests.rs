@@ -794,6 +794,421 @@ async fn timeout_and_cancelled_receiver_release_transaction_permits() {
     stop(&handle, task).await;
 }
 
+struct ProjectionWaitFixture {
+    handle: SessionHandle,
+    task: tokio::task::JoinHandle<()>,
+    ticket: SessionTicket,
+    _events: flume::Sender<TransportEvent>,
+}
+
+impl ProjectionWaitFixture {
+    async fn new(command_timeout: Duration, projector_delay: Duration) -> Self {
+        let (transport, requests, events) = test_transport(4);
+        let config = RuntimeConfig {
+            command_timeout,
+            sweep_interval: Duration::from_millis(5),
+            projector_delay,
+            publisher_delay: Duration::ZERO,
+        };
+        let (handle, task, _terminations) = spawn_runtime_with_config(63, transport, config);
+        let mut state_consistent = command();
+        state_consistent.consistency = CompletionConsistency::StateConsistent;
+        let ticket = handle.submit(state_consistent).await.unwrap();
+        let (_, written) = receive_write(&requests).await;
+        written.send(Ok(())).unwrap();
+
+        // A second result in the same stdout chunk proves the actor transferred
+        // the first command into its projection barrier before the test proceeds.
+        let follower = handle.submit(command()).await.unwrap();
+        let (_, written) = receive_write(&requests).await;
+        written.send(Ok(())).unwrap();
+        events
+            .send_async(TransportEvent::Stdout(Bytes::from(format!(
+                "=breakpoint-modified,id=\"1\"\n{}^done\n{}^done\n",
+                ticket.token(),
+                follower.token()
+            ))))
+            .await
+            .unwrap();
+        tokio::time::timeout(TEST_TIMEOUT, follower.complete())
+            .await
+            .unwrap()
+            .unwrap();
+        Self {
+            handle,
+            task,
+            ticket,
+            _events: events,
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_command_deadline_bounds_state_projection_and_releases_its_permit() {
+    let fixture =
+        ProjectionWaitFixture::new(Duration::from_millis(100), Duration::from_secs(5)).await;
+    let completion = tokio::time::timeout(TEST_TIMEOUT, fixture.ticket.complete()).await;
+    let remaining = fixture.handle.status().in_flight;
+    let registered = fixture.handle.pending_commands().len();
+    let lease = tokio::time::timeout(Duration::from_millis(100), fixture.handle.exclusive()).await;
+    let released = lease.is_ok();
+    drop(lease);
+    stop(&fixture.handle, fixture.task).await;
+
+    let error = completion
+        .expect("a native command deadline must also bound its projection barrier")
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert_eq!(remaining, 0);
+    assert_eq!(registered, 0);
+    assert!(
+        released,
+        "a timed-out barrier must release its runtime lease"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_projection_wait_releases_its_permit_without_waiting_for_the_deadline() {
+    let fixture = ProjectionWaitFixture::new(Duration::from_secs(5), Duration::from_secs(5)).await;
+    drop(fixture.ticket);
+    let lease = tokio::time::timeout(Duration::from_millis(100), fixture.handle.exclusive()).await;
+    let released = lease.is_ok();
+    drop(lease);
+    let remaining = fixture.handle.status().in_flight;
+    let registered = fixture.handle.pending_commands().len();
+    stop(&fixture.handle, fixture.task).await;
+
+    assert!(
+        released,
+        "a cancelled projection wait must release its permit"
+    );
+    assert_eq!(remaining, 0);
+    assert_eq!(registered, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn projection_wait_keeps_registration_until_the_watermark_completes() {
+    let fixture = ProjectionWaitFixture::new(TEST_TIMEOUT, Duration::from_millis(100)).await;
+    let registered = fixture
+        .handle
+        .pending_commands()
+        .iter()
+        .any(|command| command.token == fixture.ticket.token());
+    tokio::time::timeout(TEST_TIMEOUT, fixture.ticket.complete())
+        .await
+        .unwrap()
+        .unwrap();
+    wait_for_no_in_flight(&fixture.handle).await;
+    assert!(fixture.handle.pending_commands().is_empty());
+    stop(&fixture.handle, fixture.task).await;
+
+    assert!(
+        registered,
+        "native result alone must not retire a pending barrier"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_releases_a_command_already_transferred_to_its_projection_barrier() {
+    let fixture = ProjectionWaitFixture::new(Duration::from_secs(5), Duration::from_secs(5)).await;
+    stop(&fixture.handle, fixture.task).await;
+    let error = tokio::time::timeout(TEST_TIMEOUT, fixture.ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    wait_for_no_in_flight(&fixture.handle).await;
+    assert!(fixture.handle.pending_commands().is_empty());
+    assert!(error.to_string().contains("event projector stopped"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_deadline_interrupts_a_blocked_guard_before_writer_admission() {
+    let (transport, requests, _events) = test_transport(4);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::ZERO,
+        publisher_delay: Duration::ZERO,
+    };
+    let (handle, task, _terminations) = spawn_runtime_with_config(64, transport, config);
+    let checked = Arc::new(CountingGuard::default());
+    let guard = Arc::new(BlockingGuard {
+        inner: checked.clone(),
+        entered: Default::default(),
+        release: Default::default(),
+    });
+    let mut guarded_command = command();
+    guarded_command.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded_command).await.unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, guard.entered.notified())
+        .await
+        .unwrap();
+    let completion = tokio::time::timeout(Duration::from_millis(100), ticket.complete()).await;
+    guard.release.notify_one();
+    tokio::task::yield_now().await;
+    let queued = requests.len();
+    let checked = checked.0.load(std::sync::atomic::Ordering::SeqCst);
+    let lease = tokio::time::timeout(Duration::from_millis(100), handle.exclusive()).await;
+    let released = lease.is_ok();
+    drop(lease);
+    stop(&handle, task).await;
+
+    let error = completion
+        .expect("the native deadline must interrupt awaited guard preparation")
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert_eq!(queued, 0);
+    assert_eq!(checked, 0);
+    assert!(released);
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_deadline_interrupts_the_event_fence_before_checking_the_guard() {
+    let (transport, requests, events) = test_transport(4);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::from_secs(5),
+        publisher_delay: Duration::ZERO,
+    };
+    let (handle, task, _terminations) = spawn_runtime_with_config(65, transport, config);
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from_static(
+            b"=breakpoint-modified,id=\"1\"\n",
+        )))
+        .await
+        .unwrap();
+    let guard = Arc::new(CountingGuard::default());
+    let mut guarded_command = command();
+    guarded_command.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded_command).await.unwrap();
+    wait_for_pending_running(&handle, ticket.token()).await;
+    let completion = tokio::time::timeout(Duration::from_millis(100), ticket.complete()).await;
+    let queued = requests.len();
+    let checked = guard.0.load(std::sync::atomic::Ordering::SeqCst);
+    stop(&handle, task).await;
+
+    let error = completion
+        .expect("the native deadline must interrupt a pending event fence")
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert_eq!(queued, 0);
+    assert_eq!(checked, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_deadline_interrupts_unguarded_queue_insertion_without_a_late_write() {
+    let (transport, requests, _events) = test_transport(1);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::ZERO,
+        publisher_delay: Duration::ZERO,
+    };
+    let (handle, task, _terminations) = spawn_runtime_with_config(66, transport, config);
+    let first = handle.submit(command()).await.unwrap();
+    wait_for_pending_running(&handle, first.token()).await;
+    let second = handle.submit(command()).await.unwrap();
+    wait_for_pending_running(&handle, second.token()).await;
+    let completion = tokio::time::timeout(Duration::from_millis(100), async {
+        tokio::join!(first.complete(), second.complete())
+    })
+    .await;
+
+    // Making queue capacity available after the deadline must not resurrect
+    // the second command's cancelled insertion future.
+    let (_, written) = receive_write(&requests).await;
+    written.send(Ok(())).unwrap();
+    tokio::task::yield_now().await;
+    let queued = requests.len();
+    let remaining = handle.status().in_flight;
+    let lease = tokio::time::timeout(Duration::from_millis(100), handle.exclusive()).await;
+    let released = lease.is_ok();
+    drop(lease);
+    stop(&handle, task).await;
+
+    let (first, second) =
+        completion.expect("native deadlines must progress even while a writer queue is full");
+    assert!(first.unwrap_err().to_string().contains("timed out"));
+    assert!(second.unwrap_err().to_string().contains("timed out"));
+    assert_eq!(queued, 0);
+    assert_eq!(remaining, 0);
+    assert!(released);
+}
+
+#[tokio::test]
+async fn expired_ready_permit_cannot_admit_a_native_write() {
+    #[derive(Debug)]
+    struct DelayedAdmission;
+
+    #[async_trait::async_trait]
+    impl crate::cmd_flow::input::DispatchGuard for DelayedAdmission {
+        async fn check(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn prepare(&self) -> Result<Box<dyn crate::cmd_flow::input::DispatchPermit>> {
+            Ok(Box::new(DelayedAdmission))
+        }
+    }
+
+    impl crate::cmd_flow::input::DispatchPermit for DelayedAdmission {
+        fn dispatch(
+            &mut self,
+            validate: &mut dyn FnMut() -> Result<()>,
+            action: &mut dyn FnMut() -> Result<()>,
+        ) -> Result<()> {
+            // A prepared permit can wait on a synchronous admission lock while
+            // the command's async deadline timer cannot be polled.
+            std::thread::sleep(Duration::from_millis(50));
+            validate()?;
+            action()
+        }
+    }
+
+    let (transport, requests, _events) = test_transport(4);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::ZERO,
+        publisher_delay: Duration::ZERO,
+    };
+    let (handle, task, _terminations) = spawn_runtime_with_config(67, transport, config);
+    let mut guarded_command = command();
+    guarded_command.metadata.dispatch_guard = Some(Arc::new(DelayedAdmission));
+    let ticket = handle.submit(guarded_command).await.unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(requests.is_empty());
+    wait_for_no_in_flight(&handle).await;
+    assert!(handle.pending_commands().is_empty());
+    stop(&handle, task).await;
+}
+
+async fn assert_native_event_backpressure_deadline(during_guarded_drain: bool) {
+    #[derive(Debug)]
+    struct SaturatingProtocol {
+        protocol: GdbMiProtocol,
+        inject_on_encode: Option<flume::Sender<TransportEvent>>,
+        decoded: Arc<tokio::sync::Notify>,
+    }
+
+    fn notifications() -> Bytes {
+        Bytes::from(
+            (0..EVENT_MAILBOX_CAPACITY + 8)
+                .map(|id| format!("=breakpoint-modified,id=\"{id}\"\n"))
+                .collect::<String>(),
+        )
+    }
+
+    impl crate::debugger::protocol::DebuggerProtocol for SaturatingProtocol {
+        fn encode_command(
+            &self,
+            command: crate::debugger::protocol::ProtocolCommand<'_>,
+        ) -> Result<Bytes> {
+            if let Some(events) = &self.inject_on_encode {
+                events.try_send(TransportEvent::Stdout(notifications()))?;
+            }
+            self.protocol.encode_command(command)
+        }
+
+        fn push_stdout(
+            &mut self,
+            bytes: Bytes,
+        ) -> Result<Vec<crate::debugger::protocol::ProtocolRecord>> {
+            let records = self.protocol.push_stdout(bytes)?;
+            self.decoded.notify_one();
+            Ok(records)
+        }
+    }
+
+    let (transport, requests, events) = test_transport(4);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::from_secs(5),
+        publisher_delay: Duration::ZERO,
+    };
+    let (lifecycle, mut terminations) = lifecycle::channel();
+    let decoded = Arc::new(tokio::sync::Notify::new());
+    let (handle, mut task) = SessionHandle::spawn_with_config(
+        68,
+        transport,
+        Box::new(SaturatingProtocol {
+            protocol: GdbMiProtocol::default(),
+            inject_on_encode: during_guarded_drain.then(|| events.clone()),
+            decoded: decoded.clone(),
+        }),
+        lifecycle.bind(68),
+        test_reducer(),
+        config,
+    );
+    let first = if during_guarded_drain {
+        None
+    } else {
+        let ticket = handle.submit(command()).await.unwrap();
+        let (_, written) = receive_write(&requests).await;
+        written.send(Ok(())).unwrap();
+        events
+            .send_async(TransportEvent::Stdout(notifications()))
+            .await
+            .unwrap();
+        tokio::time::timeout(TEST_TIMEOUT, decoded.notified())
+            .await
+            .unwrap();
+        Some(ticket)
+    };
+    let guard = Arc::new(CountingGuard::default());
+    let mut guarded_command = command();
+    guarded_command.metadata.dispatch_guard = Some(guard.clone());
+    let guarded = handle.submit(guarded_command).await.unwrap();
+    let completion = tokio::time::timeout(Duration::from_millis(100), guarded.complete()).await;
+    let stopped = tokio::time::timeout(Duration::from_millis(100), &mut task).await;
+    let faulted = match stopped {
+        Ok(result) => {
+            result.unwrap();
+            true
+        }
+        Err(_) => {
+            stop(&handle, task).await;
+            false
+        }
+    };
+    if let Some(first) = first {
+        assert!(first.complete().await.is_err());
+    }
+    let termination = tokio::time::timeout(Duration::from_millis(100), terminations.recv()).await;
+
+    assert!(completion
+        .expect("stalled native event processing must settle at the command deadline")
+        .is_err());
+    assert!(
+        faulted,
+        "partially decoded native events require session teardown"
+    );
+    assert!(matches!(
+        termination.unwrap().unwrap().cause,
+        SessionTerminationCause::ProtocolFault { .. }
+    ));
+    assert!(requests.is_empty());
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(handle.status().in_flight, 0);
+    assert!(handle.pending_commands().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_event_backpressure_faults_at_the_pending_deadline() {
+    assert_native_event_backpressure_deadline(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn guarded_event_drain_backpressure_faults_before_any_native_write() {
+    assert_native_event_backpressure_deadline(true).await;
+}
+
 #[tokio::test]
 async fn shutdown_interrupts_transport_backpressure() {
     let (transport, _requests, _events) = test_transport(1);

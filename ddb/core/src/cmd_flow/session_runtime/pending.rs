@@ -6,11 +6,13 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Result};
-use tokio::sync::{oneshot, watch};
+use tokio::{
+    sync::{oneshot, watch},
+    time::Instant,
+};
 
 use crate::cmd_flow::response::ParsedSessionResponse;
 
@@ -23,7 +25,7 @@ pub(super) struct PendingCommand {
     pub completion: oneshot::Sender<Result<ParsedSessionResponse>>,
     pub permit: CommandPermit,
     pub consistency: CompletionConsistency,
-    pub created_at: Instant,
+    pub deadline: Instant,
     pub _registration: PendingRegistration,
 }
 
@@ -61,27 +63,26 @@ impl PendingCommands {
 
     pub(super) fn fail(&mut self, token: u64, error: anyhow::Error) {
         if let Some(command) = self.commands.remove(&token) {
-            let _ = command.completion.send(Err(error));
-            self.in_flight.fetch_sub(1, Ordering::AcqRel);
+            finish_command(command, Err(error), &self.in_flight);
         }
     }
 
     pub(super) fn fail_all(&mut self, reason: &str) {
         for (token, command) in self.commands.drain() {
-            let _ = command
-                .completion
-                .send(Err(anyhow!("command {} failed: {}", token, reason)));
-            self.in_flight.fetch_sub(1, Ordering::AcqRel);
+            finish_command(
+                command,
+                Err(anyhow!("command {} failed: {}", token, reason)),
+                &self.in_flight,
+            );
         }
     }
 
-    pub(super) fn sweep_expired(&mut self, timeout: Duration) {
+    pub(super) fn sweep_expired(&mut self) {
+        let now = Instant::now();
         let expired = self
             .commands
             .iter()
-            .filter_map(|(token, command)| {
-                (command.created_at.elapsed() >= timeout).then_some(*token)
-            })
+            .filter_map(|(token, command)| (command.deadline <= now).then_some(*token))
             .collect::<Vec<_>>();
         for token in expired {
             self.fail(token, anyhow!("command {} timed out", token));
@@ -91,10 +92,32 @@ impl PendingCommands {
     pub(super) fn in_flight(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.in_flight)
     }
+
+    pub(super) fn nearest_deadline(&self) -> Option<Instant> {
+        self.commands.values().map(|command| command.deadline).min()
+    }
+}
+
+fn finish_command(
+    command: PendingCommand,
+    result: Result<ParsedSessionResponse>,
+    in_flight: &AtomicUsize,
+) {
+    let PendingCommand {
+        completion,
+        permit,
+        _registration,
+        ..
+    } = command;
+    drop(permit);
+    drop(_registration);
+    in_flight.fetch_sub(1, Ordering::AcqRel);
+    let _ = completion.send(result);
 }
 
 /// Completes a command once the event projector has caught up to the events
-/// observed before its result, honoring the command's consistency mode.
+/// observed before its result, honoring its consistency mode and original
+/// deadline. A closed completion receiver also releases the barrier's ownership.
 ///
 /// The common case — protocol-complete commands and state-consistent commands
 /// whose observed events are already projected — completes inline on the
@@ -104,37 +127,44 @@ pub(super) fn complete_after_events(
     sid: u64,
     token: u64,
     response: ParsedSessionResponse,
-    command: PendingCommand,
+    mut command: PendingCommand,
     required_sequence: u64,
     mut applied: watch::Receiver<u64>,
     in_flight: Arc<AtomicUsize>,
 ) {
+    if command.deadline <= Instant::now() {
+        finish_command(
+            command,
+            Err(anyhow!("command {} timed out", token)),
+            &in_flight,
+        );
+        return;
+    }
     if command.consistency != CompletionConsistency::StateConsistent
         || *applied.borrow() >= required_sequence
     {
-        let _permit = command.permit;
-        let _ = command.completion.send(Ok(response));
-        in_flight.fetch_sub(1, Ordering::AcqRel);
+        finish_command(command, Ok(response), &in_flight);
         return;
     }
 
     tokio::spawn(async move {
-        let _permit = command.permit;
-        while *applied.borrow_and_update() < required_sequence {
-            if applied.changed().await.is_err() {
-                break;
+        let result = tokio::select! {
+            _ = command.completion.closed() => {
+                Err(anyhow!("command {} completion was cancelled", token))
             }
-        }
-        let result = if *applied.borrow() < required_sequence {
-            Err(anyhow!(
-                "session {} event projector stopped before command {} became state-consistent",
-                sid,
-                token
-            ))
-        } else {
-            Ok(response)
+            result = tokio::time::timeout_at(command.deadline, async {
+                while *applied.borrow_and_update() < required_sequence {
+                    if applied.changed().await.is_err() {
+                        return Err(anyhow!(
+                            "session {} event projector stopped before command {} became state-consistent",
+                            sid,
+                            token
+                        ));
+                    }
+                }
+                Ok(response)
+            }) => result.unwrap_or_else(|_| Err(anyhow!("command {} timed out", token))),
         };
-        let _ = command.completion.send(result);
-        in_flight.fetch_sub(1, Ordering::AcqRel);
+        finish_command(command, result, &in_flight);
     });
 }

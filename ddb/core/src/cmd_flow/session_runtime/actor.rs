@@ -7,7 +7,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    time::Instant,
 };
 
 use anyhow::{anyhow, Result};
@@ -77,6 +76,36 @@ fn finish_write(owner: WriteOwner, result: Result<()>, pending: &mut PendingComm
 }
 
 async fn process_transport_event(
+    sid: u64,
+    event: Option<TransportEvent>,
+    demux: &mut OutputDemux,
+    pending: &mut PendingCommands,
+    protocol: &mut dyn DebuggerProtocol,
+) -> std::result::Result<(), SessionTerminationCause> {
+    let Some(deadline) = pending.nearest_deadline() else {
+        return decode_transport_event(sid, event, demux, pending, protocol).await;
+    };
+    let result = tokio::select! {
+        biased;
+        _ = tokio::time::sleep_until(deadline) => None,
+        result = decode_transport_event(sid, event, demux, pending, protocol) => Some(result),
+    };
+    match result {
+        Some(result) => result,
+        None => {
+            // Decoding can already have consumed a stdout batch before its
+            // projector sends stall. Cancelled decoding cannot safely resume;
+            // fail the session instead of reusing that partial protocol state.
+            let message = "native event processing timed out at a pending command deadline";
+            pending.fail_all(message);
+            Err(SessionTerminationCause::ProtocolFault {
+                message: message.to_string(),
+            })
+        }
+    }
+}
+
+async fn decode_transport_event(
     sid: u64,
     event: Option<TransportEvent>,
     demux: &mut OutputDemux,
@@ -190,6 +219,7 @@ pub(super) async fn run_session(
     let mut demux = OutputDemux::new(sid, event_tx, applied, ready);
     let mut sweeper = tokio::time::interval(config.sweep_interval);
     let mut shutdown_ack = None;
+    let mut faulted_projection = false;
     let mut write_completions = FuturesUnordered::<WriteCompletion>::new();
 
     'runtime: loop {
@@ -215,11 +245,12 @@ pub(super) async fn run_session(
                             continue;
                         }
                         registration.mark_running();
+                        let deadline = tokio::time::Instant::now() + config.command_timeout;
                         pending.insert(token, PendingCommand {
                             completion,
                             permit,
                             consistency: command.consistency,
-                            created_at: Instant::now(),
+                            deadline,
                             _registration: registration,
                         });
                         let wire = match protocol.encode_command(ProtocolCommand {
@@ -250,6 +281,7 @@ pub(super) async fn run_session(
                                     'runtime
                                 );
                                 if let Err(cause) = result {
+                                    faulted_projection = matches!(&cause, SessionTerminationCause::ProtocolFault { .. });
                                     termination.terminate(cause);
                                     break 'runtime;
                                 }
@@ -267,8 +299,16 @@ pub(super) async fn run_session(
                             let result = guarded!(
                                 &mut control,
                                 async {
-                                    demux.fence().await?;
-                                    guard.prepare().await
+                                    tokio::select! {
+                                        biased;
+                                        _ = tokio::time::sleep_until(deadline) => {
+                                            Err(anyhow!("command {} timed out", token))
+                                        }
+                                        result = async {
+                                            demux.fence().await?;
+                                            guard.prepare().await
+                                        } => result,
+                                    }
                                 },
                                 shutdown_ack,
                                 'runtime
@@ -299,6 +339,9 @@ pub(super) async fn run_session(
                                     }
                                     Err(mpsc::error::TryRecvError::Empty) => {}
                                 }
+                                if tokio::time::Instant::now() >= deadline {
+                                    return Err(anyhow!("command {} timed out", token));
+                                }
                                 if !events.is_empty() || events.is_disconnected() {
                                     return Err(crate::cmd_flow::input::StaleExecution.into());
                                 }
@@ -325,7 +368,11 @@ pub(super) async fn run_session(
                         let acknowledgement = {
                             guarded!(
                                 &mut control,
-                                writer.start_write(wire),
+                                async {
+                                    tokio::time::timeout_at(deadline, writer.start_write(wire))
+                                        .await
+                                        .unwrap_or_else(|_| Err(anyhow!("command {} timed out", token)))
+                                },
                                 shutdown_ack,
                                 'runtime
                             )
@@ -369,12 +416,13 @@ pub(super) async fn run_session(
                     'runtime
                 );
                 if let Err(cause) = result {
+                    faulted_projection = matches!(&cause, SessionTerminationCause::ProtocolFault { .. });
                     termination.terminate(cause);
                     break;
                 }
             }
             _ = sweeper.tick() => {
-                pending.sweep_expired(config.command_timeout);
+                pending.sweep_expired();
             }
         }
     }
@@ -382,11 +430,21 @@ pub(super) async fn run_session(
     closed.store(true, Ordering::Release);
     pending.fail_all("session runtime stopped");
     drop(demux);
-    if shutdown_ack.is_some() {
+    if shutdown_ack.is_some() || faulted_projection {
         projector.abort();
     }
+    if faulted_projection {
+        publisher_task.abort();
+    }
     let _ = projector.await;
-    let _ = publisher_task.await;
+    if faulted_projection {
+        // Aborts require executor progress and cannot preempt a legacy stdout
+        // syscall already in progress. Release faulted command ownership
+        // without joining that presentation task.
+        drop(publisher_task);
+    } else {
+        let _ = publisher_task.await;
+    }
     if let Some(stopped) = shutdown_ack {
         let _ = stopped.send(());
     }
