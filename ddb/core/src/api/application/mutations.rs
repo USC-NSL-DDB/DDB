@@ -1203,11 +1203,19 @@ impl DdbApplicationService {
             CompletionProjection::Evaluation { dispatch_guard, .. } => dispatch_guard.clone(),
             _ => None,
         };
-        match self
+        let outcome = self
             .command_port
             .execute_guarded(&command, target, &operation_id, kind, guard.clone())
-            .await
-        {
+            .await;
+        if let Some(guard) = &guard {
+            if let (Err(error), [session_id]) = (&outcome, session_ids.as_slice()) {
+                if error.is_debugger_rejection_for(*session_id) {
+                    guard.rejected();
+                }
+            }
+            guard.finished();
+        }
+        match outcome {
             Ok(outcome) => {
                 if projection.requires_concrete_target_completions() {
                     if let Some(report) = missing_target_completion_report(&session_ids, &outcome) {
@@ -1269,11 +1277,6 @@ impl DdbApplicationService {
                 }
             }
             Err(error) => {
-                if let (Some(guard), [session_id]) = (guard.as_ref(), session_ids.as_slice()) {
-                    if error.is_debugger_rejection_for(*session_id) {
-                        guard.rejected();
-                    }
-                }
                 self.fail_command_operation(
                     &operation_id,
                     &request_id,

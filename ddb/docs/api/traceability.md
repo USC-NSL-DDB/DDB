@@ -20,6 +20,19 @@ green narrow test is not evidence for a broader requirement.
 | R-12 backend parity | backend-neutral projections and explicit capability/unsupported behavior; LLDB condition/temporary/enable behavior and hardware limitation are projected truthfully; SDK-only TUI | real GDB/LLDB API breakpoint create/list/update/delete tests; Mock partial-fanout/rollback/fidelity tests; Mock/GDB/LLDB TUI PTY suite; typed execution-line movement benchmark; optimized-build thread-state regression; distributed-backtrace backend tests |
 | R-13 measurable quality | CI schema/workspace/security/extension/SDK/TUI/soak gates, optimized-build state-transition gate, standalone public-decoder fuzz targets, deterministic packaging, retained raw transport and frontend-workload evidence | `.github/workflows/rust-check.yml`; `.github/workflows/api-fuzz.yml`; `api_v2_soak.rs`; `tools/check-api-release.sh`; three-run snapshot, typed-control/output, 10k-variable, 1/16/64 MiB memory, 1/8/20-subscriber, and 1/16/64-session reconnect evidence with hashes and environment manifests |
 
+## Stop coordination and logpoints
+
+Requirements R-01, R-05, R-07, and R-12 also cover backend-owned stop policies
+and logpoints. `core/src/api/application/stop_policies.rs` owns classification,
+peer coordination, and guarded continuation. `StopPolicy.automatic_stops` and
+the `automatic_stop_provenance` capability expose exact observed provenance to
+all clients. `stop_policy_tests.rs` verifies mode changes, overlapping failed
+pauses, late rejection, and revision expiry. Operation-store tests verify that
+cancellation completes before accepted operations become visible to retries.
+`core/tests/api_v2_stop_policies.rs` covers two clients, backend restart, and
+GDB/LLDB logpoints. The TUI native interaction tests verify hydration, stale
+revision rejection, and focus correction after delayed classification.
+
 ## Release-candidate evidence checklist
 
 The following results are environment- and revision-specific and must be

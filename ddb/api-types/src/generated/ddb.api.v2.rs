@@ -1585,6 +1585,13 @@ pub struct StopPolicy {
     pub target_outcomes: ::prost::alloc::vec::Vec<TargetOutcome>,
     #[prost(uint64, tag = "7")]
     pub revision: u64,
+    /// Exact current stops classified by DDB as automatic peer pauses. Command
+    /// acknowledgments and pending targets do not establish this provenance.
+    /// Match execution_state_id and revision against the current ExecutionState;
+    /// stale entries must not hide a newer stop. Advertised by the
+    /// "automatic_stop_provenance" DDB capability.
+    #[prost(message, repeated, tag = "8")]
+    pub automatic_stops: ::prost::alloc::vec::Vec<ExecutionState>,
 }
 /// SubBreakpoint describes one resolved member of a distributed breakpoint.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

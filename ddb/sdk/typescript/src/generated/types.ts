@@ -1520,6 +1520,7 @@ export interface StopPolicy {
   "pendingTargets"?: Target[];
   "targetOutcomes"?: TargetOutcome[];
   "revision"?: string;
+  "automaticStops"?: ExecutionState[];
 }
 
 export interface StopPolicyConfig {

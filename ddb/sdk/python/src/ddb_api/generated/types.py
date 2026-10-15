@@ -1996,6 +1996,7 @@ StopPolicy = TypedDict(
         "pendingTargets": NotRequired["list[Target]"],
         "targetOutcomes": NotRequired["list[TargetOutcome]"],
         "revision": NotRequired["str"],
+        "automaticStops": NotRequired["list[ExecutionState]"],
     },
 )
 

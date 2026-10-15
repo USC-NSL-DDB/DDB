@@ -688,6 +688,7 @@ impl<'a> ProjectionContext<'a> {
                 "multi_target_routing".to_string(),
                 "group_breakpoints".to_string(),
                 "backend_stop_policies".to_string(),
+                "automatic_stop_provenance".to_string(),
                 "execution_guards".to_string(),
             ],
             limits: Some(limits),

@@ -41,16 +41,41 @@ struct Stop {
     epoch: u64,
 }
 
+struct DispatchedPauses {
+    revision: u64,
+    attempts: HashMap<u64, u64>,
+    // Completed acknowledgments and ambiguous failures need only their newest
+    // control epoch. Unsettled attempts remain separate for precise rejection.
+    settled_epoch: Option<u64>,
+}
+
+impl DispatchedPauses {
+    fn latest_epoch(&self) -> Option<u64> {
+        self.attempts
+            .values()
+            .copied()
+            .chain(self.settled_epoch)
+            .max()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ManualStop {
+    revision: u64,
+    epoch: u64,
+}
+
 struct PolicyState {
     public: v2::StopPolicy,
     seen: HashMap<u64, u64>,
     logpoints_seen: HashMap<u64, u64>,
-    manual_stops: HashMap<u64, u64>,
+    manual_stops: HashMap<u64, ManualStop>,
+    // Preserve observed provenance independently of pending command receipts.
+    automatic_stops: HashMap<u64, u64>,
     cause: Option<Stop>,
     attempts: BTreeMap<u64, Vec<(u64, u64)>>,
     next_attempt: u64,
-    // Native revision, attempt, and control epoch identify dispatched interrupts.
-    automatic_pauses: HashMap<u64, (u64, u64, u64)>,
+    automatic_pauses: HashMap<u64, DispatchedPauses>,
 }
 
 pub(super) struct StopPolicies {
@@ -76,6 +101,7 @@ impl StopPolicies {
                 seen: HashMap::new(),
                 logpoints_seen: HashMap::new(),
                 manual_stops: HashMap::new(),
+                automatic_stops: HashMap::new(),
                 cause: None,
                 attempts: BTreeMap::new(),
                 next_attempt: 0,
@@ -130,6 +156,9 @@ impl DispatchGuard for ActiveGuard {
     }
     fn rejected(&self) {
         self.inner.rejected();
+    }
+    fn finished(&self) {
+        self.inner.finished();
     }
     async fn check(&self) -> anyhow::Result<()> {
         if !*self
@@ -214,6 +243,7 @@ struct PeerPauseGuard {
     running: Vec<(u64, u64)>,
     attempt: u64,
     state: Arc<Mutex<PolicyState>>,
+    wake: Arc<Notify>,
 }
 
 impl std::fmt::Debug for PeerPauseGuard {
@@ -255,19 +285,67 @@ impl DispatchGuard for PeerPauseGuard {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         for (thread, revision) in &self.running {
-            state.automatic_pauses.insert(
-                *thread,
-                (revision.saturating_add(1), self.attempt, self.stop.epoch),
-            );
+            let revision = revision.saturating_add(1);
+            let pauses =
+                state
+                    .automatic_pauses
+                    .entry(*thread)
+                    .or_insert_with(|| DispatchedPauses {
+                        revision,
+                        attempts: HashMap::new(),
+                        settled_epoch: None,
+                    });
+            if pauses.revision != revision {
+                *pauses = DispatchedPauses {
+                    revision,
+                    attempts: HashMap::new(),
+                    settled_epoch: None,
+                };
+            }
+            pauses.attempts.insert(self.attempt, self.stop.epoch);
         }
     }
     fn rejected(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         for (thread, revision) in &self.running {
-            if state.automatic_pauses.get(thread)
-                == Some(&(revision.saturating_add(1), self.attempt, self.stop.epoch))
-            {
+            let revision = revision.saturating_add(1);
+            let Some(pauses) = state
+                .automatic_pauses
+                .get_mut(thread)
+                .filter(|pauses| pauses.revision == revision)
+            else {
+                continue;
+            };
+            pauses.attempts.remove(&self.attempt);
+            let latest_epoch = pauses.latest_epoch();
+            let manual_epoch = state
+                .manual_stops
+                .get(thread)
+                .filter(|stop| stop.revision == revision)
+                .map(|stop| stop.epoch);
+            if latest_epoch.is_none() {
                 state.automatic_pauses.remove(thread);
+            }
+            if state.automatic_stops.get(thread) == Some(&revision)
+                && latest_epoch.is_none_or(|automatic_epoch| {
+                    manual_epoch.is_some_and(|manual_epoch| manual_epoch >= automatic_epoch)
+                })
+            {
+                state.automatic_stops.remove(thread);
+                state.seen.remove(thread);
+            }
+        }
+        self.wake.notify_one();
+    }
+    fn finished(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        for (thread, revision) in &self.running {
+            if let Some(pauses) = state.automatic_pauses.get_mut(thread) {
+                if pauses.revision == revision.saturating_add(1) {
+                    if let Some(epoch) = pauses.attempts.remove(&self.attempt) {
+                        pauses.settled_epoch = Some(pauses.settled_epoch.unwrap_or(0).max(epoch));
+                    }
+                }
             }
         }
     }
@@ -434,8 +512,11 @@ impl DdbApplicationService {
         state.cause = None;
         let logpoints_seen = state.logpoints_seen.clone();
         let manual_stops = state.manual_stops.clone();
+        let automatic_stops = state.automatic_stops.clone();
         state.seen.retain(|id, revision| {
-            logpoints_seen.get(id) == Some(revision) && manual_stops.get(id) != Some(revision)
+            (logpoints_seen.get(id) == Some(revision)
+                && manual_stops.get(id).map(|stop| stop.revision) != Some(*revision))
+                || automatic_stops.get(id) == Some(revision)
         });
         state.attempts.clear();
         state.public.mode = mode as i32;
@@ -495,6 +576,16 @@ impl DdbApplicationService {
             state
                 .manual_stops
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
+            state.automatic_stops.retain(|id, revision| {
+                view.threads.iter().any(|thread| {
+                    thread.global_id == *id
+                        && thread.status == "stopped"
+                        && thread.stop_revision == *revision
+                })
+            });
+            // A dispatch callback may have registered a newer native generation
+            // after this snapshot was sampled. Keep its receipt; exact revisions
+            // prevent it from explaining any other stop, and buckets stay bounded.
             state
                 .automatic_pauses
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
@@ -544,24 +635,43 @@ impl DdbApplicationService {
                     .stop_policies
                     .epoch
                     .take_explicit_pause(thread.session_id, epoch);
-                if explicit_pause.is_some() {
-                    state
-                        .manual_stops
-                        .insert(thread.global_id, thread.stop_revision);
+                if let Some(manual_epoch) = explicit_pause {
+                    state.manual_stops.insert(
+                        thread.global_id,
+                        ManualStop {
+                            revision: thread.stop_revision,
+                            epoch: manual_epoch,
+                        },
+                    );
                 }
-                let automatic_pause = state
-                    .automatic_pauses
-                    .remove(&thread.global_id)
-                    .is_some_and(|(revision, _, automatic_epoch)| {
-                        revision == thread.stop_revision
-                            && explicit_pause
-                                .is_none_or(|manual_epoch| manual_epoch < automatic_epoch)
-                    })
-                    && (reason.kind == ThreadStopKind::Pause
-                        || reason
-                            .signal_name
-                            .as_deref()
-                            .is_some_and(|name| matches!(name, "SIGINT" | "SIGSTOP")));
+                let manual_epoch = state
+                    .manual_stops
+                    .get(&thread.global_id)
+                    .filter(|stop| stop.revision == thread.stop_revision)
+                    .map(|stop| stop.epoch);
+                let automatic_pause =
+                    state
+                        .automatic_pauses
+                        .get(&thread.global_id)
+                        .is_some_and(|pauses| {
+                            pauses.revision == thread.stop_revision
+                                && pauses.latest_epoch().is_some_and(|automatic_epoch| {
+                                    manual_epoch
+                                        .is_none_or(|manual_epoch| manual_epoch < automatic_epoch)
+                                })
+                        })
+                        && (reason.kind == ThreadStopKind::Pause
+                            || reason
+                                .signal_name
+                                .as_deref()
+                                .is_some_and(|name| matches!(name, "SIGINT" | "SIGSTOP")));
+                if automatic_pause {
+                    state
+                        .automatic_stops
+                        .insert(thread.global_id, thread.stop_revision);
+                } else {
+                    state.automatic_stops.remove(&thread.global_id);
+                }
 
                 let target = self.policy_thread_target(thread.global_id)?;
                 let Some((_, execution)) = self
@@ -577,7 +687,11 @@ impl DdbApplicationService {
                 };
                 if let Some(message) = reason.log_message.as_ref().filter(|_| {
                     reason.kind == ThreadStopKind::Breakpoint
-                        && state.manual_stops.get(&thread.global_id) != Some(&thread.stop_revision)
+                        && state
+                            .manual_stops
+                            .get(&thread.global_id)
+                            .map(|stop| stop.revision)
+                            != Some(thread.stop_revision)
                 }) {
                     state
                         .logpoints_seen
@@ -605,6 +719,21 @@ impl DdbApplicationService {
                     state.attempts.clear();
                     changed = true;
                 }
+            }
+            let mut automatic_stops = Vec::new();
+            for thread in view.threads.iter().filter(|thread| {
+                state.automatic_stops.get(&thread.global_id) == Some(&thread.stop_revision)
+            }) {
+                if let Some((_, execution)) = self.projection().execution_state(
+                    self.policy_thread_target(thread.global_id)?,
+                    std::slice::from_ref(thread),
+                )? {
+                    automatic_stops.push(execution);
+                }
+            }
+            if state.public.automatic_stops != automatic_stops {
+                state.public.automatic_stops = automatic_stops;
+                changed = true;
             }
             if let Some(cause) = state.cause.clone() {
                 for session in &view.sessions {
@@ -681,6 +810,7 @@ impl DdbApplicationService {
                     running: running.clone(),
                     attempt,
                     state: service.stop_policies.state.clone(),
+                    wake: service.stop_policies.wake.clone(),
                 });
                 let result = service
                     .automatic_command(

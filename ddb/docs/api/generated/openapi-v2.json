@@ -4077,6 +4077,12 @@
       "StopPolicy": {
         "additionalProperties": true,
         "properties": {
+          "automaticStops": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionState"
+            },
+            "type": "array"
+          },
           "generation": {
             "format": "uint64",
             "pattern": "^[0-9]+$",

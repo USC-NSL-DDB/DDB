@@ -27386,6 +27386,9 @@ impl serde::Serialize for StopPolicy {
         if self.revision != 0 {
             len += 1;
         }
+        if !self.automatic_stops.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("ddb.api.v2.StopPolicy", len)?;
         if !self.stop_policy_id.is_empty() {
             struct_ser.serialize_field("stopPolicyId", &self.stop_policy_id)?;
@@ -27414,6 +27417,9 @@ impl serde::Serialize for StopPolicy {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("revision", ToString::to_string(&self.revision).as_str())?;
         }
+        if !self.automatic_stops.is_empty() {
+            struct_ser.serialize_field("automaticStops", &self.automatic_stops)?;
+        }
         struct_ser.end()
     }
 }
@@ -27435,6 +27441,8 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
             "target_outcomes",
             "targetOutcomes",
             "revision",
+            "automatic_stops",
+            "automaticStops",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -27446,6 +27454,7 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
             PendingTargets,
             TargetOutcomes,
             Revision,
+            AutomaticStops,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -27475,6 +27484,7 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
                             "pendingTargets" | "pending_targets" => Ok(GeneratedField::PendingTargets),
                             "targetOutcomes" | "target_outcomes" => Ok(GeneratedField::TargetOutcomes),
                             "revision" => Ok(GeneratedField::Revision),
+                            "automaticStops" | "automatic_stops" => Ok(GeneratedField::AutomaticStops),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -27501,6 +27511,7 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
                 let mut pending_targets__ = None;
                 let mut target_outcomes__ = None;
                 let mut revision__ = None;
+                let mut automatic_stops__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::StopPolicyId => {
@@ -27549,6 +27560,12 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AutomaticStops => {
+                            if automatic_stops__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("automaticStops"));
+                            }
+                            automatic_stops__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -27562,6 +27579,7 @@ impl<'de> serde::Deserialize<'de> for StopPolicy {
                     pending_targets: pending_targets__.unwrap_or_default(),
                     target_outcomes: target_outcomes__.unwrap_or_default(),
                     revision: revision__.unwrap_or_default(),
+                    automatic_stops: automatic_stops__.unwrap_or_default(),
                 })
             }
         }

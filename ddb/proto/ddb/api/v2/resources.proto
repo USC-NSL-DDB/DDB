@@ -774,6 +774,12 @@ message StopPolicy {
   repeated Target pending_targets = 5;
   repeated TargetOutcome target_outcomes = 6;
   uint64 revision = 7;
+  // Exact current stops classified by DDB as automatic peer pauses. Command
+  // acknowledgments and pending targets do not establish this provenance.
+  // Match execution_state_id and revision against the current ExecutionState;
+  // stale entries must not hide a newer stop. Advertised by the
+  // "automatic_stop_provenance" DDB capability.
+  repeated ExecutionState automatic_stops = 8;
 }
 
 // SubBreakpoint describes one resolved member of a distributed breakpoint.

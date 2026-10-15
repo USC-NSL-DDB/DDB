@@ -6,6 +6,41 @@ use prost_types::{DescriptorProto, FileDescriptorSet};
 use serde_json::json;
 
 #[test]
+fn automatic_stop_provenance_round_trips_exact_execution_identity_and_revision() {
+    let policy = StopPolicy {
+        automatic_stops: vec![ExecutionState {
+            execution_state_id: "execution/opaque".into(),
+            target: Some(Target {
+                selector: Some(target::Selector::Thread(ThreadTarget {
+                    thread_id: "thread/opaque".into(),
+                })),
+            }),
+            revision: 9_007_199_254_740_993,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&policy).unwrap();
+    assert_eq!(
+        json,
+        json!({"automaticStops": [{
+            "executionStateId": "execution/opaque",
+            "target": {"thread": {"threadId": "thread/opaque"}},
+            "revision": "9007199254740993"
+        }]})
+    );
+    assert_eq!(serde_json::from_value::<StopPolicy>(json).unwrap(), policy);
+    assert_eq!(
+        StopPolicy::decode(policy.encode_to_vec().as_slice()).unwrap(),
+        policy
+    );
+    assert!(serde_json::from_value::<StopPolicy>(json!({}))
+        .unwrap()
+        .automatic_stops
+        .is_empty());
+}
+
+#[test]
 fn binary_cursor_matches_golden_and_tolerates_unknown_fields() {
     let cursor = Cursor {
         server_instance_id: "srv_opaque/01".to_owned(),

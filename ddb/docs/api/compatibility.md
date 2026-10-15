@@ -39,6 +39,12 @@ Buf's `FILE` breaking rules are the minimum mechanical gate. Review also
 checks semantic compatibility because a schema can be wire-compatible while
 changing meaning.
 
+`StopPolicy.automatic_stops` is an additive v2 field advertised by the
+`automatic_stop_provenance` DDB feature. Supporting clients use its execution
+identity and revision to classify automatic pauses. Pending targets and command
+outcomes alone are not stop provenance. Clients connected to older servers can
+retain their existing presentation behavior until that feature is advertised.
+
 ## Binary Protobuf behavior
 
 Binary Protobuf is the canonical typed wire representation.

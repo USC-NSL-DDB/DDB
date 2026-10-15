@@ -9,6 +9,9 @@ struct PolicyTestPort {
     block_pause: AtomicBool,
     pause_queued: tokio::sync::Notify,
     release_pause: tokio::sync::Notify,
+    block_pause_result: AtomicBool,
+    pause_dispatched: tokio::sync::Notify,
+    release_pause_result: tokio::sync::Notify,
     block_frames: AtomicBool,
     frames_queued: tokio::sync::Notify,
     release_frames: tokio::sync::Notify,
@@ -111,6 +114,10 @@ impl ApplicationCommandPort for PolicyTestPort {
                 .map_err(|_| CommandPortError::test("cancelled dispatch"))?;
             guard.dispatched();
         }
+        if command == "-exec-interrupt" && self.block_pause_result.load(Ordering::SeqCst) {
+            self.pause_dispatched.notify_one();
+            self.release_pause_result.notified().await;
+        }
         self.execute(command, target).await
     }
 }
@@ -167,6 +174,25 @@ async fn policy_stop_in_session(
                 breakpoint_id: Some(1),
                 thread_id: Some(owner),
                 log_message: log_message.map(str::to_owned),
+            }),
+        )
+        .await
+        .unwrap();
+}
+
+async fn policy_pause_in_session(model: &RuntimeModel, session: u64, thread: u64) {
+    model
+        .update_thread_statuses_with_details(
+            session,
+            &[11],
+            ThreadStatus::STOPPED,
+            None,
+            Some(crate::state::ThreadStopReason {
+                kind: crate::state::ThreadStopKind::Pause,
+                signal_name: None,
+                breakpoint_id: None,
+                thread_id: Some(thread),
+                log_message: None,
             }),
         )
         .await
@@ -501,6 +527,147 @@ async fn a_failed_sent_pause_retains_provenance_but_a_native_rejection_does_not(
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_rejected_new_attempt_keeps_older_uncertain_pause_provenance() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.fail_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    let first = wait_policy(&service, |policy| {
+        policy.pending_targets.is_empty()
+            && policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| !outcome.succeeded)
+    })
+    .await;
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0].clone();
+    port.fail_pause.store(false, Ordering::SeqCst);
+    port.reject_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::Independent)
+        .unwrap();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    wait_policy(&service, |policy| {
+        policy.generation > first.generation
+            && policy.pending_targets.is_empty()
+            && policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| !outcome.succeeded)
+    })
+    .await;
+    assert_eq!(port.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision,
+        peer.stop_revision,
+        "both attempted interrupts belong to the same running generation"
+    );
+    service.retire_stop_automation();
+    policy_pause_in_session(&model, 43, peer.global_id.value()).await;
+    let policy = wait_policy(&service, |policy| {
+        policy.initiating_stop.is_some() || !policy.automatic_stops.is_empty()
+    })
+    .await;
+    assert!(
+        policy.initiating_stop.is_none(),
+        "rejecting the newer attempt cannot erase an older possibly sent interrupt"
+    );
+    assert_eq!(
+        policy.automatic_stops[0].target,
+        Some(service_thread_target(&service, peer.global_id.value()))
+    );
+}
+
+#[tokio::test]
+async fn a_late_native_rejection_corrects_an_already_observed_automatic_pause() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.reject_pause.store(true, Ordering::SeqCst);
+    port.block_pause_result.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    tokio::time::timeout(Duration::from_secs(1), port.pause_dispatched.notified())
+        .await
+        .unwrap();
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0].global_id;
+    policy_pause_in_session(&model, 43, peer.value()).await;
+    let observed = wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+    assert_eq!(
+        observed.automatic_stops[0].target,
+        Some(service_thread_target(&service, peer.value()))
+    );
+    service.retire_stop_automation();
+    port.release_pause_result.notify_one();
+    let corrected = wait_policy(&service, |policy| {
+        policy.automatic_stops.is_empty() && policy.initiating_stop.is_some()
+    })
+    .await;
+    assert_eq!(
+        corrected.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, peer.value())),
+        "a definitive rejection must restore the independently observed stop"
+    );
+}
+
+#[tokio::test]
+async fn rejecting_newer_pause_evidence_restores_manual_intent_over_older_settled_evidence() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.fail_pause.store(true, Ordering::SeqCst);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| {
+        policy.pending_targets.is_empty()
+            && policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| !outcome.succeeded)
+    })
+    .await;
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0].clone();
+    // The first interrupt has an uncertain receipt. A manual pause owns the
+    // next stop unless a later automatic generation can actually explain it.
+    service.retire_stop_automation_for_pauses(&[43]);
+    service.retire_stop_automation();
+    port.fail_pause.store(false, Ordering::SeqCst);
+    port.reject_pause.store(true, Ordering::SeqCst);
+    port.block_pause_result.store(true, Ordering::SeqCst);
+    policy_stop(&model, owner, None).await;
+    tokio::time::timeout(Duration::from_secs(1), port.pause_dispatched.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision,
+        peer.stop_revision,
+        "the older and newer interrupts target the same running generation"
+    );
+    policy_pause_in_session(&model, 43, peer.global_id.value()).await;
+    wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+    port.block_pause_result.store(false, Ordering::SeqCst);
+    port.release_pause_result.notify_one();
+    let corrected = wait_policy(&service, |policy| {
+        policy.automatic_stops.is_empty()
+            && policy.pending_targets.is_empty()
+            && policy
+                .target_outcomes
+                .first()
+                .is_some_and(|outcome| !outcome.succeeded)
+    })
+    .await;
+    assert!(
+        corrected.automatic_stops.is_empty(),
+        "the surviving older receipt cannot override the intervening manual pause"
+    );
+    assert_eq!(port.calls.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -874,6 +1041,214 @@ async fn group_stop_coordinates_a_late_member_and_leaves_other_groups_independen
     assert_eq!(
         port.calls.lock().unwrap().as_slice(),
         [("-exec-interrupt".into(), CommandTarget::Session(44))]
+    );
+}
+
+#[tokio::test]
+async fn changing_stop_mode_preserves_observed_automatic_pause_provenance() {
+    let (model, service, port, automatic_peer) = policy_fixture().await;
+    let cause = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    let owner_group = crate::state::ServiceIdentity::new("owner-group", "owner");
+    drop(model.register_service_group(43, &owner_group).await);
+    drop(
+        model
+            .register_service_group(
+                42,
+                &crate::state::ServiceIdentity::new("other-group", "other"),
+            )
+            .await,
+    );
+    model.register_session(44, "owner-peer", None).await;
+    drop(model.register_service_group(44, &owner_group).await);
+    model.complete_session_activation(44, None).await;
+    model.register_thread_group(44, "i1").await.unwrap();
+    model.register_thread(44, 11, "i1").await.unwrap();
+    model
+        .update_thread_statuses(44, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop_in_session(&model, 43, cause, None).await;
+    wait_policy(&service, |policy| {
+        policy.pending_targets.is_empty() && policy.target_outcomes.len() == 2
+    })
+    .await;
+
+    async fn pause_peer(model: &RuntimeModel, owner: u64) {
+        model
+            .update_thread_statuses_with_details(
+                42,
+                &[11],
+                ThreadStatus::STOPPED,
+                None,
+                Some(crate::state::ThreadStopReason {
+                    kind: crate::state::ThreadStopKind::Pause,
+                    signal_name: None,
+                    breakpoint_id: None,
+                    thread_id: Some(owner),
+                    log_message: None,
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    pause_peer(&model, automatic_peer).await;
+    let revision = model.thread_snapshots_for_sessions(&[42]).await[0].stop_revision;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service
+            .stop_policies
+            .classified_stop(automatic_peer, revision)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let observed = wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+    assert_eq!(
+        observed.automatic_stops[0].target,
+        Some(service_thread_target(&service, automatic_peer))
+    );
+    // Inspection handles can change while this native stop remains automatic.
+    model
+        .enter_custom_context(
+            42,
+            crate::state::ThreadContext {
+                tid: crate::state::GlobalThreadId::new(automatic_peer),
+                ctx: std::collections::HashMap::from([("pc".into(), 42)]),
+            },
+        )
+        .await;
+    model.finish_context_restore(42, true).await;
+    let refreshed = wait_policy(&service, |policy| {
+        policy
+            .automatic_stops
+            .first()
+            .is_some_and(|execution| execution.revision > observed.automatic_stops[0].revision)
+    })
+    .await;
+    assert_eq!(
+        model.thread_snapshots_for_sessions(&[42]).await[0].stop_revision,
+        revision
+    );
+    assert_eq!(
+        refreshed.automatic_stops[0],
+        service
+            .get_execution_state(GetExecutionStateRequest {
+                target: Some(service_thread_target(&service, automatic_peer)),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .execution_state
+            .unwrap()
+    );
+    port.calls.lock().unwrap().clear();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    let policy = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    assert_eq!(
+        policy.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, cause)),
+        "the older automatic peer must not replace the actual stop cause"
+    );
+    assert_eq!(policy.automatic_stops, refreshed.automatic_stops);
+    wait_policy(&service, |policy| {
+        policy.pending_targets.is_empty() && policy.target_outcomes.len() == 1
+    })
+    .await;
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        [("-exec-interrupt".into(), CommandTarget::Session(44))],
+        "group-stop must coordinate the initiating thread's group"
+    );
+
+    // Provenance belongs only to the observed native revision. A later pause
+    // from the same thread can establish an independent cause in its own group.
+    service.retire_stop_automation();
+    port.calls.lock().unwrap().clear();
+    pause_peer(&model, automatic_peer).await;
+    let policy = wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    assert_eq!(
+        policy.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, automatic_peer))
+    );
+    assert!(policy.automatic_stops.is_empty());
+    assert!(port.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_pause_takes_ownership_of_an_observed_automatic_stop() {
+    let (model, service, _, owner) = policy_fixture().await;
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    let peer = model.thread_snapshots_for_sessions(&[43]).await[0].global_id;
+    model
+        .update_thread_statuses_with_details(
+            43,
+            &[11],
+            ThreadStatus::STOPPED,
+            None,
+            Some(crate::state::ThreadStopReason {
+                kind: crate::state::ThreadStopKind::Pause,
+                signal_name: None,
+                breakpoint_id: None,
+                thread_id: Some(peer.value()),
+                log_message: None,
+            }),
+        )
+        .await
+        .unwrap();
+    wait_policy(&service, |policy| policy.automatic_stops.len() == 1).await;
+    let operation = service
+        .execute(
+            &PrincipalContext::new("manual-controller").unwrap(),
+            execute_request(
+                "claim-observed-automatic-stop",
+                session_target(service.ids.encode(ResourceIdKind::Session, 43).unwrap()),
+                ExecutionAction::Interrupt,
+            ),
+        )
+        .await
+        .unwrap()
+        .operation
+        .unwrap();
+    terminal_operation(&service, &operation.operation_id).await;
+    let policy = wait_policy(&service, |policy| {
+        policy
+            .initiating_stop
+            .as_ref()
+            .and_then(|stop| stop.target.as_ref())
+            == Some(&service_thread_target(&service, peer.value()))
+    })
+    .await;
+    assert!(policy.automatic_stops.is_empty());
+    model
+        .update_thread_statuses(42, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    let reconfigured = wait_policy(&service, |policy| {
+        policy.initiating_stop.is_some() || !policy.automatic_stops.is_empty()
+    })
+    .await;
+    assert!(
+        reconfigured.automatic_stops.is_empty(),
+        "mode changes must preserve manual ownership of the same native stop"
+    );
+    assert_eq!(
+        reconfigured.initiating_stop.unwrap().target,
+        Some(service_thread_target(&service, peer.value()))
     );
 }
 

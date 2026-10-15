@@ -8,6 +8,11 @@ public API belong in the project release notes.
 
 ### Added
 
+- `StopPolicy.automatic_stops` identifies the exact observed peer pauses that
+  DDB classified as automatic, independently of command acknowledgments. Clients
+  match execution identity and revision before suppressing a stop. The
+  `automatic_stop_provenance` DDB capability advertises this projection.
+
 - `ConfigureDebugger` applies session-wide pretty-printer enablement or a source
   prefix mapping through typed requests. Mapping order follows backend rules.
   DDB owns path quoting and rejects thread-scoped settings and control characters

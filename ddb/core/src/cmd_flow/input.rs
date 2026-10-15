@@ -14,6 +14,9 @@ pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
     fn dispatched(&self) {}
     /// A native error response proves that an admitted command was rejected.
     fn rejected(&self) {}
+    /// The command port has settled, after any proven native rejection. This
+    /// runs outside native permits and execution admission locks.
+    fn finished(&self) {}
     fn is_automatic(&self) -> bool {
         false
     }
