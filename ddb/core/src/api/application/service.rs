@@ -2775,6 +2775,94 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn restoring_caller_context_expires_frames_before_any_resume_event() {
+        let model = RuntimeModel::new();
+        model.register_session(42, "caller", None).await;
+        model.complete_session_activation(42, None).await;
+        model.register_thread_group(42, "i1").await.unwrap();
+        let owner = model.register_thread(42, 10, "i1").await.unwrap().thread_id;
+        model.register_thread(42, 20, "i1").await.unwrap();
+        model
+            .update_thread_statuses(42, &[10, 20], ThreadStatus::STOPPED)
+            .await
+            .unwrap();
+        assert!(
+            model
+                .enter_custom_context(
+                    42,
+                    crate::state::ThreadContext {
+                        tid: owner,
+                        ctx: std::collections::HashMap::from([("pc".into(), 42)]),
+                    },
+                )
+                .await
+        );
+        let service = service(Arc::clone(&model));
+        let frames = model
+            .thread_snapshots_for_sessions(&[42])
+            .await
+            .into_iter()
+            .map(|thread| {
+                let frame = service
+                    .projection()
+                    .frame(
+                        &super::super::debugger_reads::DecodedFrame {
+                            level: 0,
+                            function_name: None,
+                            path: None,
+                            line: 0,
+                            address: None,
+                            module: None,
+                        },
+                        thread.global_id.value(),
+                        thread.execution_revision,
+                    )
+                    .unwrap();
+                (thread.global_id, frame.frame_id)
+            })
+            .collect::<Vec<_>>();
+        let owner_frame = &frames
+            .iter()
+            .find(|(thread, _)| *thread == owner)
+            .unwrap()
+            .1;
+        assert!(service
+            .list_scopes(ListScopesRequest {
+                frame_id: owner_frame.clone(),
+                ..Default::default()
+            })
+            .await
+            .is_ok());
+
+        // Failed restoration leaves the reconstructed context inspectable.
+        assert!(model.finish_context_restore(42, false).await);
+        assert!(service
+            .list_scopes(ListScopesRequest {
+                frame_id: owner_frame.clone(),
+                ..Default::default()
+            })
+            .await
+            .is_ok());
+        assert!(model.finish_context_restore(42, true).await);
+        for (thread, frame_id) in frames {
+            let result = service
+                .list_scopes(ListScopesRequest {
+                    frame_id,
+                    ..Default::default()
+                })
+                .await;
+            if thread == owner {
+                assert_eq!(result.unwrap_err().code(), DdbErrorCode::Expired);
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "restoring one caller must not expire peer frames"
+                );
+            }
+        }
+    }
+
     #[derive(Default)]
     struct RecordingCommandPort {
         calls: AtomicUsize,

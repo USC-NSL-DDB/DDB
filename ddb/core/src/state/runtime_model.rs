@@ -1652,8 +1652,10 @@ mod tests {
     async fn custom_context_changes_are_only_available_through_model_commands() {
         let model = RuntimeModel::new();
         model.register_session(1, "svc", None).await;
+        model.register_thread_group(1, "i1").await.unwrap();
+        let owner = model.register_thread(1, 9, "i1").await.unwrap().thread_id;
         let context = ThreadContext {
-            tid: GlobalThreadId::new(9),
+            tid: owner,
             ctx: std::collections::HashMap::from([("pc".to_string(), 42)]),
         };
 
