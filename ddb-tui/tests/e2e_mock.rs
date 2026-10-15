@@ -2345,7 +2345,14 @@ fn real_logpoint_terminal_workflow() {
             + 1;
         tui.send(format!("\x1b[<0;5;{header}M\x1b[<0;5;{header}m").as_bytes());
         tui.send(b"Llog counter={counter}\r");
-        tui.wait_for("Logpoint configuration applied");
+        tui.wait_for("configure logpoint: completed");
+        ddb.wait_for_snapshot(|snapshot| {
+            snapshot.breakpoints.iter().any(|breakpoint| {
+                breakpoint.spec.as_ref().is_some_and(|spec| {
+                    spec.log_message.as_deref() == Some("log counter={counter}")
+                })
+            })
+        });
         tui.send(
             format!(
                 "g{}:{}\r",
@@ -2362,7 +2369,6 @@ fn real_logpoint_terminal_workflow() {
             snapshot.breakpoints.len() == 2 && snapshot.breakpoints.iter().all(|bp| bp.verified)
         });
         tui.send(b"\x1b[15~");
-        tui.wait_for_current_frame(|screen| screen.contains("log counter=0"));
         ddb.wait_for_snapshot(|snapshot| {
             snapshot.breakpoints.iter().all(|bp| bp.hit_count == 1)
                 && snapshot.threads.iter().any(|thread| {
@@ -2373,6 +2379,9 @@ fn real_logpoint_terminal_workflow() {
                             .is_some_and(|location| location.line == fixture.breakpoint_line as u32)
                 })
         });
+        tui.send(b"O");
+        tui.wait_for_current_frame(|screen| screen.contains("log counter=0"));
+        tui.send(b"O");
         tui.wait_for_source_marker('▶', fixture.breakpoint_line);
         tui.quit();
         ddb.shutdown();
@@ -3232,6 +3241,9 @@ StaticSessions:
 
         let mut command = Command::new(ddb_binary);
         command
+            // Fixtures include their symbols; startup must not wait on an
+            // external debuginfod server inherited from the developer's shell.
+            .env("DEBUGINFOD_URLS", "")
             .arg(&config_path)
             .current_dir(manifest_dir.join("../ddb/core"))
             .stdin(Stdio::piped())
