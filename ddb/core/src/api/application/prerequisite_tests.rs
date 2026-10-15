@@ -50,6 +50,10 @@ impl Fixture {
     }
 
     async fn with_migration(migration: bool) -> Self {
+        Self::with_limits(migration, 256 * 1024).await
+    }
+
+    async fn with_limits(migration: bool, max_output_bytes: usize) -> Self {
         let model = RuntimeModel::new();
         model.register_session(1, "fixture", None).await;
         model.complete_session_activation(1, None).await;
@@ -69,7 +73,10 @@ impl Fixture {
                 },
             )
             .await;
-        let output = OutputHub::new(Default::default());
+        let output = OutputHub::new(crate::cmd_flow::output_hub::OutputHubConfig {
+            max_text_bytes: max_output_bytes,
+            ..Default::default()
+        });
         let reducer = DebuggerEventReducer::new(
             model.clone(),
             BreakpointEventPublisher::new(
@@ -220,6 +227,42 @@ async fn writer_rejection_does_not_publish_logpoint_output_or_consume_the_stop()
         "rejected writer admission must not commit successful logpoint output"
     );
     no_output(&mut output).await;
+    assert!(
+        fixture
+            .model
+            .claim_thread_stop(fixture.thread, fixture.revision)
+            .await
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn configured_output_overflow_prevents_native_logpoint_admission() {
+    let fixture = Fixture::with_limits(false, 8).await;
+    fixture.model.finish_context_restore(1, true).await;
+    let service = fixture.service.clone();
+    let command = fixture.command();
+    let mut continuation = tokio::spawn(async move { service.continue_command(command).await });
+    let mut admitted = false;
+    let result = tokio::time::timeout(TIMEOUT, async {
+        tokio::select! {
+            result = &mut continuation => result.unwrap(),
+            (wire, written) = fixture.write() => {
+                admitted = true;
+                written.send(Ok(())).unwrap();
+                fixture.response(&wire, "-record-time-and-continue", "running").await;
+                continuation.await.unwrap()
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        result.is_err(),
+        "oversize output must veto native continuation"
+    );
+    assert!(!admitted);
+    assert_eq!(fixture.output.current_sequence(), 0);
     assert!(
         fixture
             .model
@@ -407,6 +450,53 @@ async fn logpoint_context_restoration_preserves_its_resume_claim_and_outputs_onc
             .await
     );
     fixture.stop().await;
+}
+
+#[tokio::test]
+async fn restore_rejection_and_cancellation_after_admission_prevent_logpoint_resume() {
+    for response in [
+        "error,msg=\"restore rejected\"",
+        "done,message=\"failure\"",
+        "done,message=\"success\"",
+    ] {
+        let fixture = Fixture::new().await;
+        let before = fixture.model.thread_snapshots_for_sessions(&[1]).await[0].execution_revision;
+        let mut output = fixture.output.subscribe(None).unwrap();
+        let service = fixture.service.clone();
+        let command = fixture.command();
+        let continuation = tokio::spawn(async move { service.continue_command(command).await });
+        let (restore, written) = fixture.write().await;
+        assert!(restore.contains("-switch-context-custom pc=42"));
+        let successful_restore = response.ends_with("\"success\"");
+        if successful_restore {
+            // Restoration was admitted before cancellation and may finish, but
+            // it cannot make the later automatic resume admissible.
+            fixture.model.retire_stop_automation();
+        }
+        written.send(Ok(())).unwrap();
+        fixture
+            .response(&restore, "-switch-context-custom", response)
+            .await;
+        let result = tokio::time::timeout(TIMEOUT, async {
+            tokio::select! {
+                result = continuation => result.unwrap(),
+                _ = fixture.requests.recv_async() => panic!("failed or canceled restoration admitted a resume"),
+            }
+        }).await.unwrap();
+        assert!(result.is_err());
+        let session = fixture.model.session_snapshot(1).await.unwrap();
+        assert_eq!(session.in_custom_context, !successful_restore);
+        let after = fixture.model.thread_snapshots_for_sessions(&[1]).await[0].execution_revision;
+        assert_eq!(after > before, successful_restore);
+        assert!(
+            fixture
+                .model
+                .claim_thread_stop(fixture.thread, fixture.revision)
+                .await
+        );
+        no_output(&mut output).await;
+        fixture.stop().await;
+    }
 }
 
 #[tokio::test]

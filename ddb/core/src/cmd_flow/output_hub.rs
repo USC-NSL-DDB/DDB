@@ -72,6 +72,8 @@ pub(crate) enum OutputHubError {
     SubscriberLimit,
     #[error("output sequence is exhausted")]
     SequenceExhausted,
+    #[error("output exceeds the configured event limit")]
+    EventTooLarge,
 }
 
 #[derive(Default)]
@@ -127,7 +129,8 @@ impl OutputHub {
         stream: DebuggerOutputStream,
         text: impl Into<String>,
     ) -> Result<(), OutputHubError> {
-        self.publish_on_admission(session_id, thread_id, stream, text, || Ok(()))
+        let (text, truncated) = truncate_utf8(text.into(), self.config.max_text_bytes);
+        self.commit_on_admission(session_id, thread_id, stream, (text, truncated), || Ok(()))
     }
 
     /// Commit output only when the synchronous action is admitted. The action
@@ -140,7 +143,21 @@ impl OutputHub {
         text: impl Into<String>,
         action: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
-        let (text, truncated) = truncate_utf8(text.into(), self.config.max_text_bytes);
+        let text = text.into();
+        if text.len() > self.config.max_text_bytes {
+            return Err(OutputHubError::EventTooLarge.into());
+        }
+        self.commit_on_admission(session_id, thread_id, stream, (text, false), action)
+    }
+
+    fn commit_on_admission<T, E: From<OutputHubError>>(
+        &self,
+        session_id: Option<u64>,
+        thread_id: Option<u64>,
+        stream: DebuggerOutputStream,
+        (text, truncated): (String, bool),
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
         let mut state = self.state();
         if self.closed.load(Ordering::Acquire) {
             return Err(OutputHubError::Closed.into());
@@ -533,7 +550,7 @@ mod tests {
                 None,
                 None,
                 DebuggerOutputStream::Console,
-                "unadmitted logpoint",
+                "skip",
                 || -> Result<(), OutputHubError> {
                     panic!("unavailable output must prevent writer admission")
                 },
@@ -557,7 +574,7 @@ mod tests {
                 None,
                 None,
                 DebuggerOutputStream::Console,
-                "admitted logpoint",
+                "emit",
                 || {
                     entered_tx.send(()).unwrap();
                     proceed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -588,7 +605,7 @@ mod tests {
                 None,
                 None,
                 DebuggerOutputStream::Console,
-                "after close",
+                "late",
                 || -> Result<(), OutputHubError> {
                     panic!("closed output must prevent writer admission")
                 },

@@ -2500,6 +2500,9 @@ fn output_hub_error(error: OutputHubError) -> ApplicationError {
         OutputHubError::SequenceExhausted => {
             ApplicationError::new(DdbErrorCode::Internal, "output sequence is exhausted")
         }
+        OutputHubError::EventTooLarge => {
+            ApplicationError::resource_exhausted("output exceeds the configured event limit")
+        }
     }
 }
 
