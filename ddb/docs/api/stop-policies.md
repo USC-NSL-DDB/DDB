@@ -123,3 +123,6 @@ replay retains its existing loss-reporting behavior.
 Logpoints interrupt the target and may evaluate debugger expressions with
 side effects. They are not non-stopping tracepoints. Peer pause coordination
 does not create a simultaneous distributed snapshot.
+
+The [lifecycle audit](stop-logpoint-lifecycle.md) records the protocol invariants,
+boundary coverage, and verification evidence.
