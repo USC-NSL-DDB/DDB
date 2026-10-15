@@ -11,7 +11,11 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use super::{
-    api::CommandExecutor, input::ParsedInputCmd, router::Target, CommandOutcome, Presentation,
+    api::CommandExecutor,
+    engine::retire_legacy_stop_automation,
+    input::{CommandMetadata, ParsedInputCmd},
+    router::Target,
+    CommandOutcome, Presentation,
 };
 use crate::{
     feature::proclet_query::ProcletQueryService, source::resolver::SourceResolver,
@@ -40,7 +44,11 @@ impl DiagnosticConsole {
         }
     }
 
-    pub(crate) async fn execute(&self, command: &str) -> Result<CommandOutcome> {
+    pub(crate) async fn execute(
+        &self,
+        command: &str,
+        metadata: CommandMetadata,
+    ) -> Result<CommandOutcome> {
         match command {
             "p-source-resolver" => info!("p-source-resolver: {:#?}", self.source_resolver),
             "p-session-meta" => {
@@ -55,7 +63,9 @@ impl DiagnosticConsole {
                 let path = &command["p-resolve-src ".len()..];
                 self.source_resolver.resolve_path(path).await?;
             }
-            _ if command.starts_with("s-cmd ") => return Ok(self.session_command(command).await),
+            _ if command.starts_with("s-cmd ") => {
+                return Ok(self.session_command(command, metadata).await)
+            }
             _ if command.starts_with("q-proclet ") => {
                 let parts = command.split_whitespace().collect::<Vec<_>>();
                 if let Some(Ok(proclet_id)) = parts.get(1).map(|id| id.parse::<u64>()) {
@@ -70,7 +80,7 @@ impl DiagnosticConsole {
         Ok(CommandOutcome::empty())
     }
 
-    async fn session_command(&self, command: &str) -> CommandOutcome {
+    async fn session_command(&self, command: &str, metadata: CommandMetadata) -> CommandOutcome {
         let parts = command.split_whitespace().collect::<Vec<_>>();
         if parts.len() < 3 {
             info!("Usage: s-cmd <session_id> <cmd>");
@@ -83,7 +93,15 @@ impl DiagnosticConsole {
         let raw = parts[2..].join(" ");
         match TryInto::<ParsedInputCmd>::try_into(raw) {
             Ok(parsed) => {
-                let command = parsed.with_target(Target::Session(sid));
+                let command = parsed
+                    .with_target(Target::Session(sid))
+                    .with_metadata(metadata);
+                if let Err(error) = retire_legacy_stop_automation(&self.model, &command, |target| {
+                    self.executor.resolve_session_ids(target)
+                }) {
+                    warn!(?error, "failed to resolve internal command cancellation");
+                    return CommandOutcome::empty();
+                }
                 match self.executor.execute_parsed(command).await {
                     Ok(response) => {
                         return CommandOutcome::response(response, Presentation::Plain);
@@ -100,5 +118,82 @@ impl DiagnosticConsole {
 impl fmt::Debug for DiagnosticConsole {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("DiagnosticConsole").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ddb_api_types::v2::OperationKind;
+
+    use crate::{
+        cmd_flow::router::Router,
+        common::Config,
+        plugin::resolve_framework_plugin,
+        source::{
+            catalog::SourceCatalog,
+            resolver::{SourceResolutionPolicy, SourceResolver},
+        },
+    };
+
+    use super::*;
+
+    async fn console(model: &Arc<RuntimeModel>) -> DiagnosticConsole {
+        let executor = CommandExecutor::new(Arc::new(Router::new(model.clone())));
+        let source = SourceResolver::new(
+            Arc::new(SourceCatalog::new()),
+            model.clone(),
+            executor.clone(),
+            SourceResolutionPolicy::OnDemand,
+        );
+        let config = Config::from_str("Framework: unspecified\n").unwrap();
+        let plugin = resolve_framework_plugin(&config);
+        let proclets = ProcletQueryService::connect(&config, plugin.as_ref())
+            .await
+            .unwrap();
+        DiagnosticConsole::new(model.clone(), source, proclets, executor)
+    }
+
+    #[tokio::test]
+    async fn legacy_diagnostic_session_resume_retires_pending_automation() {
+        let model = RuntimeModel::new();
+        let console = console(&model).await;
+        console
+            .execute("s-cmd 1 -exec-continue", CommandMetadata::default())
+            .await
+            .unwrap();
+        // Native routing fails because the session is absent, but the explicit
+        // intent must already fence pending automatic work.
+        assert_eq!(model.execution_control_epoch().current(), 1);
+    }
+
+    #[tokio::test]
+    async fn admitted_diagnostic_resume_preserves_automation_from_after_acceptance() {
+        let model = RuntimeModel::new();
+        let console = console(&model).await;
+        model.retire_stop_automation();
+        let accepted_epoch = model.execution_control_epoch().current();
+        console
+            .execute(
+                "s-cmd 1 -exec-continue",
+                CommandMetadata {
+                    operation_id: Some("accepted-raw-diagnostic".into()),
+                    operation_kind: Some(OperationKind::RawCommand as u32),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(model.execution_control_epoch().current(), accepted_epoch);
+    }
+
+    #[tokio::test]
+    async fn diagnostic_inspection_preserves_pending_automation() {
+        let model = RuntimeModel::new();
+        let console = console(&model).await;
+        console
+            .execute("s-cmd 1 -stack-list-frames", CommandMetadata::default())
+            .await
+            .unwrap();
+        assert_eq!(model.execution_control_epoch().current(), 0);
     }
 }

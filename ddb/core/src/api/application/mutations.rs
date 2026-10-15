@@ -1088,22 +1088,29 @@ impl DdbApplicationService {
                 // Store -> policy -> execution admission. Dispatch releases the
                 // execution gate before its callback acquires policy state, and
                 // policy reconciliation never calls the store while locked.
-                if kind == OperationKind::Execute
-                    && !matches!(projection, CompletionProjection::AutomaticExecution(_))
-                {
+                let automatic = match &projection {
+                    CompletionProjection::AutomaticExecution(_) => true,
+                    CompletionProjection::Evaluation {
+                        dispatch_guard: Some(guard),
+                        ..
+                    } => guard.is_automatic(),
+                    _ => false,
+                };
+                let invalidates_automation = matches!(
+                    kind,
+                    OperationKind::Execute
+                        | OperationKind::SetVariable
+                        | OperationKind::UpdateBreakpoint
+                        | OperationKind::DeleteBreakpoint
+                        | OperationKind::RawCommand
+                ) || (kind == OperationKind::Evaluate
+                    && command.starts_with("-data-evaluate-expression"));
+                if invalidates_automation && !automatic {
                     if command == "-exec-interrupt" {
                         self.retire_stop_automation_for_pauses(&resolved.session_ids);
                     } else {
                         self.retire_stop_automation();
                     }
-                }
-                if matches!(
-                    kind,
-                    OperationKind::UpdateBreakpoint
-                        | OperationKind::DeleteBreakpoint
-                        | OperationKind::RawCommand
-                ) {
-                    self.retire_stop_automation();
                 }
                 Ok(())
             },
