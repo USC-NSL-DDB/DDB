@@ -204,37 +204,132 @@ async fn guarded_dispatch_rejects_native_events_arriving_during_validation() {
     stop(&handle, task).await;
 }
 
-#[tokio::test]
-async fn guarded_dispatch_does_not_queue_behind_an_unacknowledged_write() {
-    let (transport, requests, _events) = test_transport(8);
+#[tokio::test(start_paused = true)]
+async fn guarded_dispatch_waits_for_prior_writes_before_validating() {
+    let (transport, requests, events) = test_transport(8);
     let (handle, task, _terminations) = spawn_runtime(56, transport);
     let first = handle.submit(command()).await.unwrap();
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while requests.is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    let (_, first_ack) = receive_write(&requests).await;
     let guard = Arc::new(CountingGuard::default());
     let mut guarded = command();
     guarded.metadata.dispatch_guard = Some(guard.clone());
     let ticket = handle.submit(guarded).await.unwrap();
-    let error = tokio::time::timeout(TEST_TIMEOUT, ticket.complete())
+    let mut completion = Box::pin(ticket.complete());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), &mut completion)
+            .await
+            .is_err()
+    );
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(
+        requests.is_empty(),
+        "stop validation must wait for the writer"
+    );
+
+    first_ack.send(Ok(())).unwrap();
+    let (_, second_ack) = receive_write(&requests).await;
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    second_ack.send(Ok(())).unwrap();
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from_static(
+            b"1^done\n2^done\n",
+        )))
+        .await
+        .unwrap();
+    assert!(completion.await.is_ok());
+    assert!(first.complete().await.is_ok());
+    stop(&handle, task).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn guarded_dispatch_revalidates_stops_after_waiting_for_prior_writes() {
+    let sid = 70;
+    let (guard, reducer) = stopped_guard_fixture(sid).await;
+    let (transport, requests, events) = test_transport(8);
+    let (handle, task, _terminations) = spawn_runtime_with_reducer(sid, transport, reducer);
+    let first = handle.submit(command()).await.unwrap();
+    let (_, first_ack) = receive_write(&requests).await;
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard);
+    let ticket = handle.submit(guarded).await.unwrap();
+    let mut completion = Box::pin(ticket.complete());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), &mut completion)
+            .await
+            .is_err()
+    );
+    events
+        .send_async(TransportEvent::Stdout(Bytes::from_static(NEW_STOP)))
+        .await
+        .unwrap();
+    first_ack.send(Ok(())).unwrap();
+    let error = tokio::time::timeout(TEST_TIMEOUT, completion)
         .await
         .unwrap()
         .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("transport write is still pending"));
-    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert_eq!(
-        requests.len(),
-        1,
-        "spare queue capacity must not delay a validated stop"
+    assert!(error.is::<crate::cmd_flow::input::StaleExecution>());
+    assert!(
+        requests.is_empty(),
+        "a newer stop must veto the waiting command"
     );
     stop(&handle, task).await;
     assert!(first.complete().await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn guarded_dispatch_waiting_for_prior_writes_honors_native_deadlines() {
+    let (transport, requests, _events) = test_transport(8);
+    let config = RuntimeConfig {
+        command_timeout: Duration::from_millis(25),
+        sweep_interval: Duration::from_millis(5),
+        projector_delay: Duration::ZERO,
+        publisher_delay: Duration::ZERO,
+    };
+    let (handle, task, _terminations) = spawn_runtime_with_config(71, transport, config);
+    let first = handle.submit(command()).await.unwrap();
+    let (_, first_ack) = receive_write(&requests).await;
+    let guard = Arc::new(CountingGuard::default());
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded).await.unwrap();
+    let error = tokio::time::timeout(Duration::from_millis(100), ticket.complete())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    first_ack.send(Ok(())).unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(
+        requests.is_empty(),
+        "expired work must not be dispatched later"
+    );
+    stop(&handle, task).await;
+    assert!(first.complete().await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn guarded_dispatch_waiting_for_prior_writes_is_interrupted_by_shutdown() {
+    let (transport, requests, _events) = test_transport(8);
+    let (handle, task, _terminations) = spawn_runtime(72, transport);
+    let first = handle.submit(command()).await.unwrap();
+    let (_, first_ack) = receive_write(&requests).await;
+    let guard = Arc::new(CountingGuard::default());
+    let mut guarded = command();
+    guarded.metadata.dispatch_guard = Some(guard.clone());
+    let ticket = handle.submit(guarded).await.unwrap();
+    let mut completion = Box::pin(ticket.complete());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), &mut completion)
+            .await
+            .is_err()
+    );
+    stop(&handle, task).await;
+    let _ = first_ack.send(Ok(()));
+    assert!(completion.await.is_err());
+    assert!(first.complete().await.is_err());
+    assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(requests.is_empty());
 }
 
 #[tokio::test]

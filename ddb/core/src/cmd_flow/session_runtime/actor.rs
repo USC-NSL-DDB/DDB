@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{stream::FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, warn};
 
@@ -265,6 +265,49 @@ pub(super) async fn run_session(
                             }
                         };
                         if let Some(guard) = &command.metadata.dispatch_guard {
+                            // Wait for earlier writes before validating native
+                            // state. An acknowledgement can lag its result, and
+                            // failing here makes otherwise valid controls race
+                            // with ordinary inspection. No stop claim is held
+                            // while events, deadlines, and shutdown stay active.
+                            while !write_completions.is_empty() {
+                                let write_deadline = pending.nearest_deadline().unwrap_or(deadline);
+                                let result = guarded!(
+                                    &mut control,
+                                    async {
+                                        tokio::select! {
+                                            biased;
+                                            _ = tokio::time::sleep_until(write_deadline) => {
+                                                pending.sweep_expired();
+                                                Ok(())
+                                            }
+                                            Some((owner, result)) = write_completions.next() => {
+                                                finish_write(owner, result, &mut pending);
+                                                Ok(())
+                                            }
+                                            event = events.recv_async() => {
+                                                process_transport_event(
+                                                    sid,
+                                                    event.ok(),
+                                                    &mut demux,
+                                                    &mut pending,
+                                                    protocol.as_mut(),
+                                                ).await
+                                            }
+                                        }
+                                    },
+                                    shutdown_ack,
+                                    'runtime
+                                );
+                                if let Err(cause) = result {
+                                    faulted_projection = matches!(&cause, SessionTerminationCause::ProtocolFault { .. });
+                                    termination.terminate(cause);
+                                    break 'runtime;
+                                }
+                                if !pending.contains(token) {
+                                    continue 'runtime;
+                                }
+                            }
                             // The select loop may choose a request while native
                             // events are already queued. Fence those events, not
                             // just the records previously decoded by the actor.
@@ -285,16 +328,6 @@ pub(super) async fn run_session(
                                     termination.terminate(cause);
                                     break 'runtime;
                                 }
-                            }
-                            // Spare queue capacity does not imply an idle writer.
-                            // Do not validate a stop while an earlier write can
-                            // still delay this command after its guard succeeds.
-                            while let Some(Some((owner, result))) = write_completions.next().now_or_never() {
-                                finish_write(owner, result, &mut pending);
-                            }
-                            if !write_completions.is_empty() {
-                                pending.fail(token, anyhow!("guarded transport write is still pending"));
-                                continue;
                             }
                             let result = guarded!(
                                 &mut control,

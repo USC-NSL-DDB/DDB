@@ -30,6 +30,11 @@ change. A command response and its execution event can arrive in either order.
 Preparatory frame queries, evaluations, register restoration, and migrated-heap
 cleanup have their own queueing and write-admission boundaries.
 
+Guarded commands wait for preceding write acknowledgments before validating a
+stop. This wait continues processing native events and honors pending command
+deadlines and shutdown. Writer admission follows validation without another
+queue wait.
+
 Cancellation wins when it advances the epoch or expires the task lease before
 the final synchronous admission gate. Already admitted writes can finish after
 cancellation. A rejected queue insertion is unadmitted; a later transport failure
@@ -71,12 +76,12 @@ check. Test names are abbreviated only by omitting their Rust module paths.
 | Migrated-heap lease acquisition and cleanup | I3, I4, I10 | `cancelled_migration_cleanup_preserves_heap_records_and_never_writes`; partial-failure and retired-peer tests. |
 | Heap acknowledgment and receipt removal | I10, I12 | `migration_cleanup_holds_the_session_lease_through_receipt_removal` queues a later restoration and verifies its resampled receipt set. Live partial failure retains receipts; absent/OFF peers expire them. |
 | Context entry, restoration queue, acknowledgment | I1, I3, I4, I10 | `context_entry_expires_only_its_owners_reads_and_preserves_native_claims`; `cancelled_or_stale_logpoint_does_not_restore_registers_after_queuing`; `restore_rejection_and_cancellation_after_admission_prevent_logpoint_resume`; successful restoration/output-once test. |
-| Actor event fence and native-state preparation | I1, I3, I4 | Native actor tests for preceding stops, events arriving during validation, and a busy writer; runtime-model tests for retirement, ID reuse, and consistent source/peer sampling. |
+| Actor writer availability, event fence, and native-state preparation | I1, I3, I4 | `guarded_dispatch_waits_for_prior_writes_before_validating`; `guarded_dispatch_revalidates_stops_after_waiting_for_prior_writes`; native actor tests for preceding stops and events arriving during validation; runtime-model tests for retirement, ID reuse, and consistent source/peer sampling. |
 | Cancellation after preparation | I3, I4, I5 | `cancellation_after_validation_prevents_logpoint_output_and_admission`; `cancellation_and_admission_have_a_single_order_across_threads` exercises admission-first and rejects the retired epoch afterward. |
 | Output preflight and writer queue admission | I4, I5 | `writer_rejection_does_not_publish_logpoint_output_or_consume_the_stop`; `closed_output_prevents_native_logpoint_admission_and_keeps_the_stop_available`; `configured_output_overflow_prevents_native_logpoint_admission`; output sequence-exhaustion test. |
 | Writer acknowledgment failure | I4, I5, I8 | `late_writer_failure_keeps_admitted_logpoint_output_and_consumed_stop`; `lost_continuation_ack_preserves_output_and_claim_but_coordinates_current_stop`. An uncertain admitted command never re-evaluates the same logpoint. |
 | Native command rejection and task timeout | I4, I7, I8 | Proven-native-rejection command-port tests; `expired_logpoint_leases_veto_queued_frames_evaluations_and_continuations` advances the actual 30-second deadline while work remains queued. |
-| Native preparation, queue, and projection deadlines | I3, I12 | Blocked guard/fence and queue-insertion deadline tests; `native_command_deadline_bounds_state_projection_and_releases_its_permit`; canceled/closed/shutdown projection-barrier tests retain registration until terminal cleanup. |
+| Native preparation, queue, and projection deadlines | I3, I12 | `guarded_dispatch_waiting_for_prior_writes_honors_native_deadlines`; `guarded_dispatch_waiting_for_prior_writes_is_interrupted_by_shutdown`; blocked guard/fence and queue-insertion deadline tests; `native_command_deadline_bounds_state_projection_and_releases_its_permit`; canceled/closed/shutdown projection-barrier tests retain registration until terminal cleanup. |
 | Saturated native event processing | I3, I12 | `native_event_backpressure_faults_at_the_pending_deadline`; `guarded_event_drain_backpressure_faults_before_any_native_write`. A timed-out partial decoder faults the session; it never resumes using consumed decoder state. |
 | Command acknowledgment versus native Running/Stopped | I1, I8, I11 | `continue_acknowledgment_does_not_overwrite_a_newer_native_stop`; native projection watermark tests. |
 | Peer pause queue, source retirement, peer restart | I1, I8, I9 | `queued_peer_pause_cannot_interrupt_a_newer_running_generation`; failed-peer-pause tests; runtime source/peer identity guards. One pending target prevents overlapping result ownership; callbacks match source identity, native revision, and epoch before updating current outcomes. |
