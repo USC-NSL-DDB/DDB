@@ -65,10 +65,25 @@ struct ManualStop {
     epoch: u64,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LogpointDisposition {
+    InFlight,
+    Continued,
+    Failed,
+}
+
+#[derive(Clone, Copy)]
+struct LogpointState {
+    revision: u64,
+    epoch: u64,
+    disposition: LogpointDisposition,
+}
+
 struct PolicyState {
     public: v2::StopPolicy,
     seen: HashMap<u64, u64>,
-    logpoints_seen: HashMap<u64, u64>,
+    logpoints: HashMap<u64, LogpointState>,
+    ordinary_stops: BTreeMap<u64, Stop>,
     manual_stops: HashMap<u64, ManualStop>,
     // Preserve observed provenance independently of pending command receipts.
     automatic_stops: HashMap<u64, u64>,
@@ -90,6 +105,13 @@ impl StopPolicies {
         self.state().seen.get(&thread) == Some(&revision)
     }
 
+    #[cfg(test)]
+    pub fn continued_logpoint(&self, thread: u64, revision: u64) -> bool {
+        self.state().logpoints.get(&thread).is_some_and(|stop| {
+            stop.revision == revision && stop.disposition == LogpointDisposition::Continued
+        })
+    }
+
     pub fn new(epoch: Arc<ExecutionControl>) -> Self {
         Self {
             state: Arc::new(Mutex::new(PolicyState {
@@ -99,7 +121,8 @@ impl StopPolicies {
                     ..Default::default()
                 },
                 seen: HashMap::new(),
-                logpoints_seen: HashMap::new(),
+                logpoints: HashMap::new(),
+                ordinary_stops: BTreeMap::new(),
                 manual_stops: HashMap::new(),
                 automatic_stops: HashMap::new(),
                 cause: None,
@@ -508,6 +531,7 @@ impl DdbApplicationService {
         let mut state = self.stop_policies.state();
         self.stop_policies.epoch.advance_for_pauses(sessions);
         state.cause = None;
+        state.ordinary_stops.clear();
         state.attempts.clear();
         state.public.generation += 1;
         state.public.initiating_stop = None;
@@ -543,12 +567,19 @@ impl DdbApplicationService {
         }
         self.stop_policies.epoch.advance();
         state.cause = None;
-        let logpoints_seen = state.logpoints_seen.clone();
+        state.ordinary_stops.clear();
+        for logpoint in state.logpoints.values_mut() {
+            if logpoint.disposition == LogpointDisposition::InFlight {
+                logpoint.disposition = LogpointDisposition::Failed;
+            }
+        }
+        let logpoints = state.logpoints.clone();
         let manual_stops = state.manual_stops.clone();
         let automatic_stops = state.automatic_stops.clone();
         state.seen.retain(|id, revision| {
-            (logpoints_seen.get(id) == Some(revision)
-                && manual_stops.get(id).map(|stop| stop.revision) != Some(*revision))
+            (logpoints.get(id).is_some_and(|stop| {
+                stop.revision == *revision && stop.disposition == LogpointDisposition::Continued
+            }) && manual_stops.get(id).map(|stop| stop.revision) != Some(*revision))
                 || automatic_stops.get(id) == Some(revision)
         });
         state.attempts.clear();
@@ -595,6 +626,7 @@ impl DdbApplicationService {
         let view = self.queries.snapshot().await;
         let mut logpoints = Vec::new();
         let mut pauses = Vec::new();
+        let publication;
         {
             let mut state = self.stop_policies.state();
             if self.stop_policies.epoch.current() != epoch {
@@ -604,8 +636,16 @@ impl DdbApplicationService {
                 .seen
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
             state
-                .logpoints_seen
+                .logpoints
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
+            state.ordinary_stops.retain(|id, stop| {
+                stop.epoch == epoch
+                    && view.threads.iter().any(|thread| {
+                        thread.global_id == *id
+                            && thread.status == "stopped"
+                            && thread.stop_revision == stop.thread.stop_revision
+                    })
+            });
             state
                 .manual_stops
                 .retain(|id, _| view.threads.iter().any(|thread| thread.global_id == *id));
@@ -726,26 +766,72 @@ impl DdbApplicationService {
                             .map(|stop| stop.revision)
                             != Some(thread.stop_revision)
                 }) {
-                    state
-                        .logpoints_seen
-                        .insert(thread.global_id, thread.stop_revision);
-                    if tasks.len() + logpoints.len() < MAX_AUTOMATIC_TASKS {
-                        logpoints.push((stop, message.clone()));
-                        continue;
+                    let previous = state
+                        .logpoints
+                        .get(&thread.global_id)
+                        .filter(|logpoint| logpoint.revision == thread.stop_revision);
+                    if let Some(previous) = previous {
+                        if previous.disposition != LogpointDisposition::Failed {
+                            continue;
+                        }
+                    } else {
+                        let available = tasks.len() + logpoints.len() < MAX_AUTOMATIC_TASKS;
+                        state.logpoints.insert(
+                            thread.global_id,
+                            LogpointState {
+                                revision: thread.stop_revision,
+                                epoch,
+                                disposition: if available {
+                                    LogpointDisposition::InFlight
+                                } else {
+                                    LogpointDisposition::Failed
+                                },
+                            },
+                        );
+                        if available {
+                            logpoints.push((stop, message.clone()));
+                            continue;
+                        }
+                        let _ = self.output.publish(
+                            Some(thread.session_id),
+                            DebuggerOutputStream::Log,
+                            "Logpoint left stopped: automatic work limit reached\n",
+                        );
                     }
-                    let _ = self.output.publish(
-                        Some(thread.session_id),
-                        DebuggerOutputStream::Log,
-                        "Logpoint left stopped: automatic work limit reached\n",
-                    );
                 }
-                if state.cause.is_none()
-                    && state.public.mode != v2::StopMode::Independent as i32
-                    && !automatic_pause
-                {
+                if !automatic_pause {
+                    state.ordinary_stops.insert(thread.global_id, stop);
+                }
+            }
+            // Inspection can advance the public execution revision without
+            // changing the retained native stop or its cancellation epoch.
+            for thread in &view.threads {
+                if let Some(stop) = state.ordinary_stops.get_mut(&thread.global_id) {
+                    if let Some((_, execution)) = self.projection().execution_state(
+                        self.policy_thread_target(thread.global_id)?,
+                        std::slice::from_ref(thread),
+                    )? {
+                        stop.thread = thread.clone();
+                        stop.execution = execution;
+                    }
+                }
+            }
+            if let Some(current) = state
+                .cause
+                .as_ref()
+                .and_then(|cause| state.ordinary_stops.get(&cause.thread.global_id).cloned())
+            {
+                if state.public.initiating_stop.as_ref() != Some(&current.execution) {
+                    state.public.initiating_stop = Some(current.execution.clone());
+                    changed = true;
+                }
+                state.cause = Some(current);
+            }
+            if state.cause.is_none() && state.public.mode != v2::StopMode::Independent as i32 {
+                if let Some(stop) = state.ordinary_stops.values().next().cloned() {
                     state.public.generation += 1;
-                    // A native stop does not retire another thread's transparent
-                    // logpoint. Explicit client intent owns epoch cancellation.
+                    // Native turnover preserves deferred stops. Explicit intent
+                    // retires their control epoch before another cause can form.
                     state.public.initiating_stop = Some(stop.execution.clone());
                     state.public.target_outcomes.clear();
                     state.cause = Some(stop);
@@ -817,9 +903,14 @@ impl DdbApplicationService {
                     changed = true;
                 }
             }
-            if changed {
-                self.publish_stop_policy(&mut state)?;
-            }
+            // Scheduling has already reserved these native stops and targets.
+            // A bounded journal can reject their projection; it must not leave
+            // the reserved work permanently marked seen or pending but unrun.
+            publication = if changed {
+                self.publish_stop_policy(&mut state)
+            } else {
+                Ok(())
+            };
         }
         for (stop, message) in logpoints {
             let service = self.clone();
@@ -827,9 +918,9 @@ impl DdbApplicationService {
                 let result =
                     tokio::time::timeout(AUTOMATION_TIMEOUT, service.run_logpoint(&stop, &message))
                         .await;
-                if !matches!(result, Ok(Ok(()))) {
-                    service.logpoint_failed(stop).await;
-                }
+                service
+                    .logpoint_finished(stop, matches!(result, Ok(Ok(()))))
+                    .await;
             });
         }
         for (stop, peer, target, attempt, running) in pauses {
@@ -881,7 +972,7 @@ impl DdbApplicationService {
                 let _ = service.publish_stop_policy(&mut state);
             });
         }
-        Ok(())
+        publication
     }
 
     fn policy_thread_target(&self, thread: u64) -> Result<v2::Target, ApplicationError> {
@@ -1098,30 +1189,37 @@ impl DdbApplicationService {
         .await
     }
 
-    async fn logpoint_failed(&self, stop: Stop) {
+    async fn logpoint_finished(&self, stop: Stop, continued: bool) {
         let current = self.queries.thread_by_id(stop.thread.global_id).await;
-        if self.stop_policies.epoch.current() != stop.epoch
-            || current.as_ref().is_none_or(|thread| {
-                thread.status != "stopped" || thread.stop_revision != stop.thread.stop_revision
+        let mut state = self.stop_policies.state();
+        let Some(logpoint) = state
+            .logpoints
+            .get_mut(&stop.thread.global_id)
+            .filter(|logpoint| {
+                logpoint.revision == stop.thread.stop_revision
+                    && logpoint.epoch == stop.epoch
+                    && logpoint.disposition == LogpointDisposition::InFlight
+            })
+        else {
+            return;
+        };
+        logpoint.disposition = if continued {
+            LogpointDisposition::Continued
+        } else {
+            LogpointDisposition::Failed
+        };
+        if !continued
+            && self.stop_policies.epoch.current() == stop.epoch
+            && current.as_ref().is_some_and(|thread| {
+                thread.status == "stopped" && thread.stop_revision == stop.thread.stop_revision
             })
         {
-            return;
-        }
-        let _ = self.output.publish(
-            Some(stop.thread.session_id),
-            DebuggerOutputStream::Log,
-            "Logpoint failed; left the initiating thread stopped\n",
-        );
-        let mut state = self.stop_policies.state();
-        if self.stop_policies.epoch.current() != stop.epoch {
-            return;
-        }
-        if state.cause.is_none() && state.public.mode != v2::StopMode::Independent as i32 {
-            state.public.generation += 1;
-            state.public.initiating_stop = Some(stop.execution.clone());
-            state.cause = Some(stop);
-            state.attempts.clear();
-            let _ = self.publish_stop_policy(&mut state);
+            state.seen.remove(&stop.thread.global_id);
+            let _ = self.output.publish(
+                Some(stop.thread.session_id),
+                DebuggerOutputStream::Log,
+                "Logpoint failed; left the initiating thread stopped\n",
+            );
         }
         self.stop_policies.wake.notify_one();
     }

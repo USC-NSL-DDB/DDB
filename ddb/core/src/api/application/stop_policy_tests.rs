@@ -1360,3 +1360,394 @@ async fn explicit_pause_is_a_cause_but_a_late_automatic_pause_is_not() {
         .is_none());
     assert_eq!(port.calls.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn natural_cause_retirement_promotes_an_already_observed_ordinary_stop() {
+    let (model, service, port, owner) = policy_fixture().await;
+    model.register_session(44, "second-group-peer", None).await;
+    model.complete_session_activation(44, None).await;
+    model.register_thread_group(44, "i1").await.unwrap();
+    model.register_thread(44, 11, "i1").await.unwrap();
+    model
+        .update_thread_statuses(44, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    drop(
+        model
+            .register_service_group(42, &crate::state::ServiceIdentity::new("one", "worker"))
+            .await,
+    );
+    let second_group = crate::state::ServiceIdentity::new("two", "worker");
+    drop(model.register_service_group(43, &second_group).await);
+    drop(model.register_service_group(44, &second_group).await);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| policy.initiating_stop.is_some()).await;
+    let second = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    policy_stop_in_session(&model, 43, second, None).await;
+    let revision = model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.stop_policies.classified_stop(second, revision) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(port.calls.lock().unwrap().is_empty());
+
+    model
+        .enter_custom_context(
+            43,
+            crate::state::ThreadContext {
+                tid: crate::state::GlobalThreadId::new(second),
+                ctx: std::collections::HashMap::new(),
+            },
+        )
+        .await;
+    model.finish_context_restore(43, true).await;
+    let current = service
+        .get_execution_state(GetExecutionStateRequest {
+            target: Some(service_thread_target(&service, second)),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .execution_state
+        .unwrap();
+
+    // A native running event retires the first cause without an explicit DDB
+    // command cancelling the other session's current ordinary stop.
+    model
+        .update_thread_statuses(42, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    let expected = service_thread_target(&service, second);
+    let policy = wait_policy(&service, |policy| {
+        policy
+            .initiating_stop
+            .as_ref()
+            .and_then(|stop| stop.target.as_ref())
+            == Some(&expected)
+            && !policy.target_outcomes.is_empty()
+    })
+    .await;
+    assert_eq!(policy.initiating_stop.unwrap(), current);
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        &[("-exec-interrupt".into(), CommandTarget::Session(44))]
+    );
+}
+
+#[tokio::test]
+async fn mode_change_coordinates_a_cancelled_logpoints_current_native_stop() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_continue.store(true, Ordering::SeqCst);
+    let mut output = service.output.subscribe(None).unwrap();
+    policy_stop(&model, owner, Some("cancelled logpoint")).await;
+    tokio::time::timeout(Duration::from_secs(1), port.continue_queued.notified())
+        .await
+        .unwrap();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    port.release_continue.notify_one();
+
+    let expected = service_thread_target(&service, owner);
+    let policy = wait_policy(&service, |policy| {
+        policy
+            .initiating_stop
+            .as_ref()
+            .and_then(|stop| stop.target.as_ref())
+            == Some(&expected)
+            && !policy.target_outcomes.is_empty()
+    })
+    .await;
+    assert_eq!(policy.initiating_stop.unwrap().target, Some(expected));
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        &[("-exec-interrupt".into(), CommandTarget::Session(43))]
+    );
+    no_policy_output(&mut output).await;
+}
+
+async fn no_policy_output(output: &mut crate::cmd_flow::output_hub::OutputSubscription) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), output.recv())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn mode_change_preserves_an_already_failed_logpoint_as_an_ordinary_cause() {
+    let (model, service, port, owner) = policy_fixture().await;
+    let identity = crate::state::ServiceIdentity::new("shared", "worker");
+    drop(model.register_service_group(42, &identity).await);
+    drop(model.register_service_group(43, &identity).await);
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, Some("value={missing}")).await;
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    let evaluations = port
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(command, _)| command.starts_with("-ddb-var-create"))
+        .count();
+    assert_eq!(evaluations, 1);
+
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    assert_eq!(
+        port.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(command, _)| command.starts_with("-ddb-var-create"))
+            .count(),
+        evaluations
+    );
+    assert_eq!(
+        port.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(command, _)| command == "-exec-interrupt")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn mode_change_coordinates_a_saturated_logpoint_without_restarting_it() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_continue.store(true, Ordering::SeqCst);
+    let identity = crate::state::ServiceIdentity::new("saturated", "worker");
+    drop(model.register_service_group(43, &identity).await);
+    policy_stop(&model, owner, Some("queued logpoint")).await;
+    let mut saturated = 0;
+    for sid in 44..=59 {
+        model.register_session(sid, "logpoint", None).await;
+        model.complete_session_activation(sid, None).await;
+        model.register_thread_group(sid, "i1").await.unwrap();
+        let thread = model
+            .register_thread(sid, 11, "i1")
+            .await
+            .unwrap()
+            .thread_id
+            .value();
+        if sid == 59 {
+            drop(model.register_service_group(sid, &identity).await);
+            saturated = thread;
+        }
+        policy_stop_in_session(&model, sid, thread, Some("queued logpoint")).await;
+        let revision = model.thread_snapshots_for_sessions(&[sid]).await[0].stop_revision;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !service.stop_policies.classified_stop(thread, revision) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let queued = port.calls.lock().unwrap().len();
+    assert_eq!(queued, 0, "automatic continuations are still queued");
+    for sid in std::iter::once(42).chain(44..59) {
+        model
+            .update_thread_statuses(sid, &[11], ThreadStatus::RUNNING)
+            .await
+            .unwrap();
+    }
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::GroupStop)
+        .unwrap();
+    port.block_continue.store(false, Ordering::SeqCst);
+    port.release_continue.notify_waiters();
+    let expected = service_thread_target(&service, saturated);
+    wait_policy(&service, |policy| {
+        policy
+            .initiating_stop
+            .as_ref()
+            .and_then(|stop| stop.target.as_ref())
+            == Some(&expected)
+            && !policy.target_outcomes.is_empty()
+    })
+    .await;
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        &[("-exec-interrupt".into(), CommandTarget::Session(43))]
+    );
+}
+
+#[tokio::test]
+async fn stale_logpoint_failure_cannot_replace_a_newer_transparent_disposition() {
+    let (model, service, port, owner) = policy_fixture().await;
+    port.block_continue.store(true, Ordering::SeqCst);
+    policy_stop(&model, owner, Some("old logpoint")).await;
+    tokio::time::timeout(Duration::from_secs(1), port.continue_queued.notified())
+        .await
+        .unwrap();
+    port.block_continue.store(false, Ordering::SeqCst);
+    policy_stop(&model, owner, Some("new logpoint")).await;
+    let revision = model.thread_snapshots_for_sessions(&[42]).await[0].stop_revision;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.stop_policies.continued_logpoint(owner, revision) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    port.release_continue.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service
+            .operations
+            .list_with_context()
+            .iter()
+            .any(|entry| entry.operation.state == OperationState::Failed as i32)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(service.stop_policies.continued_logpoint(owner, revision));
+    assert!(service
+        .stop_policy_snapshot()
+        .unwrap()
+        .initiating_stop
+        .is_none());
+    assert_eq!(
+        port.calls.lock().unwrap().as_slice(),
+        &[(
+            "-record-time-and-continue".into(),
+            CommandTarget::Thread(crate::state::GlobalThreadId::new(owner))
+        )]
+    );
+}
+
+#[tokio::test]
+async fn explicit_retirement_does_not_rearm_an_already_observed_ordinary_stop() {
+    let (model, service, port, owner) = policy_fixture().await;
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    let second = model.thread_snapshots_for_sessions(&[43]).await[0]
+        .global_id
+        .value();
+    policy_stop_in_session(&model, 43, second, None).await;
+    let revision = model.thread_snapshots_for_sessions(&[43]).await[0].stop_revision;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.stop_policies.classified_stop(second, revision) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    service.retire_stop_automation();
+    model
+        .update_thread_statuses(42, &[11], ThreadStatus::RUNNING)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(service
+        .stop_policy_snapshot()
+        .unwrap()
+        .initiating_stop
+        .is_none());
+    assert_eq!(port.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn policy_publication_overflow_does_not_abandon_reserved_peer_tasks() {
+    let (model, initial_service, port, owner) = policy_fixture().await;
+    drop(initial_service);
+    for sid in 44..=60 {
+        model.register_session(sid, "peer", None).await;
+        model.complete_session_activation(sid, None).await;
+        model.register_thread_group(sid, "i1").await.unwrap();
+        model.register_thread(sid, 11, "i1").await.unwrap();
+        model
+            .update_thread_statuses(sid, &[11], ThreadStatus::RUNNING)
+            .await
+            .unwrap();
+    }
+    let mut config = Config::default();
+    config.conf.debugger.backend = DebuggerBackendKind::Mock;
+    config.conf.api_limits.state_replay_bytes = 1024;
+    let config = Arc::new(config);
+    let service = service_with_components(
+        model.clone(),
+        port.clone(),
+        crate::cmd_flow::output_hub::OutputHub::new(Default::default()),
+        config.clone(),
+        resolve_framework_plugin(&config),
+        Arc::new(SourceCatalog::new()),
+    );
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    let policy = wait_policy(&service, |policy| {
+        policy.pending_targets.is_empty() && policy.target_outcomes.len() == 18
+    })
+    .await;
+    assert!(policy
+        .target_outcomes
+        .iter()
+        .all(|outcome| outcome.succeeded));
+    assert_eq!(port.calls.lock().unwrap().len(), 18);
+}
+
+#[tokio::test]
+async fn policy_cause_projection_tracks_inspection_revisions_without_native_turnover() {
+    let (model, service, port, owner) = policy_fixture().await;
+    service
+        .configure_stop_policy(ddb_api_types::v2::StopMode::AllStop)
+        .unwrap();
+    policy_stop(&model, owner, None).await;
+    let before = wait_policy(&service, |policy| !policy.target_outcomes.is_empty()).await;
+    let native_revision = model.thread_snapshots_for_sessions(&[42]).await[0].stop_revision;
+    model
+        .enter_custom_context(
+            42,
+            crate::state::ThreadContext {
+                tid: crate::state::GlobalThreadId::new(owner),
+                ctx: std::collections::HashMap::new(),
+            },
+        )
+        .await;
+    model.finish_context_restore(42, true).await;
+    let current = service
+        .get_execution_state(GetExecutionStateRequest {
+            target: Some(service_thread_target(&service, owner)),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .execution_state
+        .unwrap();
+    assert_ne!(before.initiating_stop.as_ref(), Some(&current));
+    wait_policy(&service, |policy| {
+        policy.initiating_stop.as_ref() == Some(&current)
+    })
+    .await;
+    assert_eq!(
+        model.thread_snapshots_for_sessions(&[42]).await[0].stop_revision,
+        native_revision
+    );
+    assert_eq!(port.calls.lock().unwrap().len(), 1);
+}
