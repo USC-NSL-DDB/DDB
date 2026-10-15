@@ -542,6 +542,41 @@ impl SessionMeta {
         revision: u64,
         action: impl FnOnce() -> Result<T, E>,
     ) -> Option<Result<T, E>> {
+        self.with_available_thread_stop(tid, revision, |claims| {
+            let admitted = action();
+            // Both native backends resume the process even when DDB's public
+            // target names a thread. Consume its stopped siblings before Running
+            // can arrive, so another client cannot resume the same process twice.
+            if admitted.is_ok() {
+                for (sibling, status) in &self.t_status {
+                    if *status == ThreadStatus::STOPPED {
+                        claims.insert(
+                            *sibling,
+                            self.t_stop_revisions.get(sibling).copied().unwrap_or(1),
+                        );
+                    }
+                }
+            }
+            admitted
+        })
+    }
+
+    /// Preparatory writes require an available claim but leave it for the resume.
+    pub(crate) fn validate_thread_stop_on_admission<T, E>(
+        &self,
+        tid: u64,
+        revision: u64,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Option<Result<T, E>> {
+        self.with_available_thread_stop(tid, revision, |_| action())
+    }
+
+    fn with_available_thread_stop<T>(
+        &self,
+        tid: u64,
+        revision: u64,
+        action: impl FnOnce(&mut HashMap<u64, u64>) -> T,
+    ) -> Option<T> {
         let mut claims = self
             .t_stop_claims
             .lock()
@@ -552,21 +587,7 @@ impl SessionMeta {
         {
             return None;
         }
-        let admitted = action();
-        // Both native backends resume the process even when DDB's public
-        // target names a thread. Consume its stopped siblings before Running
-        // can arrive, so another client cannot resume the same process twice.
-        if admitted.is_ok() {
-            for (sibling, status) in &self.t_status {
-                if *status == ThreadStatus::STOPPED {
-                    claims.insert(
-                        *sibling,
-                        self.t_stop_revisions.get(sibling).copied().unwrap_or(1),
-                    );
-                }
-            }
-        }
-        Some(admitted)
+        Some(action(&mut claims))
     }
 
     #[inline]

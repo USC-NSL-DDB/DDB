@@ -14,7 +14,7 @@ use crate::{
 use super::{
     api::CommandExecutor,
     decoder::Payload,
-    input::ParsedInputCmd,
+    input::{CommandMetadata, DispatchGuard, ParsedInputCmd, PrerequisiteGuard},
     router::{
         CommandFanoutError, CommandFanoutReport, SessionCommandFailure, SessionCommandFailureKind,
         Target,
@@ -53,7 +53,13 @@ impl ExecutionService {
 
     pub(crate) async fn continue_command(&self, command: ParsedInputCmd) -> Result<CommandOutcome> {
         if self.config.conf.support_migration {
-            self.proclet_restoration.reset().await;
+            if command.metadata.dispatch_guard.is_some() {
+                self.proclet_restoration
+                    .reset_guarded(&command.metadata, &self.transactions)
+                    .await?;
+            } else {
+                self.proclet_restoration.reset().await;
+            }
         }
 
         let external_token = command.external_token;
@@ -142,7 +148,7 @@ impl ExecutionService {
             .iter()
             .all(|reply| reply.get_message() != "error")
         {
-            self.restore_custom_context(session_id, &transaction)
+            self.restore_custom_context(session_id, &transaction, None)
                 .await?;
             response = self
                 .executor
@@ -216,7 +222,7 @@ impl ExecutionService {
                 )],
             ));
         }
-        self.restore_custom_context(session_id, &transaction)
+        self.restore_custom_context(session_id, &transaction, Some(&command.metadata))
             .await?;
 
         let execution_target = match command.target {
@@ -236,6 +242,7 @@ impl ExecutionService {
         &self,
         session_id: u64,
         transaction: &SessionTransaction,
+        metadata: Option<&CommandMetadata>,
     ) -> Result<()> {
         let snapshot = transaction
             .session_snapshot()
@@ -247,16 +254,20 @@ impl ExecutionService {
         if in_custom_context {
             let context = current_context
                 .ok_or_else(|| anyhow!("Session {} has no context to restore", session_id))?;
+            let mut command: ParsedInputCmd = format!(
+                "-switch-context-custom {}",
+                prepare_context_switch_args(&context)
+            )
+            .as_str()
+            .try_into()?;
+            command.metadata = metadata.cloned().unwrap_or_default();
+            command.metadata.dispatch_guard = command
+                .metadata
+                .dispatch_guard
+                .map(|guard| Arc::new(PrerequisiteGuard(guard)) as Arc<dyn DispatchGuard>);
             let restore = self
                 .executor
-                .execute_exclusive(
-                    &format!(
-                        "-switch-context-custom {}",
-                        prepare_context_switch_args(&context)
-                    ),
-                    Target::Thread(context.tid),
-                    transaction.lease(),
-                )
+                .execute_parsed_exclusive(command, Target::Thread(context.tid), transaction.lease())
                 .await?;
             let restored = restore.get_responses().len() == 1
                 && Payload::first(&restore)?.string("message")? == "success";

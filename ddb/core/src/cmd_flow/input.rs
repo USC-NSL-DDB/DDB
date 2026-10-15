@@ -10,6 +10,10 @@ pub trait DispatchGuard: Send + Sync + std::fmt::Debug {
         self.check().await?;
         Ok(Box::new(UnlockedDispatch))
     }
+    /// Validate preparatory writes without claiming the final execution action.
+    async fn prepare_prerequisite(&self) -> Result<Box<dyn DispatchPermit>> {
+        self.prepare().await
+    }
     /// Called synchronously after the session actor admits the transport write.
     fn dispatched(&self) {}
     /// A native error response proves that an admitted command was rejected.
@@ -35,6 +39,25 @@ pub trait DispatchPermit: Send {
 
 struct UnlockedDispatch;
 impl DispatchPermit for UnlockedDispatch {}
+
+/// Preparatory writes share execution fences without final-action callbacks.
+#[derive(Debug)]
+pub(crate) struct PrerequisiteGuard(pub std::sync::Arc<dyn DispatchGuard>);
+
+#[async_trait::async_trait]
+impl DispatchGuard for PrerequisiteGuard {
+    async fn check(&self) -> Result<()> {
+        self.prepare().await.map(|_| ())
+    }
+
+    async fn prepare(&self) -> Result<Box<dyn DispatchPermit>> {
+        self.0.prepare_prerequisite().await
+    }
+
+    fn is_automatic(&self) -> bool {
+        self.0.is_automatic()
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("execution stop was superseded or already consumed")]

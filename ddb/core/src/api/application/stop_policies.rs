@@ -134,6 +134,21 @@ impl Drop for AutomationLease {
 
 #[async_trait::async_trait]
 impl DispatchGuard for ActiveGuard {
+    async fn prepare_prerequisite(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        if !*self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            return Err(StaleExecution.into());
+        }
+        let inner = self.inner.prepare_prerequisite().await?;
+        Ok(Box::new(ActivePermit {
+            inner,
+            active: self.active.clone(),
+        }))
+    }
+
     async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
         if !*self
             .active
@@ -412,6 +427,22 @@ impl std::fmt::Debug for LogpointGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for LogpointGuard {
+    async fn prepare_prerequisite(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        if self.epoch.current() != self.expected {
+            return Err(StaleExecution.into());
+        }
+        let native = self.stop.prepare_prerequisite().await?;
+        if self.epoch.current() != self.expected {
+            return Err(StaleExecution.into());
+        }
+        Ok(Box::new(PolicyPermit {
+            native,
+            epoch: self.epoch.clone(),
+            expected: self.expected,
+            output: None,
+        }))
+    }
+
     async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
         if self.epoch.current() != self.expected {
             return Err(StaleExecution.into());
@@ -1092,6 +1123,11 @@ impl DdbApplicationService {
         }
         self.stop_policies.wake.notify_one();
     }
+}
+
+#[cfg(test)]
+mod prerequisite_tests {
+    include!("prerequisite_tests.rs");
 }
 
 #[cfg(test)]

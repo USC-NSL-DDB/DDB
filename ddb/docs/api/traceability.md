@@ -29,6 +29,9 @@ the `automatic_stop_provenance` capability expose exact observed provenance to
 all clients. `stop_policy_tests.rs` verifies mode changes, overlapping failed
 pauses, late rejection, and revision expiry. Operation-store tests verify that
 cancellation completes before accepted operations become visible to retries.
+`prerequisite_tests.rs` verifies that cancelled or consumed stops cannot restore
+registers or clean migrated heaps before continuation, and that cleanup failures
+retain bookkeeping for retry while retired peer receipts expire.
 `core/tests/api_v2_stop_policies.rs` covers two clients, backend restart, and
 GDB/LLDB logpoints. The TUI native interaction tests verify hydration, stale
 revision rejection, and focus correction after delayed classification.

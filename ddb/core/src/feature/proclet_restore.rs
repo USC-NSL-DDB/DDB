@@ -12,11 +12,12 @@ use crate::{
     cmd_flow::{
         api::{self, CommandExecutor},
         decoder::{OperationStatus, ProcletHeap, ProcletLocality},
+        input::{CommandMetadata, DispatchGuard, ParsedInputCmd, PrerequisiteGuard},
         session_runtime::SessionLease,
-        transaction::SessionTransaction,
+        transaction::{SessionTransaction, TransactionCoordinator},
     },
     feature::proclet_query::ProcletQueryService,
-    state::RuntimeModel,
+    state::{RuntimeModel, SessionStatus},
 };
 
 type ProcletId = u64;
@@ -311,6 +312,147 @@ impl ProcletRestorationMgr {
         self.proclet_loc_cache.clear();
         self.cleanup_heap().await;
         self.proclet_restored_heap_meta.clear();
+    }
+
+    async fn prune_retired_heap_receipts(&self, sid: u64) -> bool {
+        if self
+            .model
+            .session_snapshot(sid)
+            .await
+            .is_some_and(|session| session.status != SessionStatus::OFF)
+        {
+            return false;
+        }
+        // The retired debugger's address space no longer needs cleanup. Its
+        // receipts must not prevent a still-live session from continuing.
+        self.proclet_restored_heap_meta.remove(&sid);
+        self.proclet_is_local_cache
+            .retain(|target, _| target.sid != sid);
+        self.proclet_loc_cache.clear();
+        true
+    }
+
+    pub(crate) async fn reset_guarded(
+        &self,
+        metadata: &CommandMetadata,
+        transactions: &TransactionCoordinator,
+    ) -> Result<()> {
+        let guard = metadata
+            .dispatch_guard
+            .clone()
+            .context("guarded migration cleanup requires an execution guard")?;
+        // A partial cleanup invalidates locality assumptions too. Retain heap
+        // records until their corresponding native cleanup actually succeeds.
+        self.proclet_is_local_cache.clear();
+        self.proclet_loc_cache.clear();
+        let mut sessions = self
+            .proclet_restored_heap_meta
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        sessions.sort_unstable();
+        'sessions: for sid in sessions {
+            if self.prune_retired_heap_receipts(sid).await {
+                continue;
+            }
+            let transaction = match transactions.begin(sid).await {
+                Ok(transaction) => transaction,
+                Err(error) => {
+                    if self.prune_retired_heap_receipts(sid).await {
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+            };
+            if self.prune_retired_heap_receipts(sid).await {
+                continue;
+            }
+            // A backtrace may have restored a heap while this lease was queued.
+            // Sample receipts and invalidate locality again under the same gate
+            // held through native acknowledgment and receipt removal.
+            self.proclet_is_local_cache
+                .retain(|target, _| target.sid != sid);
+            let heaps = self
+                .proclet_restored_heap_meta
+                .get(&sid)
+                .map(|heaps| heaps.value().clone())
+                .unwrap_or_default();
+            for heap in heaps {
+                let mut command: ParsedInputCmd = format!(
+                    "-clean-proclet-heap {} {}",
+                    heap.proclet_id, heap.full_heap_size
+                )
+                .as_str()
+                .try_into()?;
+                command.metadata = metadata.clone();
+                command.metadata.dispatch_guard =
+                    Some(Arc::new(PrerequisiteGuard(guard.clone())) as Arc<dyn DispatchGuard>);
+                let cleanup = async {
+                    let response = self
+                        .executor
+                        .execute_parsed_exclusive(
+                            command,
+                            api::Target::Session(sid),
+                            transaction.lease(),
+                        )
+                        .await?;
+                    OperationStatus::decode(&response)?.require_success("clean-proclet-heap")?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = cleanup {
+                    if self.prune_retired_heap_receipts(sid).await {
+                        continue 'sessions;
+                    }
+                    return Err(error);
+                }
+                if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
+                    self.proclet_restored_heap_meta.entry(sid)
+                {
+                    entry.get_mut().remove(&heap);
+                    if entry.get().is_empty() {
+                        entry.remove();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_restored_heap_for_test(&self, sid: u64, proclet_id: u64) {
+        self.proclet_is_local_cache.insert(
+            ProcletQueryTarget { sid, proclet_id },
+            Arc::new(tokio::sync::Mutex::new(true)),
+        );
+        self.proclet_loc_cache.insert(
+            proclet_id,
+            Arc::new(tokio::sync::Mutex::new(Some(ProcletLoc { sid }))),
+        );
+        self.proclet_restored_heap_meta
+            .entry(sid)
+            .or_default()
+            .insert(ProcletHeapMeta {
+                start_addr: 0x1000,
+                data_len: 16,
+                full_heap_size: 4096,
+                proclet_id: proclet_id.to_string(),
+            });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn restored_heap_count_for_test(&self, sid: u64) -> usize {
+        self.proclet_restored_heap_meta
+            .get(&sid)
+            .map_or(0, |heaps| heaps.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn restoration_cache_counts_for_test(&self) -> (usize, usize) {
+        (
+            self.proclet_is_local_cache.len(),
+            self.proclet_loc_cache.len(),
+        )
     }
 
     pub async fn cleanup_heap(&self) {

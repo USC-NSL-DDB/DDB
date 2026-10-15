@@ -35,6 +35,14 @@ impl std::fmt::Debug for StopDispatchGuard {
 
 #[async_trait::async_trait]
 impl DispatchGuard for StopDispatchGuard {
+    async fn prepare_prerequisite(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
+        self.model
+            .prepare_stop_prerequisite(self.thread, self.revision)
+            .await
+            .map(|permit| Box::new(permit) as Box<dyn DispatchPermit>)
+            .ok_or_else(|| StaleExecution.into())
+    }
+
     async fn prepare(&self) -> anyhow::Result<Box<dyn DispatchPermit>> {
         self.model
             .prepare_stop_for_dispatch(self.thread, self.revision)

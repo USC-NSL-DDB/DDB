@@ -24,7 +24,20 @@ const RUNTIME_CHANGE_QUEUE: usize = 4_096;
 /// Keeps the native state validated for dispatch stable until writer admission.
 pub(crate) struct ExecutionDispatchPermit {
     sessions: Vec<OwnedRwLockReadGuard<SessionMeta>>,
-    claim: Option<(u64, u64, u64)>,
+    claim: Option<StopClaim>,
+}
+
+struct StopClaim {
+    session: u64,
+    thread: u64,
+    revision: u64,
+    mode: StopClaimMode,
+}
+
+#[derive(Clone, Copy)]
+enum StopClaimMode {
+    Validate,
+    Consume,
 }
 
 impl ExecutionDispatchPermit {
@@ -32,11 +45,19 @@ impl ExecutionDispatchPermit {
         &self,
         action: impl FnOnce() -> Result<T, E>,
     ) -> Option<Result<T, E>> {
-        if let Some((sid, tid, revision)) = self.claim {
-            self.sessions
+        if let Some(claim) = &self.claim {
+            let session = self
+                .sessions
                 .iter()
-                .find(|session| session.sid() == sid)?
-                .admit_thread_stop(tid, revision, action)
+                .find(|session| session.sid() == claim.session)?;
+            match claim.mode {
+                StopClaimMode::Validate => {
+                    session.validate_thread_stop_on_admission(claim.thread, claim.revision, action)
+                }
+                StopClaimMode::Consume => {
+                    session.admit_thread_stop(claim.thread, claim.revision, action)
+                }
+            }
         } else {
             Some(action())
         }
@@ -307,11 +328,35 @@ impl RuntimeModel {
         thread: GlobalThreadId,
         revision: u64,
     ) -> Option<ExecutionDispatchPermit> {
+        self.prepare_stop_claim(thread, revision, StopClaimMode::Consume)
+            .await
+    }
+
+    pub(crate) async fn prepare_stop_prerequisite(
+        &self,
+        thread: GlobalThreadId,
+        revision: u64,
+    ) -> Option<ExecutionDispatchPermit> {
+        self.prepare_stop_claim(thread, revision, StopClaimMode::Validate)
+            .await
+    }
+
+    async fn prepare_stop_claim(
+        &self,
+        thread: GlobalThreadId,
+        revision: u64,
+        mode: StopClaimMode,
+    ) -> Option<ExecutionDispatchPermit> {
         let LocalThreadId(sid, tid) = self.local_thread_id(thread)?;
         let mut permit = self
             .validate_stop_for_dispatch(thread, revision, None)
             .await?;
-        permit.claim = Some((sid, tid, revision));
+        permit.claim = Some(StopClaim {
+            session: sid,
+            thread: tid,
+            revision,
+            mode,
+        });
         Some(permit)
     }
 
