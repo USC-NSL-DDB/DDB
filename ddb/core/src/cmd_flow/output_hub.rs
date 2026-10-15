@@ -127,16 +127,29 @@ impl OutputHub {
         stream: DebuggerOutputStream,
         text: impl Into<String>,
     ) -> Result<(), OutputHubError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(OutputHubError::Closed);
-        }
+        self.publish_on_admission(session_id, thread_id, stream, text, || Ok(()))
+    }
+
+    /// Commit output only when the synchronous action is admitted. The action
+    /// must not reenter this hub or await while the output state is locked.
+    pub(crate) fn publish_on_admission<T, E: From<OutputHubError>>(
+        &self,
+        session_id: Option<u64>,
+        thread_id: Option<u64>,
+        stream: DebuggerOutputStream,
+        text: impl Into<String>,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
         let (text, truncated) = truncate_utf8(text.into(), self.config.max_text_bytes);
         let mut state = self.state();
+        if self.closed.load(Ordering::Acquire) {
+            return Err(OutputHubError::Closed.into());
+        }
         let sequence = state
             .sequence
             .checked_add(1)
-            .ok_or(OutputHubError::SequenceExhausted)?;
-        state.sequence = sequence;
+            .ok_or(OutputHubError::SequenceExhausted)
+            .map_err(E::from)?;
         let record = Arc::new(DebuggerOutputRecord {
             sequence,
             observed_at: SystemTime::now(),
@@ -146,8 +159,10 @@ impl OutputHub {
             text,
             truncated,
         });
+        let admitted = action()?;
+        state.sequence = sequence;
         let _ = self.live.send(record);
-        Ok(())
+        Ok(admitted)
     }
 
     pub(crate) fn current_sequence(&self) -> u64 {
@@ -170,7 +185,12 @@ impl OutputHub {
         // Subscribing and sampling the baseline under the same lock as publish
         // gives admission one precise linearization point.
         let state = self.state();
+        if self.closed.load(Ordering::Acquire) {
+            self.subscribers.fetch_sub(1, Ordering::AcqRel);
+            return Err(OutputHubError::Closed);
+        }
         let live = self.live.subscribe();
+        let shutdown = self.shutdown.subscribe();
         let current = state.sequence;
         drop(state);
         let pending_gap = after_sequence
@@ -185,7 +205,7 @@ impl OutputHub {
         let (delivery_tx, delivery_rx) = mpsc::channel(self.config.subscriber_queue);
         let task = tokio::spawn(pump_output_subscription(
             live,
-            self.shutdown.subscribe(),
+            shutdown,
             delivery_tx,
             pending_gap,
             current,
@@ -199,6 +219,7 @@ impl OutputHub {
     }
 
     pub(crate) fn shutdown(&self) {
+        let _state = self.state();
         if !self.closed.swap(true, Ordering::AcqRel) {
             let _ = self.shutdown.send(true);
         }
@@ -493,5 +514,87 @@ mod tests {
                 .unwrap_err(),
             OutputHubError::Closed
         );
+    }
+
+    #[test]
+    fn output_preconditions_reject_before_writer_admission() {
+        for closed in [false, true] {
+            let hub = OutputHub::new(config(4));
+            let expected = if closed {
+                hub.shutdown();
+                OutputHubError::Closed
+            } else {
+                hub.state().sequence = u64::MAX;
+                OutputHubError::SequenceExhausted
+            };
+            let before = hub.current_sequence();
+
+            let result = hub.publish_on_admission(
+                None,
+                None,
+                DebuggerOutputStream::Console,
+                "unadmitted logpoint",
+                || -> Result<(), OutputHubError> {
+                    panic!("unavailable output must prevent writer admission")
+                },
+            );
+
+            assert_eq!(result, Err(expected));
+            assert_eq!(hub.current_sequence(), before);
+        }
+    }
+
+    #[test]
+    fn output_shutdown_and_writer_admission_share_one_order() {
+        use std::sync::mpsc;
+
+        let hub = OutputHub::new(config(4));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
+        let writer_hub = hub.clone();
+        let writer = std::thread::spawn(move || {
+            writer_hub.publish_on_admission(
+                None,
+                None,
+                DebuggerOutputStream::Console,
+                "admitted logpoint",
+                || {
+                    entered_tx.send(()).unwrap();
+                    proceed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                    Ok::<_, OutputHubError>(())
+                },
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (closing_tx, closing_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let closing_hub = hub.clone();
+        let closer = std::thread::spawn(move || {
+            closing_tx.send(()).unwrap();
+            closing_hub.shutdown();
+            closed_tx.send(()).unwrap();
+        });
+        closing_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(closed_rx.recv_timeout(Duration::from_millis(20)).is_err());
+
+        proceed_tx.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        closed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        closer.join().unwrap();
+        assert_eq!(hub.current_sequence(), 1);
+        assert_eq!(
+            hub.publish_on_admission(
+                None,
+                None,
+                DebuggerOutputStream::Console,
+                "after close",
+                || -> Result<(), OutputHubError> {
+                    panic!("closed output must prevent writer admission")
+                },
+            ),
+            Err(OutputHubError::Closed)
+        );
+        assert_eq!(hub.current_sequence(), 1);
     }
 }

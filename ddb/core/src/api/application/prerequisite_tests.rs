@@ -204,6 +204,89 @@ async fn no_output(output: &mut OutputSubscription) {
 }
 
 #[tokio::test]
+async fn writer_rejection_does_not_publish_logpoint_output_or_consume_the_stop() {
+    let mut fixture = Fixture::new().await;
+    fixture.model.finish_context_restore(1, true).await;
+    let mut output = fixture.output.subscribe(None).unwrap();
+    let (_, disconnected) = flume::bounded(1);
+    drop(std::mem::replace(&mut fixture.requests, disconnected));
+    let result = tokio::time::timeout(TIMEOUT, fixture.service.continue_command(fixture.command()))
+        .await
+        .unwrap();
+    assert!(result.is_err());
+    assert_eq!(
+        fixture.output.current_sequence(),
+        0,
+        "rejected writer admission must not commit successful logpoint output"
+    );
+    no_output(&mut output).await;
+    assert!(
+        fixture
+            .model
+            .claim_thread_stop(fixture.thread, fixture.revision)
+            .await
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn closed_output_prevents_native_logpoint_admission_and_keeps_the_stop_available() {
+    let fixture = Fixture::new().await;
+    fixture.model.finish_context_restore(1, true).await;
+    fixture.output.shutdown();
+    let result = tokio::time::timeout(TIMEOUT, fixture.service.continue_command(fixture.command()))
+        .await
+        .unwrap();
+    assert!(result.is_err());
+    assert!(fixture.requests.is_empty());
+    assert_eq!(fixture.output.current_sequence(), 0);
+    assert!(
+        fixture
+            .model
+            .claim_thread_stop(fixture.thread, fixture.revision)
+            .await
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn late_writer_failure_keeps_admitted_logpoint_output_and_consumed_stop() {
+    let fixture = Fixture::new().await;
+    fixture.model.finish_context_restore(1, true).await;
+    let mut output = fixture.output.subscribe(None).unwrap();
+    let service = fixture.service.clone();
+    let command = fixture.command();
+    let continuation = tokio::spawn(async move { service.continue_command(command).await });
+    let (wire, written) = fixture.write().await;
+    assert!(wire.contains("-record-time-and-continue"));
+    written
+        .send(Err(anyhow!("transport failed after writer admission")))
+        .unwrap();
+    assert!(tokio::time::timeout(TIMEOUT, continuation)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let OutputDelivery::Record(record) = tokio::time::timeout(TIMEOUT, output.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("admitted logpoint output was lost")
+    };
+    assert_eq!(record.text, "one logpoint\n");
+    assert_eq!(fixture.output.current_sequence(), 1);
+    assert!(
+        !fixture
+            .model
+            .claim_thread_stop(fixture.thread, fixture.revision)
+            .await
+    );
+    no_output(&mut output).await;
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn cancelled_or_stale_logpoint_does_not_restore_registers_after_queuing() {
     #[derive(Clone, Copy)]
     enum Invalidation {

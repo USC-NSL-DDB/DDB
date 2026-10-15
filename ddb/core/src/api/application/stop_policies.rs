@@ -234,14 +234,16 @@ impl DispatchPermit for PolicyPermit {
             .admit(self.expected, || {
                 self.native.dispatch(validate, &mut || {
                     if let Some((hub, session, thread, message)) = &self.output {
-                        hub.publish_for_thread(
+                        hub.publish_on_admission(
                             Some(*session),
                             Some(*thread),
                             DebuggerOutputStream::Console,
                             message.clone(),
-                        )?;
+                            &mut *action,
+                        )
+                    } else {
+                        action()
                     }
-                    action()
                 })
             })
             .ok_or(StaleExecution)?
