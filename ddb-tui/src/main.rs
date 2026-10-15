@@ -2793,6 +2793,7 @@ fn apply_message(app: &mut App, message: UiMessage, requests: &mpsc::Sender<Back
             let threads = snapshot.threads.clone();
             app.apply_snapshot(snapshot);
             app.apply_threads(threads);
+            app.reconcile_backend_pause_focus();
             for session in resumed_sessions {
                 app.peer_pauses.remove(&session);
             }

@@ -247,6 +247,172 @@ fn successful_pending_peer_pause_keeps_exact_stop_provenance_after_retirement() 
     );
 }
 
+fn authoritative_pause_snapshot(revision: u64) -> v2::Snapshot {
+    let mut value = snapshot(&["a", "b"], revision);
+    value.capabilities = Some(v2::Capabilities {
+        ddb_features: vec!["automatic_stop_provenance".into()],
+        ..Default::default()
+    });
+    value.execution_states[0].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/a".into()),
+        ..Default::default()
+    });
+    value.stop_policy = Some(v2::StopPolicy {
+        stop_policy_id: "policy/shared".into(),
+        mode: v2::StopMode::AllStop as i32,
+        generation: 1,
+        revision,
+        initiating_stop: Some(value.execution_states[1].clone()),
+        automatic_stops: vec![value.execution_states[0].clone()],
+        ..Default::default()
+    });
+    value
+}
+
+#[test]
+fn authoritative_pause_provenance_survives_failed_ack_hydration_and_reconfiguration() {
+    let mut app = app(&[]);
+    let mut pending = authoritative_pause_snapshot(2);
+    pending.threads[0].state = v2::ThreadState::Running as i32;
+    pending.execution_states[0].running = true;
+    pending.execution_states[0].stop_reason = None;
+    let policy = pending.stop_policy.as_mut().unwrap();
+    policy.automatic_stops.clear();
+    policy.pending_targets.push(api::session_target("a"));
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(pending.clone()), &tx);
+    let failure = v2::TargetOutcome {
+        target: Some(api::session_target("a")),
+        succeeded: false,
+        error: Some(v2::DdbError {
+            message: "pause acknowledgment lost".into(),
+            ..Default::default()
+        }),
+    };
+    let policy = pending.stop_policy.as_mut().unwrap();
+    policy.revision += 1;
+    policy.pending_targets.clear();
+    policy.target_outcomes.push(failure.clone());
+    apply_message(&mut app, UiMessage::Snapshot(pending), &tx);
+    let mut late = authoritative_pause_snapshot(3);
+    late.stop_policy
+        .as_mut()
+        .unwrap()
+        .target_outcomes
+        .push(failure);
+    apply_message(&mut app, UiMessage::Snapshot(late.clone()), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+    assert_eq!(app.current_thread().unwrap().id, "thread/b");
+    let mut newcomer = self::app(&[]);
+    apply_message(&mut newcomer, UiMessage::Snapshot(late.clone()), &tx);
+    assert!(newcomer.is_automatic_pause("thread/a"));
+    assert_eq!(newcomer.current_thread().unwrap().id, "thread/b");
+    let policy = late.stop_policy.as_mut().unwrap();
+    policy.mode = v2::StopMode::Independent as i32;
+    policy.generation += 1;
+    policy.revision += 1;
+    policy.initiating_stop = None;
+    policy.target_outcomes.clear();
+    apply_message(&mut app, UiMessage::Snapshot(late), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+}
+
+#[test]
+fn authoritative_pause_classification_requires_the_current_stopped_execution_version() {
+    let mut app = app(&[]);
+    let mut stopped = authoritative_pause_snapshot(2);
+    let (tx, _rx) = mpsc::channel(32);
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+    // Inspection can advance the public revision while the native stop stays.
+    stopped.execution_states[0].revision = 3;
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(!app.is_automatic_pause("thread/a"));
+    stopped.stop_policy.as_mut().unwrap().automatic_stops =
+        vec![stopped.execution_states[0].clone()];
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(app.is_automatic_pause("thread/a"));
+    stopped.execution_states[0].execution_state_id = "execution/replaced".into();
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(!app.is_automatic_pause("thread/a"));
+    stopped.execution_states[0].execution_state_id = "execution/a".into();
+    stopped.execution_states[0].running = true;
+    stopped.threads[0].state = v2::ThreadState::Running as i32;
+    apply_message(&mut app, UiMessage::Snapshot(stopped.clone()), &tx);
+    assert!(!app.is_automatic_pause("thread/a"));
+    stopped.execution_states[0].running = false;
+    stopped.execution_states[0].revision = 4;
+    stopped.threads[0].state = v2::ThreadState::Stopped as i32;
+    apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+    assert!(
+        !app.is_automatic_pause("thread/a"),
+        "a later independent pause cannot inherit an older classification"
+    );
+}
+
+#[test]
+fn authoritative_pause_projection_does_not_infer_stops_from_command_acknowledgments() {
+    for pending in [false, true] {
+        let mut app = app(&[]);
+        let mut stopped = authoritative_pause_snapshot(2);
+        let policy = stopped.stop_policy.as_mut().unwrap();
+        policy.automatic_stops.clear();
+        if pending {
+            policy.pending_targets.push(api::session_target("a"));
+        } else {
+            policy.target_outcomes.push(v2::TargetOutcome {
+                target: Some(api::session_target("a")),
+                succeeded: true,
+                error: None,
+            });
+        }
+        let (tx, _rx) = mpsc::channel(32);
+        apply_message(&mut app, UiMessage::Snapshot(stopped), &tx);
+        assert!(!app.is_automatic_pause("thread/a"));
+    }
+}
+
+#[test]
+fn authoritative_classification_corrects_focus_chosen_before_the_policy_event() {
+    let mut classified = authoritative_pause_snapshot(2);
+    classified.execution_states[1].stop_reason = Some(v2::StopReason {
+        kind: v2::StopReasonKind::Pause as i32,
+        thread_id: Some("thread/b".into()),
+        ..Default::default()
+    });
+    classified.stop_policy.as_mut().unwrap().initiating_stop =
+        Some(classified.execution_states[1].clone());
+    for navigated in [false, true] {
+        let mut app = app(&[]);
+        let mut unclassified = classified.clone();
+        unclassified
+            .stop_policy
+            .as_mut()
+            .unwrap()
+            .automatic_stops
+            .clear();
+        let (tx, _rx) = mpsc::channel(32);
+        apply_message(&mut app, UiMessage::Snapshot(unclassified), &tx);
+        assert_eq!(app.current_thread().unwrap().id, "thread/a");
+        if navigated {
+            app.selected_thread = 1;
+        }
+        apply_message(&mut app, UiMessage::Snapshot(classified.clone()), &tx);
+        assert!(app.is_automatic_pause("thread/a"));
+        assert_eq!(
+            app.current_thread().unwrap().id,
+            "thread/b",
+            "a policy-only update must restore the initiating stop's focus"
+        );
+        assert_eq!(
+            app.pause_focus.as_deref(),
+            (!navigated).then_some("thread/b"),
+            "classification must not establish new stop focus after manual navigation"
+        );
+    }
+}
+
 fn snapshot(stopped: &[&str], revision: u64) -> v2::Snapshot {
     v2::Snapshot {
         server_instance_id: "backend/native-ux".into(),

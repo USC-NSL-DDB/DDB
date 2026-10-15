@@ -27,74 +27,113 @@ impl App {
             .as_ref()
             .and_then(|state| state.stop_reason.as_ref())
             .and_then(|reason| reason.thread_id.clone());
-        let automatic = policy
-            .pending_targets
-            .iter()
-            .chain(
-                policy
-                    .target_outcomes
-                    .iter()
-                    .filter(|outcome| outcome.succeeded)
-                    .filter_map(|outcome| outcome.target.as_ref()),
-            )
-            .filter_map(|target| match target.selector.as_ref() {
-                Some(v2::target::Selector::Session(session)) => Some(session.session_id.clone()),
-                _ => None,
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        self.peer_pauses = automatic.clone();
-        // Failed and retired attempts cannot explain a future stop. Keep an
-        // already observed pause until its exact execution revision expires.
-        self.automatic_pauses.retain(|id, provenance| {
-            matches!(provenance, AutomaticPause::Observed(_))
-                || threads
-                    .iter()
-                    .any(|thread| thread.thread_id == *id && automatic.contains(&thread.session_id))
-        });
-        // Outcomes are historical acknowledgments. Only a new attempt may arm
-        // provenance; a later independent stop must not inherit an old success.
-        let new_attempts = policy
-            .pending_targets
-            .iter()
-            .chain(
-                policy
-                    .target_outcomes
-                    .iter()
-                    .filter(|outcome| outcome.succeeded)
-                    .filter_map(|outcome| outcome.target.as_ref()),
-            )
-            .filter(|target| {
-                previous.is_none_or(|previous| {
-                    previous.generation != policy.generation
-                        || (!previous.pending_targets.contains(target)
-                            && (policy.pending_targets.contains(target)
-                                || !previous.target_outcomes.iter().any(|outcome| {
-                                    outcome.succeeded && outcome.target.as_ref() == Some(target)
-                                })))
-                })
-            })
-            .filter_map(|target| match target.selector.as_ref() {
-                Some(v2::target::Selector::Session(session)) => Some(session.session_id.clone()),
-                _ => None,
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        for thread in threads
-            .iter()
-            .filter(|thread| new_attempts.contains(&thread.session_id))
+        if self
+            .capabilities
+            .supports_ddb_feature("automatic_stop_provenance")
         {
-            if let Some(state) = self.thread_execution(&thread.thread_id) {
-                let pending = policy.pending_targets.iter().any(|target| matches!(target.selector.as_ref(),
+            self.automatic_pauses = policy
+                .automatic_stops
+                .iter()
+                .filter(|state| !state.running)
+                .filter_map(|automatic| {
+                    let Some(target::Selector::Thread(thread)) = automatic
+                        .target
+                        .as_ref()
+                        .and_then(|target| target.selector.as_ref())
+                    else {
+                        return None;
+                    };
+                    let current = self.thread_execution(&thread.thread_id)?;
+                    (!current.running
+                        && current.execution_state_id == automatic.execution_state_id
+                        && current.revision == automatic.revision)
+                        .then(|| {
+                            (
+                                thread.thread_id.clone(),
+                                AutomaticPause::Observed(current.revision),
+                            )
+                        })
+                })
+                .collect();
+            self.peer_pauses = threads
+                .iter()
+                .filter(|thread| self.automatic_pauses.contains_key(&thread.thread_id))
+                .map(|thread| thread.session_id.clone())
+                .collect();
+        } else {
+            let automatic = policy
+                .pending_targets
+                .iter()
+                .chain(
+                    policy
+                        .target_outcomes
+                        .iter()
+                        .filter(|outcome| outcome.succeeded)
+                        .filter_map(|outcome| outcome.target.as_ref()),
+                )
+                .filter_map(|target| match target.selector.as_ref() {
+                    Some(v2::target::Selector::Session(session)) => {
+                        Some(session.session_id.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            self.peer_pauses = automatic.clone();
+            // Failed and retired attempts cannot explain a future stop. Keep an
+            // already observed pause until its exact execution revision expires.
+            self.automatic_pauses.retain(|id, provenance| {
+                matches!(provenance, AutomaticPause::Observed(_))
+                    || threads.iter().any(|thread| {
+                        thread.thread_id == *id && automatic.contains(&thread.session_id)
+                    })
+            });
+            // Outcomes are historical acknowledgments. Only a new attempt may arm
+            // provenance; a later independent stop must not inherit an old success.
+            let new_attempts = policy
+                .pending_targets
+                .iter()
+                .chain(
+                    policy
+                        .target_outcomes
+                        .iter()
+                        .filter(|outcome| outcome.succeeded)
+                        .filter_map(|outcome| outcome.target.as_ref()),
+                )
+                .filter(|target| {
+                    previous.is_none_or(|previous| {
+                        previous.generation != policy.generation
+                            || (!previous.pending_targets.contains(target)
+                                && (policy.pending_targets.contains(target)
+                                    || !previous.target_outcomes.iter().any(|outcome| {
+                                        outcome.succeeded && outcome.target.as_ref() == Some(target)
+                                    })))
+                    })
+                })
+                .filter_map(|target| match target.selector.as_ref() {
+                    Some(v2::target::Selector::Session(session)) => {
+                        Some(session.session_id.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            for thread in threads
+                .iter()
+                .filter(|thread| new_attempts.contains(&thread.session_id))
+            {
+                if let Some(state) = self.thread_execution(&thread.thread_id) {
+                    let pending = policy.pending_targets.iter().any(|target| matches!(target.selector.as_ref(),
                     Some(v2::target::Selector::Session(session)) if session.session_id == thread.session_id));
-                let provenance = if state.running && pending {
-                    Some(AutomaticPause::Pending(state.revision))
-                } else if state.stop_reason.as_ref().is_some_and(is_interrupt) {
-                    Some(AutomaticPause::Observed(state.revision))
-                } else {
-                    None
-                };
-                if let Some(provenance) = provenance {
-                    self.automatic_pauses
-                        .insert(thread.thread_id.clone(), provenance);
+                    let provenance = if state.running && pending {
+                        Some(AutomaticPause::Pending(state.revision))
+                    } else if state.stop_reason.as_ref().is_some_and(is_interrupt) {
+                        Some(AutomaticPause::Observed(state.revision))
+                    } else {
+                        None
+                    };
+                    if let Some(provenance) = provenance {
+                        self.automatic_pauses
+                            .insert(thread.thread_id.clone(), provenance);
+                    }
                 }
             }
         }
@@ -115,6 +154,35 @@ impl App {
             self.error(text);
         }
         self.stop_policy = Some(policy);
+    }
+
+    pub fn reconcile_backend_pause_focus(&mut self) {
+        if !self
+            .capabilities
+            .supports_ddb_feature("automatic_stop_provenance")
+        {
+            return;
+        }
+        let Some(previous) = self
+            .pause_focus
+            .as_ref()
+            .filter(|thread| self.is_automatic_pause(thread))
+            .cloned()
+        else {
+            return;
+        };
+        self.pause_focus = None;
+        // Classification can arrive after the native stop. Correct that
+        // premature focus without displacing navigation chosen since then.
+        if self
+            .current_thread()
+            .is_some_and(|thread| thread.id != previous)
+        {
+            return;
+        }
+        if let Some(cause) = self.all_stop_cause.clone() {
+            self.select_pause_thread(&cause);
+        }
     }
 
     /// A process-wide stop also stops peers, but only its reported thread owns
